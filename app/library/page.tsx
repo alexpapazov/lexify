@@ -324,6 +324,7 @@ export default function LibraryPage() {
                   onDrop={e => { e.preventDefault(); commitDrop({ id: folder.id, pos: dropTarget?.pos ?? 'after' }) }}
                   onTouchStart={e => onItemTouchStart(e, { type: 'folder', id: folder.id })}
                   onTouchMove={onItemTouchMove}
+                  style={{ WebkitTouchCallout: 'none' } as React.CSSProperties}
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
                     isDragging  ? 'opacity-40' :
                     dt?.pos === 'into' ? 'border-accent bg-accent/5 scale-[1.01]' :
@@ -376,6 +377,7 @@ export default function LibraryPage() {
                   onDrop={e => { e.preventDefault(); commitDrop({ id: deck.id, pos: dropTarget?.pos ?? 'after' }) }}
                   onTouchStart={e => onItemTouchStart(e, { type: 'deck', id: deck.id })}
                   onTouchMove={onItemTouchMove}
+                  style={{ WebkitTouchCallout: 'none' } as React.CSSProperties}
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
                     isDragging ? 'opacity-40' : 'hover:border-white/10'
                   }`}
