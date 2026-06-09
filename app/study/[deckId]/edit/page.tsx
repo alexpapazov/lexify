@@ -265,13 +265,46 @@ export default function DeckEditPage() {
           <h1 className="text-xl font-semibold text-ink truncate">{deckName}</h1>
           <span className="text-xs text-ink-faint shrink-0">{cards.length} cards</span>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="btn-primary shrink-0"
-        >
-          {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save all'}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {!confirmDelete ? (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="p-2 rounded-lg border border-white/10 hover:border-danger/40 text-ink-muted hover:text-danger transition-colors"
+              title="Delete deck"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path d="M10 11v6M14 11v6"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+              </svg>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-ink-muted">Delete?</span>
+              <button
+                onClick={handleDeleteDeck}
+                disabled={deleting}
+                className="text-sm font-medium text-danger hover:text-danger/80 transition-colors"
+              >
+                {deleting ? 'Deleting…' : 'Yes'}
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="text-sm text-ink-faint hover:text-ink transition-colors"
+              >
+                No
+              </button>
+            </div>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="btn-primary"
+          >
+            {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
 
       {/* Language selector row */}
@@ -333,40 +366,12 @@ export default function DeckEditPage() {
         + New card
       </button>
 
-      {/* Bottom save + delete */}
-      <div className="flex items-center justify-between gap-3 pb-8">
-        <div className="flex gap-3">
-          <button onClick={handleSave} disabled={saving} className="btn-primary">
-            {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save all'}
-          </button>
-          <Link href={`/study/${deckId}`} className="btn-ghost">Cancel</Link>
-        </div>
-
-        {!confirmDelete ? (
-          <button
-            onClick={() => setConfirmDelete(true)}
-            className="text-sm text-ink-faint hover:text-danger transition-colors"
-          >
-            Delete deck
-          </button>
-        ) : (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-ink-muted">Are you sure?</span>
-            <button
-              onClick={handleDeleteDeck}
-              disabled={deleting}
-              className="text-sm font-medium text-danger hover:text-danger/80 transition-colors"
-            >
-              {deleting ? 'Deleting…' : 'Yes, delete'}
-            </button>
-            <button
-              onClick={() => setConfirmDelete(false)}
-              className="text-sm text-ink-faint hover:text-ink transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
+      {/* Bottom save */}
+      <div className="flex gap-3 pb-8">
+        <button onClick={handleSave} disabled={saving} className="btn-primary">
+          {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
+        </button>
+        <Link href={`/study/${deckId}`} className="btn-ghost">Cancel</Link>
       </div>
     </div>
   )
