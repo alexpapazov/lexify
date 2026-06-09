@@ -140,7 +140,7 @@ export default function StudyPage() {
       ) : (
         <>
           {/* ── Global counters ─────────────────────────────────────────── */}
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
               const isActive = activeFilter === key
               return (
