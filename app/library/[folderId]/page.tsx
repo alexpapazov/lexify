@@ -69,7 +69,7 @@ function getDropPos(e: React.DragEvent, isFolder: boolean): DropPos {
 
 function reorder<T>(arr: T[], fromIdx: number, toIdx: number, pos: 'before' | 'after'): T[] {
   const next = [...arr]
-  const [item] = next.splice(fromIdx, 1)
+  const item = next.splice(fromIdx, 1)[0] as T
   const insertAt = pos === 'before' ? toIdx : toIdx + 1
   const adjusted = fromIdx < insertAt ? insertAt - 1 : insertAt
   next.splice(adjusted, 0, item)
