@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -113,6 +113,15 @@ export default function FolderPage() {
   // Which breadcrumb segment is being hovered: null | 'root' | ancestorId
   const [crumbTarget, setCrumbTarget] = useState<string | null>(null)
 
+  // Touch drag state
+  const [touchGhost,  setTouchGhost]  = useState<{ x: number; y: number; type: 'folder' | 'deck' } | null>(null)
+  const draggingRef   = useRef<DragItem | null>(null)
+  const dropTargetRef = useRef<DropTarget>(null)
+  const commitDropRef = useRef(commitDrop)
+  const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => { draggingRef.current   = dragging   }, [dragging])
+  useEffect(() => { dropTargetRef.current = dropTarget }, [dropTarget])
+
   const supabase = createClient()
 
   async function load() {
@@ -201,6 +210,62 @@ export default function FolderPage() {
     setCrumbTarget(null)
     load()
   }
+
+  // ── Touch drag ────────────────────────────────────────────────────────────
+  useEffect(() => { commitDropRef.current = commitDrop })
+
+  function onItemTouchStart(e: React.TouchEvent, item: DragItem) {
+    const t = e.touches[0]!
+    const startX = t.clientX, startY = t.clientY
+    touchTimerRef.current = setTimeout(() => {
+      setDragging(item)
+      setTouchGhost({ x: startX, y: startY, type: item.type })
+    }, 350)
+  }
+
+  function onItemTouchMove(e: React.TouchEvent) {
+    if (!touchGhost && touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = null
+    }
+  }
+
+  useEffect(() => {
+    if (!touchGhost) return
+    function onMove(e: TouchEvent) {
+      e.preventDefault()
+      const t = e.touches[0]!
+      setTouchGhost(g => g ? { ...g, x: t.clientX, y: t.clientY } : null)
+      const els = document.elementsFromPoint(t.clientX, t.clientY)
+      const target = els.find(el => {
+        const h = el as HTMLElement
+        return h.dataset?.dragId && h.dataset.dragId !== draggingRef.current?.id
+      }) as HTMLElement | undefined
+      if (target?.dataset.dragId) {
+        const rect = target.getBoundingClientRect()
+        const pct  = (t.clientY - rect.top) / rect.height
+        const isF  = target.dataset.dragType === 'folder'
+        const pos: DropPos = pct < 0.33 ? 'before' : (isF && pct < 0.67 ? 'into' : 'after')
+        setDropTarget({ id: target.dataset.dragId, pos })
+      } else {
+        setDropTarget(null)
+      }
+    }
+    function onEnd() {
+      const item = draggingRef.current
+      const tgt  = dropTargetRef.current
+      if (item && tgt) commitDropRef.current(tgt)
+      else { setDragging(null); setDropTarget(null) }
+      setTouchGhost(null)
+      if (touchTimerRef.current) clearTimeout(touchTimerRef.current)
+    }
+    document.addEventListener('touchmove', onMove, { passive: false })
+    document.addEventListener('touchend',  onEnd)
+    return () => {
+      document.removeEventListener('touchmove', onMove)
+      document.removeEventListener('touchend',  onEnd)
+    }
+  }, [touchGhost]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleAddFolder() {
     const name = newName.trim()
@@ -332,6 +397,8 @@ export default function FolderPage() {
                 )}
                 <div
                   draggable
+                  data-drag-id={sub.id}
+                  data-drag-type="folder"
                   onDragStart={e => { applyDragImage(e, 'folder'); setDragging({ type: 'folder', id: sub.id }) }}
                   onDragOver={e => {
                     e.preventDefault()
@@ -340,6 +407,8 @@ export default function FolderPage() {
                   }}
                   onDragLeave={() => setDropTarget(null)}
                   onDrop={e => { e.preventDefault(); commitDrop({ id: sub.id, pos: dropTarget?.pos ?? 'after' }) }}
+                  onTouchStart={e => onItemTouchStart(e, { type: 'folder', id: sub.id })}
+                  onTouchMove={onItemTouchMove}
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
                     isDragging      ? 'opacity-40' :
                     dt?.pos === 'into' ? 'border-accent bg-accent/5 scale-[1.01]' :
@@ -378,6 +447,8 @@ export default function FolderPage() {
                 )}
                 <div
                   draggable
+                  data-drag-id={deck.id}
+                  data-drag-type="deck"
                   onDragStart={e => { applyDragImage(e, 'deck'); setDragging({ type: 'deck', id: deck.id }) }}
                   onDragOver={e => {
                     e.preventDefault()
@@ -385,6 +456,8 @@ export default function FolderPage() {
                   }}
                   onDragLeave={() => setDropTarget(null)}
                   onDrop={e => { e.preventDefault(); commitDrop({ id: deck.id, pos: dropTarget?.pos ?? 'after' }) }}
+                  onTouchStart={e => onItemTouchStart(e, { type: 'deck', id: deck.id })}
+                  onTouchMove={onItemTouchMove}
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
                     isDragging ? 'opacity-40' : 'hover:border-white/10'
                   }`}
@@ -411,6 +484,15 @@ export default function FolderPage() {
             )
           })}
         </div>
+      )}
+
+      {/* Touch drag ghost icon */}
+      {touchGhost && (
+        <div
+          className="fixed pointer-events-none z-50 opacity-90"
+          style={{ left: touchGhost.x - 16, top: touchGhost.y - 16 }}
+          dangerouslySetInnerHTML={{ __html: touchGhost.type === 'folder' ? FOLDER_SVG : DECK_SVG }}
+        />
       )}
     </div>
   )
