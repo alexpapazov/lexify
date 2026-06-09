@@ -93,6 +93,8 @@ export default function DeckEditPage() {
   const supabase   = createClient()
 
   const [deckName,    setDeckName]    = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting,      setDeleting]      = useState(false)
   const [sourceLang,  setSourceLang]  = useState('es')
   const [targetLang,  setTargetLang]  = useState('en')
   const [cards,       setCards]       = useState<EditableCard[]>([])
@@ -237,6 +239,19 @@ export default function DeckEditPage() {
     }
   }
 
+  async function handleDeleteDeck() {
+    setDeleting(true)
+    try {
+      const deckRepo = new SupabaseDeckRepository()
+      await deckRepo.softDelete(deckId)
+      router.push('/study')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
+      setDeleting(false)
+      setConfirmDelete(false)
+    }
+  }
+
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
 
   const errorCount = cards.filter(c => c.error !== null).length
@@ -318,12 +333,40 @@ export default function DeckEditPage() {
         + New card
       </button>
 
-      {/* Bottom save */}
-      <div className="flex gap-3 pb-8">
-        <button onClick={handleSave} disabled={saving} className="btn-primary">
-          {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save all'}
-        </button>
-        <Link href={`/study/${deckId}`} className="btn-ghost">Cancel</Link>
+      {/* Bottom save + delete */}
+      <div className="flex items-center justify-between gap-3 pb-8">
+        <div className="flex gap-3">
+          <button onClick={handleSave} disabled={saving} className="btn-primary">
+            {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save all'}
+          </button>
+          <Link href={`/study/${deckId}`} className="btn-ghost">Cancel</Link>
+        </div>
+
+        {!confirmDelete ? (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="text-sm text-ink-faint hover:text-danger transition-colors"
+          >
+            Delete deck
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-ink-muted">Are you sure?</span>
+            <button
+              onClick={handleDeleteDeck}
+              disabled={deleting}
+              className="text-sm font-medium text-danger hover:text-danger/80 transition-colors"
+            >
+              {deleting ? 'Deleting…' : 'Yes, delete'}
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              className="text-sm text-ink-faint hover:text-ink transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
