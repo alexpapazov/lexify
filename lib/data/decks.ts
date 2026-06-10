@@ -84,7 +84,7 @@ export class SupabaseDeckRepository implements DeckRepository {
   }
 
   async softDelete(deckId: DeckId): Promise<void> {
-    const { error } = await this.db.from('decks').update({ deleted_at: new Date().toISOString() }).eq('id', deckId)
+    const { error } = await this.db.rpc('soft_delete_deck', { p_deck_id: deckId })
     if (error) throw new Error(error.message)
   }
 }

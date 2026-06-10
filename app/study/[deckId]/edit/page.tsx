@@ -362,8 +362,7 @@ export default function DeckEditPage() {
           <div className="panel max-w-sm w-full space-y-4">
             <h2 className="text-lg font-semibold text-ink">Delete deck?</h2>
             <p className="text-sm text-ink-muted">
-              This will permanently delete <span className="text-ink font-medium">{deckName}</span> and
-              all {cards.length} card{cards.length !== 1 ? 's' : ''} in it. This can&apos;t be undone.
+              This will permanently delete <span className="text-ink font-medium">{deckName}</span> and all {cards.length} card{cards.length !== 1 ? 's' : ''} in it. This can&apos;t be undone.
             </p>
             {deleteError && (
               <div className="border border-danger/40 bg-danger/10 rounded-lg px-4 py-3 text-sm text-danger">
