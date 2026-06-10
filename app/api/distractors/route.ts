@@ -114,14 +114,17 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
       return NextResponse.json({ ok: false, reason: 'parse-error' })
     }
 
-    const pairs = parsed.pairs.filter(
-      (p): p is { front: string; back: string } =>
-        !!p && typeof p === 'object'
-        && typeof (p as Record<string, unknown>).front === 'string'
-        && typeof (p as Record<string, unknown>).back === 'string'
-        && (p as Record<string, string>).front.trim().length > 0
-        && (p as Record<string, string>).back.trim().length > 0,
-    )
+    const toPair = (p: unknown): { front: string; back: string } | null => {
+      const obj = p as { front?: unknown; back?: unknown } | null | undefined
+      if (!obj || typeof obj.front !== 'string' || typeof obj.back !== 'string') return null
+      const front = obj.front.trim()
+      const back  = obj.back.trim()
+      return front && back ? { front, back } : null
+    }
+
+    const pairs = parsed.pairs
+      .map(toPair)
+      .filter((p): p is { front: string; back: string } => p !== null)
 
     return NextResponse.json({
       ok: true,
