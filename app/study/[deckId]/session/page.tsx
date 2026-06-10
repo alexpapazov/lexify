@@ -16,6 +16,7 @@ import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
+import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 
 interface SessionCard { card: Card; state: CardState; pipeline: Pipeline }
 
@@ -118,6 +119,20 @@ export default function SessionPage() {
       if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
       setQueue(finalQueue)
       setLoading(false)
+
+      // Pre-generate multiple-choice distractors for upcoming recognition
+      // steps in the background, so cards rarely show "Loading choices…".
+      // Skip index 0 — that card's own component will fetch on mount.
+      const prefetchItems: PrefetchItem[] = finalQueue
+        .slice(1)
+        .map(item => {
+          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
+          if (item.state.graduated || step.stepType !== 'recognition') return null
+          return { card: item.card, side: step.answerSide, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+        })
+        .filter((x): x is PrefetchItem => x !== null)
+      void prefetchChoices(prefetchItems, handleChoicesCached)
     }
     load()
   }, [deckId]) // eslint-disable-line react-hooks/exhaustive-deps

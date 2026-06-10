@@ -60,20 +60,32 @@ export async function POST(req: NextRequest) {
   const deckBacks  = (body.deckBacks  ?? []).filter(Boolean).slice(0, 30)
   const avoid = [...new Set([...deckFronts, ...deckBacks, front, back])]
 
+  const srcLang = sourceLanguage || 'the source language'
+  const tgtLang = targetLanguage || 'the target language'
+
   const prompt = `You generate multiple-choice distractors for a language-learning flashcard app.
 
-Card:
-- Term in ${sourceLanguage || 'the source language'} (front): "${front}"
-- Translation in ${targetLanguage || 'the target language'} (back): "${back}"
+The real flashcard pair is:
+- ${srcLang}: "${front}"
+- ${tgtLang}: "${back}"
 
-For EACH side, generate ${DISTRACTORS_PER_SIDE} plausible-but-INCORRECT options a learner might mistakenly pick. They should be:
-- The same language as that side (front options in ${sourceLanguage || 'the source language'}, back options in ${targetLanguage || 'the target language'})
-- Similar in category, part of speech, and length to the correct answer (e.g. if the answer is a piece of furniture, suggest other furniture)
-- Plausible but clearly different words — not synonyms or alternate translations of the correct answer
+Generate ${DISTRACTORS_PER_SIDE} OTHER vocabulary pairs to use as wrong-answer options. Each pair must be:
+- A genuinely correct translation: "front" is a real word/phrase in ${srcLang}, and "back" is its accurate ${tgtLang} translation (NOT a translation of "${front}" / "${back}")
+- Similar in category, part of speech, and length to the real pair (e.g. if the real pair is a piece of furniture, suggest other furniture)
+- Clearly different from "${front}" / "${back}" — not synonyms or alternate translations of them
 - Distinct from each other and from these existing words: ${avoid.join(', ') || '(none)'}
 
+CRITICAL: every "front" value must be written in ${srcLang}, and every "back" value must be written in ${tgtLang}. Never mix languages within a field.
+
 Respond with ONLY a JSON object, no other text, in exactly this shape:
-{"front": ["option1", "option2", "option3", "option4", "option5", "option6"], "back": ["option1", "option2", "option3", "option4", "option5", "option6"]}`
+{"pairs": [
+  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
+  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
+  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
+  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
+  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
+  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"}
+]}`
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -96,18 +108,27 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
 
     const data = await res.json()
     const text: string = data?.content?.[0]?.text ?? ''
-    const parsed = extractJson(text) as { front?: unknown; back?: unknown } | null
+    const parsed = extractJson(text) as { pairs?: unknown } | null
 
-    if (!parsed || !Array.isArray(parsed.front) || !Array.isArray(parsed.back)) {
+    if (!parsed || !Array.isArray(parsed.pairs)) {
       return NextResponse.json({ ok: false, reason: 'parse-error' })
     }
 
-    const clean = (arr: unknown[]) =>
-      arr.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+    const pairs = parsed.pairs.filter(
+      (p): p is { front: string; back: string } =>
+        !!p && typeof p === 'object'
+        && typeof (p as Record<string, unknown>).front === 'string'
+        && typeof (p as Record<string, unknown>).back === 'string'
+        && (p as Record<string, string>).front.trim().length > 0
+        && (p as Record<string, string>).back.trim().length > 0,
+    )
 
     return NextResponse.json({
       ok: true,
-      choices: { front: clean(parsed.front), back: clean(parsed.back) },
+      choices: {
+        front: pairs.map(p => p.front.trim()),
+        back:  pairs.map(p => p.back.trim()),
+      },
     })
   } catch {
     return NextResponse.json({ ok: false, reason: 'exception' })
