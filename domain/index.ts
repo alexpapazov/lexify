@@ -89,12 +89,19 @@ export interface Deck {
 
 // ─── Card ─────────────────────────────────────────────────────────────────────
 
+/** Cached pool of multiple-choice distractors per side (excludes the correct answer). */
+export interface CardChoices {
+  front: string[]
+  back:  string[]
+}
+
 export interface Card {
   id:        CardId
   deckId:    DeckId
   front:     string
   back:      string
   hints:     string[]
+  choices:   CardChoices | null
   position:  number
   createdAt: string
   updatedAt: string

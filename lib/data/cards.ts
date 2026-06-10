@@ -9,6 +9,7 @@ function rowToCard(row: Record<string, unknown>): Card {
     front:     row.front as string,
     back:      row.back as string,
     hints:     (row.hints as string[]) ?? [],
+    choices:   (row.choices as Card['choices']) ?? null,
     position:  row.position as number,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
@@ -40,7 +41,7 @@ export class SupabaseCardRepository implements CardRepository {
     return (data ?? []).map(rowToCard)
   }
 
-  async update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints'>>): Promise<Card> {
+  async update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints' | 'choices'>>): Promise<Card> {
     const { data, error } = await this.db.from('cards').update(patch).eq('id', cardId).select().single()
     if (error) throw new Error(error.message)
     return rowToCard(data)

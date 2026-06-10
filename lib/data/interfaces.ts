@@ -27,7 +27,7 @@ export interface CardRepository {
   listByDeck(deckId: DeckId): Promise<Card[]>
   get(cardId: CardId): Promise<Card | null>
   bulkCreate(deckId: DeckId, inputs: CreateCardInput[]): Promise<Card[]>
-  update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints'>>): Promise<Card>
+  update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints' | 'choices'>>): Promise<Card>
   softDelete(cardId: CardId): Promise<void>
 }
 

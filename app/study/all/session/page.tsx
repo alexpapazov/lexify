@@ -16,9 +16,11 @@ import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }    from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { progressAfterReview, initialCardState, ratingToWasCorrect } from '@/engine/pipeline'
-import { gradeTyping } from '@/engine/grading'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, Deck } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
+import { FlashcardMode } from '@/components/session/FlashcardMode'
+import { TypingMode } from '@/components/session/TypingMode'
+import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 
 interface SessionCard {
   card:            Card
@@ -26,6 +28,9 @@ interface SessionCard {
   pipeline:        Pipeline
   gradingSettings: GradingSettings
   deckName:        string
+  deckCards:       Card[]
+  sourceLanguage:  string
+  targetLanguage:  string
 }
 
 function shuffle<T>(arr: T[]): T[] {
@@ -35,101 +40,6 @@ function shuffle<T>(arr: T[]): T[] {
     ;[a[i], a[j]] = [a[j]!, a[i]!]
   }
   return a
-}
-
-// Reuse the same FlashcardMode and TypingMode as per-deck session
-// (duplicated here to keep files self-contained — will extract to shared component later)
-
-function RatingButtons({ onRate }: { onRate: (r: Rating) => void }) {
-  const buttons: { rating: Rating; label: string; color: string }[] = [
-    { rating: 'again', label: 'Again', color: 'border-danger/60 text-danger hover:bg-danger/10'       },
-    { rating: 'hard',  label: 'Hard',  color: 'border-warning/60 text-warning hover:bg-warning/10'    },
-    { rating: 'good',  label: 'Good',  color: 'border-success/60 text-success hover:bg-success/10'    },
-    { rating: 'easy',  label: 'Easy',  color: 'border-accent/60 text-accent-soft hover:bg-accent/10'  },
-  ]
-  return (
-    <div className="flex gap-3 justify-center">
-      {buttons.map(({ rating, label, color }) => (
-        <button key={rating} onClick={() => onRate(rating)}
-          className={`border rounded-lg px-5 py-2 text-sm font-medium transition-colors ${color}`}>
-          {label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function FlashcardMode({ card, promptSide, deckName, onRate }: {
-  card: Card; promptSide: 'front' | 'back'; deckName: string; onRate: (r: Rating) => void
-}) {
-  const [revealed, setRevealed] = useState(false)
-  useEffect(() => setRevealed(false), [card.id])
-  const prompt = promptSide === 'front' ? card.front : card.back
-  const answer = promptSide === 'front' ? card.back  : card.front
-  return (
-    <div className="space-y-6 w-full max-w-xl mx-auto">
-      <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>
-      <div className="panel min-h-[160px] flex items-center justify-center text-center">
-        <p className="text-2xl font-medium text-ink">{prompt}</p>
-      </div>
-      {!revealed ? (
-        <div className="flex flex-col items-center gap-3">
-          <button onClick={() => setRevealed(true)} className="btn-primary px-10">Show answer</button>
-          <button onClick={() => onRate('again')} className="text-xs text-ink-faint hover:text-ink-muted">Don&apos;t know</button>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="panel min-h-[100px] flex items-center justify-center text-center bg-surface-raised">
-            <p className="text-xl text-ink">{answer}</p>
-          </div>
-          <RatingButtons onRate={onRate} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-function TypingMode({ card, promptSide, gradingSettings, deckName, onRate }: {
-  card: Card; promptSide: 'front' | 'back'; gradingSettings: GradingSettings; deckName: string
-  onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
-}) {
-  const [input,  setInput]  = useState('')
-  const [result, setResult] = useState<{ correct: boolean; expected: string } | null>(null)
-  useEffect(() => { setInput(''); setResult(null) }, [card.id])
-  const prompt   = promptSide === 'front' ? card.front : card.back
-  const expected = promptSide === 'front' ? card.back  : card.front
-  function check() { setResult({ correct: gradeTyping(input, expected, gradingSettings).correct, expected }) }
-  return (
-    <div className="space-y-6 w-full max-w-xl mx-auto">
-      <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>
-      <div className="panel min-h-[120px] flex items-center justify-center text-center">
-        <p className="text-2xl font-medium text-ink">{prompt}</p>
-      </div>
-      <div className="space-y-3">
-        <input className={`input text-center text-lg font-mono ${result ? result.correct ? 'border-success/60 bg-success/5' : 'border-danger/60 bg-danger/5' : ''}`}
-          placeholder="Type your answer…" value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !result) check() }} disabled={!!result} autoFocus />
-        {!result ? (
-          <div className="flex gap-3 justify-center">
-            <button onClick={check} disabled={!input.trim()} className="btn-primary">Check</button>
-            <button onClick={() => { setResult({ correct: false, expected }); setInput('') }} className="text-xs text-ink-faint hover:text-ink-muted pt-2">Don&apos;t know</button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className={`panel text-center py-3 ${result.correct ? 'border-success/30 bg-success/5' : 'border-danger/30 bg-danger/5'}`}>
-              {result.correct ? <p className="text-success font-medium">Correct!</p> : (
-                <div className="space-y-1">
-                  <p className="text-danger font-medium">Not quite</p>
-                  <p className="text-ink-muted text-sm">Answer: <span className="text-ink font-mono">{result.expected}</span></p>
-                </div>
-              )}
-            </div>
-            <RatingButtons onRate={r => onRate(r, result.correct, input)} />
-          </div>
-        )}
-      </div>
-    </div>
-  )
 }
 
 export default function AllDueSessionPage() {
@@ -180,23 +90,27 @@ export default function AllDueSessionPage() {
         for (const card of cards) {
           const state = stateMap.get(card.id)
 
+          const common = {
+            card,
+            pipeline,
+            gradingSettings: deck.gradingSettings,
+            deckName:        deck.name,
+            deckCards:       cards,
+            sourceLanguage:  deck.sourceLanguage,
+            targetLanguage:  deck.targetLanguage,
+          }
+
           if (!state) {
             // New card — only include if under daily limit
             if (newCardBudget <= 0) continue
             newCardBudget--
-            allCards.push({
-              card,
-              state: initialCardState(session.user.id, card.id, pipeline.id),
-              pipeline,
-              gradingSettings: deck.gradingSettings,
-              deckName: deck.name,
-            })
+            allCards.push({ ...common, state: initialCardState(session.user.id, card.id, pipeline.id) })
           } else if (!state.graduated) {
             // In pipeline — always include
-            allCards.push({ card, state, pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name })
+            allCards.push({ ...common, state })
           } else if (state.dueAt && new Date(state.dueAt) <= now) {
             // Graduated and due
-            allCards.push({ card, state, pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name })
+            allCards.push({ ...common, state })
           }
         }
       }
@@ -240,6 +154,14 @@ export default function AllDueSessionPage() {
     }
   }, [queue, index, userId])
 
+  const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
+    setQueue(prev => prev.map(item => {
+      if (item.card.id !== cardId) return item
+      const card = { ...item.card, choices }
+      return { ...item, card, deckCards: item.deckCards.map(c => c.id === cardId ? card : c) }
+    }))
+  }, [])
+
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (done) {
@@ -254,7 +176,7 @@ export default function AllDueSessionPage() {
   }
 
   const current = queue[index]!
-  const { card, state, pipeline, gradingSettings, deckName } = current
+  const { card, state, pipeline, gradingSettings, deckName, deckCards, sourceLanguage, targetLanguage } = current
   const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
 
@@ -269,12 +191,17 @@ export default function AllDueSessionPage() {
         <div className="h-full bg-accent rounded-full transition-all duration-300"
           style={{ width: `${Math.round((index / queue.length) * 100)}%` }} />
       </div>
-      {step.stepType === 'recognition' ? (
+      {!state.graduated && step.stepType === 'recognition' ? (
+        <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
+          deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
+          onChoicesCached={handleChoicesCached}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+      ) : step.stepType === 'recognition' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} deckName={deckName}
           onRate={rating => handleAnswer(rating, ratingToWasCorrect(rating))} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
-          gradingSettings={gradingSettings} deckName={deckName}
+          gradingSettings={gradingSettings} gradedReview={state.graduated} deckName={deckName}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       )}
     </div>
