@@ -93,8 +93,9 @@ export default function DeckEditPage() {
   const supabase   = createClient()
 
   const [deckName,    setDeckName]    = useState('')
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const [deleting,      setDeleting]      = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleting,        setDeleting]        = useState(false)
+  const [deleteError,     setDeleteError]     = useState<string | null>(null)
   const [sourceLang,  setSourceLang]  = useState('es')
   const [targetLang,  setTargetLang]  = useState('en')
   const [cards,       setCards]       = useState<EditableCard[]>([])
@@ -241,14 +242,14 @@ export default function DeckEditPage() {
 
   async function handleDeleteDeck() {
     setDeleting(true)
+    setDeleteError(null)
     try {
       const deckRepo = new SupabaseDeckRepository()
       await deckRepo.softDelete(deckId)
       router.push('/study')
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Delete failed')
+      setDeleteError(err instanceof Error ? err.message : 'Delete failed')
       setDeleting(false)
-      setConfirmDelete(false)
     }
   }
 
@@ -266,37 +267,18 @@ export default function DeckEditPage() {
           <span className="text-xs text-ink-faint shrink-0">{cards.length} cards</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {!confirmDelete ? (
-            <button
-              onClick={() => setConfirmDelete(true)}
-              className="p-2.5 rounded-lg border border-white/10 hover:border-danger/40 text-ink-muted hover:text-danger transition-colors"
-              title="Delete deck"
-            >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                <path d="M10 11v6M14 11v6"/>
-                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-              </svg>
-            </button>
-          ) : (
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-ink-muted">Delete?</span>
-              <button
-                onClick={handleDeleteDeck}
-                disabled={deleting}
-                className="text-sm font-medium text-danger hover:text-danger/80 transition-colors"
-              >
-                {deleting ? 'Deleting…' : 'Yes'}
-              </button>
-              <button
-                onClick={() => setConfirmDelete(false)}
-                className="text-sm text-ink-faint hover:text-ink transition-colors"
-              >
-                No
-              </button>
-            </div>
-          )}
+          <button
+            onClick={() => { setDeleteError(null); setShowDeleteModal(true) }}
+            className="p-2.5 rounded-lg border border-white/10 hover:border-danger/40 text-ink-muted hover:text-danger transition-colors"
+            title="Delete deck"
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+              <path d="M10 11v6M14 11v6"/>
+              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+            </svg>
+          </button>
           <button
             onClick={handleSave}
             disabled={saving}
@@ -373,6 +355,40 @@ export default function DeckEditPage() {
         </button>
         <Link href={`/study/${deckId}`} className="btn-ghost">Cancel</Link>
       </div>
+
+      {/* Delete confirmation modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="panel max-w-sm w-full space-y-4">
+            <h2 className="text-lg font-semibold text-ink">Delete deck?</h2>
+            <p className="text-sm text-ink-muted">
+              This will permanently delete <span className="text-ink font-medium">{deckName}</span> and
+              all {cards.length} card{cards.length !== 1 ? 's' : ''} in it. This can&apos;t be undone.
+            </p>
+            {deleteError && (
+              <div className="border border-danger/40 bg-danger/10 rounded-lg px-4 py-3 text-sm text-danger">
+                ⚠ {deleteError}
+              </div>
+            )}
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => { setShowDeleteModal(false); setDeleteError(null) }}
+                disabled={deleting}
+                className="btn-ghost"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteDeck}
+                disabled={deleting}
+                className="bg-danger hover:bg-danger/80 text-white font-medium px-5 py-2.5 rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
