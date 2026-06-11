@@ -58,7 +58,8 @@ export async function POST(req: NextRequest) {
 
   const deckFronts = (body.deckFronts ?? []).filter(Boolean).slice(0, 30)
   const deckBacks  = (body.deckBacks  ?? []).filter(Boolean).slice(0, 30)
-  const avoid = [...new Set([...deckFronts, ...deckBacks, front, back])]
+  const avoidFront = [...new Set([...deckFronts, front])]
+  const avoidBack  = [...new Set([...deckBacks, back])]
 
   const srcLang = sourceLanguage || 'the source language'
   const tgtLang = targetLanguage || 'the target language'
@@ -69,23 +70,43 @@ The real flashcard pair is:
 - ${srcLang}: "${front}"
 - ${tgtLang}: "${back}"
 
-Generate ${DISTRACTORS_PER_SIDE} OTHER vocabulary pairs to use as wrong-answer options. Each pair must be:
-- A genuinely correct translation: "front" is a real word/phrase in ${srcLang}, and "back" is its accurate ${tgtLang} translation (NOT a translation of "${front}" / "${back}")
-- Similar in category, part of speech, and length to the real pair (e.g. if the real pair is a piece of furniture, suggest other furniture)
-- Clearly different from "${front}" / "${back}" — not synonyms or alternate translations of them
-- Distinct from each other and from these existing words: ${avoid.join(', ') || '(none)'}
+You need to generate TWO separate lists of wrong-answer options, one for each
+side of the card, because each side is quizzed differently and needs a
+different KIND of distractor.
 
-CRITICAL: every "front" value must be written in ${srcLang}, and every "back" value must be written in ${tgtLang}. Never mix languages within a field.
+1. "backDistractors" — used when the learner sees "${front}" (in ${srcLang})
+   and must pick its meaning in ${tgtLang}. Generate ${DISTRACTORS_PER_SIDE}
+   words/phrases in ${tgtLang} that are SEMANTICALLY RELATED to "${back}" —
+   same general category, theme, or domain — but are clearly DIFFERENT in
+   meaning, NOT synonyms, near-synonyms, or alternate valid translations of
+   "${back}" (or of "${front}"). The goal is plausible-but-wrong options, never
+   options that could also be considered correct.
+   Example: if "${back}" means "joy", good distractors are other emotions like
+   "anger", "excitement", "sadness" — NOT "happiness", since that's a synonym
+   and would make the question ambiguous.
+   Similar in part of speech and length to "${back}". Distinct from each other
+   and from: ${avoidBack.join(', ') || '(none)'}.
+
+2. "frontDistractors" — used when the learner sees "${back}" (in ${tgtLang})
+   and must pick the matching word in ${srcLang}. Generate ${DISTRACTORS_PER_SIDE}
+   words/phrases in ${srcLang} that LOOK / SOUND SIMILAR to "${front}" —
+   similar spelling, letter patterns, length, or word root — so the learner
+   has to recall the exact word rather than just recognizing the "shape" of
+   it. These do NOT need to be related in meaning to "${front}" or "${back}"
+   at all — visual/phonetic similarity is what matters.
+   Example: if "${front}" is "llenar", good distractors are other similar-
+   looking verbs like "llamar", "llover", "llegar".
+   Distinct from each other and from: ${avoidFront.join(', ') || '(none)'}.
+
+CRITICAL: every "frontDistractors" value must be written in ${srcLang}, and
+every "backDistractors" value must be written in ${tgtLang}. Never mix
+languages within a list.
 
 Respond with ONLY a JSON object, no other text, in exactly this shape:
-{"pairs": [
-  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
-  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
-  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
-  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
-  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"},
-  {"front": "<word in ${srcLang}>", "back": "<translation in ${tgtLang}>"}
-]}`
+{
+  "frontDistractors": ["<word in ${srcLang}>", "<word in ${srcLang}>", "<word in ${srcLang}>", "<word in ${srcLang}>", "<word in ${srcLang}>", "<word in ${srcLang}>"],
+  "backDistractors": ["<word in ${tgtLang}>", "<word in ${tgtLang}>", "<word in ${tgtLang}>", "<word in ${tgtLang}>", "<word in ${tgtLang}>", "<word in ${tgtLang}>"]
+}`
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -108,29 +129,32 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
 
     const data = await res.json()
     const text: string = data?.content?.[0]?.text ?? ''
-    const parsed = extractJson(text) as { pairs?: unknown } | null
+    const parsed = extractJson(text) as { frontDistractors?: unknown; backDistractors?: unknown } | null
 
-    if (!parsed || !Array.isArray(parsed.pairs)) {
+    if (!parsed) {
       return NextResponse.json({ ok: false, reason: 'parse-error' })
     }
 
-    const toPair = (p: unknown): { front: string; back: string } | null => {
-      const obj = p as { front?: unknown; back?: unknown } | null | undefined
-      if (!obj || typeof obj.front !== 'string' || typeof obj.back !== 'string') return null
-      const front = obj.front.trim()
-      const back  = obj.back.trim()
-      return front && back ? { front, back } : null
+    const toStringList = (val: unknown): string[] => {
+      if (!Array.isArray(val)) return []
+      return val
+        .filter((s): s is string => typeof s === 'string')
+        .map(s => s.trim())
+        .filter(Boolean)
     }
 
-    const pairs = parsed.pairs
-      .map(toPair)
-      .filter((p): p is { front: string; back: string } => p !== null)
+    const frontDistractors = toStringList(parsed.frontDistractors)
+    const backDistractors  = toStringList(parsed.backDistractors)
+
+    if (frontDistractors.length === 0 && backDistractors.length === 0) {
+      return NextResponse.json({ ok: false, reason: 'parse-error' })
+    }
 
     return NextResponse.json({
       ok: true,
       choices: {
-        front: pairs.map(p => p.front.trim()),
-        back:  pairs.map(p => p.back.trim()),
+        front: frontDistractors,
+        back:  backDistractors,
       },
     })
   } catch {

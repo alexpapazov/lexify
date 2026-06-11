@@ -1,0 +1,12 @@
+-- Migration 012: clear cached multiple-choice distractor pools again.
+--
+-- The /api/distractors prompt strategy changed:
+--   - "back" distractors are now semantically related to the correct answer
+--     but explicitly NOT synonyms (avoids ambiguous multiple-correct-answer
+--     situations, e.g. "joy" vs "happiness").
+--   - "front" distractors are now chosen for visual/spelling similarity to
+--     the correct answer rather than semantic similarity (e.g. "llenar" vs
+--     "llamar", "llover", "llegar").
+-- Existing cached `choices` were generated under the old strategy, so clear
+-- them to force regeneration.
+UPDATE cards SET choices = NULL WHERE choices IS NOT NULL;
