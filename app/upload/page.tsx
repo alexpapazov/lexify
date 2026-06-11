@@ -7,6 +7,7 @@ import { SupabaseDeckRepository }     from '@/lib/data/decks'
 import { SupabaseCardRepository }     from '@/lib/data/cards'
 import { SupabasePipelineRepository } from '@/lib/data/pipelines'
 import { LANGUAGES } from '@/lib/languages'
+import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 
 type SeparatorOption = 'tab' | 'newline' | 'custom'
 interface ParsedCard { front: string; back: string }
@@ -110,6 +111,7 @@ function LanguagePicker({ label, value, onChange }: {
         value={value}
         onChange={e => onChange(e.target.value)}
       >
+        <option value="">Select a language…</option>
         {LANGUAGES.map(l => (
           <option key={l.code} value={l.code}>{l.name}</option>
         ))}
@@ -127,10 +129,11 @@ export default function UploadPage() {
   const [customCardSep, setCustomCardSep] = useState('')
   const [useAiFormat,   setUseAiFormat]   = useState(false)
   const [aiPrompt,      setAiPrompt]      = useState('')
-  const [frontLang,     setFrontLang]     = useState('es')
-  const [backLang,      setBackLang]      = useState('en')
+  const [frontLang,     setFrontLang]     = useState('')
+  const [backLang,      setBackLang]      = useState('')
   const [saving,        setSaving]        = useState(false)
   const [error,         setError]         = useState<string | null>(null)
+  const [showLangPopup, setShowLangPopup] = useState(false)
 
   const router   = useRouter()
   const supabase = createClient()
@@ -147,6 +150,12 @@ export default function UploadPage() {
 
   async function handleSave() {
     setError(null)
+
+    if (!frontLang || !backLang) {
+      setShowLangPopup(true)
+      return
+    }
+
     setSaving(true)
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -165,11 +174,22 @@ export default function UploadPage() {
         pipelineId:     pipeline.id,
       })
 
-      await cardRepo.bulkCreate(deck.id, parsed.map((c, i) => ({
+      const created = await cardRepo.bulkCreate(deck.id, parsed.map((c, i) => ({
         front:    c.front,
         back:     c.back,
         position: i,
       })))
+
+      // Kick off background generation of AI answer choices for every card
+      // so multiple-choice steps don't have to lazy-load them later.
+      const prefetchItems: PrefetchItem[] = created.map(card => ({
+        card:           { ...card, choices: null },
+        side:           'front',
+        deckCards:      created,
+        sourceLanguage: frontLang,
+        targetLanguage: backLang,
+      }))
+      void prefetchChoices(prefetchItems, () => {})
 
       router.push(`/study/${deck.id}`)
     } catch (err: unknown) {
@@ -252,6 +272,21 @@ export default function UploadPage() {
           Clear
         </button>
       </div>
+
+      {/* Missing language popup */}
+      {showLangPopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="panel max-w-sm w-full space-y-4">
+            <h2 className="text-lg font-semibold text-ink">Select languages</h2>
+            <p className="text-sm text-ink-muted">
+              Please choose both the front and back language before saving this deck.
+            </p>
+            <div className="flex justify-end">
+              <button onClick={() => setShowLangPopup(false)} className="btn-primary">Got it</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

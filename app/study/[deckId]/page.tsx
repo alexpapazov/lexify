@@ -10,6 +10,7 @@ import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import type { Deck, Card, CardState, DeckPreferences } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
+import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 
 // ─── Card edit modal ─────────────────────────────────────────────────────────
 
@@ -180,13 +181,16 @@ function ConfirmDialog({ message, onConfirm, onCancel }: {
 
 // ─── Gear settings panel ──────────────────────────────────────────────────────
 
-function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, defaultSpillover, maxCards, onClose }: {
+function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, defaultSpillover, maxCards, cards, sourceLanguage, targetLanguage, onClose }: {
   deckId:           string
   userId:           string
   initialPrefs:     DeckPreferences | null
   defaultLimit:     number
   defaultSpillover: boolean
   maxCards:         number
+  cards:            Card[]
+  sourceLanguage:   string
+  targetLanguage:   string
   onClose:          () => void
 }) {
   const today    = new Date().toISOString().slice(0, 10)
@@ -238,6 +242,14 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
       await deckRepo.resetProgress(deckId)
       setConfirmFullReset(false)
       onClose()
+
+      // Kick off background regeneration of AI answer choices for every
+      // card now that the cached pools were just cleared.
+      const resetCards = cards.map(c => ({ ...c, choices: null }))
+      const prefetchItems: PrefetchItem[] = resetCards.map(card => ({
+        card, side: 'front', deckCards: resetCards, sourceLanguage, targetLanguage,
+      }))
+      void prefetchChoices(prefetchItems, () => {})
     } catch (err: unknown) {
       setFullResetError(err instanceof Error ? err.message : 'Reset failed')
     } finally {
@@ -464,6 +476,7 @@ export default function DeckDetailPage() {
           deckId={deckId} userId={userId} initialPrefs={prefs}
           defaultLimit={defaultLimit} defaultSpillover={defaultSpillover}
           maxCards={cards.length}
+          cards={cards} sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage}
           onClose={() => { setShowGear(false); loadAll(userId) }}
         />
       )}
