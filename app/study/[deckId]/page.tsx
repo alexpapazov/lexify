@@ -200,6 +200,9 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
   const [saved,         setSaved]         = useState(false)
   const [saveError,     setSaveError]     = useState<string | null>(null)
   const [confirmReset,  setConfirmReset]  = useState(false)
+  const [confirmFullReset, setConfirmFullReset] = useState(false)
+  const [fullResetting,   setFullResetting]   = useState(false)
+  const [fullResetError,  setFullResetError]  = useState<string | null>(null)
 
   async function handleSave() {
     setSaving(true)
@@ -227,6 +230,21 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
     onClose()
   }
 
+  async function handleFullReset() {
+    setFullResetting(true)
+    setFullResetError(null)
+    try {
+      const deckRepo = new SupabaseDeckRepository()
+      await deckRepo.resetProgress(deckId)
+      setConfirmFullReset(false)
+      onClose()
+    } catch (err: unknown) {
+      setFullResetError(err instanceof Error ? err.message : 'Reset failed')
+    } finally {
+      setFullResetting(false)
+    }
+  }
+
   return (
     <>
       {confirmReset && (
@@ -234,6 +252,14 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
           message="Are you sure you want to reset and stray from your study routine? This will clear the backlog for this deck and treat all in-progress cards as starting fresh today."
           onConfirm={handleReset}
           onCancel={() => setConfirmReset(false)}
+        />
+      )}
+
+      {confirmFullReset && (
+        <ConfirmDialog
+          message="This will erase ALL study progress for this deck — every card goes back to never studied, and cached answer choices are cleared and regenerated. The cards themselves and your other settings are not affected. This can't be undone."
+          onConfirm={handleFullReset}
+          onCancel={() => setConfirmFullReset(false)}
         />
       )}
 
@@ -308,6 +334,25 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
             <p className="text-xs text-ink-faint mt-1">
               Clears accumulated missed cards — only today&apos;s {dailyLimit} will be due.
             </p>
+          </div>
+
+          {/* Full progress reset */}
+          <div className="border-t border-white/10 pt-3">
+            <button
+              onClick={() => setConfirmFullReset(true)}
+              disabled={fullResetting}
+              className="text-sm text-danger/70 hover:text-danger transition-colors w-full text-left disabled:opacity-40"
+            >
+              ↺ Reset all progress for this deck
+            </button>
+            <p className="text-xs text-ink-faint mt-1">
+              Resets every card to never studied and clears cached answer choices. Cards and settings are kept.
+            </p>
+            {fullResetError && (
+              <p className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-lg px-3 py-2 mt-2">
+                ⚠ {fullResetError}
+              </p>
+            )}
           </div>
         </div>
       </div>

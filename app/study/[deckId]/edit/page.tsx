@@ -96,10 +96,6 @@ export default function DeckEditPage() {
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleting,        setDeleting]        = useState(false)
   const [deleteError,     setDeleteError]     = useState<string | null>(null)
-  const [showResetModal,  setShowResetModal]  = useState(false)
-  const [resetting,       setResetting]       = useState(false)
-  const [resetError,      setResetError]      = useState<string | null>(null)
-  const [resetDone,       setResetDone]       = useState(false)
   const [sourceLang,  setSourceLang]  = useState('es')
   const [targetLang,  setTargetLang]  = useState('en')
   const [cards,       setCards]       = useState<EditableCard[]>([])
@@ -257,20 +253,6 @@ export default function DeckEditPage() {
     }
   }
 
-  async function handleResetDeck() {
-    setResetting(true)
-    setResetError(null)
-    try {
-      const deckRepo = new SupabaseDeckRepository()
-      await deckRepo.resetProgress(deckId)
-      setResetDone(true)
-      setTimeout(() => { setResetDone(false); setShowResetModal(false) }, 1200)
-    } catch (err: unknown) {
-      setResetError(err instanceof Error ? err.message : 'Reset failed')
-    } finally {
-      setResetting(false)
-    }
-  }
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
 
@@ -286,16 +268,6 @@ export default function DeckEditPage() {
           <span className="text-xs text-ink-faint shrink-0">{cards.length} cards</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => { setResetError(null); setShowResetModal(true) }}
-            className="p-2.5 rounded-lg border border-white/10 hover:border-accent/40 text-ink-muted hover:text-accent transition-colors"
-            title="Reset deck progress"
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-              <path d="M3 3v5h5"/>
-            </svg>
-          </button>
           <button
             onClick={() => { setDeleteError(null); setShowDeleteModal(true) }}
             className="p-2.5 rounded-lg border border-white/10 hover:border-danger/40 text-ink-muted hover:text-danger transition-colors"
@@ -384,39 +356,6 @@ export default function DeckEditPage() {
         </button>
         <Link href={`/study/${deckId}`} className="btn-ghost">Cancel</Link>
       </div>
-
-      {/* Reset progress confirmation modal */}
-      {showResetModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="panel max-w-sm w-full space-y-4">
-            <h2 className="text-lg font-semibold text-ink">Reset deck progress?</h2>
-            <p className="text-sm text-ink-muted">
-              This will erase all study progress for <span className="text-ink font-medium">{deckName}</span> — every card goes back to &quot;never studied&quot;, and cached answer choices are cleared and regenerated. The cards themselves and deck settings are not affected. This can&apos;t be undone.
-            </p>
-            {resetError && (
-              <div className="border border-danger/40 bg-danger/10 rounded-lg px-4 py-3 text-sm text-danger">
-                ⚠ {resetError}
-              </div>
-            )}
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                onClick={() => { setShowResetModal(false); setResetError(null) }}
-                disabled={resetting}
-                className="btn-ghost"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleResetDeck}
-                disabled={resetting || resetDone}
-                className="bg-danger hover:bg-danger/80 text-white font-medium px-5 py-2.5 rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {resetDone ? 'Reset ✓' : resetting ? 'Resetting…' : 'Reset deck'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Delete confirmation modal */}
       {showDeleteModal && (
