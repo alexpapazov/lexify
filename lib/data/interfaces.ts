@@ -14,6 +14,8 @@ export interface DeckRepository {
   create(userId: UserId, input: CreateDeckInput): Promise<Deck>
   update(deckId: DeckId, patch: Partial<Pick<Deck, 'name' | 'gradingSettings' | 'pipelineId' | 'isPublic'>>): Promise<Deck>
   softDelete(deckId: DeckId): Promise<void>
+  /** Wipes study progress for every card in the deck and clears cached AI answer choices. */
+  resetProgress(deckId: DeckId): Promise<void>
 }
 
 export interface CreateCardInput {

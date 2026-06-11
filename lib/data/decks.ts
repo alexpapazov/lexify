@@ -87,4 +87,9 @@ export class SupabaseDeckRepository implements DeckRepository {
     const { error } = await this.db.rpc('soft_delete_deck', { p_deck_id: deckId })
     if (error) throw new Error(error.message)
   }
+
+  async resetProgress(deckId: DeckId): Promise<void> {
+    const { error } = await this.db.rpc('reset_deck_progress', { p_deck_id: deckId })
+    if (error) throw new Error(error.message)
+  }
 }
