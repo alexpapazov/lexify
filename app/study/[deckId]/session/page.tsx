@@ -46,8 +46,18 @@ export default function SessionPage() {
   const [targetLanguage,  setTargetLanguage]  = useState('en')
   const [gradingSettings, setGradingSettings] = useState<GradingSettings | null>(null)
   const [done,            setDone]            = useState(false)
+  const [cardStates,      setCardStates]      = useState<Map<string, CardState>>(new Map())
 
-  useEffect(() => {
+  const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
+    setAllCards(prev => prev.map(c => c.id === cardId ? { ...c, choices } : c))
+    setQueue(prev => prev.map(item => item.card.id === cardId ? { ...item, card: { ...item.card, choices } } : item))
+  }, [])
+
+  const loadSession = useCallback(() => {
+    setLoading(true)
+    setDone(false)
+    setIndex(0)
+
     async function load() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth'); return }
@@ -75,6 +85,7 @@ export default function SessionPage() {
 
       const existingStates = await stateRepo.listByDeck(session.user.id, deckId)
       const stateMap = new Map(existingStates.map(s => [s.cardId, s]))
+      setCardStates(stateMap)
 
       const now   = new Date()
       const today = now.toISOString().slice(0, 10)
@@ -134,8 +145,13 @@ export default function SessionPage() {
         .filter((x): x is PrefetchItem => x !== null)
       void prefetchChoices(prefetchItems, handleChoicesCached)
     }
-    load()
-  }, [deckId]) // eslint-disable-line react-hooks/exhaustive-deps
+    void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deckId])
+
+  useEffect(() => {
+    loadSession()
+  }, [loadSession])
 
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
     const current = queue[index]
@@ -158,6 +174,12 @@ export default function SessionPage() {
     const newState = progressAfterReview(state, pipeline, { wasCorrect, rating })
     await stateRepo.upsert(newState)
 
+    setCardStates(prev => {
+      const next = new Map(prev)
+      next.set(card.id, newState)
+      return next
+    })
+
     if (index + 1 >= queue.length) setDone(true)
     else {
       setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
@@ -165,14 +187,10 @@ export default function SessionPage() {
     }
   }, [queue, index, userId])
 
-  const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
-    setAllCards(prev => prev.map(c => c.id === cardId ? { ...c, choices } : c))
-    setQueue(prev => prev.map(item => item.card.id === cardId ? { ...item, card: { ...item.card, choices } } : item))
-  }, [])
-
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (done) {
+    const allLearned = allCards.length > 0 && allCards.every(c => cardStates.get(c.id)?.graduated === true)
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
         <div className="text-5xl">🎉</div>
@@ -180,7 +198,9 @@ export default function SessionPage() {
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}.</p>
         <div className="flex gap-3 justify-center">
           <Link href={`/study/${deckId}`} className="btn-primary">Back to deck</Link>
-          <Link href="/study" className="btn-ghost">All decks</Link>
+          {!allLearned && (
+            <button onClick={() => loadSession()} className="btn-ghost">Next round</button>
+          )}
         </div>
       </div>
     )

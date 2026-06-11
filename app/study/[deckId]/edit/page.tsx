@@ -16,6 +16,7 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { LANGUAGES } from '@/lib/languages'
+import type { Card } from '@/domain'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,6 +100,7 @@ export default function DeckEditPage() {
   const [sourceLang,  setSourceLang]  = useState('es')
   const [targetLang,  setTargetLang]  = useState('en')
   const [cards,       setCards]       = useState<EditableCard[]>([])
+  const [originalCards, setOriginalCards] = useState<Map<string, { front: string; back: string }>>(new Map())
   const [loading,     setLoading]     = useState(true)
   const [saving,      setSaving]      = useState(false)
   const [langSaving,  setLangSaving]  = useState(false)
@@ -122,6 +124,7 @@ export default function DeckEditPage() {
       setSourceLang(deck.sourceLanguage ?? 'es')
       setTargetLang(deck.targetLanguage ?? 'en')
       setCards(existing.map((c, i) => ({ id: c.id, front: c.front, back: c.back, position: i, error: null })))
+      setOriginalCards(new Map(existing.map(c => [c.id, { front: c.front, back: c.back }])))
       setLoading(false)
     }
     load()
@@ -215,20 +218,42 @@ export default function DeckEditPage() {
     try {
       const cardRepo = new SupabaseCardRepository()
 
-      // Update existing cards, create new ones
-      for (let i = 0; i < cards.length; i++) {
-        const card = cards[i]!
-        if (card.id) {
-          await cardRepo.update(card.id, { front: card.front.trim(), back: card.back.trim() })
-        } else {
-          const created = await cardRepo.bulkCreate(deckId, [{
-            front:    card.front.trim(),
-            back:     card.back.trim(),
+      // Only push updates for cards whose front/back actually changed —
+      // for a large deck, re-saving every card on every save is what makes
+      // this slow. Untouched cards are skipped entirely.
+      const updatePromises = cards
+        .filter(c => c.id)
+        .map(c => {
+          const front = c.front.trim()
+          const back  = c.back.trim()
+          const original = originalCards.get(c.id!)
+          if (original && original.front === front && original.back === back) return null
+          // Content changed — clear cached AI distractors, they no longer match.
+          return cardRepo.update(c.id!, { front, back, choices: null })
+        })
+        .filter((p): p is Promise<Card> => p !== null)
+
+      // Create all new (unsaved) cards in a single batch insert.
+      const newEntries = cards.map((c, i) => ({ c, i })).filter(({ c }) => !c.id)
+      const createPromise = newEntries.length > 0
+        ? cardRepo.bulkCreate(deckId, newEntries.map(({ c, i }) => ({
+            front:    c.front.trim(),
+            back:     c.back.trim(),
             position: i,
-          }])
-          // Update local state with the new id
-          setCards(prev => prev.map((c, idx) => idx === i ? { ...c, id: created[0]?.id ?? null } : c))
-        }
+          })))
+        : Promise.resolve([] as Card[])
+
+      const [, created] = await Promise.all([Promise.all(updatePromises), createPromise])
+
+      if (created.length > 0) {
+        setCards(prev => {
+          const next = [...prev]
+          newEntries.forEach(({ i }, j) => {
+            const createdCard = created[j]
+            if (createdCard) next[i] = { ...next[i]!, id: createdCard.id }
+          })
+          return next
+        })
       }
 
       setSaved(true)
