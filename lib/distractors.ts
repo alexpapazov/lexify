@@ -4,11 +4,16 @@
  * Multiple-choice option builder for pre-graduation "recognition" steps.
  *
  * Strategy:
- *  1. Use cached `card.choices[side]` if it has enough usable distractors.
- *  2. Otherwise, ask /api/distractors for AI-generated options (Claude) and
- *     cache the result on the card via cardRepo.update().
- *  3. If AI generation is unavailable or fails, fall back to picking random
- *     front/back values from sibling cards in the same deck.
+ *  1. Use cached `card.choices[side]` if it has enough usable distractors —
+ *     return these immediately, synchronously.
+ *  2. Otherwise, fill in with random front/back values from sibling cards in
+ *     the deck so options can be shown right away with no loading delay.
+ *  3. Separately (in the background), ask /api/distractors for AI-generated
+ *     options (Claude) and cache the result on the card via
+ *     cardRepo.update() once it resolves. Once cached, those AI choices are
+ *     permanent and will be used immediately on future renders — the
+ *     sibling-card fallback is only ever a temporary stand-in while AI
+ *     choices are (re-)generated.
  *
  * Returns a shuffled array containing the correct answer plus up to
  * `OPTIONS_NEEDED - 1` distractors (fewer if the deck is too small).
@@ -80,51 +85,29 @@ async function fetchAiChoices(
   }
 }
 
-export interface MultipleChoiceResult {
-  options: string[]
-  /** Set when AI generation produced (and cached) a new choices pool, so callers can update local state. */
-  cachedChoices?: CardChoices
-}
-
 /**
- * Get (and lazily generate/cache) multiple-choice options for `side` of `card`.
+ * Build multiple-choice options for `side` of `card` synchronously, with no
+ * network calls. Uses cached AI choices if there are enough; otherwise pads
+ * out with random sibling-card values from the deck as a temporary stand-in.
  * `side` is the answer side of the current pipeline step — i.e. what the
  * learner needs to pick out from among the distractors.
  */
-export async function getMultipleChoiceOptions(
+export function buildOptions(
   card: Card,
   side: CardSide,
   deckCards: Card[],
-  sourceLanguage: string,
-  targetLanguage: string,
-): Promise<MultipleChoiceResult> {
+): string[] {
   const correct = side === 'front' ? card.front : card.back
   const distractorsNeeded = OPTIONS_NEEDED - 1
 
   let pool = dedupeAgainst(correct, card.choices?.[side] ?? [])
-  let cachedChoices: CardChoices | undefined
-
-  if (pool.length < distractorsNeeded) {
-    const aiChoices = await fetchAiChoices(card, deckCards, sourceLanguage, targetLanguage)
-    if (aiChoices) {
-      try {
-        const cardRepo = new SupabaseCardRepository()
-        await cardRepo.update(card.id, { choices: aiChoices })
-        cachedChoices = aiChoices
-      } catch {
-        // Caching is best-effort — still use the freshly generated choices below.
-      }
-      pool = dedupeAgainst(correct, aiChoices[side] ?? [])
-    }
-  }
-
   if (pool.length < distractorsNeeded) {
     const fallback = deckFallback(card, side, deckCards, correct, distractorsNeeded - pool.length)
     pool = dedupeAgainst(correct, [...pool, ...fallback])
   }
 
   const distractors = shuffle(pool).slice(0, distractorsNeeded)
-  return { options: shuffle([correct, ...distractors]), cachedChoices }
+  return shuffle([correct, ...distractors])
 }
 
 /** True if `card` still needs AI/cached distractors generated for `side`. */
@@ -132,6 +115,34 @@ export function needsChoices(card: Card, side: CardSide): boolean {
   const correct = side === 'front' ? card.front : card.back
   const pool = dedupeAgainst(correct, card.choices?.[side] ?? [])
   return pool.length < OPTIONS_NEEDED - 1
+}
+
+/**
+ * If `card` doesn't yet have enough cached AI distractors for `side`, fetch
+ * fresh ones from /api/distractors and cache them on the card for good.
+ * Returns the newly cached choices (covering both sides), or `null` if no
+ * generation was needed or it failed — in which case the caller keeps
+ * showing its existing/fallback options and can simply try again later.
+ */
+export async function ensureChoicesGenerated(
+  card: Card,
+  side: CardSide,
+  deckCards: Card[],
+  sourceLanguage: string,
+  targetLanguage: string,
+): Promise<CardChoices | null> {
+  if (!needsChoices(card, side)) return null
+
+  const aiChoices = await fetchAiChoices(card, deckCards, sourceLanguage, targetLanguage)
+  if (!aiChoices) return null
+
+  try {
+    const cardRepo = new SupabaseCardRepository()
+    await cardRepo.update(card.id, { choices: aiChoices })
+  } catch {
+    // Caching is best-effort — the caller still gets the freshly generated choices.
+  }
+  return aiChoices
 }
 
 export interface PrefetchItem {
@@ -158,14 +169,14 @@ export async function prefetchChoices(
   async function worker() {
     while (next < items.length) {
       const item = items[next++]
-      if (!item || !needsChoices(item.card, item.side)) continue
+      if (!item) continue
       try {
-        const result = await getMultipleChoiceOptions(
+        const aiChoices = await ensureChoicesGenerated(
           item.card, item.side, item.deckCards, item.sourceLanguage, item.targetLanguage,
         )
-        if (result.cachedChoices) onCached(item.card.id, result.cachedChoices)
+        if (aiChoices) onCached(item.card.id, aiChoices)
       } catch {
-        // Best-effort — the card will lazy-load its own choices when shown.
+        // Best-effort — the card will fall back to deck-based choices when shown.
       }
     }
   }

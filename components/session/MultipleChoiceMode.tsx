@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import type { Card, CardChoices, CardSide, Rating } from '@/domain'
-import { getMultipleChoiceOptions } from '@/lib/distractors'
+import { buildOptions, ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
 
 const FEEDBACK_MS = 650
 
@@ -25,18 +25,25 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
 }) {
-  const [choices,  setChoices]  = useState<string[] | null>(null)
+  // Show options immediately — cached AI choices if there are enough,
+  // otherwise sibling-card values from the deck as a temporary stand-in.
+  const [choices,  setChoices]  = useState<string[]>(() => buildOptions(card, answerSide, deckCards))
   const [selected, setSelected] = useState<string | null>(null)
 
   useEffect(() => {
-    let cancelled = false
-    setChoices(null)
+    setChoices(buildOptions(card, answerSide, deckCards))
     setSelected(null)
-    getMultipleChoiceOptions(card, answerSide, deckCards, sourceLanguage, targetLanguage)
-      .then(({ options, cachedChoices }) => {
-        if (cancelled) return
-        setChoices(options)
-        if (cachedChoices) onChoicesCached?.(card.id, cachedChoices)
+
+    // If we're still relying on the deck-based fallback, try to generate and
+    // permanently cache real AI distractors in the background. This doesn't
+    // affect the options already shown for this card — it just means future
+    // visits to this card will use the AI-generated choices.
+    if (!needsChoices(card, answerSide)) return
+    let cancelled = false
+    ensureChoicesGenerated(card, answerSide, deckCards, sourceLanguage, targetLanguage)
+      .then(aiChoices => {
+        if (cancelled || !aiChoices) return
+        onChoicesCached?.(card.id, aiChoices)
       })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
