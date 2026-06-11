@@ -200,6 +200,8 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
   const [onlyToday,     setOnlyToday]     = useState(false)
   const [todayOverride, setTodayOverride] = useState(initialPrefs?.dailyOverride     ?? defaultLimit)
   const [spillover,     setSpillover]     = useState(initialPrefs?.spilloverDue      ?? defaultSpillover)
+  const [cardsPerSessionOn, setCardsPerSessionOn] = useState((initialPrefs?.cardsPerSession ?? 0) > 0)
+  const [cardsPerSession,   setCardsPerSession]   = useState(initialPrefs?.cardsPerSession || 10)
   const [saving,        setSaving]        = useState(false)
   const [saved,         setSaved]         = useState(false)
   const [saveError,     setSaveError]     = useState<string | null>(null)
@@ -218,6 +220,7 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
       dailyOverride:     onlyToday ? todayOverride : null,
       dailyOverrideDate: onlyToday ? today         : null,
       spilloverDue:      spillover,
+      cardsPerSession:   cardsPerSessionOn ? cardsPerSession : null,
     })
     setSaving(false)
     setSaved(true)
@@ -320,6 +323,26 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
                 ? 'Cards you miss accumulate — tomorrow you may see more than your daily limit.'
                 : 'Missed cards count toward tomorrow\'s limit — total stays at ' + dailyLimit + '/day.'}
             </p>
+          </div>
+
+          {/* Cards per session (batch mode) */}
+          <div className="space-y-2 border-t border-white/10 pt-3">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={cardsPerSessionOn} onChange={e => setCardsPerSessionOn(e.target.checked)} className="accent-accent w-4 h-4" />
+              <span className="text-sm text-ink">Study in fixed-size batches</span>
+            </label>
+            {cardsPerSessionOn && (
+              <div className="space-y-1.5 pl-6">
+                <label className="text-sm text-ink-muted">Cards per session</label>
+                <input type="number" min={1} max={500} className="input"
+                  value={cardsPerSession}
+                  onChange={e => setCardsPerSession(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
+                <p className="text-xs text-ink-faint">
+                  Keeps {cardsPerSession} new card{cardsPerSession !== 1 ? 's' : ''} in the learning pipeline at a time —
+                  once a card graduates, the next session introduces another to take its place. Overrides the daily limit above.
+                </p>
+              </div>
+            )}
           </div>
 
           {saveError && (

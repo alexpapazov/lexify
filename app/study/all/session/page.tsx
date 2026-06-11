@@ -80,13 +80,21 @@ export default function AllDueSessionPage() {
           prefRepo.get(session.user.id, deck.id),
         ])
 
-        const stateMap   = new Map(states.map(s => [s.cardId, s]))
-        const dailyLimit = Math.min(
-          prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
-          cards.length,
-        )
-        const introducedToday = states.filter(s => s.introducedDate === today).length
-        let newCardBudget = Math.max(0, dailyLimit - introducedToday)
+        const stateMap = new Map(states.map(s => [s.cardId, s]))
+        const cardsPerSession = prefs?.cardsPerSession ?? null
+
+        let newCardBudget: number
+        if (cardsPerSession && cardsPerSession > 0) {
+          const inPipelineTotal = states.filter(s => !s.graduated).length
+          newCardBudget = Math.max(0, Math.min(cardsPerSession, cards.length) - inPipelineTotal)
+        } else {
+          const dailyLimit = Math.min(
+            prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
+            cards.length,
+          )
+          const introducedToday = states.filter(s => s.introducedDate === today).length
+          newCardBudget = Math.max(0, dailyLimit - introducedToday)
+        }
 
         for (const card of cards) {
           const state = stateMap.get(card.id)

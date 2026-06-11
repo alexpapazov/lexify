@@ -46,6 +46,7 @@ export default function SessionPage() {
   const [targetLanguage,  setTargetLanguage]  = useState('en')
   const [gradingSettings, setGradingSettings] = useState<GradingSettings | null>(null)
   const [done,            setDone]            = useState(false)
+  const [emptySession,    setEmptySession]    = useState(false)
   const [cardStates,      setCardStates]      = useState<Map<string, CardState>>(new Map())
 
   const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
@@ -56,7 +57,9 @@ export default function SessionPage() {
   const loadSession = useCallback(() => {
     setLoading(true)
     setDone(false)
+    setEmptySession(false)
     setIndex(0)
+    setQueue([])
 
     async function load() {
       const { data: { session } } = await supabase.auth.getSession()
@@ -90,20 +93,33 @@ export default function SessionPage() {
       const now   = new Date()
       const today = now.toISOString().slice(0, 10)
 
-      const dailyLimit   = Math.min(
-        prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
-        cards.length,
-      )
-      const spilloverOn  = prefs?.spilloverDue ?? false
+      const cardsPerSession = prefs?.cardsPerSession ?? null
 
-      const introducedToday    = existingStates.filter(s => s.introducedDate === today).length
-      // In-pipeline cards introduced before today (i.e. the "backlog")
-      const inPipelineBacklog  = existingStates.filter(s => !s.graduated && s.introducedDate && s.introducedDate < today).length
+      let newCardBudget: number
 
-      // Without spillover: backlog cards count against today's budget
-      // With spillover:    backlog is additive — full daily budget for new cards
-      const budgetUsed    = spilloverOn ? introducedToday : introducedToday + inPipelineBacklog
-      let newCardBudget   = Math.max(0, dailyLimit - budgetUsed)
+      if (cardsPerSession && cardsPerSession > 0) {
+        // Batch mode: keep at most `cardsPerSession` cards actively in the
+        // pipeline (introduced but not yet graduated) at once, regardless of
+        // calendar day. Once a card graduates, the next session introduces
+        // another to refill the batch.
+        const inPipelineTotal = existingStates.filter(s => !s.graduated).length
+        newCardBudget = Math.max(0, Math.min(cardsPerSession, cards.length) - inPipelineTotal)
+      } else {
+        const dailyLimit  = Math.min(
+          prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
+          cards.length,
+        )
+        const spilloverOn = prefs?.spilloverDue ?? false
+
+        const introducedToday   = existingStates.filter(s => s.introducedDate === today).length
+        // In-pipeline cards introduced before today (i.e. the "backlog")
+        const inPipelineBacklog = existingStates.filter(s => !s.graduated && s.introducedDate && s.introducedDate < today).length
+
+        // Without spillover: backlog cards count against today's budget
+        // With spillover:    backlog is additive — full daily budget for new cards
+        const budgetUsed = spilloverOn ? introducedToday : introducedToday + inPipelineBacklog
+        newCardBudget = Math.max(0, dailyLimit - budgetUsed)
+      }
 
       // Build three buckets
       const newCards:    SessionCard[] = []
@@ -127,7 +143,7 @@ export default function SessionPage() {
       // In-pipeline + due: shuffle so session feels varied
       const finalQueue = [...newCards, ...shuffle(inPipeline), ...shuffle(dueCards)]
 
-      if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
+      if (finalQueue.length === 0) { setEmptySession(true); setDone(true); setLoading(false); return }
       setQueue(finalQueue)
       setLoading(false)
 
@@ -190,6 +206,23 @@ export default function SessionPage() {
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (done) {
+    if (emptySession) {
+      return (
+        <div className="max-w-md mx-auto pt-20 text-center space-y-6">
+          <div className="text-5xl">✅</div>
+          <h2 className="text-2xl font-semibold text-ink">All caught up!</h2>
+          <p className="text-ink-muted">
+            You&apos;ve gone through everything available for this deck right now.
+            To keep studying, add more cards to the deck or increase your new-cards
+            limit (or cards-per-session batch size) in the deck&apos;s study settings.
+          </p>
+          <div className="flex justify-center">
+            <Link href={`/study/${deckId}`} className="btn-primary">Back to deck</Link>
+          </div>
+        </div>
+      )
+    }
+
     const allLearned = allCards.length > 0 && allCards.every(c => cardStates.get(c.id)?.graduated === true)
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">

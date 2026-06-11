@@ -5,16 +5,20 @@ import type { Card, GradingSettings, Rating } from '@/domain'
 import { gradeTyping } from '@/engine/grading'
 import { RatingButtons } from './RatingButtons'
 
-const AUTO_ADVANCE_MS = 900
-
 /**
  * Type-the-answer recall.
  *
- * - `gradedReview = false` (pre-graduation): no rating buttons — correctness
- *   is auto-derived ('good' if correct, 'again' if not) and the session
- *   advances automatically after a short delay.
+ * - After checking, the session never auto-advances — the learner presses
+ *   Continue (or Enter, since the relevant button is auto-focused) to move
+ *   on.
+ * - If the answer was wrong (and not overridden as correct), the learner
+ *   must retype the correct answer exactly before they can continue —
+ *   reinforcing the right form.
+ * - "Mark as correct" / "Mark as wrong" override buttons let the learner
+ *   correct a typo (mark a wrong answer as correct, skipping the retype) or
+ *   flag a lucky/right answer as wrong (so it comes back sooner).
  * - `gradedReview = true` (post-graduation, long-term retention): shows
- *   Again/Hard/Good/Easy after checking, same as before.
+ *   Again/Hard/Good/Easy instead of a single Continue button.
  */
 export function TypingMode({ card, promptSide, gradingSettings, gradedReview, deckName, onRate }: {
   card: Card
@@ -24,27 +28,53 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   deckName?: string
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
 }) {
-  const [input,  setInput]  = useState('')
-  const [result, setResult] = useState<{ correct: boolean; expected: string } | null>(null)
-  useEffect(() => { setInput(''); setResult(null) }, [card.id])
+  const [input,       setInput]       = useState('')
+  const [result,      setResult]      = useState<{ correct: boolean; expected: string } | null>(null)
+  const [override,    setOverride]    = useState<boolean | null>(null)
+  const [retype,      setRetype]      = useState('')
+  const [retypeError, setRetypeError] = useState(false)
+
+  useEffect(() => {
+    setInput('')
+    setResult(null)
+    setOverride(null)
+    setRetype('')
+    setRetypeError(false)
+  }, [card.id])
 
   const prompt   = promptSide === 'front' ? card.front : card.back
   const expected = promptSide === 'front' ? card.back  : card.front
 
-  function finish(correct: boolean, userAnswer: string) {
-    setResult({ correct, expected })
-    if (!gradedReview) {
-      setTimeout(() => onRate(correct ? 'good' : 'again', correct, userAnswer), AUTO_ADVANCE_MS)
-    }
-  }
+  const finalCorrect = override ?? result?.correct ?? false
+  // Wrong answers (and "marked wrong" overrides) require retyping the
+  // correct answer before continuing. Typo overrides skip this.
+  const needsRetype  = !!result && !finalCorrect
 
   function check() {
-    finish(gradeTyping(input, expected, gradingSettings).correct, input)
+    setResult({ correct: gradeTyping(input, expected, gradingSettings).correct, expected })
+    setOverride(null)
+    setRetype('')
+    setRetypeError(false)
   }
 
   function dontKnow() {
-    finish(false, '')
+    setResult({ correct: false, expected })
+    setOverride(null)
+    setRetype('')
+    setRetypeError(false)
     setInput('')
+  }
+
+  function retypeMatches(): boolean {
+    return retype.trim().toLowerCase() === expected.trim().toLowerCase()
+  }
+
+  function tryAdvance(rating: Rating) {
+    if (needsRetype && !retypeMatches()) {
+      setRetypeError(true)
+      return
+    }
+    onRate(rating, finalCorrect, input)
   }
 
   return (
@@ -65,15 +95,60 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
           </div>
         ) : (
           <div className="space-y-4">
-            <div className={`panel text-center py-3 ${result.correct ? 'border-success/30 bg-success/5' : 'border-danger/30 bg-danger/5'}`}>
-              {result.correct ? <p className="text-success font-medium">Correct!</p> : (
+            <div className={`panel text-center py-3 ${finalCorrect ? 'border-success/30 bg-success/5' : 'border-danger/30 bg-danger/5'}`}>
+              {finalCorrect ? (
+                <p className="text-success font-medium">Correct!{override === true && <span className="text-ink-faint font-normal"> (marked correct)</span>}</p>
+              ) : (
                 <div className="space-y-1">
-                  <p className="text-danger font-medium">Not quite</p>
+                  <p className="text-danger font-medium">Not quite{override === false && <span className="text-ink-faint font-normal"> (marked wrong)</span>}</p>
                   <p className="text-ink-muted text-sm">Answer: <span className="text-ink font-mono">{result.expected}</span></p>
                 </div>
               )}
             </div>
-            {gradedReview && <RatingButtons onRate={r => onRate(r, result.correct, input)} />}
+
+            {/* Override controls — fix a typo or flag a lucky guess. */}
+            <div className="flex items-center justify-center gap-3">
+              {result.correct && override !== false && (
+                <button onClick={() => setOverride(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
+                  Actually mark wrong
+                </button>
+              )}
+              {!result.correct && override !== true && (
+                <button onClick={() => setOverride(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
+                  Actually mark correct (typo)
+                </button>
+              )}
+              {override !== null && (
+                <button onClick={() => setOverride(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
+                  Undo override
+                </button>
+              )}
+            </div>
+
+            {needsRetype && (
+              <div className="space-y-2">
+                <p className="text-xs text-ink-muted text-center">Type the correct answer to continue:</p>
+                <input
+                  className={`input text-center text-lg font-mono ${retypeError ? 'border-danger/60 bg-danger/5' : ''}`}
+                  placeholder="Retype the answer…" value={retype}
+                  onChange={e => { setRetype(e.target.value); setRetypeError(false) }}
+                  onKeyDown={e => { if (e.key === 'Enter' && !gradedReview) tryAdvance(finalCorrect ? 'good' : 'again') }}
+                  autoFocus
+                />
+                {retypeError && <p className="text-danger text-xs text-center">Doesn&apos;t match — try again.</p>}
+              </div>
+            )}
+
+            {gradedReview ? (
+              <RatingButtons onRate={tryAdvance} />
+            ) : (
+              <div className="flex justify-center">
+                {/* Auto-focused (when no retype is needed) so pressing Enter continues. */}
+                <button onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')} autoFocus={!needsRetype} className="btn-primary px-10">
+                  Continue
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

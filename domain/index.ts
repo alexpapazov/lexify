@@ -167,6 +167,14 @@ export interface DeckPreferences {
    * When true: previous-day backlog is additive — cards accumulate if you fall behind.
    */
   spilloverDue:      boolean
+  /**
+   * When set (> 0): overrides the daily/calendar-based new-card budget.
+   * Caps the number of cards actively "in the pipeline" (introduced but not
+   * yet graduated) at this value — once a card graduates, the next session
+   * introduces another new card to refill the batch. Decoupled from
+   * dailyNewCards/spilloverDue. Null/0 = use the daily-limit logic instead.
+   */
+  cardsPerSession:   number | null
 }
 
 export const DEFAULT_DAILY_NEW_CARDS = 20
