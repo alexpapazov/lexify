@@ -106,7 +106,7 @@ function CardRow({ card, index, onChange, onDelete, onActionChange }: {
           <p className="text-xs text-ink-muted">
             {card.existingCardDeckNames && card.existingCardDeckNames.length > 0
               ? <>Already in <span className="text-ink">{card.existingCardDeckNames.join(', ')}</span>.</>
-              : 'Already in your library, but not currently in any deck.'} Remove this card (✕ above) if you do not want to add this duplicate to this deck.
+              : 'Already in your library, but not currently in any deck.'} Remove this card if you do not want to add this duplicate to this deck.
           </p>
         </div>
       )}

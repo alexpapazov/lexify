@@ -515,7 +515,7 @@ export default function UploadPage() {
                   <p className="text-xs text-ink-muted">
                     {item.existingCardDeckNames && item.existingCardDeckNames.length > 0
                       ? <>Already in <span className="text-ink">{item.existingCardDeckNames.join(', ')}</span>.</>
-                      : 'Already in your library, but not currently in any deck.'} X out this card (✕ above) if you do not want to add this duplicate to this deck.
+                      : 'Already in your library, but not currently in any deck.'} X out this card if you do not want to add this duplicate to this deck.
                   </p>
                 </div>
               )}
