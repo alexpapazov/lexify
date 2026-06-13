@@ -352,10 +352,21 @@ export default function FolderPage() {
 
   async function handleDeleteCurrentFolder() {
     if (!folder) return
-    if (!confirm(`Delete folder "${folder.name}" and move its contents to root?`)) return
+    const destination = folder.parentId ? 'its parent folder' : 'the library root'
+    if (!confirm(`Delete folder "${folder.name}"? Its subfolders and decks will move to ${destination}.`)) return
+
     const folderRepo = new SupabaseFolderRepository()
+    const deckRepo   = new SupabaseDeckRepository()
+    const parentId   = folder.parentId
+
+    // Move this folder's direct contents (subfolders + decks) up to its parent
+    // (or to the library root if this was a top-level folder) before deleting it.
+    await Promise.all([
+      ...subfolders.map(f => folderRepo.updateParent(f.id, parentId)),
+      ...decks.map(d => deckRepo.update(d.id, { folderId: parentId })),
+    ])
     await folderRepo.softDelete(folder.id)
-    const parentId = folder.parentId
+
     router.push(parentId ? `/library/${parentId}` : '/library')
   }
 
