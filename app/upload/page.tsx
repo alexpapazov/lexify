@@ -500,9 +500,9 @@ export default function UploadPage() {
               {dupChecked && item.duplicate?.tier === 'exact' && item.duplicate.existingCard && (
                 <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
                   <p className="text-xs text-ink-muted">
-                    Already in {item.existingCardDeckNames && item.existingCardDeckNames.length > 0
-                      ? <span className="text-ink">{item.existingCardDeckNames.join(', ')}</span>
-                      : 'your library'}. Uncheck the box to the left if you do not want to add this duplicate to this deck.
+                    {item.existingCardDeckNames && item.existingCardDeckNames.length > 0
+                      ? <>Already in <span className="text-ink">{item.existingCardDeckNames.join(', ')}</span>.</>
+                      : 'Already in your library, but not currently in any deck.'} Uncheck the box to the left if you do not want to add this duplicate to this deck.
                   </p>
                 </div>
               )}

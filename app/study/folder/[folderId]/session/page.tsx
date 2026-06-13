@@ -1,0 +1,251 @@
+'use client'
+
+/**
+ * Folder-scoped study session — pulls due/new cards from every deck inside
+ * a folder (including nested subfolders). Same engine as the all-decks
+ * session, just with a folder-scoped queue-builder.
+ */
+
+import { useEffect, useState, useCallback } from 'react'
+import { useRouter, useParams } from 'next/navigation'
+import Link from 'next/link'
+import { createClient } from '@/lib/supabase/client'
+import { SupabaseDeckRepository }        from '@/lib/data/decks'
+import { SupabaseCardRepository }        from '@/lib/data/cards'
+import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
+import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
+import { SupabasePipelineRepository }    from '@/lib/data/pipelines'
+import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
+import { SupabaseFolderRepository } from '@/lib/data/folders'
+import { descendantDeckIds } from '@/lib/folderStats'
+import { progressAfterReview, initialCardState, ratingToWasCorrect } from '@/engine/pipeline'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, Folder } from '@/domain'
+import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
+import { FlashcardMode } from '@/components/session/FlashcardMode'
+import { TypingMode } from '@/components/session/TypingMode'
+import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
+import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
+
+interface SessionCard {
+  card:            Card
+  state:           CardState
+  pipeline:        Pipeline
+  gradingSettings: GradingSettings
+  deckName:        string
+  deckCards:       Card[]
+  sourceLanguage:  string
+  targetLanguage:  string
+}
+
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j]!, a[i]!]
+  }
+  return a
+}
+
+export default function FolderSessionPage() {
+  const router   = useRouter()
+  const params   = useParams()
+  const folderId = params.folderId as string
+  const supabase = createClient()
+  const [queue,      setQueue]      = useState<SessionCard[]>([])
+  const [index,      setIndex]      = useState(0)
+  const [loading,    setLoading]    = useState(true)
+  const [userId,     setUserId]     = useState('')
+  const [done,       setDone]       = useState(false)
+  const [folder,     setFolder]     = useState<Folder | null>(null)
+
+  useEffect(() => {
+    async function load() {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/auth'); return }
+      setUserId(session.user.id)
+
+      const deckRepo     = new SupabaseDeckRepository()
+      const cardRepo     = new SupabaseCardRepository()
+      const stateRepo    = new SupabaseCardStateRepository()
+      const pipelineRepo = new SupabasePipelineRepository()
+      const prefRepo     = new SupabaseDeckPreferencesRepository()
+      const folderRepo   = new SupabaseFolderRepository()
+
+      const [allDecks, allFolders, pipeline, thisFolder] = await Promise.all([
+        deckRepo.list(session.user.id),
+        folderRepo.list(session.user.id),
+        pipelineRepo.getDefault(),
+        folderRepo.get(folderId),
+      ])
+      setFolder(thisFolder)
+
+      const deckIds = new Set(descendantDeckIds(folderId, allFolders, allDecks))
+      const decks   = allDecks.filter(d => deckIds.has(d.id))
+
+      const now   = new Date()
+      const today = now.toISOString().slice(0, 10)
+      const allCards: SessionCard[] = []
+
+      for (const deck of decks) {
+        const [cards, states, prefs] = await Promise.all([
+          cardRepo.listByDeck(deck.id),
+          stateRepo.listByDeck(session.user.id, deck.id),
+          prefRepo.get(session.user.id, deck.id),
+        ])
+
+        const stateMap = new Map(states.map(s => [s.cardId, s]))
+        const cardsPerSession = prefs?.cardsPerSession ?? null
+
+        let newCardBudget: number
+        if (cardsPerSession && cardsPerSession > 0) {
+          const inPipelineTotal = states.filter(s => !s.graduated).length
+          newCardBudget = Math.max(0, Math.min(cardsPerSession, cards.length) - inPipelineTotal)
+        } else {
+          const dailyLimit = Math.min(
+            prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
+            cards.length,
+          )
+          const introducedToday = states.filter(s => s.introducedDate === today).length
+          newCardBudget = Math.max(0, dailyLimit - introducedToday)
+        }
+
+        for (const card of cards) {
+          const state = stateMap.get(card.id)
+
+          const common = {
+            card,
+            pipeline,
+            gradingSettings: deck.gradingSettings,
+            deckName:        deck.name,
+            deckCards:       cards,
+            sourceLanguage:  deck.sourceLanguage,
+            targetLanguage:  deck.targetLanguage,
+          }
+
+          if (!state) {
+            // New card — only include if under daily limit
+            if (newCardBudget <= 0) continue
+            newCardBudget--
+            allCards.push({ ...common, state: initialCardState(session.user.id, card.id, pipeline.id) })
+          } else if (!state.graduated) {
+            // In pipeline — always include
+            allCards.push({ ...common, state })
+          } else if (state.dueAt && new Date(state.dueAt) <= now) {
+            // Graduated and due
+            allCards.push({ ...common, state })
+          }
+        }
+      }
+
+      if (allCards.length === 0) { setDone(true); setLoading(false); return }
+
+      // Shuffle all seen cards; keep new cards in order at the start
+      const newCards  = allCards.filter(c => !c.state.lastReviewedAt)
+      const seenCards = shuffle(allCards.filter(c => c.state.lastReviewedAt))
+      const finalQueue = [...newCards, ...seenCards]
+      setQueue(finalQueue)
+      setLoading(false)
+
+      // Pre-generate multiple-choice distractors for upcoming recognition
+      // steps in the background, so cards rarely show "Loading choices…".
+      // Skip index 0 — that card's own component will fetch on mount.
+      const prefetchItems: PrefetchItem[] = finalQueue
+        .slice(1)
+        .map(item => {
+          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
+          if (item.state.graduated || step.stepType !== 'recognition') return null
+          return { card: item.card, side: step.answerSide, deckCards: item.deckCards, sourceLanguage: item.sourceLanguage, targetLanguage: item.targetLanguage }
+        })
+        .filter((x): x is PrefetchItem => x !== null)
+      void prefetchChoices(prefetchItems, handleChoicesCached)
+    }
+    load()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
+    const current = queue[index]
+    if (!current) return
+
+    const { card, state, pipeline, gradingSettings } = current
+    const stateRepo  = new SupabaseCardStateRepository()
+    const eventRepo  = new SupabaseReviewEventRepository()
+    const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+    const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+
+    await eventRepo.create({
+      userId: userId, cardId: card.id, mode: step.stepType,
+      promptSide: step.promptSide, answerSide: step.answerSide,
+      promptShown: step.promptSide === 'front' ? card.front : card.back,
+      expected:    step.answerSide === 'front' ? card.front : card.back,
+      userAnswer, wasCorrect, rating, responseMs: null,
+    })
+
+    const newState = progressAfterReview(state, pipeline, { wasCorrect, rating })
+    await stateRepo.upsert(newState)
+
+    if (index + 1 >= queue.length) setDone(true)
+    else {
+      setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
+      setIndex(i => i + 1)
+    }
+  }, [queue, index, userId])
+
+  const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
+    setQueue(prev => prev.map(item => {
+      if (item.card.id !== cardId) return item
+      const card = { ...item.card, choices }
+      return { ...item, card, deckCards: item.deckCards.map(c => c.id === cardId ? card : c) }
+    }))
+  }, [])
+
+  if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
+
+  const backHref = folder ? `/library/${folder.id}` : '/library'
+
+  if (done) {
+    return (
+      <div className="max-w-md mx-auto pt-20 text-center space-y-6">
+        <div className="text-5xl">🎉</div>
+        <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
+        <p className="text-ink-muted">
+          You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}
+          {folder ? ` in ${folder.name}` : ''}.
+        </p>
+        <Link href={backHref} className="btn-primary inline-block">Back to library</Link>
+      </div>
+    )
+  }
+
+  const current = queue[index]!
+  const { card, state, pipeline, gradingSettings, deckName, deckCards, sourceLanguage, targetLanguage } = current
+  const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+  const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+
+  return (
+    <div className="space-y-8 max-w-2xl mx-auto">
+      <div className="flex items-center justify-between">
+        <Link href={backHref} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
+        <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
+        <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
+      </div>
+      <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
+        <div className="h-full bg-accent rounded-full transition-all duration-300"
+          style={{ width: `${Math.round((index / queue.length) * 100)}%` }} />
+      </div>
+      {!state.graduated && step.stepType === 'recognition' ? (
+        <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
+          deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
+          onChoicesCached={handleChoicesCached}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+      ) : step.stepType === 'recognition' ? (
+        <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} deckName={deckName}
+          onRate={rating => handleAnswer(rating, ratingToWasCorrect(rating))} />
+      ) : (
+        <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
+          gradingSettings={gradingSettings} gradedReview={state.graduated} deckName={deckName}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+      )}
+    </div>
+  )
+}

@@ -6,6 +6,9 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
+import { SupabaseCardRepository }      from '@/lib/data/cards'
+import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { descendantDeckIds, computeDeckCounts, type FolderCounts } from '@/lib/folderStats'
 import type { Folder, Deck } from '@/domain'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -106,6 +109,7 @@ export default function FolderPage() {
   const [userId,       setUserId]       = useState('')
   const [addingFolder, setAddingFolder] = useState(false)
   const [newName,      setNewName]      = useState('')
+  const [counts,       setCounts]       = useState<FolderCounts | null>(null)
 
   // Drag state
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
@@ -148,6 +152,12 @@ export default function FolderPage() {
     setAllFolders(folders)
     setAllDecks(decksData)
     setLoading(false)
+
+    // Aggregate stats for every card in this folder (including subfolders)
+    const deckIds = descendantDeckIds(folderId, folders, decksData)
+    const cardRepo  = new SupabaseCardRepository()
+    const stateRepo = new SupabaseCardStateRepository()
+    computeDeckCounts(deckIds, session.user.id, cardRepo, stateRepo).then(setCounts)
   }
 
   useEffect(() => { load() }, [folderId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -356,6 +366,31 @@ export default function FolderPage() {
           + New folder
         </button>
       </div>
+
+      {/* Stats + Study button for this folder (including subfolders) */}
+      {counts && (counts.unlearned + counts.learning + counts.graduated) > 0 && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: 'Unlearned', value: counts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint' },
+              { label: 'Learning',  value: counts.learning,  color: 'text-warning',     border: 'border-warning'   },
+              { label: 'Graduated', value: counts.graduated, color: 'text-success',     border: 'border-success'   },
+              { label: 'Due Now',   value: counts.dueNow,    color: 'text-accent-soft', border: 'border-accent'    },
+            ].map(({ label, value, color, border }) => (
+              <div key={label} className={`panel border-t-2 ${border} space-y-1 text-center`}>
+                <div className={`text-2xl font-semibold ${color}`}>{value}</div>
+                <div className="text-xs font-medium text-ink">{label}</div>
+              </div>
+            ))}
+          </div>
+          <Link
+            href={`/study/folder/${folderId}/session`}
+            className={(counts.dueNow + counts.learning) === 0 ? 'btn-primary opacity-40 pointer-events-none inline-block' : 'btn-primary inline-block'}
+          >
+            Study folder ({counts.dueNow + counts.learning})
+          </Link>
+        </div>
+      )}
 
       {/* New folder input */}
       {addingFolder && (

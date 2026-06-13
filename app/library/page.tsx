@@ -5,6 +5,9 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
+import { SupabaseCardRepository }      from '@/lib/data/cards'
+import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { descendantDeckIds, computeDeckCounts, type FolderCounts } from '@/lib/folderStats'
 import type { Folder, Deck } from '@/domain'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -86,6 +89,7 @@ export default function LibraryPage() {
   const [userId,       setUserId]       = useState('')
   const [addingFolder, setAddingFolder] = useState(false)
   const [newName,      setNewName]      = useState('')
+  const [folderCounts, setFolderCounts] = useState<Record<string, FolderCounts>>({})
 
   // Drag state
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
@@ -117,6 +121,17 @@ export default function LibraryPage() {
     setAllFolders(folders)
     setAllDecks(decks)
     setLoading(false)
+
+    // Aggregate stats for each root folder (including its subfolders)
+    const cardRepo  = new SupabaseCardRepository()
+    const stateRepo = new SupabaseCardStateRepository()
+    const rootFolders = folders.filter(f => f.parentId === null)
+    const entries = await Promise.all(rootFolders.map(async folder => {
+      const deckIds = descendantDeckIds(folder.id, folders, decks)
+      const counts  = await computeDeckCounts(deckIds, session.user.id, cardRepo, stateRepo)
+      return [folder.id, counts] as const
+    }))
+    setFolderCounts(Object.fromEntries(entries))
   }
 
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -340,6 +355,26 @@ export default function LibraryPage() {
                     <div className="text-sm font-medium text-ink truncate">{folder.name}</div>
                     <div className="text-xs text-ink-faint mt-0.5 truncate">{preview}</div>
                   </Link>
+                  {(() => {
+                    const c = folderCounts[folder.id]
+                    if (!c || (c.unlearned + c.learning + c.graduated) === 0) return null
+                    const totalDue = c.dueNow + c.learning
+                    return (
+                      <div className="hidden sm:flex items-center gap-3 text-xs shrink-0" onClick={e => e.stopPropagation()}>
+                        <span className="text-ink-muted">{c.unlearned} new</span>
+                        <span className="text-warning">{c.learning} learning</span>
+                        <span className="text-success">{c.graduated} done</span>
+                        <span className="text-accent-soft">{c.dueNow} due</span>
+                        <Link
+                          href={`/study/folder/${folder.id}/session`}
+                          onClick={e => { e.stopPropagation(); if (dragging) e.preventDefault() }}
+                          className={totalDue === 0 ? 'btn-primary text-xs py-1 px-3 opacity-40 pointer-events-none' : 'btn-primary text-xs py-1 px-3'}
+                        >
+                          Study
+                        </Link>
+                      </div>
+                    )
+                  })()}
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="text-ink-faint shrink-0 mr-0.5">
                     <path d="M8 5l8 7-8 7V5z"/>
                   </svg>
