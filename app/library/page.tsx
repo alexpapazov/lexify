@@ -2,13 +2,17 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import { descendantDeckIds, computeDeckCounts, type FolderCounts } from '@/lib/folderStats'
-import type { Folder, Deck } from '@/domain'
+import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
+import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { LanguageCombobox } from '@/components/LanguageCombobox'
+import { langName } from '@/lib/languages'
+import type { Folder, Deck, LanguagePair } from '@/domain'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -72,8 +76,14 @@ function reorder<T>(arr: T[], fromIdx: number, toIdx: number, pos: 'before' | 'a
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function LibraryPage() {
+  const searchParams = useSearchParams()
+  const pairSource = searchParams.get('source')
+  const pairTarget = searchParams.get('target')
+  const inPair = !!(pairSource && pairTarget)
+
   const [allFolders,   setAllFolders]   = useState<Folder[]>([])
   const [allDecks,     setAllDecks]     = useState<Deck[]>([])
+  const [pairs,        setPairs]        = useState<LanguagePair[]>([])
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
   const [userId,       setUserId]       = useState('')
@@ -81,10 +91,14 @@ export default function LibraryPage() {
   const [newName,      setNewName]      = useState('')
   const [folderCounts, setFolderCounts] = useState<Record<string, FolderCounts>>({})
 
+  // "+ New language" form
+  const [addingPair,    setAddingPair]    = useState(false)
+  const [newPairSource, setNewPairSource] = useState('')
+  const [newPairTarget, setNewPairTarget] = useState('')
+
   // Drag state
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
   const [dropTarget,  setDropTarget]  = useState<DropTarget>(null)
-  const [dropOnCrumb, setDropOnCrumb] = useState(false)  // hovering breadcrumb (unused on root)
 
   // Touch drag state
   const [touchGhost,   setTouchGhost]  = useState<{ x: number; y: number; type: 'folder' | 'deck' } | null>(null)
@@ -104,12 +118,15 @@ export default function LibraryPage() {
     setUserId(session.user.id)
     const folderRepo = new SupabaseFolderRepository()
     const deckRepo   = new SupabaseDeckRepository()
-    const [folders, decks] = await Promise.all([
+    const pairRepo   = new SupabaseLanguagePairRepository()
+    const [folders, decks, pairsData] = await Promise.all([
       folderRepo.list(session.user.id),
       deckRepo.list(session.user.id),
+      pairRepo.list(session.user.id),
     ])
     setAllFolders(folders)
     setAllDecks(decks)
+    setPairs(pairsData)
     setLoading(false)
 
     // Aggregate stats for each root folder (including its subfolders)
@@ -126,6 +143,18 @@ export default function LibraryPage() {
 
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Visible root items (filtered to the active pairing, if any) ───────────
+
+  function getVisibleRoots() {
+    const rootFolders = allFolders.filter(f => f.parentId === null)
+    const rootDecks   = allDecks.filter(d => !d.folderId)
+    if (!inPair) return { rootFolders, rootDecks }
+    return {
+      rootFolders: rootFolders.filter(f => folderMatchesPair(f.id, allFolders, allDecks, pairSource!, pairTarget!)),
+      rootDecks:   rootDecks.filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget),
+    }
+  }
+
   // ── Drop handling ──────────────────────────────────────────────────────────
 
   async function commitDrop(target: DropTarget) {
@@ -133,8 +162,7 @@ export default function LibraryPage() {
     const folderRepo = new SupabaseFolderRepository()
     const deckRepo   = new SupabaseDeckRepository()
 
-    const rootFolders = allFolders.filter(f => f.parentId === null)
-    const rootDecks   = allDecks.filter(d => !d.folderId)
+    const { rootFolders, rootDecks } = getVisibleRoots()
 
     if (target.pos === 'into') {
       // Move INTO a folder
@@ -245,6 +273,16 @@ export default function LibraryPage() {
     load()
   }
 
+  async function handleAddPair() {
+    if (!newPairSource || !newPairTarget || !userId) return
+    const pairRepo = new SupabaseLanguagePairRepository()
+    await pairRepo.create(userId, newPairSource, newPairTarget)
+    setNewPairSource('')
+    setNewPairTarget('')
+    setAddingPair(false)
+    load()
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -256,9 +294,74 @@ export default function LibraryPage() {
     </div>
   )
 
-  const rootFolders = allFolders.filter(f => f.parentId === null)
-  const rootDecks   = allDecks.filter(d => !d.folderId)
-  const hasContent  = rootFolders.length > 0 || rootDecks.length > 0
+  // ── Pairing "boxes" view (root, no pairing selected) ───────────────────────
+
+  if (!inPair) {
+    const seen = new Set<string>()
+    const allPairs: LanguagePair[] = []
+    for (const p of pairs) {
+      const key = `${p.sourceLanguage}|${p.targetLanguage}`
+      if (!seen.has(key)) { seen.add(key); allPairs.push(p) }
+    }
+    for (const d of allDecks) {
+      const key = `${d.sourceLanguage}|${d.targetLanguage}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        allPairs.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, createdAt: '' })
+      }
+    }
+
+    return (
+      <div className="space-y-5 max-w-2xl mx-auto">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold text-ink">Library</h1>
+          <button
+            onClick={() => { setAddingPair(true); setNewPairSource(''); setNewPairTarget('') }}
+            className="text-sm text-accent hover:text-accent-soft transition-colors"
+          >
+            + New language
+          </button>
+        </div>
+
+        {addingPair && (
+          <div className="panel space-y-3 py-3">
+            <div className="grid grid-cols-2 gap-3">
+              <LanguageCombobox label="Target language" value={newPairSource} onChange={setNewPairSource} />
+              <LanguageCombobox label="Basis language"  value={newPairTarget} onChange={setNewPairTarget} />
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={handleAddPair} className="btn-primary text-xs py-1 px-3" disabled={!newPairSource || !newPairTarget}>Create</button>
+              <button onClick={() => setAddingPair(false)} className="text-ink-faint hover:text-ink text-xs transition-colors">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {allPairs.length === 0 && !addingPair ? (
+          <div className="panel text-ink-muted text-sm text-center py-10">
+            No languages yet. Press &quot;+ New language&quot; to start a new vocabulary collection.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {allPairs.map(p => (
+              <Link
+                key={`${p.sourceLanguage}|${p.targetLanguage}`}
+                href={`/library?source=${p.sourceLanguage}&target=${p.targetLanguage}`}
+                className="panel flex flex-col items-center justify-center gap-1 py-6 text-center hover:border-accent/40 hover:bg-surface-raised/50 transition-colors"
+              >
+                <span className="text-sm font-semibold text-ink">{langName(p.sourceLanguage)}</span>
+                <span className="text-xs text-ink-muted">{langName(p.targetLanguage)}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── Folder-tree view, filtered to the active pairing ───────────────────────
+
+  const { rootFolders, rootDecks } = getVisibleRoots()
+  const hasContent = rootFolders.length > 0 || rootDecks.length > 0
 
   return (
     <div
@@ -267,7 +370,12 @@ export default function LibraryPage() {
     >
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-ink">Library</h1>
+        <div>
+          <Link href="/library" className="text-xs text-ink-muted hover:text-ink transition-colors">← Library</Link>
+          <h1 className="text-2xl font-semibold text-ink">
+            {langName(pairSource!)} <span className="text-ink-faint text-base font-normal">/ {langName(pairTarget!)}</span>
+          </h1>
+        </div>
         <button
           onClick={() => { setAddingFolder(true); setNewName('') }}
           className="text-sm text-accent hover:text-accent-soft transition-colors"
@@ -298,7 +406,7 @@ export default function LibraryPage() {
 
       {!hasContent && !addingFolder ? (
         <div className="panel text-ink-muted text-sm text-center py-10">
-          Your library is empty. Create a folder or move decks here from Study.
+          Nothing here yet. Create a folder or move decks here from Study.
         </div>
       ) : (
         <div className="space-y-0">
@@ -337,7 +445,7 @@ export default function LibraryPage() {
                 >
                   <FolderIcon />
                   <Link
-                    href={`/library/${folder.id}`}
+                    href={`/library/${folder.id}?source=${pairSource}&target=${pairTarget}`}
                     className="flex-1 min-w-0"
                     onClick={e => { if (dragging) e.preventDefault() }}
                   >

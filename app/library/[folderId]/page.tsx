@@ -2,13 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import { descendantDeckIds, type FolderCounts } from '@/lib/folderStats'
+import { descendantDeckIds, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
@@ -104,7 +104,13 @@ function buildAncestors(allFolders: Folder[], currentId: string): Folder[] {
 export default function FolderPage() {
   const params   = useParams()
   const router   = useRouter()
+  const searchParams = useSearchParams()
   const folderId = params.folderId as string
+
+  const pairSource = searchParams.get('source')
+  const pairTarget = searchParams.get('target')
+  const inPair = !!(pairSource && pairTarget)
+  const qs = inPair ? `?source=${pairSource}&target=${pairTarget}` : ''
 
   const [folder,       setFolder]       = useState<Folder | null>(null)
   const [ancestors,    setAncestors]    = useState<Folder[]>([])
@@ -192,6 +198,15 @@ export default function FolderPage() {
 
   useEffect(() => { load() }, [folderId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Subfolders/decks visible in the active language-pairing view (if any)
+  function getVisibleItems() {
+    if (!inPair) return { subfolders, decks }
+    return {
+      subfolders: subfolders.filter(f => folderMatchesPair(f.id, allFolders, allDecks, pairSource!, pairTarget!)),
+      decks:      decks.filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget),
+    }
+  }
+
   // Build the filtered card list across all decks in this folder (incl. subfolders)
   const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? deckStats.flatMap(({ deck, cards, states }) => {
@@ -233,11 +248,12 @@ export default function FolderPage() {
         await deckRepo.update(dragging.id, { folderId: target.id })
       }
     } else {
+      const { subfolders: visibleSubfolders, decks: visibleDecks } = getVisibleItems()
       if (dragging.type === 'folder') {
-        const fromIdx = subfolders.findIndex(f => f.id === dragging.id)
-        const toIdx   = subfolders.findIndex(f => f.id === target.id)
+        const fromIdx = visibleSubfolders.findIndex(f => f.id === dragging.id)
+        const toIdx   = visibleSubfolders.findIndex(f => f.id === target.id)
         if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-          const reordered = reorder(subfolders, fromIdx, toIdx, target.pos)
+          const reordered = reorder(visibleSubfolders, fromIdx, toIdx, target.pos)
           await folderRepo.updatePositions(reordered.map((f, i) => ({ id: f.id, position: i })))
         }
       } else {
@@ -245,10 +261,10 @@ export default function FolderPage() {
         if (allFolders.some(f => f.id === target.id)) {
           await deckRepo.update(dragging.id, { folderId: target.id })
         } else {
-          const fromIdx = decks.findIndex(d => d.id === dragging.id)
-          const toIdx   = decks.findIndex(d => d.id === target.id)
+          const fromIdx = visibleDecks.findIndex(d => d.id === dragging.id)
+          const toIdx   = visibleDecks.findIndex(d => d.id === target.id)
           if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-            const reordered = reorder(decks, fromIdx, toIdx, target.pos)
+            const reordered = reorder(visibleDecks, fromIdx, toIdx, target.pos)
             await deckRepo.updatePositions(reordered.map((d, i) => ({ id: d.id, position: i })))
           }
         }
@@ -367,7 +383,7 @@ export default function FolderPage() {
     ])
     await folderRepo.softDelete(folder.id)
 
-    router.push(parentId ? `/library/${parentId}` : '/library')
+    router.push((parentId ? `/library/${parentId}` : '/library') + qs)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -388,6 +404,8 @@ export default function FolderPage() {
     </div>
   )
 
+  const { subfolders: visibleSubfolders, decks: visibleDecks } = getVisibleItems()
+
   return (
     <div
       className="space-y-5 max-w-2xl mx-auto"
@@ -406,7 +424,7 @@ export default function FolderPage() {
               : 'text-ink-muted hover:text-ink'
           }`}
         >
-          <Link href="/library">Library</Link>
+          <Link href={`/library${qs}`}>Library</Link>
         </span>
 
         {/* Ancestor folders */}
@@ -424,7 +442,7 @@ export default function FolderPage() {
                   : 'text-ink-muted hover:text-ink'
               }`}
             >
-              <Link href={`/library/${ancestor.id}`}>{ancestor.name}</Link>
+              <Link href={`/library/${ancestor.id}${qs}`}>{ancestor.name}</Link>
             </span>
           </>
         ))}
@@ -539,14 +557,14 @@ export default function FolderPage() {
       )}
 
       {/* Contents */}
-      {subfolders.length === 0 && decks.length === 0 && !addingFolder ? (
+      {visibleSubfolders.length === 0 && visibleDecks.length === 0 && !addingFolder ? (
         <div className="panel text-ink-muted text-sm text-center py-10">
           This folder is empty. Add a subfolder or drag decks here.
         </div>
       ) : (
         <div className="space-y-0">
           {/* Subfolders */}
-          {subfolders.map(sub => {
+          {visibleSubfolders.map(sub => {
             const dt         = dropTarget?.id === sub.id ? dropTarget : null
             const isDragging = dragging?.type === 'folder' && dragging.id === sub.id
 
@@ -578,7 +596,7 @@ export default function FolderPage() {
                 >
                   <FolderIcon />
                   <Link
-                    href={`/library/${sub.id}`}
+                    href={`/library/${sub.id}${qs}`}
                     className="flex-1 min-w-0"
                     onClick={e => { if (dragging) e.preventDefault() }}
                   >
@@ -593,7 +611,7 @@ export default function FolderPage() {
           })}
 
           {/* Decks */}
-          {decks.map(deck => {
+          {visibleDecks.map(deck => {
             const dt         = dropTarget?.id === deck.id ? dropTarget : null
             const isDragging = dragging?.type === 'deck' && dragging.id === deck.id
 

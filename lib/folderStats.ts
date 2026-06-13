@@ -30,6 +30,26 @@ export function descendantDeckIds(folderId: string, allFolders: Folder[], allDec
 }
 
 /**
+ * Whether `folderId` belongs in a given language-pairing view: either it
+ * (recursively) contains at least one deck matching the pairing, or it
+ * contains no decks at all (a brand-new/empty folder is shown in every
+ * pairing until it's populated).
+ */
+export function folderMatchesPair(
+  folderId: string,
+  allFolders: Folder[],
+  allDecks: Deck[],
+  sourceLanguage: string,
+  targetLanguage: string,
+): boolean {
+  const deckIds = descendantDeckIds(folderId, allFolders, allDecks)
+  if (deckIds.length === 0) return true
+  return allDecks.some(d =>
+    deckIds.includes(d.id) && d.sourceLanguage === sourceLanguage && d.targetLanguage === targetLanguage
+  )
+}
+
+/**
  * Aggregate unlearned/learning/graduated/due-now counts across the given
  * decks, mirroring the per-deck computation on the Study page.
  */

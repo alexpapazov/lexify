@@ -68,6 +68,23 @@ export interface Folder {
   deletedAt: string | null
 }
 
+// ─── LanguagePair ─────────────────────────────────────────────────────────────
+
+/**
+ * A "language pairing" grouping shown as a box on the Library root page.
+ * Same convention as Deck/Card: sourceLanguage = the language being learned
+ * ("Target" in the UI), targetLanguage = the learner's native/basis language
+ * ("Basis" in the UI).
+ */
+export interface LanguagePair {
+  id:             string
+  ownerId:        UserId
+  sourceLanguage: string
+  targetLanguage: string
+  position:       number
+  createdAt:      string
+}
+
 // ─── Deck ─────────────────────────────────────────────────────────────────────
 
 export interface Deck {
