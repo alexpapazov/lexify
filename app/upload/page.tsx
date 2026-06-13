@@ -7,7 +7,7 @@ import { SupabaseDeckRepository }          from '@/lib/data/decks'
 import { SupabaseCardRepository }          from '@/lib/data/cards'
 import { SupabasePipelineRepository }      from '@/lib/data/pipelines'
 import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
-import { LANGUAGES } from '@/lib/languages'
+import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
@@ -138,26 +138,6 @@ function SeparatorPicker({ label, value, onChange, custom, onCustomChange }: {
       {value === 'custom' && (
         <input className="input text-sm" placeholder='e.g. | or ;' value={custom} onChange={e => onCustomChange(e.target.value)} />
       )}
-    </div>
-  )
-}
-
-function LanguagePicker({ label, value, onChange }: {
-  label: string; value: string; onChange: (v: string) => void
-}) {
-  return (
-    <div className="space-y-1.5">
-      <span className="text-sm text-ink-muted">{label}</span>
-      <select
-        className="input text-sm"
-        value={value}
-        onChange={e => onChange(e.target.value)}
-      >
-        <option value="">Select a language…</option>
-        {LANGUAGES.map(l => (
-          <option key={l.code} value={l.code}>{l.name}</option>
-        ))}
-      </select>
     </div>
   )
 }
@@ -527,8 +507,8 @@ export default function UploadPage() {
 
       {/* Language pickers */}
       <div className="grid grid-cols-2 gap-4">
-        <LanguagePicker label="Target language" value={targetLang} onChange={setTargetLang} />
-        <LanguagePicker label="Basis language"  value={basisLang}  onChange={setBasisLang}  />
+        <LanguageCombobox label="Target language" value={targetLang} onChange={setTargetLang} />
+        <LanguageCombobox label="Basis language"  value={basisLang}  onChange={setBasisLang}  />
       </div>
 
       <div className="space-y-2">

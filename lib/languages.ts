@@ -23,6 +23,7 @@ export const LANGUAGES: Language[] = [
   { code: 'el',  name: 'Greek'      },
   { code: 'he',  name: 'Hebrew'     },
   { code: 'uk',  name: 'Ukrainian'  },
+  { code: 'bg',  name: 'Bulgarian'  },
   { code: 'cs',  name: 'Czech'      },
   { code: 'hu',  name: 'Hungarian'  },
   { code: 'ro',  name: 'Romanian'   },

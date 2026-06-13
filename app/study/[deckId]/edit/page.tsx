@@ -7,6 +7,13 @@
  *   - Neither front nor back may be empty
  *   - No two cards may have the same front (case-insensitive, trimmed)
  * Violations are highlighted in red; a banner explains the problem.
+ *
+ * Duplicate check (on save): newly-added cards ("+ New card") are checked
+ * against the user's existing card library, same two-tier scheme as the
+ * Upload flow (see lib/duplicates.ts). Tier-1 exact matches are merged
+ * silently. Tier-2 near matches are flagged — the user chooses, per card,
+ * whether to keep it as a new card or use the existing one instead — before
+ * the save completes.
  */
 
 import { useEffect, useState, useCallback } from 'react'
@@ -15,34 +22,40 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
-import { LANGUAGES } from '@/lib/languages'
+import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
+import { LanguageCombobox } from '@/components/LanguageCombobox'
+import { analyzeDuplicate, type DuplicateAnalysis } from '@/lib/duplicates'
 import type { Card } from '@/domain'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface EditableCard {
-  id:       string | null   // null = new, unsaved card
-  front:    string
-  back:     string
-  position: number
-  error:    'empty-front' | 'empty-back' | 'duplicate-front' | null
+  id:        string | null   // null = new, unsaved card
+  front:     string
+  back:      string
+  position:  number
+  error:     'empty-front' | 'empty-back' | 'duplicate-front' | null
+  duplicate: DuplicateAnalysis | null
+  action:    'create' | 'merge' | 'keep-both'
 }
 
 function newCard(position: number): EditableCard {
-  return { id: null, front: '', back: '', position, error: null }
+  return { id: null, front: '', back: '', position, error: null, duplicate: null, action: 'create' }
 }
 
 // ─── Single card row ──────────────────────────────────────────────────────────
 
-function CardRow({ card, index, onChange, onDelete }: {
-  card:     EditableCard
-  index:    number
-  onChange: (index: number, field: 'front' | 'back', value: string) => void
-  onDelete: (index: number) => void
+function CardRow({ card, index, onChange, onDelete, onActionChange }: {
+  card:           EditableCard
+  index:          number
+  onChange:       (index: number, field: 'front' | 'back', value: string) => void
+  onDelete:       (index: number) => void
+  onActionChange: (index: number, action: 'merge' | 'keep-both') => void
 }) {
   const hasError = card.error !== null
   const frontErr = card.error === 'empty-front' || card.error === 'duplicate-front'
   const backErr  = card.error === 'empty-back'
+  const showDup  = !card.id && card.duplicate?.tier === 'near' && card.duplicate.existingCard
 
   return (
     <div className={`panel space-y-3 transition-colors ${hasError ? 'border-danger/50 bg-danger/5' : ''}`}>
@@ -82,6 +95,25 @@ function CardRow({ card, index, onChange, onDelete }: {
           />
         </div>
       </div>
+
+      {/* Near-duplicate flag (new cards only) */}
+      {showDup && card.duplicate?.existingCard && (
+        <div className="pl-0 space-y-2 border-t border-white/10 pt-3">
+          <p className="text-xs text-ink-muted">
+            Similar to existing card: <span className="text-ink">&quot;{card.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{card.duplicate.existingCard.back}&quot;</span>
+          </p>
+          <div className="flex gap-4 text-sm">
+            <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+              <input type="radio" name={`dup-${index}`} checked={card.action === 'keep-both'} onChange={() => onActionChange(index, 'keep-both')} className="accent-accent" />
+              Keep as new card
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+              <input type="radio" name={`dup-${index}`} checked={card.action === 'merge'} onChange={() => onActionChange(index, 'merge')} className="accent-accent" />
+              Use existing card instead
+            </label>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -107,6 +139,7 @@ export default function DeckEditPage() {
   const [langSaving,  setLangSaving]  = useState(false)
   const [error,       setError]       = useState<string | null>(null)
   const [saved,       setSaved]       = useState(false)
+  const [dupChecked,  setDupChecked]  = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -125,7 +158,7 @@ export default function DeckEditPage() {
       setDeckName(deck.name)
       setSourceLang(deck.sourceLanguage ?? 'es')
       setTargetLang(deck.targetLanguage ?? 'en')
-      setCards(existing.map((c, i) => ({ id: c.id, front: c.front, back: c.back, position: i, error: null })))
+      setCards(existing.map((c, i) => ({ id: c.id, front: c.front, back: c.back, position: i, error: null, duplicate: null, action: 'create' as const })))
       setOriginalCards(new Map(existing.map(c => [c.id, { front: c.front, back: c.back }])))
       setLoading(false)
     }
@@ -150,16 +183,23 @@ export default function DeckEditPage() {
   }
 
   const handleChange = useCallback((index: number, field: 'front' | 'back', value: string) => {
-    setCards(prev => prev.map((c, i) => i === index ? { ...c, [field]: value, error: null } : c))
+    setCards(prev => prev.map((c, i) => i === index ? { ...c, [field]: value, error: null, duplicate: null, action: 'create' as const } : c))
     setError(null)
+    setDupChecked(false)
+  }, [])
+
+  const handleActionChange = useCallback((index: number, action: 'merge' | 'keep-both') => {
+    setCards(prev => prev.map((c, i) => i === index ? { ...c, action } : c))
   }, [])
 
   const handleDelete = useCallback((index: number) => {
     setCards(prev => prev.filter((_, i) => i !== index).map((c, i) => ({ ...c, position: i })))
+    setDupChecked(false)
   }, [])
 
   function addCard() {
     setCards(prev => [...prev, newCard(prev.length)])
+    setDupChecked(false)
   }
 
   // ── Validation ──────────────────────────────────────────────────────────────
@@ -216,9 +256,39 @@ export default function DeckEditPage() {
       return
     }
 
+    // Duplicate check for newly-added cards, run once per batch of changes.
+    if (!dupChecked) {
+      const newCount = cards.filter(c => !c.id).length
+      if (newCount > 0) {
+        try {
+          const cardRepo = new SupabaseCardRepository()
+          const existing = await cardRepo.listOwned(ownerId, sourceLang, targetLang)
+
+          let hasNear = false
+          const withDup = cards.map(c => {
+            if (c.id) return c
+            const duplicate = analyzeDuplicate({ front: c.front.trim(), back: c.back.trim() }, existing, sourceLang, targetLang)
+            if (duplicate.tier === 'near') hasNear = true
+            return { ...c, duplicate, action: duplicate.tier === 'near' ? 'keep-both' as const : 'create' as const }
+          })
+
+          setCards(withDup)
+          setDupChecked(true)
+
+          if (hasNear) return
+        } catch (err: unknown) {
+          setError(err instanceof Error ? err.message : 'Failed to check for duplicates')
+          return
+        }
+      } else {
+        setDupChecked(true)
+      }
+    }
+
     setSaving(true)
     try {
-      const cardRepo = new SupabaseCardRepository()
+      const cardRepo     = new SupabaseCardRepository()
+      const dismissedRepo = new SupabaseDismissedPairRepository()
 
       // Only push updates for cards whose front/back actually changed —
       // for a large deck, re-saving every card on every save is what makes
@@ -235,24 +305,48 @@ export default function DeckEditPage() {
         })
         .filter((p): p is Promise<Card> => p !== null)
 
-      // Create all new (unsaved) cards in a single batch insert.
+      // New cards: split into "use existing card instead" (merge) vs. create.
       const newEntries = cards.map((c, i) => ({ c, i })).filter(({ c }) => !c.id)
-      const createPromise = newEntries.length > 0
-        ? cardRepo.bulkCreate(deckId, ownerId, sourceLang, targetLang, newEntries.map(({ c, i }) => ({
+      const toMerge  = newEntries.filter(({ c }) => c.action === 'merge' && c.duplicate?.existingCard)
+      const toCreate = newEntries.filter(({ c }) => c.action !== 'merge')
+
+      const mergePromises = toMerge.map(({ c, i }) =>
+        cardRepo.addToDeck(deckId, c.duplicate!.existingCard!.id, i).then(() => ({ i, card: c.duplicate!.existingCard! }))
+      )
+
+      const createPromise = toCreate.length > 0
+        ? cardRepo.bulkCreate(deckId, ownerId, sourceLang, targetLang, toCreate.map(({ c, i }) => ({
             front:    c.front.trim(),
             back:     c.back.trim(),
             position: i,
           })))
         : Promise.resolve([] as Card[])
 
-      const [, created] = await Promise.all([Promise.all(updatePromises), createPromise])
+      const [, mergedResults, created] = await Promise.all([
+        Promise.all(updatePromises),
+        Promise.all(mergePromises),
+        createPromise,
+      ])
 
-      if (created.length > 0) {
+      // Record "keep as new card" choices so this near-duplicate pair isn't
+      // flagged again in the future.
+      for (let j = 0; j < toCreate.length; j++) {
+        const { c }       = toCreate[j]!
+        const createdCard = created[j]
+        if (c.action === 'keep-both' && c.duplicate?.existingCard && createdCard && createdCard.id !== c.duplicate.existingCard.id) {
+          await dismissedRepo.create(ownerId, c.duplicate.existingCard.id, createdCard.id)
+        }
+      }
+
+      if (created.length > 0 || mergedResults.length > 0) {
         setCards(prev => {
           const next = [...prev]
-          newEntries.forEach(({ i }, j) => {
+          toCreate.forEach(({ i }, j) => {
             const createdCard = created[j]
             if (createdCard) next[i] = { ...next[i]!, id: createdCard.id }
+          })
+          mergedResults.forEach(({ i, card }) => {
+            next[i] = { ...next[i]!, id: card.id, front: card.front, back: card.back }
           })
           return next
         })
@@ -284,6 +378,8 @@ export default function DeckEditPage() {
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
 
   const errorCount = cards.filter(c => c.error !== null).length
+  const nearCount  = cards.filter(c => !c.id && c.duplicate?.tier === 'near').length
+  const saveLabel  = saved ? 'Saved ✓' : saving ? 'Saving…' : (dupChecked && nearCount > 0) ? 'Confirm & save' : 'Save'
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -312,20 +408,18 @@ export default function DeckEditPage() {
             disabled={saving}
             className="btn-primary"
           >
-            {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
+            {saveLabel}
           </button>
         </div>
       </div>
 
       {/* Language selector row */}
       <div className="panel flex items-center gap-3 py-2.5">
-        <select
-          className="input text-sm flex-1"
+        <LanguageCombobox
+          className="flex-1"
           value={sourceLang}
-          onChange={e => { setSourceLang(e.target.value); saveLangs(e.target.value, targetLang) }}
-        >
-          {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
-        </select>
+          onChange={code => { setSourceLang(code); saveLangs(code, targetLang) }}
+        />
 
         <button
           onClick={swapLangs}
@@ -336,13 +430,11 @@ export default function DeckEditPage() {
           ⇄
         </button>
 
-        <select
-          className="input text-sm flex-1"
+        <LanguageCombobox
+          className="flex-1"
           value={targetLang}
-          onChange={e => { setTargetLang(e.target.value); saveLangs(sourceLang, e.target.value) }}
-        >
-          {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
-        </select>
+          onChange={code => { setTargetLang(code); saveLangs(sourceLang, code) }}
+        />
 
         {langSaving && <span className="text-xs text-ink-faint shrink-0">Saving…</span>}
       </div>
@@ -351,6 +443,13 @@ export default function DeckEditPage() {
       {error && (
         <div className="border border-danger/40 bg-danger/10 rounded-lg px-4 py-3 text-sm text-danger">
           ⚠ {error}{errorCount > 0 ? ` (${errorCount} card${errorCount !== 1 ? 's' : ''} highlighted below)` : ''}
+        </div>
+      )}
+
+      {/* Duplicate banner */}
+      {dupChecked && nearCount > 0 && (
+        <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
+          {nearCount} new card{nearCount !== 1 ? 's' : ''} look similar to cards you already have — choose whether to keep {nearCount !== 1 ? 'them' : 'it'} as new card{nearCount !== 1 ? 's' : ''} or use the existing one{nearCount !== 1 ? 's' : ''} instead, then press &quot;Confirm &amp; save&quot;.
         </div>
       )}
 
@@ -363,6 +462,7 @@ export default function DeckEditPage() {
             index={i}
             onChange={handleChange}
             onDelete={handleDelete}
+            onActionChange={handleActionChange}
           />
         ))}
       </div>
@@ -379,7 +479,7 @@ export default function DeckEditPage() {
       {/* Bottom save */}
       <div className="flex gap-3 pb-8">
         <button onClick={handleSave} disabled={saving} className="btn-primary">
-          {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
+          {saveLabel}
         </button>
         <Link href={`/study/${deckId}`} className="btn-ghost">Cancel</Link>
       </div>
