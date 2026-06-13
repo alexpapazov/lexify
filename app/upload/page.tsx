@@ -396,8 +396,8 @@ export default function UploadPage() {
         setPreviewItems(withDup)
         setDupChecked(true)
 
-        const hasNear = withDup.some(it => it.duplicate?.tier === 'near')
-        if (hasNear) return
+        const hasFlag = withDup.some(it => it.duplicate?.tier === 'near' || it.duplicate?.tier === 'exact')
+        if (hasFlag) return
 
         await doSave(withDup)
       } catch (err: unknown) {
@@ -425,7 +425,9 @@ export default function UploadPage() {
   if (stage === 'preview') {
     const includedCount = previewItems.filter(it => it.include).length
     const nearCount     = previewItems.filter(it => it.duplicate?.tier === 'near').length
-    const saveLabel = !dupChecked || nearCount === 0 ? 'Save deck' : 'Confirm & save deck'
+    const exactCount    = previewItems.filter(it => it.duplicate?.tier === 'exact').length
+    const flaggedCount  = nearCount + exactCount
+    const saveLabel = !dupChecked || flaggedCount === 0 ? 'Save deck' : 'Confirm & save deck'
 
     return (
       <div className="space-y-6 max-w-3xl mx-auto pb-12">
@@ -436,9 +438,13 @@ export default function UploadPage() {
           </p>
         </div>
 
-        {dupChecked && nearCount > 0 && (
+        {dupChecked && flaggedCount > 0 && (
           <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
-            {nearCount} card{nearCount !== 1 ? 's' : ''} look similar to existing cards or to other cards in this list — review the flagged cards below before saving.
+            {flaggedCount} card{flaggedCount !== 1 ? 's' : ''} {flaggedCount !== 1 ? 'are' : 'is'} flagged below
+            {exactCount > 0 && nearCount > 0 && ` — ${exactCount} already in your library, ${nearCount} similar to existing or other cards in this list`}
+            {exactCount > 0 && nearCount === 0 && ` — already in your library`}
+            {exactCount === 0 && nearCount > 0 && ` — similar to existing cards or other cards in this list`}
+            . Review them before saving.
           </div>
         )}
 
@@ -474,6 +480,17 @@ export default function UploadPage() {
                   ✕
                 </button>
               </div>
+
+              {dupChecked && item.duplicate?.tier === 'exact' && item.duplicate.existingCard && (
+                <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
+                  <p className="text-xs text-ink-muted">
+                    Already in your library: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span> — this card will be reused, not duplicated.
+                    {item.include
+                      ? ' Uncheck the box above if you don’t want it added to this deck.'
+                      : ' It will be left out of this deck.'}
+                  </p>
+                </div>
+              )}
 
               {dupChecked && item.duplicate?.tier === 'near' && (
                 <div className="pl-7 space-y-2 border-t border-white/10 pt-3">

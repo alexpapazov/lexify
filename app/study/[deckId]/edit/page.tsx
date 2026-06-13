@@ -10,10 +10,11 @@
  *
  * Duplicate check (on save): newly-added cards ("+ New card") are checked
  * against the user's existing card library, same two-tier scheme as the
- * Upload flow (see lib/duplicates.ts). Tier-1 exact matches are merged
- * silently. Tier-2 near matches are flagged — the user chooses, per card,
- * whether to keep it as a new card or use the existing one instead — before
- * the save completes.
+ * Upload flow (see lib/duplicates.ts). Tier-1 exact matches are reused (no
+ * duplicate row is created) but flagged so the user can remove the card if
+ * they don't want it in this deck. Tier-2 near matches are flagged — the
+ * user chooses, per card, whether to keep it as a new card or use the
+ * existing one instead — before the save completes.
  */
 
 import { useEffect, useState, useCallback } from 'react'
@@ -52,10 +53,11 @@ function CardRow({ card, index, onChange, onDelete, onActionChange }: {
   onDelete:       (index: number) => void
   onActionChange: (index: number, action: 'merge' | 'keep-both') => void
 }) {
-  const hasError = card.error !== null
-  const frontErr = card.error === 'empty-front' || card.error === 'duplicate-front'
-  const backErr  = card.error === 'empty-back'
-  const showDup  = !card.id && card.duplicate?.tier === 'near' && card.duplicate.existingCard
+  const hasError  = card.error !== null
+  const frontErr  = card.error === 'empty-front' || card.error === 'duplicate-front'
+  const backErr   = card.error === 'empty-back'
+  const showNear  = !card.id && card.duplicate?.tier === 'near'  && card.duplicate.existingCard
+  const showExact = !card.id && card.duplicate?.tier === 'exact' && card.duplicate.existingCard
 
   return (
     <div className={`panel space-y-3 transition-colors ${hasError ? 'border-danger/50 bg-danger/5' : ''}`}>
@@ -96,8 +98,17 @@ function CardRow({ card, index, onChange, onDelete, onActionChange }: {
         </div>
       </div>
 
+      {/* Exact-duplicate flag (new cards only) */}
+      {showExact && card.duplicate?.existingCard && (
+        <div className="pl-0 space-y-2 border-t border-white/10 pt-3">
+          <p className="text-xs text-ink-muted">
+            Already in your library: <span className="text-ink">&quot;{card.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{card.duplicate.existingCard.back}&quot;</span> — this card will be reused, not duplicated. Remove it (✕ above) if you don&apos;t want it in this deck.
+          </p>
+        </div>
+      )}
+
       {/* Near-duplicate flag (new cards only) */}
-      {showDup && card.duplicate?.existingCard && (
+      {showNear && card.duplicate?.existingCard && (
         <div className="pl-0 space-y-2 border-t border-white/10 pt-3">
           <p className="text-xs text-ink-muted">
             Similar to existing card: <span className="text-ink">&quot;{card.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{card.duplicate.existingCard.back}&quot;</span>
@@ -264,18 +275,18 @@ export default function DeckEditPage() {
           const cardRepo = new SupabaseCardRepository()
           const existing = await cardRepo.listOwned(ownerId, sourceLang, targetLang)
 
-          let hasNear = false
+          let hasFlag = false
           const withDup = cards.map(c => {
             if (c.id) return c
             const duplicate = analyzeDuplicate({ front: c.front.trim(), back: c.back.trim() }, existing, sourceLang, targetLang)
-            if (duplicate.tier === 'near') hasNear = true
+            if (duplicate.tier === 'near' || duplicate.tier === 'exact') hasFlag = true
             return { ...c, duplicate, action: duplicate.tier === 'near' ? 'keep-both' as const : 'create' as const }
           })
 
           setCards(withDup)
           setDupChecked(true)
 
-          if (hasNear) return
+          if (hasFlag) return
         } catch (err: unknown) {
           setError(err instanceof Error ? err.message : 'Failed to check for duplicates')
           return
@@ -377,9 +388,11 @@ export default function DeckEditPage() {
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
 
-  const errorCount = cards.filter(c => c.error !== null).length
-  const nearCount  = cards.filter(c => !c.id && c.duplicate?.tier === 'near').length
-  const saveLabel  = saved ? 'Saved ✓' : saving ? 'Saving…' : (dupChecked && nearCount > 0) ? 'Confirm & save' : 'Save'
+  const errorCount  = cards.filter(c => c.error !== null).length
+  const nearCount   = cards.filter(c => !c.id && c.duplicate?.tier === 'near').length
+  const exactCount  = cards.filter(c => !c.id && c.duplicate?.tier === 'exact').length
+  const flaggedCount = nearCount + exactCount
+  const saveLabel  = saved ? 'Saved ✓' : saving ? 'Saving…' : (dupChecked && flaggedCount > 0) ? 'Confirm & save' : 'Save'
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -447,9 +460,15 @@ export default function DeckEditPage() {
       )}
 
       {/* Duplicate banner */}
-      {dupChecked && nearCount > 0 && (
+      {dupChecked && flaggedCount > 0 && (
         <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
-          {nearCount} new card{nearCount !== 1 ? 's' : ''} look similar to cards you already have — choose whether to keep {nearCount !== 1 ? 'them' : 'it'} as new card{nearCount !== 1 ? 's' : ''} or use the existing one{nearCount !== 1 ? 's' : ''} instead, then press &quot;Confirm &amp; save&quot;.
+          {nearCount > 0 && (
+            <>{nearCount} new card{nearCount !== 1 ? 's' : ''} look similar to cards you already have — choose whether to keep {nearCount !== 1 ? 'them' : 'it'} as new card{nearCount !== 1 ? 's' : ''} or use the existing one{nearCount !== 1 ? 's' : ''} instead. </>
+          )}
+          {exactCount > 0 && (
+            <>{exactCount} new card{exactCount !== 1 ? 's' : ''} {exactCount !== 1 ? 'are' : 'is'} already in your library and will be reused — remove {exactCount !== 1 ? 'them' : 'it'} below if you don&apos;t want {exactCount !== 1 ? 'them' : 'it'} in this deck. </>
+          )}
+          Then press &quot;Confirm &amp; save&quot;.
         </div>
       )}
 
