@@ -12,6 +12,7 @@ import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
   analyzeDuplicate, type DuplicateAnalysis,
+  tier1Match, tier2Match,
 } from '@/lib/duplicates'
 import type { Card } from '@/domain'
 
@@ -28,11 +29,13 @@ interface CandidateCard {
 }
 
 interface PreviewItem {
-  front:     string
-  back:      string
-  include:   boolean
-  duplicate: DuplicateAnalysis | null
-  action:    'create' | 'merge' | 'keep-both'
+  front:           string
+  back:            string
+  include:         boolean
+  duplicate:       DuplicateAnalysis | null
+  action:          'create' | 'merge' | 'keep-both'
+  /** Index of an earlier item in this same preview list that this one looks like a near-duplicate of (not yet saved, so no existing card to merge with). */
+  batchDuplicateOf?: number
 }
 
 function parseCards(raw: string, cardSep: string, pairSep: string): ParsedCard[] {
@@ -368,9 +371,26 @@ export default function UploadPage() {
         const cardRepo = new SupabaseCardRepository()
         const existing = await cardRepo.listOwned(session.user.id, targetLang, basisLang)
 
-        const withDup: PreviewItem[] = previewItems.map(it => {
+        const withDup: PreviewItem[] = previewItems.map((it, idx) => {
           const duplicate = analyzeDuplicate({ front: it.front, back: it.back }, existing, targetLang, basisLang)
-          return { ...it, duplicate, action: duplicate.tier === 'near' ? 'keep-both' : 'create' }
+          if (duplicate.tier !== 'none') {
+            return { ...it, duplicate, action: duplicate.tier === 'near' ? 'keep-both' as const : 'create' as const }
+          }
+
+          // No match in the saved library — check whether this looks like a
+          // near/exact duplicate of an earlier card in this same batch (which
+          // wouldn't show up in `existing` since neither is saved yet).
+          for (let j = 0; j < idx; j++) {
+            const other = previewItems[j]!
+            if (!other.include) continue
+            const a = { front: it.front, back: it.back }
+            const b = { front: other.front, back: other.back }
+            if (tier1Match(a, b) || tier2Match(a, b, targetLang, basisLang)) {
+              return { ...it, duplicate: { tier: 'near' as const, existingCard: null }, action: 'keep-both' as const, batchDuplicateOf: j }
+            }
+          }
+
+          return { ...it, duplicate, action: 'create' as const }
         })
 
         setPreviewItems(withDup)
@@ -418,7 +438,7 @@ export default function UploadPage() {
 
         {dupChecked && nearCount > 0 && (
           <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
-            {nearCount} card{nearCount !== 1 ? 's' : ''} look similar to cards you already have — choose whether to keep them as new cards or use the existing ones instead.
+            {nearCount} card{nearCount !== 1 ? 's' : ''} look similar to existing cards or to other cards in this list — review the flagged cards below before saving.
           </div>
         )}
 
@@ -455,21 +475,34 @@ export default function UploadPage() {
                 </button>
               </div>
 
-              {dupChecked && item.duplicate?.tier === 'near' && item.duplicate.existingCard && (
+              {dupChecked && item.duplicate?.tier === 'near' && (
                 <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
-                  <p className="text-xs text-ink-muted">
-                    Similar to existing card: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
-                  </p>
-                  <div className="flex gap-4 text-sm">
-                    <label className="flex items-center gap-1.5 cursor-pointer text-ink">
-                      <input type="radio" name={`dup-${i}`} checked={item.action === 'keep-both'} onChange={() => updatePreviewItem(i, { action: 'keep-both' })} className="accent-accent" />
-                      Keep as new card
-                    </label>
-                    <label className="flex items-center gap-1.5 cursor-pointer text-ink">
-                      <input type="radio" name={`dup-${i}`} checked={item.action === 'merge'} onChange={() => updatePreviewItem(i, { action: 'merge' })} className="accent-accent" />
-                      Use existing card instead
-                    </label>
-                  </div>
+                  {item.duplicate.existingCard ? (
+                    <>
+                      <p className="text-xs text-ink-muted">
+                        Similar to existing card: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
+                      </p>
+                      <div className="flex gap-4 text-sm">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+                          <input type="radio" name={`dup-${i}`} checked={item.action === 'keep-both'} onChange={() => updatePreviewItem(i, { action: 'keep-both' })} className="accent-accent" />
+                          Keep as new card
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+                          <input type="radio" name={`dup-${i}`} checked={item.action === 'merge'} onChange={() => updatePreviewItem(i, { action: 'merge' })} className="accent-accent" />
+                          Use existing card instead
+                        </label>
+                      </div>
+                    </>
+                  ) : item.batchDuplicateOf !== undefined ? (
+                    <>
+                      <p className="text-xs text-ink-muted">
+                        Looks like a duplicate of card #{item.batchDuplicateOf + 1} above: <span className="text-ink">&quot;{previewItems[item.batchDuplicateOf]?.front}&quot;</span> / <span className="text-ink">&quot;{previewItems[item.batchDuplicateOf]?.back}&quot;</span>
+                      </p>
+                      <button type="button" onClick={() => removePreviewItem(i)} className="btn-ghost text-xs px-3 py-1">
+                        Remove this card
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               )}
             </div>
