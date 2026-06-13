@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
@@ -113,6 +113,7 @@ function buildAncestors(allFolders: Folder[], currentId: string): Folder[] {
 
 export default function FolderPage() {
   const params   = useParams()
+  const router   = useRouter()
   const folderId = params.folderId as string
 
   const [folder,       setFolder]       = useState<Folder | null>(null)
@@ -359,6 +360,22 @@ export default function FolderPage() {
     load()
   }
 
+  async function handleDeleteFolder(id: string, name: string) {
+    if (!confirm(`Delete folder "${name}" and move its contents to root?`)) return
+    const folderRepo = new SupabaseFolderRepository()
+    await folderRepo.softDelete(id)
+    load()
+  }
+
+  async function handleDeleteCurrentFolder() {
+    if (!folder) return
+    if (!confirm(`Delete folder "${folder.name}" and move its contents to root?`)) return
+    const folderRepo = new SupabaseFolderRepository()
+    await folderRepo.softDelete(folder.id)
+    const parentId = folder.parentId
+    router.push(parentId ? `/library/${parentId}` : '/library')
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -425,12 +442,20 @@ export default function FolderPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-ink">{folder.name}</h1>
-        <button
-          onClick={() => { setAddingFolder(true); setNewName('') }}
-          className="text-sm text-accent hover:text-accent-soft transition-colors"
-        >
-          + New folder
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => { setAddingFolder(true); setNewName('') }}
+            className="text-sm text-accent hover:text-accent-soft transition-colors"
+          >
+            + New folder
+          </button>
+          <button
+            onClick={handleDeleteCurrentFolder}
+            className="text-sm text-ink-faint hover:text-danger transition-colors"
+          >
+            Delete folder
+          </button>
+        </div>
       </div>
 
       {/* Stats + Study button for this folder (including subfolders) */}
@@ -567,6 +592,13 @@ export default function FolderPage() {
                     <div className="text-sm font-medium text-ink truncate">{sub.name}</div>
                     <div className="text-xs text-ink-faint mt-0.5 truncate">{preview}</div>
                   </Link>
+                  <button
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); handleDeleteFolder(sub.id, sub.name) }}
+                    className="text-ink-faint hover:text-danger transition-colors text-sm shrink-0 px-1"
+                    title="Delete folder"
+                  >
+                    ✕
+                  </button>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="text-ink-faint shrink-0 mr-0.5">
                     <path d="M8 5l8 7-8 7V5z"/>
                   </svg>

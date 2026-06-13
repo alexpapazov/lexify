@@ -255,6 +255,13 @@ export default function LibraryPage() {
     load()
   }
 
+  async function handleDeleteFolder(id: string, name: string) {
+    if (!confirm(`Delete folder "${name}" and move its contents to root?`)) return
+    const folderRepo = new SupabaseFolderRepository()
+    await folderRepo.softDelete(id)
+    load()
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -375,6 +382,13 @@ export default function LibraryPage() {
                       </div>
                     )
                   })()}
+                  <button
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); handleDeleteFolder(folder.id, folder.name) }}
+                    className="text-ink-faint hover:text-danger transition-colors text-sm shrink-0 px-1"
+                    title="Delete folder"
+                  >
+                    ✕
+                  </button>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="text-ink-faint shrink-0 mr-0.5">
                     <path d="M8 5l8 7-8 7V5z"/>
                   </svg>
