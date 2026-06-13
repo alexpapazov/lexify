@@ -51,16 +51,6 @@ function DeckIcon() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function folderPreview(folderId: string, allFolders: Folder[], allDecks: Deck[]): string {
-  const items = [
-    ...allFolders.filter(f => f.parentId === folderId).map(f => f.name),
-    ...allDecks.filter(d => d.folderId === folderId).map(d => d.name),
-  ]
-  if (items.length === 0) return 'Empty'
-  const preview = items.slice(0, 3).join(', ')
-  return items.length > 3 ? `${preview} +${items.length - 3} more` : preview
-}
-
 function getDropPos(e: React.DragEvent, isFolder: boolean): DropPos {
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   const pct  = (e.clientY - rect.top) / rect.height
@@ -255,13 +245,6 @@ export default function LibraryPage() {
     load()
   }
 
-  async function handleDeleteFolder(id: string, name: string) {
-    if (!confirm(`Delete folder "${name}" and move its contents to root?`)) return
-    const folderRepo = new SupabaseFolderRepository()
-    await folderRepo.softDelete(id)
-    load()
-  }
-
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -321,7 +304,6 @@ export default function LibraryPage() {
         <div className="space-y-0">
           {/* Root folders */}
           {rootFolders.map(folder => {
-            const preview       = folderPreview(folder.id, allFolders, allDecks)
             const dt            = dropTarget?.id === folder.id ? dropTarget : null
             const isDragging    = dragging?.type === 'folder' && dragging.id === folder.id
 
@@ -360,38 +342,19 @@ export default function LibraryPage() {
                     onClick={e => { if (dragging) e.preventDefault() }}
                   >
                     <div className="text-sm font-medium text-ink truncate">{folder.name}</div>
-                    <div className="text-xs text-ink-faint mt-0.5 truncate">{preview}</div>
                   </Link>
                   {(() => {
                     const c = folderCounts[folder.id]
                     if (!c || (c.unlearned + c.learning + c.graduated) === 0) return null
-                    const totalDue = c.dueNow + c.learning
                     return (
-                      <div className="hidden sm:flex items-center gap-3 text-xs shrink-0" onClick={e => e.stopPropagation()}>
+                      <div className="hidden sm:flex items-center gap-3 text-xs shrink-0">
                         <span className="text-ink-muted">{c.unlearned} new</span>
                         <span className="text-warning">{c.learning} learning</span>
                         <span className="text-success">{c.graduated} done</span>
                         <span className="text-accent-soft">{c.dueNow} due</span>
-                        <Link
-                          href={`/study/folder/${folder.id}/session`}
-                          onClick={e => { e.stopPropagation(); if (dragging) e.preventDefault() }}
-                          className={totalDue === 0 ? 'btn-primary text-xs py-1 px-3 opacity-40 pointer-events-none' : 'btn-primary text-xs py-1 px-3'}
-                        >
-                          Study
-                        </Link>
                       </div>
                     )
                   })()}
-                  <button
-                    onClick={e => { e.preventDefault(); e.stopPropagation(); handleDeleteFolder(folder.id, folder.name) }}
-                    className="text-ink-faint hover:text-danger transition-colors text-sm shrink-0 px-1"
-                    title="Delete folder"
-                  >
-                    ✕
-                  </button>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="text-ink-faint shrink-0 mr-0.5">
-                    <path d="M8 5l8 7-8 7V5z"/>
-                  </svg>
                 </div>
 
                 {/* Insert line BELOW */}

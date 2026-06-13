@@ -69,16 +69,6 @@ function DeckIcon() {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function folderPreview(folderId: string, allFolders: Folder[], allDecks: Deck[]): string {
-  const items = [
-    ...allFolders.filter(f => f.parentId === folderId).map(f => f.name),
-    ...allDecks.filter(d => d.folderId === folderId).map(d => d.name),
-  ]
-  if (items.length === 0) return 'Empty'
-  const preview = items.slice(0, 3).join(', ')
-  return items.length > 3 ? `${preview} +${items.length - 3} more` : preview
-}
-
 function getDropPos(e: React.DragEvent, isFolder: boolean): DropPos {
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   const pct  = (e.clientY - rect.top) / rect.height
@@ -360,13 +350,6 @@ export default function FolderPage() {
     load()
   }
 
-  async function handleDeleteFolder(id: string, name: string) {
-    if (!confirm(`Delete folder "${name}" and move its contents to root?`)) return
-    const folderRepo = new SupabaseFolderRepository()
-    await folderRepo.softDelete(id)
-    load()
-  }
-
   async function handleDeleteCurrentFolder() {
     if (!folder) return
     if (!confirm(`Delete folder "${folder.name}" and move its contents to root?`)) return
@@ -553,7 +536,6 @@ export default function FolderPage() {
         <div className="space-y-0">
           {/* Subfolders */}
           {subfolders.map(sub => {
-            const preview    = folderPreview(sub.id, allFolders, allDecks)
             const dt         = dropTarget?.id === sub.id ? dropTarget : null
             const isDragging = dragging?.type === 'folder' && dragging.id === sub.id
 
@@ -590,18 +572,7 @@ export default function FolderPage() {
                     onClick={e => { if (dragging) e.preventDefault() }}
                   >
                     <div className="text-sm font-medium text-ink truncate">{sub.name}</div>
-                    <div className="text-xs text-ink-faint mt-0.5 truncate">{preview}</div>
                   </Link>
-                  <button
-                    onClick={e => { e.preventDefault(); e.stopPropagation(); handleDeleteFolder(sub.id, sub.name) }}
-                    className="text-ink-faint hover:text-danger transition-colors text-sm shrink-0 px-1"
-                    title="Delete folder"
-                  >
-                    ✕
-                  </button>
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="text-ink-faint shrink-0 mr-0.5">
-                    <path d="M8 5l8 7-8 7V5z"/>
-                  </svg>
                 </div>
                 {dt?.pos === 'after' && (
                   <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent rounded-full z-10 translate-y-0.5" />
