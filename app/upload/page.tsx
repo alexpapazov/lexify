@@ -174,7 +174,7 @@ export default function UploadPage() {
         pipelineId:     pipeline.id,
       })
 
-      const created = await cardRepo.bulkCreate(deck.id, parsed.map((c, i) => ({
+      const created = await cardRepo.bulkCreate(deck.id, session.user.id, frontLang, backLang, parsed.map((c, i) => ({
         front:    c.front,
         back:     c.back,
         position: i,

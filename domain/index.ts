@@ -96,8 +96,13 @@ export interface CardChoices {
 }
 
 export interface Card {
-  id:        CardId
-  deckId:    DeckId
+  id:             CardId
+  /** Cards are owned by a user (within a target/native language direction), not by a deck. */
+  ownerId:        UserId
+  /** Front-side language (the language being learned). */
+  sourceLanguage: string
+  /** Back-side language (the learner's native / foundation language). */
+  targetLanguage: string
   front:     string
   back:      string
   hints:     string[]
@@ -106,6 +111,30 @@ export interface Card {
   createdAt: string
   updatedAt: string
   deletedAt: string | null
+}
+
+// ─── DeckCard (join table) ─────────────────────────────────────────────────────
+
+/** A card's membership in a deck — the same card may belong to multiple decks. */
+export interface DeckCard {
+  deckId:   DeckId
+  cardId:   CardId
+  position: number
+}
+
+// ─── DismissedPair ──────────────────────────────────────────────────────────────
+
+/**
+ * A Tier-2 near-duplicate pair the user explicitly chose to "keep both" for —
+ * remembered so the same pair isn't flagged again. Also feeds Milestone 4's
+ * embedding-based similarity work.
+ */
+export interface DismissedPair {
+  id:        string
+  userId:    UserId
+  cardAId:   CardId
+  cardBId:   CardId
+  createdAt: string
 }
 
 // ─── CardState ────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import type { Deck, DeckId, Card, CardId, CardState, ReviewEvent, Pipeline, UserId, DeckPreferences } from '@/domain'
+import type { Deck, DeckId, Card, CardId, CardState, ReviewEvent, Pipeline, UserId, DeckPreferences, DismissedPair } from '@/domain'
 
 export interface CreateDeckInput {
   name:           string
@@ -28,9 +28,24 @@ export interface CreateCardInput {
 export interface CardRepository {
   listByDeck(deckId: DeckId): Promise<Card[]>
   get(cardId: CardId): Promise<Card | null>
-  bulkCreate(deckId: DeckId, inputs: CreateCardInput[]): Promise<Card[]>
+  /**
+   * Creates cards owned by `ownerId` in the given language direction and
+   * links them into `deckId` (via deck_cards). Performs silent Tier-1 exact
+   * duplicate detection first — if an input's (front, back) exactly matches
+   * (whitespace-normalized) an existing card the user already owns in this
+   * direction, that existing card is reused (just linked into the deck)
+   * instead of creating a new row.
+   */
+  bulkCreate(deckId: DeckId, ownerId: UserId, sourceLanguage: string, targetLanguage: string, inputs: CreateCardInput[]): Promise<Card[]>
   update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints' | 'choices'>>): Promise<Card>
+  /** Soft-deletes a card everywhere — it disappears from every deck that references it. */
   softDelete(cardId: CardId): Promise<void>
+  /** Links an existing card into a deck (no-op if already linked). */
+  addToDeck(deckId: DeckId, cardId: CardId, position: number): Promise<void>
+  /** Removes a card from a deck without deleting the card itself (it may still belong to other decks). */
+  removeFromDeck(deckId: DeckId, cardId: CardId): Promise<void>
+  /** All of a user's non-deleted cards in a given (target, native) language direction — for duplicate detection. */
+  listOwned(ownerId: UserId, sourceLanguage: string, targetLanguage: string): Promise<Card[]>
 }
 
 export interface CardStateRepository {
@@ -70,4 +85,11 @@ export interface PipelineRepository {
   getDefault(): Promise<Pipeline>
   list(userId: UserId): Promise<Pipeline[]>
   get(pipelineId: string): Promise<Pipeline | null>
+}
+
+export interface DismissedPairRepository {
+  /** True if the user previously chose "keep both" for this pair (order-independent). */
+  isDismissed(userId: UserId, cardAId: CardId, cardBId: CardId): Promise<boolean>
+  /** Records a "keep both" decision so this pair isn't flagged again. */
+  create(userId: UserId, cardAId: CardId, cardBId: CardId): Promise<DismissedPair>
 }

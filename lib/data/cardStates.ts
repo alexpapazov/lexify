@@ -32,9 +32,18 @@ export class SupabaseCardStateRepository implements CardStateRepository {
   }
 
   async listByDeck(userId: UserId, deckId: DeckId): Promise<CardState[]> {
+    // cards are no longer deck-owned — join through deck_cards to find
+    // which cards belong to this deck, then fetch this user's states for them.
+    const { data: links, error: linkError } = await this.db.from('deck_cards')
+      .select('card_id').eq('deck_id', deckId)
+    if (linkError) throw new Error(linkError.message)
+
+    const cardIds = (links ?? []).map(l => l.card_id as string)
+    if (cardIds.length === 0) return []
+
     const { data, error } = await this.db.from('card_states')
-      .select('*, cards!inner(deck_id)')
-      .eq('user_id', userId).eq('cards.deck_id', deckId)
+      .select('*')
+      .eq('user_id', userId).in('card_id', cardIds)
     if (error) throw new Error(error.message)
     return (data ?? []).map(rowToCardState)
   }

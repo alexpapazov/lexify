@@ -93,6 +93,7 @@ export default function DeckEditPage() {
   const router     = useRouter()
   const supabase   = createClient()
 
+  const [ownerId,     setOwnerId]     = useState('')
   const [deckName,    setDeckName]    = useState('')
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleting,        setDeleting]        = useState(false)
@@ -111,6 +112,7 @@ export default function DeckEditPage() {
     async function load() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth'); return }
+      setOwnerId(session.user.id)
 
       const deckRepo = new SupabaseDeckRepository()
       const cardRepo = new SupabaseCardRepository()
@@ -236,7 +238,7 @@ export default function DeckEditPage() {
       // Create all new (unsaved) cards in a single batch insert.
       const newEntries = cards.map((c, i) => ({ c, i })).filter(({ c }) => !c.id)
       const createPromise = newEntries.length > 0
-        ? cardRepo.bulkCreate(deckId, newEntries.map(({ c, i }) => ({
+        ? cardRepo.bulkCreate(deckId, ownerId, sourceLang, targetLang, newEntries.map(({ c, i }) => ({
             front:    c.front.trim(),
             back:     c.back.trim(),
             position: i,
