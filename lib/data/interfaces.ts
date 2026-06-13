@@ -46,6 +46,8 @@ export interface CardRepository {
   removeFromDeck(deckId: DeckId, cardId: CardId): Promise<void>
   /** All of a user's non-deleted cards in a given (target, native) language direction — for duplicate detection. */
   listOwned(ownerId: UserId, sourceLanguage: string, targetLanguage: string): Promise<Card[]>
+  /** For each given card id, the names of the (non-deleted) decks it currently belongs to. */
+  listDeckNamesForCards(cardIds: CardId[]): Promise<Record<string, string[]>>
 }
 
 export interface CardStateRepository {

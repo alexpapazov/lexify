@@ -53,6 +53,23 @@ export class SupabaseCardRepository implements CardRepository {
     return (data ?? []).map(rowToCard)
   }
 
+  async listDeckNamesForCards(cardIds: CardId[]): Promise<Record<string, string[]>> {
+    if (cardIds.length === 0) return {}
+
+    const { data, error } = await this.db.from('deck_cards')
+      .select('card_id, decks(name, deleted_at)')
+      .in('card_id', cardIds)
+    if (error) throw new Error(error.message)
+
+    const result: Record<string, string[]> = {}
+    for (const row of (data ?? []) as unknown as { card_id: string; decks: { name: string; deleted_at: string | null } | null }[]) {
+      if (!row.decks || row.decks.deleted_at !== null) continue
+      const names = result[row.card_id] ?? (result[row.card_id] = [])
+      names.push(row.decks.name)
+    }
+    return result
+  }
+
   async bulkCreate(deckId: DeckId, ownerId: UserId, sourceLanguage: string, targetLanguage: string, inputs: CreateCardInput[]): Promise<Card[]> {
     if (inputs.length === 0) return []
 

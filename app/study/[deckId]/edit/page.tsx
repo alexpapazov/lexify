@@ -38,6 +38,8 @@ interface EditableCard {
   error:     'empty-front' | 'empty-back' | 'duplicate-front' | null
   duplicate: DuplicateAnalysis | null
   action:    'create' | 'merge' | 'keep-both'
+  /** Names of decks the matched existing card (Tier-1 exact match) already belongs to. */
+  existingCardDeckNames?: string[]
 }
 
 function newCard(position: number): EditableCard {
@@ -102,7 +104,9 @@ function CardRow({ card, index, onChange, onDelete, onActionChange }: {
       {showExact && card.duplicate?.existingCard && (
         <div className="pl-0 space-y-2 border-t border-white/10 pt-3">
           <p className="text-xs text-ink-muted">
-            Already in your library: <span className="text-ink">&quot;{card.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{card.duplicate.existingCard.back}&quot;</span> — this card will be reused, not duplicated. Remove it (✕ above) if you don&apos;t want it in this deck.
+            Already in {card.existingCardDeckNames && card.existingCardDeckNames.length > 0
+              ? <span className="text-ink">{card.existingCardDeckNames.join(', ')}</span>
+              : 'your library'}. Remove this card (✕ above) if you do not want to add this duplicate to this deck.
           </p>
         </div>
       )}
@@ -283,7 +287,21 @@ export default function DeckEditPage() {
             return { ...c, duplicate, action: duplicate.tier === 'near' ? 'keep-both' as const : 'create' as const }
           })
 
-          setCards(withDup)
+          // For exact (Tier-1) matches, look up which deck(s) the existing
+          // card already lives in, so we can tell the user where it is.
+          const exactCardIds = [...new Set(
+            withDup
+              .filter(c => c.duplicate?.tier === 'exact' && c.duplicate.existingCard)
+              .map(c => c.duplicate!.existingCard!.id)
+          )]
+          const deckNamesByCard = await cardRepo.listDeckNamesForCards(exactCardIds)
+          const withDeckNames = withDup.map(c =>
+            c.duplicate?.tier === 'exact' && c.duplicate.existingCard
+              ? { ...c, existingCardDeckNames: deckNamesByCard[c.duplicate.existingCard.id] ?? [] }
+              : c
+          )
+
+          setCards(withDeckNames)
           setDupChecked(true)
 
           if (hasFlag) return

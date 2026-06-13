@@ -36,6 +36,8 @@ interface PreviewItem {
   action:          'create' | 'merge' | 'keep-both'
   /** Index of an earlier item in this same preview list that this one looks like a near-duplicate of (not yet saved, so no existing card to merge with). */
   batchDuplicateOf?: number
+  /** Names of decks the matched existing card (Tier-1 exact match) already belongs to. */
+  existingCardDeckNames?: string[]
 }
 
 function parseCards(raw: string, cardSep: string, pairSep: string): ParsedCard[] {
@@ -393,13 +395,27 @@ export default function UploadPage() {
           return { ...it, duplicate, action: 'create' as const }
         })
 
-        setPreviewItems(withDup)
+        // For exact (Tier-1) matches, look up which deck(s) the existing card
+        // already lives in, so we can tell the user where the duplicate is.
+        const exactCardIds = [...new Set(
+          withDup
+            .filter(it => it.duplicate?.tier === 'exact' && it.duplicate.existingCard)
+            .map(it => it.duplicate!.existingCard!.id)
+        )]
+        const deckNamesByCard = await cardRepo.listDeckNamesForCards(exactCardIds)
+        const withDeckNames = withDup.map(it =>
+          it.duplicate?.tier === 'exact' && it.duplicate.existingCard
+            ? { ...it, existingCardDeckNames: deckNamesByCard[it.duplicate.existingCard.id] ?? [] }
+            : it
+        )
+
+        setPreviewItems(withDeckNames)
         setDupChecked(true)
 
-        const hasFlag = withDup.some(it => it.duplicate?.tier === 'near' || it.duplicate?.tier === 'exact')
+        const hasFlag = withDeckNames.some(it => it.duplicate?.tier === 'near' || it.duplicate?.tier === 'exact')
         if (hasFlag) return
 
-        await doSave(withDup)
+        await doSave(withDeckNames)
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : 'Failed to check for duplicates')
       }
@@ -484,10 +500,9 @@ export default function UploadPage() {
               {dupChecked && item.duplicate?.tier === 'exact' && item.duplicate.existingCard && (
                 <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
                   <p className="text-xs text-ink-muted">
-                    Already in your library: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span> — this card will be reused, not duplicated.
-                    {item.include
-                      ? ' Uncheck the box above if you don’t want it added to this deck.'
-                      : ' It will be left out of this deck.'}
+                    Already in {item.existingCardDeckNames && item.existingCardDeckNames.length > 0
+                      ? <span className="text-ink">{item.existingCardDeckNames.join(', ')}</span>
+                      : 'your library'}. Uncheck the box to the left if you do not want to add this duplicate to this deck.
                   </p>
                 </div>
               )}
