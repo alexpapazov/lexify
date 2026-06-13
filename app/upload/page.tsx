@@ -10,7 +10,7 @@ import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
 import { LANGUAGES } from '@/lib/languages'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import {
-  WORDLIST_CHAR_CAP, INSTRUCTIONS_CHAR_CAP, EXTRACTION_WORD_CAP,
+  INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
   analyzeDuplicate, type DuplicateAnalysis,
 } from '@/lib/duplicates'
 import type { Card } from '@/domain'
@@ -58,8 +58,8 @@ function wordCount(text: string): number {
 function reasonToMessage(reason: string): string {
   switch (reason) {
     case 'no-api-key':            return 'AI card generation is not configured for this app yet.'
-    case 'content-too-long':      return `Your word list exceeds the ${WORDLIST_CHAR_CAP}-character limit.`
-    case 'text-too-long':         return `Your text exceeds the ${EXTRACTION_WORD_CAP}-word limit.`
+    case 'content-too-long':      return `Your word list exceeds the ${INPUT_WORD_CAP}-word limit.`
+    case 'text-too-long':         return `Your text exceeds the ${INPUT_WORD_CAP}-word limit.`
     case 'instructions-too-long': return `Prompt exceeds the ${INSTRUCTIONS_CHAR_CAP}-character limit.`
     case 'empty-content':         return 'Please enter some content first.'
     case 'parse-error':           return 'Could not understand the AI response. Please try again.'
@@ -262,12 +262,8 @@ export default function UploadPage() {
     setAgentError(null)
     if (!ensureLanguages()) return
     if (!rawText.trim()) { setAgentError('Enter some content first.'); return }
-    if (aiMode === 'wordlist' && rawText.length > WORDLIST_CHAR_CAP) {
-      setAgentError(`Your word list exceeds the ${WORDLIST_CHAR_CAP}-character limit.`)
-      return
-    }
-    if (aiMode === 'extraction' && wordCount(rawText) > EXTRACTION_WORD_CAP) {
-      setAgentError(`Your text exceeds the ${EXTRACTION_WORD_CAP}-word limit.`)
+    if (wordCount(rawText) > INPUT_WORD_CAP) {
+      setAgentError(`Your ${aiMode === 'wordlist' ? 'word list' : 'text'} exceeds the ${INPUT_WORD_CAP}-word limit.`)
       return
     }
 
@@ -573,7 +569,7 @@ export default function UploadPage() {
           <label className="text-sm text-ink-muted">{textareaLabel}</label>
           {aiFormatEnabled && (
             <span className="text-xs text-ink-faint">
-              {aiMode === 'wordlist' ? `${rawText.length} / ${WORDLIST_CHAR_CAP}` : `${wordCount(rawText)} / ${EXTRACTION_WORD_CAP} words`}
+              {wordCount(rawText)} / {INPUT_WORD_CAP} words
             </span>
           )}
         </div>

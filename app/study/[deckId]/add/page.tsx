@@ -5,9 +5,9 @@
  *
  * Two input modes:
  *  - Word list: a single text field (words/phrases, optionally with
- *    translations), capped at WORDLIST_CHAR_CAP characters.
+ *    translations), capped at INPUT_WORD_CAP words.
  *  - Extract from text: a passage of running text capped at
- *    EXTRACTION_WORD_CAP words — any "instructions" inside it are ignored.
+ *    INPUT_WORD_CAP words — any "instructions" inside it are ignored.
  *
  * Both modes share an optional formatting-instructions field (capped at
  * INSTRUCTIONS_CHAR_CAP characters) and an "improve translations" toggle.
@@ -25,7 +25,7 @@ import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
 import { langName } from '@/lib/languages'
 import {
-  WORDLIST_CHAR_CAP, INSTRUCTIONS_CHAR_CAP, EXTRACTION_WORD_CAP,
+  INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
   estimateCardCount, analyzeDuplicate, type DuplicateAnalysis,
 } from '@/lib/duplicates'
 import type { Deck, Card } from '@/domain'
@@ -58,8 +58,8 @@ function wordCount(text: string): number {
 function reasonToMessage(reason: string): string {
   switch (reason) {
     case 'no-api-key':           return 'AI card generation is not configured for this app yet.'
-    case 'content-too-long':     return `Content exceeds the ${WORDLIST_CHAR_CAP}-character limit.`
-    case 'text-too-long':        return `Text exceeds the ${EXTRACTION_WORD_CAP}-word limit.`
+    case 'content-too-long':     return `Content exceeds the ${INPUT_WORD_CAP}-word limit.`
+    case 'text-too-long':        return `Text exceeds the ${INPUT_WORD_CAP}-word limit.`
     case 'instructions-too-long': return `Instructions exceed the ${INSTRUCTIONS_CHAR_CAP}-character limit.`
     case 'empty-content':        return 'Please enter some content first.'
     case 'parse-error':          return 'Could not understand the AI response. Please try again.'
@@ -112,15 +112,15 @@ export default function AddCardsPage() {
     load()
   }, [deckId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const charCount    = content.length
-  const instrCount   = instructions.length
+  const contentWordCount = wordCount(content)
+  const instrCount    = instructions.length
   const textWordCount = wordCount(text)
 
   const estimate = useMemo(() => {
     return mode === 'wordlist' ? estimateCardCount('wordlist', content) : estimateCardCount('extraction', text)
   }, [mode, content, text])
 
-  const overCap = mode === 'wordlist' ? charCount > WORDLIST_CHAR_CAP : textWordCount > EXTRACTION_WORD_CAP
+  const overCap = mode === 'wordlist' ? contentWordCount > INPUT_WORD_CAP : textWordCount > INPUT_WORD_CAP
   const instrOverCap = instrCount > INSTRUCTIONS_CHAR_CAP
 
   const canContinue = !overCap && !instrOverCap && estimate > 0
@@ -262,7 +262,7 @@ export default function AddCardsPage() {
                 <label className="text-sm text-ink-muted">
                   Words / phrases — one per line, optionally with a translation ({srcLang} ↔ {tgtLang})
                 </label>
-                <span className={`text-xs ${overCap ? 'text-danger' : 'text-ink-faint'}`}>{charCount} / {WORDLIST_CHAR_CAP}</span>
+                <span className={`text-xs ${overCap ? 'text-danger' : 'text-ink-faint'}`}>{contentWordCount} / {INPUT_WORD_CAP} words</span>
               </div>
               <textarea
                 className={`input min-h-[200px] resize-y font-mono text-sm leading-relaxed ${overCap ? 'border-danger/60 bg-danger/5' : ''}`}
@@ -277,7 +277,7 @@ export default function AddCardsPage() {
                 <label className="text-sm text-ink-muted">
                   Passage to extract vocabulary from ({srcLang}) — do not put instructions here, they&apos;ll be ignored
                 </label>
-                <span className={`text-xs ${overCap ? 'text-danger' : 'text-ink-faint'}`}>{textWordCount} / {EXTRACTION_WORD_CAP} words</span>
+                <span className={`text-xs ${overCap ? 'text-danger' : 'text-ink-faint'}`}>{textWordCount} / {INPUT_WORD_CAP} words</span>
               </div>
               <textarea
                 className={`input min-h-[220px] resize-y text-sm leading-relaxed ${overCap ? 'border-danger/60 bg-danger/5' : ''}`}

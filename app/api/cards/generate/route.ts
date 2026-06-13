@@ -8,9 +8,9 @@
  *
  * Two input modes:
  *  - "wordlist": `content` is a list of words/phrases (optionally with
- *    translations already attached), capped at WORDLIST_CHAR_CAP characters.
+ *    translations already attached), capped at INPUT_WORD_CAP words.
  *  - "extraction": `text` is a passage of running text to mine for
- *    vocabulary, capped at EXTRACTION_WORD_CAP words. Any instruction-like
+ *    vocabulary, capped at INPUT_WORD_CAP words. Any instruction-like
  *    text found inside `text` is ignored — only the separate `instructions`
  *    field affects formatting.
  *
@@ -28,7 +28,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { langName } from '@/lib/languages'
-import { WORDLIST_CHAR_CAP, INSTRUCTIONS_CHAR_CAP, EXTRACTION_WORD_CAP } from '@/lib/duplicates'
+import { INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP } from '@/lib/duplicates'
 
 export const runtime = 'nodejs'
 
@@ -198,7 +198,7 @@ export async function POST(req: NextRequest) {
     if (!content) {
       return NextResponse.json({ ok: false, reason: 'empty-content' }, { status: 400 })
     }
-    if (content.length > WORDLIST_CHAR_CAP) {
+    if (wordCount(content) > INPUT_WORD_CAP) {
       return NextResponse.json({ ok: false, reason: 'content-too-long' }, { status: 400 })
     }
     prompt = wordlistPrompt(content, instructions, improvedTranslations, srcLang, tgtLang)
@@ -207,7 +207,7 @@ export async function POST(req: NextRequest) {
     if (!text) {
       return NextResponse.json({ ok: false, reason: 'empty-content' }, { status: 400 })
     }
-    if (wordCount(text) > EXTRACTION_WORD_CAP) {
+    if (wordCount(text) > INPUT_WORD_CAP) {
       return NextResponse.json({ ok: false, reason: 'text-too-long' }, { status: 400 })
     }
     prompt = extractionPrompt(text, instructions, improvedTranslations, srcLang, tgtLang)
