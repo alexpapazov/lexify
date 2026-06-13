@@ -92,6 +92,7 @@ const EXAMPLES: Record<string, [string, string]> = {
   el:  ['μήλο',        'νερό'],
   he:  ['תפוח',        'מים'],
   uk:  ['яблуко',      'вода'],
+  bg:  ['ябълка',      'вода'],
   cs:  ['jablko',      'voda'],
   hu:  ['alma',        'víz'],
   ro:  ['mărul',       'apa'],
