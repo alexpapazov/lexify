@@ -3,14 +3,37 @@
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { SupabaseDeckRepository }     from '@/lib/data/decks'
-import { SupabaseCardRepository }     from '@/lib/data/cards'
-import { SupabasePipelineRepository } from '@/lib/data/pipelines'
+import { SupabaseDeckRepository }          from '@/lib/data/decks'
+import { SupabaseCardRepository }          from '@/lib/data/cards'
+import { SupabasePipelineRepository }      from '@/lib/data/pipelines'
+import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
 import { LANGUAGES } from '@/lib/languages'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
+import {
+  WORDLIST_CHAR_CAP, INSTRUCTIONS_CHAR_CAP, EXTRACTION_WORD_CAP,
+  analyzeDuplicate, type DuplicateAnalysis,
+} from '@/lib/duplicates'
+import type { Card } from '@/domain'
 
 type SeparatorOption = 'tab' | 'newline' | 'custom'
+type AiMode = 'wordlist' | 'extraction'
+type Stage = 'edit' | 'preview'
+
 interface ParsedCard { front: string; back: string }
+
+interface CandidateCard {
+  front:           string
+  back:            string
+  languageWarning: 'front' | 'back' | 'both' | null
+}
+
+interface PreviewItem {
+  front:     string
+  back:      string
+  include:   boolean
+  duplicate: DuplicateAnalysis | null
+  action:    'create' | 'merge' | 'keep-both'
+}
 
 function parseCards(raw: string, cardSep: string, pairSep: string): ParsedCard[] {
   return raw.split(cardSep).map(l => l.trim()).filter(Boolean).map(line => {
@@ -24,6 +47,25 @@ function sepChar(opt: SeparatorOption, custom: string): string {
   if (opt === 'tab')     return '\t'
   if (opt === 'newline') return '\n'
   return custom || '\t'
+}
+
+function wordCount(text: string): number {
+  const trimmed = text.trim()
+  if (!trimmed) return 0
+  return trimmed.split(/\s+/).filter(Boolean).length
+}
+
+function reasonToMessage(reason: string): string {
+  switch (reason) {
+    case 'no-api-key':            return 'AI card generation is not configured for this app yet.'
+    case 'content-too-long':      return `Your word list exceeds the ${WORDLIST_CHAR_CAP}-character limit.`
+    case 'text-too-long':         return `Your text exceeds the ${EXTRACTION_WORD_CAP}-word limit.`
+    case 'instructions-too-long': return `Prompt exceeds the ${INSTRUCTIONS_CHAR_CAP}-character limit.`
+    case 'empty-content':         return 'Please enter some content first.'
+    case 'parse-error':           return 'Could not understand the AI response. Please try again.'
+    case 'api-error':             return 'AI service error. Please try again.'
+    default:                       return 'Something went wrong running the agent. Please try again.'
+  }
 }
 
 /** Example words per language code: [apple, water] */
@@ -120,6 +162,28 @@ function LanguagePicker({ label, value, onChange }: {
   )
 }
 
+/** Pill-style toggle between "Wordlist" and "Extract Text". */
+function ModeSwitch({ value, onChange }: { value: AiMode; onChange: (v: AiMode) => void }) {
+  return (
+    <div className="inline-flex items-center rounded-full border border-white/10 bg-surface p-1 text-sm shrink-0">
+      <button
+        type="button"
+        onClick={() => onChange('wordlist')}
+        className={`px-3 py-1 rounded-full transition-colors ${value === 'wordlist' ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
+      >
+        Wordlist
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('extraction')}
+        className={`px-3 py-1 rounded-full transition-colors ${value === 'extraction' ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
+      >
+        Extract Text
+      </button>
+    </div>
+  )
+}
+
 export default function UploadPage() {
   const [rawText,       setRawText]       = useState('')
   const [deckName,      setDeckName]      = useState('')
@@ -127,77 +191,331 @@ export default function UploadPage() {
   const [cardSepOpt,    setCardSepOpt]    = useState<SeparatorOption>('newline')
   const [customPairSep, setCustomPairSep] = useState('')
   const [customCardSep, setCustomCardSep] = useState('')
-  const [useAiFormat,   setUseAiFormat]   = useState(false)
-  const [aiPrompt,      setAiPrompt]      = useState('')
-  const [frontLang,     setFrontLang]     = useState('')
-  const [backLang,      setBackLang]      = useState('')
+
+  const [aiFormatEnabled, setAiFormatEnabled] = useState(false)
+  const [aiMode,          setAiMode]          = useState<AiMode>('wordlist')
+  const [aiPrompt,        setAiPrompt]        = useState('')
+  const [agentRunning,    setAgentRunning]    = useState(false)
+  const [agentRan,        setAgentRan]        = useState(false)
+  const [agentError,      setAgentError]      = useState<string | null>(null)
+
+  const [targetLang,    setTargetLang]    = useState('')
+  const [basisLang,     setBasisLang]     = useState('')
   const [saving,        setSaving]        = useState(false)
   const [error,         setError]         = useState<string | null>(null)
   const [showLangPopup, setShowLangPopup] = useState(false)
+
+  const [stage,        setStage]        = useState<Stage>('edit')
+  const [previewItems, setPreviewItems] = useState<PreviewItem[]>([])
+  const [dupChecked,   setDupChecked]   = useState(false)
 
   const router   = useRouter()
   const supabase = createClient()
 
   const placeholder = useMemo(
-    () => buildPlaceholder(pairSepOpt, customPairSep, cardSepOpt, customCardSep, frontLang, backLang),
-    [pairSepOpt, customPairSep, cardSepOpt, customCardSep, frontLang, backLang]
+    () => buildPlaceholder(pairSepOpt, customPairSep, cardSepOpt, customCardSep, targetLang, basisLang),
+    [pairSepOpt, customPairSep, cardSepOpt, customCardSep, targetLang, basisLang]
   )
+
+  const effectivePairSep = aiFormatEnabled ? '\t' : sepChar(pairSepOpt, customPairSep)
+  const effectiveCardSep = aiFormatEnabled ? '\n' : sepChar(cardSepOpt, customCardSep)
 
   const parsed = useMemo(() => {
     if (!rawText.trim()) return []
-    return parseCards(rawText, sepChar(cardSepOpt, customCardSep), sepChar(pairSepOpt, customPairSep))
-  }, [rawText, pairSepOpt, cardSepOpt, customPairSep, customCardSep])
+    return parseCards(rawText, effectiveCardSep, effectivePairSep)
+  }, [rawText, effectiveCardSep, effectivePairSep])
 
-  async function handleSave() {
-    setError(null)
+  const textareaLabel = aiFormatEnabled && aiMode === 'wordlist' ? 'Paste words here' : 'Paste text here'
 
-    if (!frontLang || !backLang) {
+  const textareaPlaceholder = !aiFormatEnabled
+    ? placeholder
+    : aiMode === 'wordlist'
+      ? 'Enter words to be formatted by AI agent'
+      : 'Paste text for word extraction here'
+
+  function ensureLanguages(): boolean {
+    if (!targetLang || !basisLang) {
       setShowLangPopup(true)
+      return false
+    }
+    return true
+  }
+
+  function handleRawTextChange(value: string) {
+    setRawText(value)
+    setAgentRan(false)
+  }
+
+  function handleAiToggle(checked: boolean) {
+    setAiFormatEnabled(checked)
+    setAgentRan(false)
+    setAgentError(null)
+  }
+
+  function handleAiModeChange(mode: AiMode) {
+    setAiMode(mode)
+    setAgentRan(false)
+    setAgentError(null)
+  }
+
+  async function handleRunAgent() {
+    setAgentError(null)
+    if (!ensureLanguages()) return
+    if (!rawText.trim()) { setAgentError('Enter some content first.'); return }
+    if (aiMode === 'wordlist' && rawText.length > WORDLIST_CHAR_CAP) {
+      setAgentError(`Your word list exceeds the ${WORDLIST_CHAR_CAP}-character limit.`)
+      return
+    }
+    if (aiMode === 'extraction' && wordCount(rawText) > EXTRACTION_WORD_CAP) {
+      setAgentError(`Your text exceeds the ${EXTRACTION_WORD_CAP}-word limit.`)
       return
     }
 
+    setAgentRunning(true)
+    try {
+      const body = aiMode === 'wordlist'
+        ? { mode: 'wordlist', content: rawText, instructions: aiPrompt, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
+        : { mode: 'extraction', text: rawText, instructions: aiPrompt, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
+
+      const res  = await fetch('/api/cards/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+
+      if (!data.ok) {
+        setAgentError(reasonToMessage(data.reason))
+        return
+      }
+
+      const formatted = (data.cards as CandidateCard[]).map(c => `${c.front}\t${c.back}`).join('\n')
+      setRawText(formatted)
+      setAgentRan(true)
+    } catch {
+      setAgentError('Something went wrong running the agent. Please try again.')
+    } finally {
+      setAgentRunning(false)
+    }
+  }
+
+  function handlePreview() {
+    setError(null)
+    if (!ensureLanguages()) return
+    if (!deckName.trim() || parsed.length === 0) return
+
+    setPreviewItems(parsed.map(c => ({ front: c.front, back: c.back, include: true, duplicate: null, action: 'create' })))
+    setDupChecked(false)
+    setStage('preview')
+  }
+
+  function updatePreviewItem(i: number, patch: Partial<PreviewItem>) {
+    setPreviewItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...patch } : it))
+  }
+
+  function removePreviewItem(i: number) {
+    setPreviewItems(prev => prev.filter((_, idx) => idx !== i))
+  }
+
+  async function doSave(items: PreviewItem[]) {
     setSaving(true)
+    setError(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth'); return }
 
-      const deckRepo     = new SupabaseDeckRepository()
-      const cardRepo     = new SupabaseCardRepository()
-      const pipelineRepo = new SupabasePipelineRepository()
+      const deckRepo      = new SupabaseDeckRepository()
+      const cardRepo      = new SupabaseCardRepository()
+      const pipelineRepo  = new SupabasePipelineRepository()
+      const dismissedRepo = new SupabaseDismissedPairRepository()
 
       const pipeline = await pipelineRepo.getDefault()
-
       const deck = await deckRepo.create(session.user.id, {
         name:           deckName,
-        sourceLanguage: frontLang,
-        targetLanguage: backLang,
+        sourceLanguage: targetLang,
+        targetLanguage: basisLang,
         pipelineId:     pipeline.id,
       })
 
-      const created = await cardRepo.bulkCreate(deck.id, session.user.id, frontLang, backLang, parsed.map((c, i) => ({
-        front:    c.front,
-        back:     c.back,
-        position: i,
-      })))
+      const included = items.filter(it => it.include)
+      const toMerge   = included.filter(it => it.action === 'merge' && it.duplicate?.existingCard)
+      const toCreate  = included.filter(it => it.action !== 'merge')
 
-      // Kick off background generation of AI answer choices for every card
-      // so multiple-choice steps don't have to lazy-load them later.
+      let position = 0
+      for (const it of toMerge) {
+        await cardRepo.addToDeck(deck.id, it.duplicate!.existingCard!.id, position++)
+      }
+
+      let created: Card[] = []
+      if (toCreate.length > 0) {
+        created = await cardRepo.bulkCreate(deck.id, session.user.id, targetLang, basisLang, toCreate.map(it => ({
+          front:    it.front,
+          back:     it.back,
+          position: position++,
+        })))
+
+        for (let i = 0; i < toCreate.length; i++) {
+          const it          = toCreate[i]!
+          const createdCard = created[i]
+          if (it.action === 'keep-both' && it.duplicate?.existingCard && createdCard && createdCard.id !== it.duplicate.existingCard.id) {
+            await dismissedRepo.create(session.user.id, it.duplicate.existingCard.id, createdCard.id)
+          }
+        }
+      }
+
+      // Kick off background generation of AI answer choices for newly created cards.
       const prefetchItems: PrefetchItem[] = created.map(card => ({
         card:           { ...card, choices: null },
         side:           'front',
         deckCards:      created,
-        sourceLanguage: frontLang,
-        targetLanguage: backLang,
+        sourceLanguage: targetLang,
+        targetLanguage: basisLang,
       }))
       void prefetchChoices(prefetchItems, () => {})
 
       router.push(`/study/${deck.id}`)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save deck')
-    } finally {
       setSaving(false)
     }
   }
+
+  async function handleSaveDeck() {
+    setError(null)
+
+    if (!dupChecked) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session) { router.push('/auth'); return }
+
+        const cardRepo = new SupabaseCardRepository()
+        const existing = await cardRepo.listOwned(session.user.id, targetLang, basisLang)
+
+        const withDup: PreviewItem[] = previewItems.map(it => {
+          const duplicate = analyzeDuplicate({ front: it.front, back: it.back }, existing, targetLang, basisLang)
+          return { ...it, duplicate, action: duplicate.tier === 'near' ? 'keep-both' : 'create' }
+        })
+
+        setPreviewItems(withDup)
+        setDupChecked(true)
+
+        const hasNear = withDup.some(it => it.duplicate?.tier === 'near')
+        if (hasNear) return
+
+        await doSave(withDup)
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to check for duplicates')
+      }
+      return
+    }
+
+    await doSave(previewItems)
+  }
+
+  function handleClear() {
+    setRawText('')
+    setDeckName('')
+    setError(null)
+    setAgentError(null)
+    setAgentRan(false)
+    setStage('edit')
+    setPreviewItems([])
+    setDupChecked(false)
+  }
+
+  // ── Preview stage ─────────────────────────────────────────────────────────
+
+  if (stage === 'preview') {
+    const includedCount = previewItems.filter(it => it.include).length
+    const nearCount     = previewItems.filter(it => it.duplicate?.tier === 'near').length
+    const saveLabel = !dupChecked || nearCount === 0 ? 'Save deck' : 'Confirm & save deck'
+
+    return (
+      <div className="space-y-6 max-w-3xl mx-auto pb-12">
+        <div>
+          <h1 className="text-2xl font-semibold text-ink">Preview deck</h1>
+          <p className="text-ink-muted mt-1">
+            {deckName || 'Untitled deck'} — {includedCount} of {previewItems.length} card{previewItems.length !== 1 ? 's' : ''}
+          </p>
+        </div>
+
+        {dupChecked && nearCount > 0 && (
+          <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
+            {nearCount} card{nearCount !== 1 ? 's' : ''} look similar to cards you already have — choose whether to keep them as new cards or use the existing ones instead.
+          </div>
+        )}
+
+        {error && <p className="text-danger text-sm">{error}</p>}
+
+        <div className="space-y-3">
+          {previewItems.map((item, i) => (
+            <div key={i} className={`panel space-y-3 ${!item.include ? 'opacity-50' : ''}`}>
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={item.include}
+                  onChange={e => updatePreviewItem(i, { include: e.target.checked })}
+                  className="accent-accent w-4 h-4 mt-2.5"
+                />
+                <div className="flex-1 grid grid-cols-2 gap-3">
+                  <textarea
+                    className="input resize-none min-h-[52px] text-sm font-medium"
+                    value={item.front}
+                    onChange={e => updatePreviewItem(i, { front: e.target.value })}
+                  />
+                  <textarea
+                    className="input resize-none min-h-[52px] text-sm"
+                    value={item.back}
+                    onChange={e => updatePreviewItem(i, { back: e.target.value })}
+                  />
+                </div>
+                <button
+                  onClick={() => removePreviewItem(i)}
+                  className="text-ink-faint hover:text-danger transition-colors text-sm shrink-0 mt-2"
+                  title="Remove"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {dupChecked && item.duplicate?.tier === 'near' && item.duplicate.existingCard && (
+                <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
+                  <p className="text-xs text-ink-muted">
+                    Similar to existing card: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
+                  </p>
+                  <div className="flex gap-4 text-sm">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+                      <input type="radio" name={`dup-${i}`} checked={item.action === 'keep-both'} onChange={() => updatePreviewItem(i, { action: 'keep-both' })} className="accent-accent" />
+                      Keep as new card
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+                      <input type="radio" name={`dup-${i}`} checked={item.action === 'merge'} onChange={() => updatePreviewItem(i, { action: 'merge' })} className="accent-accent" />
+                      Use existing card instead
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {previewItems.length === 0 && (
+            <div className="panel text-center text-ink-muted text-sm py-8">
+              No cards left to save.
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-3">
+          <button className="btn-primary" disabled={includedCount === 0 || saving} onClick={handleSaveDeck}>
+            {saving ? 'Saving…' : saveLabel}
+          </button>
+          <button className="btn-ghost" disabled={saving} onClick={() => setStage('edit')}>Back</button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Edit stage ────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -213,39 +531,82 @@ export default function UploadPage() {
 
       {/* Language pickers */}
       <div className="grid grid-cols-2 gap-4">
-        <LanguagePicker label="Front language" value={frontLang} onChange={setFrontLang} />
-        <LanguagePicker label="Back language"  value={backLang}  onChange={setBackLang}  />
+        <LanguagePicker label="Target language" value={targetLang} onChange={setTargetLang} />
+        <LanguagePicker label="Basis language"  value={basisLang}  onChange={setBasisLang}  />
       </div>
 
       <div className="space-y-2">
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" checked={useAiFormat} onChange={e => setUseAiFormat(e.target.checked)} className="accent-accent w-4 h-4" />
-          <span className="text-sm text-ink">Format with AI agent?</span>
-        </label>
-        {useAiFormat && (
-          <input className="input" placeholder="Prompt: e.g. 'Extract Spanish → English pairs'" value={aiPrompt} onChange={e => setAiPrompt(e.target.value)} />
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={aiFormatEnabled} onChange={e => handleAiToggle(e.target.checked)} className="accent-accent w-4 h-4" />
+            <span className="text-sm text-ink">Format with AI agent</span>
+          </label>
+          {aiFormatEnabled && <ModeSwitch value={aiMode} onChange={handleAiModeChange} />}
+        </div>
+
+        {aiFormatEnabled && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-sm text-ink-muted">Prompt</label>
+              <span className="text-xs text-ink-faint">{aiPrompt.length} / {INSTRUCTIONS_CHAR_CAP}</span>
+            </div>
+            <textarea
+              className="input min-h-[60px] resize-y text-sm"
+              maxLength={INSTRUCTIONS_CHAR_CAP}
+              placeholder="Prompt: e.g. 'Extract Spanish → English pairs'"
+              value={aiPrompt}
+              onChange={e => setAiPrompt(e.target.value)}
+            />
+          </div>
         )}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <SeparatorPicker label="Front / back separator" value={pairSepOpt} onChange={setPairSepOpt} custom={customPairSep} onCustomChange={setCustomPairSep} />
-        <SeparatorPicker label="Between-card separator" value={cardSepOpt} onChange={setCardSepOpt} custom={customCardSep} onCustomChange={setCustomCardSep} />
-      </div>
+      {!aiFormatEnabled && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <SeparatorPicker label="Front / back separator" value={pairSepOpt} onChange={setPairSepOpt} custom={customPairSep} onCustomChange={setCustomPairSep} />
+          <SeparatorPicker label="Between-card separator" value={cardSepOpt} onChange={setCardSepOpt} custom={customCardSep} onCustomChange={setCustomCardSep} />
+        </div>
+      )}
 
       <div className="space-y-1.5">
-        <label className="text-sm text-ink-muted">Paste text here</label>
+        <div className="flex items-center justify-between">
+          <label className="text-sm text-ink-muted">{textareaLabel}</label>
+          {aiFormatEnabled && (
+            <span className="text-xs text-ink-faint">
+              {aiMode === 'wordlist' ? `${rawText.length} / ${WORDLIST_CHAR_CAP}` : `${wordCount(rawText)} / ${EXTRACTION_WORD_CAP} words`}
+            </span>
+          )}
+        </div>
         <textarea
           className="input min-h-[220px] resize-y font-mono text-sm leading-relaxed"
-          placeholder={placeholder}
+          placeholder={textareaPlaceholder}
           value={rawText}
-          onChange={e => setRawText(e.target.value)}
+          onChange={e => handleRawTextChange(e.target.value)}
         />
       </div>
 
-      {parsed.length > 0 && (
+      {agentError && <p className="text-danger text-sm">{agentError}</p>}
+
+      {!aiFormatEnabled && parsed.length > 0 && (
         <div className="space-y-2">
           <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
             Preview — {parsed.length} card{parsed.length !== 1 ? 's' : ''} detected
+          </h2>
+          <div className="panel space-y-2 max-h-56 overflow-y-auto">
+            {parsed.map((card, i) => (
+              <div key={i} className="flex gap-4 text-sm">
+                <span className="text-ink w-1/2 truncate">{card.front}</span>
+                <span className="text-ink-muted w-1/2 truncate">{card.back}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {aiFormatEnabled && agentRan && parsed.length > 0 && (
+        <div className="space-y-2">
+          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
+            Agent result — {parsed.length} card{parsed.length !== 1 ? 's' : ''} detected
           </h2>
           <div className="panel space-y-2 max-h-56 overflow-y-auto">
             {parsed.map((card, i) => (
@@ -263,12 +624,21 @@ export default function UploadPage() {
       <div className="flex gap-3">
         <button
           className="btn-primary"
-          disabled={parsed.length === 0 || !deckName.trim() || saving}
-          onClick={handleSave}
+          disabled={!deckName.trim() || saving || (aiFormatEnabled ? (!agentRan || parsed.length === 0) : parsed.length === 0)}
+          onClick={handlePreview}
         >
-          {saving ? 'Saving…' : `Save ${parsed.length > 0 ? parsed.length + ' cards' : 'deck'}`}
+          Preview deck
         </button>
-        <button className="btn-ghost" onClick={() => { setRawText(''); setDeckName(''); setError(null) }}>
+        {aiFormatEnabled && (
+          <button
+            className="btn-ghost"
+            disabled={agentRunning || !rawText.trim()}
+            onClick={handleRunAgent}
+          >
+            {agentRunning ? 'Running…' : 'Run agent'}
+          </button>
+        )}
+        <button className="btn-ghost" onClick={handleClear}>
           Clear
         </button>
       </div>
@@ -279,7 +649,7 @@ export default function UploadPage() {
           <div className="panel max-w-sm w-full space-y-4">
             <h2 className="text-lg font-semibold text-ink">Select languages</h2>
             <p className="text-sm text-ink-muted">
-              Please choose both the front and back language before saving this deck.
+              Please choose both the target and basis language before continuing.
             </p>
             <div className="flex justify-end">
               <button onClick={() => setShowLangPopup(false)} className="btn-primary">Got it</button>
