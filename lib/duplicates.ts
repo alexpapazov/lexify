@@ -5,11 +5,12 @@
  * and for the input caps / pre-flight card-count estimate.
  *
  * Tier 1 (exact, silent): trim whitespace only, compare (front, back) as a
- * whole. No lowercasing — capitalization is meaningful (Milestone 1 spec).
+ * whole, case-sensitive.
  *
- * Tier 2 (near match, flagged): additionally strip a leading article /
- * determiner (only the article token is compared case-insensitively; the
- * rest of the string keeps its original case).
+ * Tier 2 (near match, flagged): equal to an existing card once a leading
+ * article/determiner is stripped from each side AND/OR the strings are
+ * compared case-insensitively — e.g. "Matin"/"Morning" vs "matin"/"morning"
+ * is a Tier-2 near match, not a silent Tier-1 merge.
  */
 
 import type { Card } from '@/domain'
@@ -73,11 +74,15 @@ export function tier1Match(a: FrontBack, b: FrontBack): boolean {
       && normalizeTier1(a.back)  === normalizeTier1(b.back)
 }
 
-/** Tier 2: near match — equal once a leading article is stripped from each side, but not already a Tier-1 match. */
+/**
+ * Tier 2: near match — equal once a leading article is stripped from each
+ * side and/or the result is compared case-insensitively, but not already a
+ * Tier-1 (exact, case-sensitive) match.
+ */
 export function tier2Match(a: FrontBack, b: FrontBack, sourceLanguage: string, targetLanguage: string): boolean {
   if (tier1Match(a, b)) return false
-  return normalizeTier2(a.front, sourceLanguage) === normalizeTier2(b.front, sourceLanguage)
-      && normalizeTier2(a.back,  targetLanguage) === normalizeTier2(b.back,  targetLanguage)
+  return normalizeTier2(a.front, sourceLanguage).toLowerCase() === normalizeTier2(b.front, sourceLanguage).toLowerCase()
+      && normalizeTier2(a.back,  targetLanguage).toLowerCase() === normalizeTier2(b.back,  targetLanguage).toLowerCase()
 }
 
 // ─── Duplicate analysis ──────────────────────────────────────────────────────

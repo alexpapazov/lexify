@@ -31,7 +31,6 @@ interface CandidateCard {
 interface PreviewItem {
   front:           string
   back:            string
-  include:         boolean
   duplicate:       DuplicateAnalysis | null
   action:          'create' | 'merge' | 'keep-both'
   /** Index of an earlier item in this same preview list that this one looks like a near-duplicate of (not yet saved, so no existing card to merge with). */
@@ -184,6 +183,8 @@ export default function UploadPage() {
   const [agentRunning,    setAgentRunning]    = useState(false)
   const [agentRan,        setAgentRan]        = useState(false)
   const [agentError,      setAgentError]      = useState<string | null>(null)
+  /** Indices (into `parsed`) of agent-result cards whose front/back language still looks off after auto-fixing reversed pairs. */
+  const [agentWarningLines, setAgentWarningLines] = useState<number[]>([])
 
   const [targetLang,    setTargetLang]    = useState('')
   const [basisLang,     setBasisLang]     = useState('')
@@ -230,18 +231,21 @@ export default function UploadPage() {
   function handleRawTextChange(value: string) {
     setRawText(value)
     setAgentRan(false)
+    setAgentWarningLines([])
   }
 
   function handleAiToggle(checked: boolean) {
     setAiFormatEnabled(checked)
     setAgentRan(false)
     setAgentError(null)
+    setAgentWarningLines([])
   }
 
   function handleAiModeChange(mode: AiMode) {
     setAiMode(mode)
     setAgentRan(false)
     setAgentError(null)
+    setAgentWarningLines([])
   }
 
   async function handleRunAgent() {
@@ -271,8 +275,26 @@ export default function UploadPage() {
         return
       }
 
-      const formatted = (data.cards as CandidateCard[]).map(c => `${c.front}\t${c.back}`).join('\n')
+      // If the agent flagged a card as 'both' sides being in the wrong
+      // language, it's almost always a fully reversed pair (front/back
+      // swapped) — auto-fix by swapping them back. Cards still flagged on
+      // just one side afterwards are surfaced as warnings for the user to
+      // review, since those usually mean a mistranslation rather than a
+      // simple swap.
+      const warningLines: number[] = []
+      const fixedCards = (data.cards as CandidateCard[]).map((c, idx) => {
+        if (c.languageWarning === 'both') {
+          return { front: c.back, back: c.front }
+        }
+        if (c.languageWarning === 'front' || c.languageWarning === 'back') {
+          warningLines.push(idx)
+        }
+        return { front: c.front, back: c.back }
+      })
+
+      const formatted = fixedCards.map(c => `${c.front}\t${c.back}`).join('\n')
       setRawText(formatted)
+      setAgentWarningLines(warningLines)
       setAgentRan(true)
     } catch {
       setAgentError('Something went wrong running the agent. Please try again.')
@@ -286,7 +308,7 @@ export default function UploadPage() {
     if (!ensureLanguages()) return
     if (!deckName.trim() || parsed.length === 0) return
 
-    setPreviewItems(parsed.map(c => ({ front: c.front, back: c.back, include: true, duplicate: null, action: 'create' })))
+    setPreviewItems(parsed.map(c => ({ front: c.front, back: c.back, duplicate: null, action: 'create' })))
     setDupChecked(false)
     setStage('preview')
   }
@@ -319,9 +341,8 @@ export default function UploadPage() {
         pipelineId:     pipeline.id,
       })
 
-      const included = items.filter(it => it.include)
-      const toMerge   = included.filter(it => it.action === 'merge' && it.duplicate?.existingCard)
-      const toCreate  = included.filter(it => it.action !== 'merge')
+      const toMerge   = items.filter(it => it.action === 'merge' && it.duplicate?.existingCard)
+      const toCreate  = items.filter(it => it.action !== 'merge')
 
       let position = 0
       for (const it of toMerge) {
@@ -384,7 +405,6 @@ export default function UploadPage() {
           // wouldn't show up in `existing` since neither is saved yet).
           for (let j = 0; j < idx; j++) {
             const other = previewItems[j]!
-            if (!other.include) continue
             const a = { front: it.front, back: it.back }
             const b = { front: other.front, back: other.back }
             if (tier1Match(a, b) || tier2Match(a, b, targetLang, basisLang)) {
@@ -439,7 +459,6 @@ export default function UploadPage() {
   // ── Preview stage ─────────────────────────────────────────────────────────
 
   if (stage === 'preview') {
-    const includedCount = previewItems.filter(it => it.include).length
     const nearCount     = previewItems.filter(it => it.duplicate?.tier === 'near').length
     const exactCount    = previewItems.filter(it => it.duplicate?.tier === 'exact').length
     const flaggedCount  = nearCount + exactCount
@@ -450,7 +469,7 @@ export default function UploadPage() {
         <div>
           <h1 className="text-2xl font-semibold text-ink">Preview deck</h1>
           <p className="text-ink-muted mt-1">
-            {deckName || 'Untitled deck'} — {includedCount} of {previewItems.length} card{previewItems.length !== 1 ? 's' : ''}
+            {deckName || 'Untitled deck'} — {previewItems.length} card{previewItems.length !== 1 ? 's' : ''}
           </p>
         </div>
 
@@ -468,14 +487,8 @@ export default function UploadPage() {
 
         <div className="space-y-3">
           {previewItems.map((item, i) => (
-            <div key={i} className={`panel space-y-3 ${!item.include ? 'opacity-50' : ''}`}>
+            <div key={i} className="panel space-y-3">
               <div className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  checked={item.include}
-                  onChange={e => updatePreviewItem(i, { include: e.target.checked })}
-                  className="accent-accent w-4 h-4 mt-2.5"
-                />
                 <div className="flex-1 grid grid-cols-2 gap-3">
                   <textarea
                     className="input resize-none min-h-[52px] text-sm font-medium"
@@ -502,7 +515,7 @@ export default function UploadPage() {
                   <p className="text-xs text-ink-muted">
                     {item.existingCardDeckNames && item.existingCardDeckNames.length > 0
                       ? <>Already in <span className="text-ink">{item.existingCardDeckNames.join(', ')}</span>.</>
-                      : 'Already in your library, but not currently in any deck.'} Uncheck the box to the left if you do not want to add this duplicate to this deck.
+                      : 'Already in your library, but not currently in any deck.'} X out this card (✕ above) if you do not want to add this duplicate to this deck.
                   </p>
                 </div>
               )}
@@ -548,7 +561,7 @@ export default function UploadPage() {
         </div>
 
         <div className="flex gap-3">
-          <button className="btn-primary" disabled={includedCount === 0 || saving} onClick={handleSaveDeck}>
+          <button className="btn-primary" disabled={previewItems.length === 0 || saving} onClick={handleSaveDeck}>
             {saving ? 'Saving…' : saveLabel}
           </button>
           <button className="btn-ghost" disabled={saving} onClick={() => setStage('edit')}>Back</button>
@@ -652,12 +665,17 @@ export default function UploadPage() {
           </h2>
           <div className="panel space-y-2 max-h-56 overflow-y-auto">
             {parsed.map((card, i) => (
-              <div key={i} className="flex gap-4 text-sm">
-                <span className="text-ink w-1/2 truncate">{card.front}</span>
-                <span className="text-ink-muted w-1/2 truncate">{card.back}</span>
+              <div key={i} className={`flex gap-4 text-sm ${agentWarningLines.includes(i) ? 'text-warning' : ''}`}>
+                <span className={`w-1/2 truncate ${agentWarningLines.includes(i) ? '' : 'text-ink'}`}>{card.front}</span>
+                <span className={`w-1/2 truncate ${agentWarningLines.includes(i) ? '' : 'text-ink-muted'}`}>{card.back}</span>
               </div>
             ))}
           </div>
+          {agentWarningLines.length > 0 && (
+            <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
+              {agentWarningLines.length === 1 ? 'Card' : 'Cards'} {agentWarningLines.map(i => `#${i + 1}`).join(', ')} {agentWarningLines.length === 1 ? 'doesn\'t' : 'don\'t'} look like {agentWarningLines.length === 1 ? "it's" : "they're"} in the expected language on one side — double-check the highlighted row{agentWarningLines.length !== 1 ? 's' : ''} above before saving.
+            </div>
+          )}
         </div>
       )}
 
