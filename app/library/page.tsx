@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -76,6 +76,14 @@ function reorder<T>(arr: T[], fromIdx: number, toIdx: number, pos: 'before' | 'a
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function LibraryPage() {
+  return (
+    <Suspense fallback={<div className="text-ink-muted pt-16 text-center">Loading…</div>}>
+      <LibraryPageInner />
+    </Suspense>
+  )
+}
+
+function LibraryPageInner() {
   const searchParams = useSearchParams()
   const pairSource = searchParams.get('source')
   const pairTarget = searchParams.get('target')

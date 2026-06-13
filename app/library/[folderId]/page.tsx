@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -102,6 +102,14 @@ function buildAncestors(allFolders: Folder[], currentId: string): Folder[] {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function FolderPage() {
+  return (
+    <Suspense fallback={<div className="text-ink-muted pt-16 text-center">Loading…</div>}>
+      <FolderPageInner />
+    </Suspense>
+  )
+}
+
+function FolderPageInner() {
   const params   = useParams()
   const router   = useRouter()
   const searchParams = useSearchParams()
