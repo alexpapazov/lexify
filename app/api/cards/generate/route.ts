@@ -91,16 +91,24 @@ comma, etc.), or MAY contain just a word/phrase in one language with no
 translation given at all.
 
 Your job: parse each non-empty line into a flashcard pair
-{ front: <${srcLang} term>, back: <${tgtLang} term> }.
+{ front: <${srcLang} term>, back: <${tgtLang} term> }. The "front" MUST always
+be the ${srcLang} term and the "back" MUST always be the ${tgtLang} term —
+this is determined by which language each term is actually written in, NOT
+by the order the terms appear in the line.
 
-- If a line already gives both the ${srcLang} term and its ${tgtLang}
-  translation${improvedTranslations ? ', you may correct or improve the given translation if it is inaccurate or unnatural' : ', preserve the user-given translation as-is — do not change it'}.
-- If a line gives only one side (no translation), generate the missing side
-  yourself by translating into the other language.
+- If a line gives two terms (its own translation pair), figure out which one
+  is actually written in ${srcLang} and which is in ${tgtLang} — do not
+  assume the first term on the line is the front. Put the ${srcLang} term in
+  "front" and the ${tgtLang} term in "back"${improvedTranslations ? ', and you may correct or improve a translation if it is inaccurate or unnatural' : ', preserving each user-given term exactly as written — do not change it'}.
+- If a line gives only one term (no translation), figure out which language
+  that term is written in. Place it on the matching side — "front" if it's
+  ${srcLang}, "back" if it's ${tgtLang} — and generate the missing side
+  yourself by translating it into the other language.
 - Skip empty lines.
-- Never alter the spelling, spacing, or capitalization of text the user
-  actually supplied — only generate or (if permitted above) improve the
-  translation side.
+- Never alter the spelling, spacing, or capitalization of a user-supplied
+  term — only generate (or, if permitted above, improve) the translation
+  side. Moving a user-supplied term to the correct side of the card is not
+  an alteration.
 
 ${instructions ? `The user also gave these formatting instructions — follow them when deciding how to parse each line and/or format the output (e.g. punctuation, register, dialect):
 """
