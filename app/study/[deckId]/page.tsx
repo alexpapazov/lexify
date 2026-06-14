@@ -497,7 +497,7 @@ export default function DeckDetailPage() {
   const activeLimit = Math.min(rawLimit, cards.length)
 
   return (
-    <div className="space-y-8 max-w-3xl mx-auto">
+    <div className="space-y-8">
       {addingCard && (
         <NewCardModal
           existingFronts={cards.map(c => c.front)}
