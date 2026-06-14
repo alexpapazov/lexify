@@ -39,6 +39,15 @@ interface FilteredCard {
   status:   string
 }
 
+// A card grouped across all the decks it belongs to (a shared card can live
+// in multiple decks within the same pairing)
+interface GroupedCard {
+  card:   Card
+  state:  CardState | undefined
+  status: string
+  decks:  { id: string; name: string }[]
+}
+
 // ─── Custom drag image ────────────────────────────────────────────────────────
 
 const FOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="33" height="33" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.75"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>`
@@ -193,16 +202,31 @@ function LibraryPageInner() {
       }))
       setPairDeckStats(stats)
 
-      const now = new Date()
-      setPairCounts(stats.reduce((acc, { cards, states }) => {
+      // A shared card can belong to more than one deck — dedupe by card id
+      // so each unique card is only counted once across the whole pairing.
+      const uniqueCards = new Map<string, { card: Card; state: CardState | undefined }>()
+      for (const { cards, states } of stats) {
         const stateMap = new Map(states.map(s => [s.cardId, s]))
-        return {
-          unlearned: acc.unlearned + cards.filter(c => !stateMap.has(c.id)).length,
-          learning:  acc.learning  + states.filter(s => !s.graduated).length,
-          graduated: acc.graduated + states.filter(s => s.graduated).length,
-          dueNow:    acc.dueNow    + states.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length,
+        for (const card of cards) {
+          if (!uniqueCards.has(card.id)) {
+            uniqueCards.set(card.id, { card, state: stateMap.get(card.id) })
+          }
         }
-      }, { ...EMPTY_COUNTS }))
+      }
+
+      const now = new Date()
+      const counts = { ...EMPTY_COUNTS }
+      for (const { state } of uniqueCards.values()) {
+        if (!state) {
+          counts.unlearned++
+        } else if (state.graduated) {
+          counts.graduated++
+          if (state.dueAt && new Date(state.dueAt) <= now) counts.dueNow++
+        } else {
+          counts.learning++
+        }
+      }
+      setPairCounts(counts)
     } else {
       setPairDeckStats([])
       setPairCounts(EMPTY_COUNTS)
@@ -488,6 +512,21 @@ function LibraryPageInner() {
       })
   }) : []
 
+  // A shared card can appear in multiple decks — collapse those into a
+  // single row listing every deck it belongs to.
+  const groupedCards: GroupedCard[] = (() => {
+    const map = new Map<string, GroupedCard>()
+    for (const { card, state, deckName, deckId, status } of filteredCards) {
+      const existing = map.get(card.id)
+      if (existing) {
+        existing.decks.push({ id: deckId, name: deckName })
+      } else {
+        map.set(card.id, { card, state, status, decks: [{ id: deckId, name: deckName }] })
+      }
+    }
+    return [...map.values()]
+  })()
+
   const PAIR_COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: pairCounts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
@@ -548,21 +587,21 @@ function LibraryPageInner() {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
-              {PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {filteredCards.length} card{filteredCards.length !== 1 ? 's' : ''}
+              {PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {groupedCards.length} card{groupedCards.length !== 1 ? 's' : ''}
             </h2>
             <button onClick={() => setActiveFilter(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
               Show all ✕
             </button>
           </div>
 
-          {filteredCards.length === 0 ? (
+          {groupedCards.length === 0 ? (
             <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
           ) : (
             <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
-              {filteredCards.map(({ card, deckName, deckId, status }) => (
+              {groupedCards.map(({ card, decks, status }) => (
                 <Link
                   key={card.id}
-                  href={`/study/${deckId}?filter=${activeFilter}`}
+                  href={`/study/${decks[0].id}?filter=${activeFilter}`}
                   className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
                 >
                   <div className="flex gap-6 text-sm min-w-0">
@@ -570,7 +609,9 @@ function LibraryPageInner() {
                     <span className="text-ink-muted truncate">{card.back}</span>
                   </div>
                   <div className="flex items-center gap-3 shrink-0 ml-2">
-                    <span className="text-xs text-ink-faint hidden sm:block">{deckName}</span>
+                    <span className="text-xs text-ink-faint hidden sm:block truncate max-w-xs">
+                      {decks.map(d => d.name).join(', ')}
+                    </span>
                     <span className="chip">{status}</span>
                   </div>
                 </Link>
