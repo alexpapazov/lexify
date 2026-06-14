@@ -86,6 +86,7 @@ function CardEditModal({ card, state, onSave, onClose }: {
                 : state.graduated
                   ? 'Graduated'
                   : `Learning — Step ${state.currentStepOrder + 1}`
+              const rating = state?.lastRating
               const rows: [string, string][] = [
                 ['Status',        status],
                 ['Reps',          String(state?.reps ?? 0)],
@@ -95,7 +96,7 @@ function CardEditModal({ card, state, onSave, onClose }: {
                 ['Next due',      state?.graduated ? formatDate(state.dueAt) : '—'],
                 ['Last reviewed', formatDate(state?.lastReviewedAt ?? null, 'Never')],
                 ['Introduced',    formatDate(state?.introducedDate ?? null, 'Not yet')],
-                ['Last rating',   state?.lastRating ? state.lastRating[0].toUpperCase() + state.lastRating.slice(1) : '—'],
+                ['Last rating',   rating ? rating[0].toUpperCase() + rating.slice(1) : '—'],
                 ['Recent lapses', String(state?.lapseClusterCount ?? 0)],
               ]
               return rows.map(([label, value]) => (
