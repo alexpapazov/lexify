@@ -60,4 +60,10 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     if (error) throw new Error(error.message)
     return rowToCardState(data)
   }
+
+  async copy(userId: UserId, fromCardId: CardId, toCardId: CardId): Promise<CardState | null> {
+    const existing = await this.get(userId, fromCardId)
+    if (!existing) return null
+    return this.upsert({ ...existing, cardId: toCardId })
+  }
 }

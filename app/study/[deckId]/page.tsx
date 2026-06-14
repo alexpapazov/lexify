@@ -451,8 +451,17 @@ export default function DeckDetailPage() {
   }, [deckId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleCardSave(cardId: string, front: string, back: string) {
-    const cardRepo = new SupabaseCardRepository()
-    const updated  = await cardRepo.update(cardId, { front, back })
+    const cardRepo  = new SupabaseCardRepository()
+    const stateRepo = new SupabaseCardStateRepository()
+    const { card: updated, forked } = await cardRepo.forkInDeck(deckId, cardId, userId, { front, back })
+    if (forked) {
+      await stateRepo.copy(userId, cardId, updated.id)
+      setStates(prev => {
+        const oldState = prev.find(s => s.cardId === cardId)
+        const withoutOld = prev.filter(s => s.cardId !== cardId)
+        return oldState ? [...withoutOld, { ...oldState, cardId: updated.id }] : withoutOld
+      })
+    }
     setCards(prev => prev.map(c => c.id === cardId ? updated : c))
   }
 

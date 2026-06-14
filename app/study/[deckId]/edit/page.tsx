@@ -23,6 +23,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
+import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { analyzeDuplicate, type DuplicateAnalysis } from '@/lib/duplicates'
@@ -317,22 +318,30 @@ export default function DeckEditPage() {
     setSaving(true)
     try {
       const cardRepo     = new SupabaseCardRepository()
+      const stateRepo    = new SupabaseCardStateRepository()
       const dismissedRepo = new SupabaseDismissedPairRepository()
 
       // Only push updates for cards whose front/back actually changed —
       // for a large deck, re-saving every card on every save is what makes
       // this slow. Untouched cards are skipped entirely.
-      const updatePromises = cards
-        .filter(c => c.id)
-        .map(c => {
+      const changedEntries = cards
+        .map((c, i) => ({ c, i }))
+        .filter(({ c }) => c.id)
+        .map(({ c, i }) => {
           const front = c.front.trim()
           const back  = c.back.trim()
           const original = originalCards.get(c.id!)
           if (original && original.front === front && original.back === back) return null
-          // Content changed — clear cached AI distractors, they no longer match.
-          return cardRepo.update(c.id!, { front, back, choices: null })
+          return { i, cardId: c.id!, front, back }
         })
-        .filter((p): p is Promise<Card> => p !== null)
+        .filter((e): e is { i: number; cardId: string; front: string; back: string } => e !== null)
+
+      // A changed card may be shared with other decks — forkInDeck creates a
+      // copy (and re-points this deck's link) when that's the case, leaving
+      // the original card and its other decks untouched.
+      const updatePromises = changedEntries.map(({ cardId, front, back }) =>
+        cardRepo.forkInDeck(deckId, cardId, ownerId, { front, back })
+      )
 
       // New cards: split into "use existing card instead" (merge) vs. create.
       const newEntries = cards.map((c, i) => ({ c, i })).filter(({ c }) => !c.id)
@@ -351,11 +360,19 @@ export default function DeckEditPage() {
           })))
         : Promise.resolve([] as Card[])
 
-      const [, mergedResults, created] = await Promise.all([
+      const [updateResults, mergedResults, created] = await Promise.all([
         Promise.all(updatePromises),
         Promise.all(mergePromises),
         createPromise,
       ])
+
+      // For any edits that forked the card (shared with other decks), copy
+      // this user's study progress over to the new card so the new card
+      // keeps its review history/stage.
+      for (let j = 0; j < updateResults.length; j++) {
+        const { card, forked } = updateResults[j]!
+        if (forked) await stateRepo.copy(ownerId, changedEntries[j]!.cardId, card.id)
+      }
 
       // Record "keep as new card" choices so this near-duplicate pair isn't
       // flagged again in the future.
@@ -367,9 +384,12 @@ export default function DeckEditPage() {
         }
       }
 
-      if (created.length > 0 || mergedResults.length > 0) {
+      if (created.length > 0 || mergedResults.length > 0 || updateResults.length > 0) {
         setCards(prev => {
           const next = [...prev]
+          updateResults.forEach(({ card, forked }, j) => {
+            if (forked) next[changedEntries[j]!.i] = { ...next[changedEntries[j]!.i]!, id: card.id }
+          })
           toCreate.forEach(({ i }, j) => {
             const createdCard = created[j]
             if (createdCard) next[i] = { ...next[i]!, id: createdCard.id }

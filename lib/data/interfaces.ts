@@ -48,12 +48,22 @@ export interface CardRepository {
   listOwned(ownerId: UserId, sourceLanguage: string, targetLanguage: string): Promise<Card[]>
   /** For each given card id, the names of the (non-deleted) decks it currently belongs to. */
   listDeckNamesForCards(cardIds: CardId[]): Promise<Record<string, string[]>>
+  /**
+   * Applies an edit to a card within the context of a single deck. If the
+   * card is only linked to this one deck, it's updated in place. If the card
+   * is shared with other decks, a new card row is created with the patched
+   * fields (a fork), and only this deck's `deck_cards` link is re-pointed to
+   * the new card — the original card and its other deck links are untouched.
+   */
+  forkInDeck(deckId: DeckId, cardId: CardId, ownerId: UserId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints'>>): Promise<{ card: Card; forked: boolean }>
 }
 
 export interface CardStateRepository {
   get(userId: UserId, cardId: CardId): Promise<CardState | null>
   listByDeck(userId: UserId, deckId: DeckId): Promise<CardState[]>
   upsert(state: CardState): Promise<CardState>
+  /** Copies a user's study progress from one card to another (used when forking a shared card). */
+  copy(userId: UserId, fromCardId: CardId, toCardId: CardId): Promise<CardState | null>
 }
 
 export interface CreateReviewEventInput {

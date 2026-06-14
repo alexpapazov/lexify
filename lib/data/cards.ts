@@ -142,4 +142,38 @@ export class SupabaseCardRepository implements CardRepository {
     const { error } = await this.db.from('cards').update({ deleted_at: new Date().toISOString() }).eq('id', cardId)
     if (error) throw new Error(error.message)
   }
+
+  async forkInDeck(deckId: DeckId, cardId: CardId, ownerId: UserId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints'>>): Promise<{ card: Card; forked: boolean }> {
+    const { count, error: countError } = await this.db.from('deck_cards')
+      .select('*', { count: 'exact', head: true })
+      .eq('card_id', cardId)
+    if (countError) throw new Error(countError.message)
+
+    if ((count ?? 0) <= 1) {
+      const updated = await this.update(cardId, { ...patch, choices: null })
+      return { card: updated, forked: false }
+    }
+
+    const original = await this.get(cardId)
+    if (!original) throw new Error('Card not found')
+
+    const { data: created, error: insertError } = await this.db.from('cards').insert({
+      owner_id:        ownerId,
+      source_language: original.sourceLanguage,
+      target_language: original.targetLanguage,
+      front:           patch.front ?? original.front,
+      back:            patch.back  ?? original.back,
+      hints:           patch.hints ?? original.hints,
+      position:        original.position,
+    }).select().single()
+    if (insertError) throw new Error(insertError.message)
+    const newCard = rowToCard(created)
+
+    const { error: updateLinkError } = await this.db.from('deck_cards')
+      .update({ card_id: newCard.id })
+      .eq('deck_id', deckId).eq('card_id', cardId)
+    if (updateLinkError) throw new Error(updateLinkError.message)
+
+    return { card: newCard, forked: true }
+  }
 }
