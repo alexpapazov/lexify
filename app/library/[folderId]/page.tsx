@@ -421,7 +421,7 @@ function FolderPageInner() {
 
   return (
     <div
-      className="space-y-5 max-w-2xl mx-auto"
+      className="space-y-5"
       onDragEnd={() => { setDragging(null); setDropTarget(null); setCrumbTarget(null) }}
     >
       {/* Breadcrumb — each segment is a drop target when dragging */}

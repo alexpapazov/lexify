@@ -417,7 +417,7 @@ function LibraryPageInner() {
     }
 
     return (
-      <div className="space-y-5 max-w-2xl mx-auto">
+      <div className="space-y-5">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold text-ink">Library</h1>
           <button
@@ -497,7 +497,7 @@ function LibraryPageInner() {
 
   return (
     <div
-      className="space-y-5 max-w-2xl mx-auto"
+      className="space-y-5"
       onDragEnd={() => { setDragging(null); setDropTarget(null) }}
     >
       {/* Header */}
