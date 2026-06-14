@@ -143,6 +143,7 @@ export default function DeckEditPage() {
 
   const [ownerId,     setOwnerId]     = useState('')
   const [deckName,    setDeckName]    = useState('')
+  const [folderId,    setFolderId]    = useState<string | null>(null)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleting,        setDeleting]        = useState(false)
   const [deleteError,     setDeleteError]     = useState<string | null>(null)
@@ -172,6 +173,7 @@ export default function DeckEditPage() {
       if (!deck) { router.push('/study'); return }
 
       setDeckName(deck.name)
+      setFolderId(deck.folderId)
       setSourceLang(deck.sourceLanguage ?? 'es')
       setTargetLang(deck.targetLanguage ?? 'en')
       setCards(existing.map((c, i) => ({ id: c.id, front: c.front, back: c.back, position: i, error: null, duplicate: null, action: 'create' as const })))
@@ -416,7 +418,7 @@ export default function DeckEditPage() {
     try {
       const deckRepo = new SupabaseDeckRepository()
       await deckRepo.softDelete(deckId)
-      router.push('/study')
+      router.push(folderId ? `/library/${folderId}` : '/library')
     } catch (err: unknown) {
       setDeleteError(err instanceof Error ? err.message : 'Delete failed')
       setDeleting(false)
