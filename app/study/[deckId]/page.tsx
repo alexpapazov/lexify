@@ -516,7 +516,7 @@ export default function DeckDetailPage() {
 
       <div className="flex items-start justify-between gap-4">
         <div>
-          <Link href="/study" className="text-xs text-ink-muted hover:text-ink mb-2 inline-block">← My decks</Link>
+          <Link href={`/library?source=${deck.sourceLanguage}&target=${deck.targetLanguage}`} className="text-xs text-ink-muted hover:text-ink mb-2 inline-block">← Library</Link>
           <h1 className="text-2xl font-semibold text-ink">{deck.name}</h1>
           <p className="text-ink-muted text-sm mt-1">
             {cards.length} cards · {deck.targetLanguage.toUpperCase()} · {activeLimit} new/day
