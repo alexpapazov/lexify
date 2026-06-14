@@ -8,7 +8,8 @@ import { SupabaseDeckRepository }            from '@/lib/data/decks'
 import { SupabaseCardRepository }            from '@/lib/data/cards'
 import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
-import type { Deck, Card, CardState, DeckPreferences } from '@/domain'
+import { SupabaseFolderRepository }          from '@/lib/data/folders'
+import type { Deck, Card, CardState, DeckPreferences, Folder } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 
@@ -403,6 +404,7 @@ export default function DeckDetailPage() {
   const supabase   = createClient()
 
   const [deck,             setDeck]             = useState<Deck | null>(null)
+  const [parentFolder,     setParentFolder]     = useState<Folder | null>(null)
   const [cards,            setCards]            = useState<Card[]>([])
   const [states,           setStates]           = useState<CardState[]>([])
   const [prefs,            setPrefs]            = useState<DeckPreferences | null>(null)
@@ -438,6 +440,14 @@ export default function DeckDetailPage() {
 
     if (!d) { router.push('/study'); return }
     setDeck(d); setCards(c); setStates(s); setPrefs(p)
+
+    if (d.folderId) {
+      const folderRepo = new SupabaseFolderRepository()
+      setParentFolder(await folderRepo.get(d.folderId))
+    } else {
+      setParentFolder(null)
+    }
+
     setLoading(false)
   }
 
@@ -516,7 +526,14 @@ export default function DeckDetailPage() {
 
       <div className="flex items-start justify-between gap-4">
         <div>
-          <Link href={`/library?source=${deck.sourceLanguage}&target=${deck.targetLanguage}`} className="text-xs text-ink-muted hover:text-ink mb-2 inline-block">← Library</Link>
+          <Link
+            href={parentFolder
+              ? `/library/${parentFolder.id}?source=${deck.sourceLanguage}&target=${deck.targetLanguage}`
+              : `/library?source=${deck.sourceLanguage}&target=${deck.targetLanguage}`}
+            className="text-xs text-ink-muted hover:text-ink mb-2 inline-block"
+          >
+            ← {parentFolder ? parentFolder.name : 'Library'}
+          </Link>
           <h1 className="text-2xl font-semibold text-ink">{deck.name}</h1>
           <p className="text-ink-muted text-sm mt-1">
             {cards.length} cards · {deck.targetLanguage.toUpperCase()} · {activeLimit} new/day
