@@ -63,7 +63,7 @@ interface PreviewItem {
   front:           string
   back:            string
   duplicate:       DuplicateAnalysis | null
-  action:          'create' | 'merge' | 'keep-both'
+  action:          'create' | 'merge' | 'keep-both' | 'delete-existing'
   /** Index of an earlier item in this same preview list that this one looks like a near-duplicate of (not yet saved, so no existing card to merge with). */
   batchDuplicateOf?: number
   /** Names of decks the matched existing card (Tier-1 exact match) already belongs to. */
@@ -434,6 +434,9 @@ export default function UploadPage() {
           if (it.action === 'keep-both' && it.duplicate?.existingCard && createdCard && createdCard.id !== it.duplicate.existingCard.id) {
             await dismissedRepo.create(session.user.id, it.duplicate.existingCard.id, createdCard.id)
           }
+          if (it.action === 'delete-existing' && it.duplicate?.existingCard && createdCard && createdCard.id !== it.duplicate.existingCard.id) {
+            await cardRepo.softDelete(it.duplicate.existingCard.id)
+          }
         }
       }
 
@@ -598,7 +601,7 @@ export default function UploadPage() {
                       <p className="text-xs text-ink-muted">
                         Similar to existing card: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
                       </p>
-                      <div className="flex gap-4 text-sm">
+                      <div className="flex flex-wrap gap-4 text-sm">
                         <label className="flex items-center gap-1.5 cursor-pointer text-ink">
                           <input type="radio" name={`dup-${i}`} checked={item.action === 'keep-both'} onChange={() => updatePreviewItem(i, { action: 'keep-both' })} className="accent-accent" />
                           Keep as new card
@@ -607,7 +610,16 @@ export default function UploadPage() {
                           <input type="radio" name={`dup-${i}`} checked={item.action === 'merge'} onChange={() => updatePreviewItem(i, { action: 'merge' })} className="accent-accent" />
                           Use existing card instead
                         </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+                          <input type="radio" name={`dup-${i}`} checked={item.action === 'delete-existing'} onChange={() => updatePreviewItem(i, { action: 'delete-existing' })} className="accent-accent" />
+                          Delete other existing card
+                        </label>
                       </div>
+                      {item.action === 'delete-existing' && (
+                        <p className="text-xs text-warning">
+                          This will permanently delete the existing card &quot;{item.duplicate.existingCard.front}&quot; / &quot;{item.duplicate.existingCard.back}&quot; everywhere it appears.
+                        </p>
+                      )}
                     </>
                   ) : item.batchDuplicateOf !== undefined ? (
                     <>
