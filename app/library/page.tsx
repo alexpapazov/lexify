@@ -137,19 +137,28 @@ function LibraryPageInner() {
     setPairs(pairsData)
     setLoading(false)
 
-    // Aggregate stats for each root folder (including its subfolders)
+    // Aggregate stats for each root folder (including its subfolders). When
+    // viewing a specific language pairing, only count decks matching that
+    // pairing's direction.
     const cardRepo  = new SupabaseCardRepository()
     const stateRepo = new SupabaseCardStateRepository()
     const rootFolders = folders.filter(f => f.parentId === null)
+    const deckById = new Map(decks.map(d => [d.id, d]))
     const entries = await Promise.all(rootFolders.map(async folder => {
-      const deckIds = descendantDeckIds(folder.id, folders, decks)
-      const counts  = await computeDeckCounts(deckIds, session.user.id, cardRepo, stateRepo)
+      let deckIds = descendantDeckIds(folder.id, folders, decks)
+      if (pairSource && pairTarget) {
+        deckIds = deckIds.filter(id => {
+          const d = deckById.get(id)
+          return d && d.sourceLanguage === pairSource && d.targetLanguage === pairTarget
+        })
+      }
+      const counts = await computeDeckCounts(deckIds, session.user.id, cardRepo, stateRepo)
       return [folder.id, counts] as const
     }))
     setFolderCounts(Object.fromEntries(entries))
   }
 
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load() }, [pairSource, pairTarget]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Visible root items (filtered to the active pairing, if any) ───────────
 

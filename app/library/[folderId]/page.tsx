@@ -383,13 +383,18 @@ function FolderPageInner() {
     const deckRepo   = new SupabaseDeckRepository()
     const parentId   = folder.parentId
 
-    // Move this folder's direct contents (subfolders + decks) up to its parent
-    // (or to the library root if this was a top-level folder) before deleting it.
-    await Promise.all([
-      ...subfolders.map(f => folderRepo.updateParent(f.id, parentId)),
-      ...decks.map(d => deckRepo.update(d.id, { folderId: parentId })),
-    ])
-    await folderRepo.softDelete(folder.id)
+    try {
+      // Move this folder's direct contents (subfolders + decks) up to its parent
+      // (or to the library root if this was a top-level folder) before deleting it.
+      await Promise.all([
+        ...subfolders.map(f => folderRepo.updateParent(f.id, parentId)),
+        ...decks.map(d => deckRepo.update(d.id, { folderId: parentId })),
+      ])
+      await folderRepo.softDelete(folder.id)
+    } catch (err) {
+      alert(`Couldn't delete this folder: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
 
     router.push((parentId ? `/library/${parentId}` : '/library') + qs)
   }
