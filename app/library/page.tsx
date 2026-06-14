@@ -601,7 +601,7 @@ function LibraryPageInner() {
               {groupedCards.map(({ card, decks, status }) => (
                 <Link
                   key={card.id}
-                  href={`/study/${decks[0].id}?filter=${activeFilter}`}
+                  href={`/study/${decks[0]?.id ?? ''}?filter=${activeFilter}`}
                   className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
                 >
                   <div className="flex gap-6 text-sm min-w-0">
