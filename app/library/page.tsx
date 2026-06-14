@@ -14,13 +14,30 @@ import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCou
 const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { langName } from '@/lib/languages'
-import type { Folder, Deck, LanguagePair } from '@/domain'
+import type { Folder, Deck, LanguagePair, Card, CardState } from '@/domain'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type DragItem = { type: 'folder'; id: string } | { type: 'deck'; id: string }
 type DropPos  = 'before' | 'into' | 'after'
 type DropTarget = { id: string; pos: DropPos } | null
+
+type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
+
+interface DeckStats {
+  deck:   Deck
+  cards:  Card[]
+  states: CardState[]
+}
+
+// A flat card entry for the cross-deck filtered view
+interface FilteredCard {
+  card:     Card
+  state:    CardState | undefined
+  deckName: string
+  deckId:   string
+  status:   string
+}
 
 // ─── Custom drag image ────────────────────────────────────────────────────────
 
@@ -102,6 +119,8 @@ function LibraryPageInner() {
   const [newName,      setNewName]      = useState('')
   const [folderCounts, setFolderCounts] = useState<Record<string, FolderCounts>>({})
   const [pairCounts,   setPairCounts]   = useState<FolderCounts>(EMPTY_COUNTS)
+  const [pairDeckStats, setPairDeckStats] = useState<DeckStats[]>([])
+  const [activeFilter,  setActiveFilter]  = useState<FilterKey | null>(null)
 
   // "+ New language" form
   const [addingPair,    setAddingPair]    = useState(false)
@@ -164,9 +183,28 @@ function LibraryPageInner() {
     // Pairing-wide totals (every deck in this language pairing, regardless
     // of which folder it lives in).
     if (pairSource && pairTarget) {
-      const pairDeckIds = decks.filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget).map(d => d.id)
-      setPairCounts(await computeDeckCounts(pairDeckIds, session.user.id, cardRepo, stateRepo))
+      const pairDecks = decks.filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget)
+      const stats = await Promise.all(pairDecks.map(async deck => {
+        const [cards, states] = await Promise.all([
+          cardRepo.listByDeck(deck.id),
+          stateRepo.listByDeck(session.user.id, deck.id),
+        ])
+        return { deck, cards, states }
+      }))
+      setPairDeckStats(stats)
+
+      const now = new Date()
+      setPairCounts(stats.reduce((acc, { cards, states }) => {
+        const stateMap = new Map(states.map(s => [s.cardId, s]))
+        return {
+          unlearned: acc.unlearned + cards.filter(c => !stateMap.has(c.id)).length,
+          learning:  acc.learning  + states.filter(s => !s.graduated).length,
+          graduated: acc.graduated + states.filter(s => s.graduated).length,
+          dueNow:    acc.dueNow    + states.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length,
+        }
+      }, { ...EMPTY_COUNTS }))
     } else {
+      setPairDeckStats([])
       setPairCounts(EMPTY_COUNTS)
     }
   }
@@ -430,6 +468,33 @@ function LibraryPageInner() {
   const { rootFolders, rootDecks } = getVisibleRoots()
   const hasContent = rootFolders.length > 0 || rootDecks.length > 0
 
+  // Build the filtered card list across the whole pairing
+  const now = new Date()
+  const filteredCards: FilteredCard[] = activeFilter ? pairDeckStats.flatMap(({ deck, cards, states }) => {
+    const stateMap = new Map(states.map(s => [s.cardId, s]))
+    return cards
+      .filter(card => {
+        const s = stateMap.get(card.id)
+        if (activeFilter === 'new')       return !s
+        if (activeFilter === 'learning')  return s && !s.graduated
+        if (activeFilter === 'graduated') return !!s?.graduated
+        if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
+        return false
+      })
+      .map(card => {
+        const s = stateMap.get(card.id)
+        const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+        return { card, state: s, deckName: deck.name, deckId: deck.id, status }
+      })
+  }) : []
+
+  const PAIR_COUNTER_CONFIG = [
+    { key: 'new'       as FilterKey, label: 'Unlearned', value: pairCounts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
+    { key: 'learning'  as FilterKey, label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
+    { key: 'graduated' as FilterKey, label: 'Graduated', value: pairCounts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
+    { key: 'due'       as FilterKey, label: 'Due Now',   value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
+  ]
+
   return (
     <div
       className="space-y-5 max-w-2xl mx-auto"
@@ -461,19 +526,59 @@ function LibraryPageInner() {
 
       {/* Pairing-wide stat counters */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: 'Unlearned', value: pairCounts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
-          { label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
-          { label: 'Graduated', value: pairCounts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
-          { label: 'Due Now',   value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
-        ].map(({ label, value, color, border, desc }) => (
-          <div key={label} className={`panel border-t-2 ${border} space-y-1 text-center`}>
-            <div className={`text-2xl font-semibold ${color}`}>{value}</div>
-            <div className="text-xs font-medium text-ink">{label}</div>
-            <div className="text-xs text-ink-faint">{desc}</div>
-          </div>
-        ))}
+        {PAIR_COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
+          const isActive = activeFilter === key
+          return (
+            <button
+              key={key}
+              onClick={() => setActiveFilter(isActive ? null : key)}
+              className={`panel border-t-2 ${border} space-y-1 text-center transition-colors w-full
+                ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
+            >
+              <div className={`text-2xl font-semibold ${color}`}>{value}</div>
+              <div className="text-xs font-medium text-ink">{label}</div>
+              <div className="text-xs text-ink-faint">{desc}</div>
+            </button>
+          )
+        })}
       </div>
+
+      {/* Filtered card list (cross-deck, whole pairing) */}
+      {activeFilter && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
+              {PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {filteredCards.length} card{filteredCards.length !== 1 ? 's' : ''}
+            </h2>
+            <button onClick={() => setActiveFilter(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
+              Show all ✕
+            </button>
+          </div>
+
+          {filteredCards.length === 0 ? (
+            <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
+          ) : (
+            <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+              {filteredCards.map(({ card, deckName, deckId, status }) => (
+                <Link
+                  key={card.id}
+                  href={`/study/${deckId}?filter=${activeFilter}`}
+                  className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+                >
+                  <div className="flex gap-6 text-sm min-w-0">
+                    <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
+                    <span className="text-ink-muted truncate">{card.back}</span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0 ml-2">
+                    <span className="text-xs text-ink-faint hidden sm:block">{deckName}</span>
+                    <span className="chip">{status}</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* New folder input */}
       {addingFolder && (
