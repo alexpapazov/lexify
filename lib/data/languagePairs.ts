@@ -43,4 +43,17 @@ export class SupabaseLanguagePairRepository {
     if (error) throw new Error(error.message)
     return rowToPair(data)
   }
+
+  /**
+   * Permanently delete a language pairing: hard-deletes all cards in this
+   * direction (cascading to deck_cards/card_states/review_events/duplicate
+   * pairs), soft-deletes its decks, and removes the language_pairs row.
+   */
+  async deletePair(sourceLanguage: string, targetLanguage: string): Promise<void> {
+    const { error } = await this.db.rpc('delete_language_pair', {
+      p_source: sourceLanguage,
+      p_target: targetLanguage,
+    })
+    if (error) throw new Error(error.message)
+  }
 }

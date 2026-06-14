@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
@@ -84,6 +84,7 @@ export default function LibraryPage() {
 }
 
 function LibraryPageInner() {
+  const router = useRouter()
   const searchParams = useSearchParams()
   const pairSource = searchParams.get('source')
   const pairTarget = searchParams.get('target')
@@ -300,6 +301,23 @@ function LibraryPageInner() {
     load()
   }
 
+  async function handleDeletePair() {
+    if (!pairSource || !pairTarget) return
+    const confirmed = confirm(
+      `Delete ${langName(pairSource)} / ${langName(pairTarget)}?\n\nThis will permanently delete ALL cards in this language pairing, along with their progress. This cannot be undone.`
+    )
+    if (!confirmed) return
+
+    const pairRepo = new SupabaseLanguagePairRepository()
+    try {
+      await pairRepo.deletePair(pairSource, pairTarget)
+    } catch (err) {
+      alert(`Couldn't delete this language pairing: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    router.push('/library')
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -393,12 +411,20 @@ function LibraryPageInner() {
             {langName(pairSource!)} <span className="text-ink-faint text-base font-normal">/ {langName(pairTarget!)}</span>
           </h1>
         </div>
-        <button
-          onClick={() => { setAddingFolder(true); setNewName('') }}
-          className="text-sm text-accent hover:text-accent-soft transition-colors"
-        >
-          + New folder
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => { setAddingFolder(true); setNewName('') }}
+            className="text-sm text-accent hover:text-accent-soft transition-colors"
+          >
+            + New folder
+          </button>
+          <button
+            onClick={handleDeletePair}
+            className="text-sm text-danger hover:text-danger/80 transition-colors"
+          >
+            Delete language
+          </button>
+        </div>
       </div>
 
       {/* New folder input */}
