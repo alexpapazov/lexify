@@ -7,14 +7,45 @@ import { SupabaseDeckRepository }          from '@/lib/data/decks'
 import { SupabaseCardRepository }          from '@/lib/data/cards'
 import { SupabasePipelineRepository }      from '@/lib/data/pipelines'
 import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
+import { SupabaseFolderRepository }        from '@/lib/data/folders'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
+import { folderMatchesPair } from '@/lib/folderStats'
+import { langName } from '@/lib/languages'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
   analyzeDuplicate, type DuplicateAnalysis,
   tier1Match, tier2Match,
 } from '@/lib/duplicates'
-import type { Card } from '@/domain'
+import type { Card, Folder, Deck } from '@/domain'
+
+const NEW_FOLDER_VALUE = '__new__'
+const ROOT_FOLDER_VALUE = '__root__'
+
+/**
+ * Flatten the folders that belong to a language pairing (per
+ * `folderMatchesPair`) into a depth-first list with indentation depth, for
+ * use in a flat <select> picker.
+ */
+function buildFolderOptions(folders: Folder[], decks: Deck[], sourceLanguage: string, targetLanguage: string): Array<{ folder: Folder; depth: number }> {
+  const matching = folders.filter(f => folderMatchesPair(f.id, folders, decks, sourceLanguage, targetLanguage))
+  const byParent = new Map<string | null, Folder[]>()
+  for (const f of matching) {
+    const arr = byParent.get(f.parentId) ?? []
+    arr.push(f)
+    byParent.set(f.parentId, arr)
+  }
+  const result: Array<{ folder: Folder; depth: number }> = []
+  function walk(parentId: string | null, depth: number) {
+    const children = (byParent.get(parentId) ?? []).slice().sort((a, b) => a.position - b.position)
+    for (const c of children) {
+      result.push({ folder: c, depth })
+      walk(c.id, depth + 1)
+    }
+  }
+  walk(null, 0)
+  return result
+}
 
 type SeparatorOption = 'tab' | 'newline' | 'custom'
 type AiMode = 'wordlist' | 'extraction'
@@ -196,6 +227,13 @@ export default function UploadPage() {
   const [previewItems, setPreviewItems] = useState<PreviewItem[]>([])
   const [dupChecked,   setDupChecked]   = useState(false)
 
+  // Folder picker (shown on the preview stage)
+  const [folders,          setFolders]          = useState<Folder[]>([])
+  const [decksForFolders,  setDecksForFolders]  = useState<Deck[]>([])
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null)
+  const [creatingFolder,   setCreatingFolder]   = useState(false)
+  const [newFolderName,    setNewFolderName]    = useState('')
+
   const router   = useRouter()
   const supabase = createClient()
 
@@ -310,7 +348,25 @@ export default function UploadPage() {
 
     setPreviewItems(parsed.map(c => ({ front: c.front, back: c.back, duplicate: null, action: 'create' })))
     setDupChecked(false)
+    setSelectedFolderId(null)
+    setCreatingFolder(false)
+    setNewFolderName('')
     setStage('preview')
+    void loadFolderOptions()
+  }
+
+  /** Load this user's folders/decks so the preview stage can offer a folder picker scoped to the current language pairing. */
+  async function loadFolderOptions() {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return
+    const folderRepo = new SupabaseFolderRepository()
+    const deckRepo   = new SupabaseDeckRepository()
+    const [allFolders, allDecks] = await Promise.all([
+      folderRepo.list(session.user.id),
+      deckRepo.list(session.user.id),
+    ])
+    setFolders(allFolders)
+    setDecksForFolders(allDecks)
   }
 
   function updatePreviewItem(i: number, patch: Partial<PreviewItem>) {
@@ -340,6 +396,21 @@ export default function UploadPage() {
         targetLanguage: basisLang,
         pipelineId:     pipeline.id,
       })
+
+      // Place the new deck in the chosen folder (creating it first if the
+      // user typed a new folder name), within this language pairing's tree.
+      let folderId = selectedFolderId
+      if (creatingFolder) {
+        const name = newFolderName.trim()
+        if (name) {
+          const folderRepo = new SupabaseFolderRepository()
+          const newFolder  = await folderRepo.create(session.user.id, name, null)
+          folderId = newFolder.id
+        }
+      }
+      if (folderId) {
+        await deckRepo.update(deck.id, { folderId })
+      }
 
       const toMerge   = items.filter(it => it.action === 'merge' && it.duplicate?.existingCard)
       const toCreate  = items.filter(it => it.action !== 'merge')
@@ -559,6 +630,41 @@ export default function UploadPage() {
             </div>
           )}
         </div>
+
+        {(() => {
+          const folderOptions = buildFolderOptions(folders, decksForFolders, targetLang, basisLang)
+          return (
+            <div className="space-y-1.5 max-w-sm">
+              <label className="text-sm text-ink-muted">Save to folder</label>
+              <select
+                className="input text-sm"
+                value={creatingFolder ? NEW_FOLDER_VALUE : (selectedFolderId ?? ROOT_FOLDER_VALUE)}
+                onChange={e => {
+                  const v = e.target.value
+                  if (v === NEW_FOLDER_VALUE) { setCreatingFolder(true); setNewFolderName('') }
+                  else { setCreatingFolder(false); setSelectedFolderId(v === ROOT_FOLDER_VALUE ? null : v) }
+                }}
+              >
+                <option value={ROOT_FOLDER_VALUE}>{langName(targetLang)} / {langName(basisLang)} — root</option>
+                {folderOptions.map(({ folder, depth }) => (
+                  <option key={folder.id} value={folder.id}>
+                    {'  '.repeat(depth)}{folder.name}
+                  </option>
+                ))}
+                <option value={NEW_FOLDER_VALUE}>+ New folder…</option>
+              </select>
+              {creatingFolder && (
+                <input
+                  autoFocus
+                  className="input text-sm"
+                  placeholder="New folder name…"
+                  value={newFolderName}
+                  onChange={e => setNewFolderName(e.target.value)}
+                />
+              )}
+            </div>
+          )
+        })()}
 
         <div className="flex gap-3">
           <button className="btn-primary" disabled={previewItems.length === 0 || saving} onClick={handleSaveDeck}>
