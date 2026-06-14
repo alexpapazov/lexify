@@ -236,10 +236,10 @@ function FolderPageInner() {
   }) : []
 
   const COUNTER_CONFIG = counts ? [
-    { key: 'new'       as FilterKey, label: 'Unlearned', value: counts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint' },
-    { key: 'learning'  as FilterKey, label: 'Learning',  value: counts.learning,  color: 'text-warning',     border: 'border-warning'   },
-    { key: 'graduated' as FilterKey, label: 'Graduated', value: counts.graduated, color: 'text-success',     border: 'border-success'   },
-    { key: 'due'       as FilterKey, label: 'Due Now',   value: counts.dueNow,    color: 'text-accent-soft', border: 'border-accent'    },
+    { key: 'new'       as FilterKey, label: 'Unlearned', value: counts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
+    { key: 'learning'  as FilterKey, label: 'Learning',  value: counts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
+    { key: 'graduated' as FilterKey, label: 'Graduated', value: counts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
+    { key: 'due'       as FilterKey, label: 'Due Now',   value: counts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
   ] : []
 
   // ── Drop onto row ─────────────────────────────────────────────────────────
@@ -487,7 +487,7 @@ function FolderPageInner() {
       {counts && (counts.unlearned + counts.learning + counts.graduated) > 0 && (
         <div className="space-y-3">
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {COUNTER_CONFIG.map(({ key, label, value, color, border }) => {
+            {COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
               const isActive = activeFilter === key
               return (
                 <button
@@ -498,6 +498,7 @@ function FolderPageInner() {
                 >
                   <div className={`text-2xl font-semibold ${color}`}>{value}</div>
                   <div className="text-xs font-medium text-ink">{label}</div>
+                  <div className="text-xs text-ink-faint">{desc}</div>
                 </button>
               )
             })}
