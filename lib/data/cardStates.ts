@@ -18,6 +18,8 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     lastRating:       row.last_rating as Rating | null,
     lastReviewedAt:   row.last_reviewed_at as string | null,
     introducedDate:   row.introduced_date as string | null,
+    lapseClusterCount: Number(row.lapse_cluster_count ?? 0),
+    lastLapseAt:       row.last_lapse_at as string | null,
   }
 }
 
@@ -56,6 +58,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       ease: state.ease, reps: state.reps, lapses: state.lapses,
       last_rating: state.lastRating, last_reviewed_at: state.lastReviewedAt,
       introduced_date: state.introducedDate,
+      lapse_cluster_count: state.lapseClusterCount, last_lapse_at: state.lastLapseAt,
     }, { onConflict: 'user_id,card_id' }).select().single()
     if (error) throw new Error(error.message)
     return rowToCardState(data)
@@ -65,5 +68,24 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     const existing = await this.get(userId, fromCardId)
     if (!existing) return null
     return this.upsert({ ...existing, cardId: toCardId })
+  }
+
+  async countDueByDateRange(userId: UserId, startIso: string, endIso: string): Promise<Map<string, number>> {
+    const { data, error } = await this.db.from('card_states')
+      .select('due_at')
+      .eq('user_id', userId)
+      .eq('graduated', true)
+      .gte('due_at', startIso)
+      .lt('due_at', endIso)
+    if (error) throw new Error(error.message)
+
+    const counts = new Map<string, number>()
+    for (const row of data ?? []) {
+      const dueAt = row.due_at as string | null
+      if (!dueAt) continue
+      const day = dueAt.slice(0, 10)
+      counts.set(day, (counts.get(day) ?? 0) + 1)
+    }
+    return counts
   }
 }

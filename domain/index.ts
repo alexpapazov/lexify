@@ -172,6 +172,14 @@ export interface CardState {
   lastReviewedAt:   string | null
   /** ISO date (YYYY-MM-DD) when this card was first introduced to the user. */
   introducedDate:   string | null
+  /**
+   * Number of consecutive "again" ratings (post-graduation) that happened
+   * within the lapse-clustering window of each other (see lastLapseAt).
+   * Resets to 0 on a correct answer.
+   */
+  lapseClusterCount: number
+  /** Timestamp of the most recent post-graduation "again" rating, if any. */
+  lastLapseAt:       string | null
 }
 
 // ─── Ratings ──────────────────────────────────────────────────────────────────
@@ -236,4 +244,11 @@ export interface GradingResult {
 export interface ReviewInput {
   wasCorrect: boolean
   rating:     Rating
+  /**
+   * For wrong typed answers, a 0 (mild — close typo/spelling/article slip)
+   * to 1 (severe — total meaning failure / blank) severity score used to
+   * scale how much the next interval shrinks. Defaults to 0.5 (moderate)
+   * when omitted, e.g. for recognition-mode misses.
+   */
+  wrongSeverity?: number
 }

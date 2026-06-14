@@ -89,3 +89,46 @@ export function gradeTyping(
 
   return { correct: false, normalizedUser, normalizedExpected: candidates[0]! }
 }
+
+/**
+ * Classifies how "wrong" a typed answer was, returning a severity score
+ * from 0 (mild — close typo, spelling/accent slip, or article/gender slip)
+ * to 1 (severe — blank answer or a totally different word). Used by the
+ * long-term scheduler to scale how much a missed review shrinks the
+ * card's interval.
+ *
+ * Only meaningful when `gradeTyping` already determined the answer is
+ * incorrect — callers should not call this for correct answers.
+ */
+export function classifyWrongAnswer(
+  userAnswer: string,
+  expected:   string,
+  settings:   GradingSettings,
+): number {
+  const normalizedUser     = normalizeAnswer(userAnswer, settings)
+  const normalizedExpected = normalizeAnswer(expected, settings)
+
+  // Blank / no attempt — total failure to produce the word.
+  if (normalizedUser.length === 0) return 1.0
+
+  // Article/gender-only mistake: stripping a leading article from both
+  // sides makes them match, but they didn't match before stripping.
+  const userNoArticle     = stripLeadingArticle(normalizedUser)
+  const expectedNoArticle = stripLeadingArticle(normalizedExpected)
+  if (userNoArticle === expectedNoArticle && normalizedUser !== normalizedExpected) {
+    return 0.3
+  }
+
+  const distance = levenshtein(normalizedUser, normalizedExpected)
+  const maxLen   = Math.max(normalizedUser.length, normalizedExpected.length, 1)
+  const ratio    = distance / maxLen
+
+  // Close typo / spelling / accent slip.
+  if (ratio <= 0.34) return 0.15
+
+  // Essentially a different word.
+  if (ratio >= 0.75) return 1.0
+
+  // Moderate mismatch — partial recall.
+  return 0.6
+}

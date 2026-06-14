@@ -27,6 +27,8 @@ export function initialCardState(
     lastRating:       null,
     lastReviewedAt:   null,
     introducedDate:   new Date().toISOString().slice(0, 10), // YYYY-MM-DD
+    lapseClusterCount: 0,
+    lastLapseAt:       null,
   }
 }
 
@@ -35,25 +37,58 @@ export function progressAfterReview(
   pipeline: Pipeline,
   input:    ReviewInput,
 ): CardState {
-  const now = new Date().toISOString()
-  const { wasCorrect, rating } = input
+  const nowDate = new Date()
+  const now = nowDate.toISOString()
+  const { wasCorrect, rating, wrongSeverity } = input
 
   // ── Post-graduation ──────────────────────────────────────────────────────
   if (state.graduated) {
     if (rating === 'again') {
-      const scheduled = scheduleNext(state, 'again')
-      return { ...state, lapses: state.lapses + 1, lastRating: rating, lastReviewedAt: now, ...scheduled }
+      const scheduled = scheduleNext(state, 'again', { now: nowDate, wrongSeverity })
+
+      if (scheduled.relearn) {
+        // 3+ wrongs in a row on an elective review — send the card back
+        // into the learning pipeline instead of just shrinking its interval.
+        return {
+          ...state,
+          graduated:         false,
+          currentStepOrder:  0,
+          correctInStep:     0,
+          dueAt:             null,
+          intervalDays:      0,
+          ease:              scheduled.ease,
+          lapses:            state.lapses + 1,
+          lapseClusterCount: scheduled.lapseClusterCount,
+          lastLapseAt:       scheduled.lastLapseAt,
+          lastRating:        rating,
+          lastReviewedAt:    now,
+        }
+      }
+
+      return {
+        ...state,
+        lapses:            state.lapses + 1,
+        lastRating:        rating,
+        lastReviewedAt:    now,
+        dueAt:             scheduled.dueAt,
+        intervalDays:      scheduled.intervalDays,
+        ease:              scheduled.ease,
+        lapseClusterCount: scheduled.lapseClusterCount,
+        lastLapseAt:       scheduled.lastLapseAt,
+      }
     }
-    const scheduled = scheduleNext(
-      { ...state, reps: state.reps + (rating !== 'hard' ? 1 : 0) },
-      rating,
-    )
+
+    const scheduled = scheduleNext(state, rating, { now: nowDate, wrongSeverity })
     return {
       ...state,
-      reps:           rating !== 'hard' ? state.reps + 1 : state.reps,
-      lastRating:     rating,
-      lastReviewedAt: now,
-      ...scheduled,
+      reps:              rating !== 'hard' ? state.reps + 1 : state.reps,
+      lastRating:        rating,
+      lastReviewedAt:    now,
+      dueAt:             scheduled.dueAt,
+      intervalDays:      scheduled.intervalDays,
+      ease:              scheduled.ease,
+      lapseClusterCount: scheduled.lapseClusterCount,
+      lastLapseAt:       scheduled.lastLapseAt,
     }
   }
 
@@ -77,7 +112,7 @@ export function progressAfterReview(
 
     if (!nextStep) {
       // Graduate
-      const scheduled = scheduleNext(state, rating)
+      const scheduled = scheduleNext(state, rating, { now: nowDate })
       return {
         ...state,
         correctInStep:    0,

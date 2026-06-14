@@ -81,4 +81,33 @@ describe('post-graduation', () => {
     const next = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' })
     expect(next.reps).toBeGreaterThan(s.reps)
   })
+
+  it('sends the card back to the learning pipeline after 3 close-together early lapses', () => {
+    let s = graduated() // intervalDays: 3 (good graduation), lastReviewedAt: now, lapseClusterCount: 0
+
+    // First lapse: clusters to 1
+    s = progressAfterReview(s, PIPELINE, { wasCorrect: false, rating: 'again' })
+    expect(s.graduated).toBe(true)
+    expect(s.lapseClusterCount).toBe(1)
+
+    // Second close-together lapse: clusters to 2
+    s = progressAfterReview(s, PIPELINE, { wasCorrect: false, rating: 'again' })
+    expect(s.graduated).toBe(true)
+    expect(s.lapseClusterCount).toBe(2)
+
+    // Third close-together lapse: relearn — back into the pipeline
+    s = progressAfterReview(s, PIPELINE, { wasCorrect: false, rating: 'again' })
+    expect(s.graduated).toBe(false)
+    expect(s.currentStepOrder).toBe(0)
+    expect(s.dueAt).toBeNull()
+    expect(s.lapses).toBe(3)
+  })
+})
+
+describe('initialCardState', () => {
+  it('initializes lapse-clustering fields', () => {
+    const s = initialCardState('user-1', 'card-1', 'pipeline-1')
+    expect(s.lapseClusterCount).toBe(0)
+    expect(s.lastLapseAt).toBeNull()
+  })
 })

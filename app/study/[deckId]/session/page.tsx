@@ -11,8 +11,10 @@ import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { progressAfterReview, initialCardState, ratingToWasCorrect } from '@/engine/pipeline'
+import { classifyWrongAnswer } from '@/engine/grading'
+import { smoothDueDate } from '@/engine/density'
 import type { Card, CardState, Pipeline, Rating, GradingSettings } from '@/domain'
-import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
+import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
@@ -187,7 +189,17 @@ export default function SessionPage() {
       userAnswer, wasCorrect, rating, responseMs: null,
     })
 
-    const newState = progressAfterReview(state, pipeline, { wasCorrect, rating })
+    const wrongSeverity = !wasCorrect && step.stepType === 'typing'
+      ? classifyWrongAnswer(userAnswer, step.answerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
+      : undefined
+
+    let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity })
+
+    if (newState.graduated && newState.dueAt && newState.intervalDays >= 7) {
+      const smoothed = await smoothDueDate(userId, newState.intervalDays, newState.dueAt, stateRepo)
+      newState = { ...newState, dueAt: smoothed }
+    }
+
     await stateRepo.upsert(newState)
 
     setCardStates(prev => {
@@ -201,7 +213,7 @@ export default function SessionPage() {
       setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
       setIndex(i => i + 1)
     }
-  }, [queue, index, userId])
+  }, [queue, index, userId, gradingSettings])
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 

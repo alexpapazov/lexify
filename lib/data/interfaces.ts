@@ -64,6 +64,12 @@ export interface CardStateRepository {
   upsert(state: CardState): Promise<CardState>
   /** Copies a user's study progress from one card to another (used when forking a shared card). */
   copy(userId: UserId, fromCardId: CardId, toCardId: CardId): Promise<CardState | null>
+  /**
+   * Counts how many of the user's graduated cards are currently due on each
+   * date (YYYY-MM-DD) within [startIso, endIso), across all decks. Used by
+   * the long-term scheduler's review-density smoothing.
+   */
+  countDueByDateRange(userId: UserId, startIso: string, endIso: string): Promise<Map<string, number>>
 }
 
 export interface CreateReviewEventInput {
