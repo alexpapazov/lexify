@@ -96,7 +96,7 @@ function CardEditModal({ card, state, onSave, onClose }: {
                 ['Next due',      state?.graduated ? formatDate(state.dueAt) : '—'],
                 ['Last reviewed', formatDate(state?.lastReviewedAt ?? null, 'Never')],
                 ['Introduced',    formatDate(state?.introducedDate ?? null, 'Not yet')],
-                ['Last rating',   rating ? rating[0].toUpperCase() + rating.slice(1) : '—'],
+                ['Last rating',   rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
                 ['Recent lapses', String(state?.lapseClusterCount ?? 0)],
               ]
               return rows.map(([label, value]) => (
