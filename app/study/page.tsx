@@ -2,13 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }      from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import { SupabaseFolderRepository }    from '@/lib/data/folders'
-import type { Deck, Card, CardState, Folder } from '@/domain'
+import type { Deck, Card, CardState } from '@/domain'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
 
@@ -38,15 +36,23 @@ interface FilteredCard {
   status:   string
 }
 
+// One day's worth of upcoming-review forecast data
+interface ForecastDay {
+  date:   string
+  label:  string
+  dayNum: number
+  count:  number
+}
+
+const FORECAST_DAYS = 14
+
 export default function StudyPage() {
   const [deckStats,    setDeckStats]    = useState<DeckWithStats[]>([])
   const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dueNow: 0 })
-  const [rootFolders,  setRootFolders]  = useState<Folder[]>([])
-  const [allDecks,     setAllDecks]     = useState<Deck[]>([])
+  const [forecast,     setForecast]     = useState<ForecastDay[]>([])
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
-  const router   = useRouter()
   const supabase = createClient()
 
   async function load() {
@@ -54,17 +60,11 @@ export default function StudyPage() {
     if (!session) { setLoading(false); return }
     setAuthed(true)
 
-    const deckRepo   = new SupabaseDeckRepository()
-    const cardRepo   = new SupabaseCardRepository()
-    const stateRepo  = new SupabaseCardStateRepository()
-    const folderRepo = new SupabaseFolderRepository()
+    const deckRepo  = new SupabaseDeckRepository()
+    const cardRepo  = new SupabaseCardRepository()
+    const stateRepo = new SupabaseCardStateRepository()
 
-    const [decks, folders] = await Promise.all([
-      deckRepo.list(session.user.id),
-      folderRepo.list(session.user.id),
-    ])
-    setRootFolders(folders.filter(f => f.parentId === null))
-    setAllDecks(decks)
+    const decks = await deckRepo.list(session.user.id)
     const now = new Date()
 
     const stats = await Promise.all(decks.map(async deck => {
@@ -89,6 +89,26 @@ export default function StudyPage() {
       graduated: acc.graduated + s.graduated,
       dueNow:    acc.dueNow    + s.dueNow,
     }), { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }))
+
+    // ── Upcoming review forecast ────────────────────────────────────────
+    const endDate = new Date(now)
+    endDate.setUTCDate(endDate.getUTCDate() + FORECAST_DAYS)
+    const counts = await stateRepo.countDueByDateRange(session.user.id, now.toISOString(), endDate.toISOString())
+
+    const days: ForecastDay[] = []
+    for (let i = 0; i < FORECAST_DAYS; i++) {
+      const d = new Date(now)
+      d.setUTCDate(d.getUTCDate() + i)
+      const dateStr = d.toISOString().slice(0, 10)
+      days.push({
+        date:   dateStr,
+        label:  i === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
+        dayNum: d.getUTCDate(),
+        count:  counts.get(dateStr) ?? 0,
+      })
+    }
+    setForecast(days)
+
     setLoading(false)
   }
 
@@ -115,6 +135,7 @@ export default function StudyPage() {
   }) : []
 
   const totalDue = global.dueNow + global.learning
+  const maxForecast = Math.max(1, ...forecast.map(d => d.count))
 
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },
@@ -210,95 +231,35 @@ export default function StudyPage() {
             </div>
           )}
 
-          {/* ── Pinned decks ────────────────────────────────────────────── */}
+          {/* ── Upcoming reviews ─────────────────────────────────────────── */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-medium text-ink">Pinned decks</h2>
-              <Link href="/upload" className="text-sm text-accent hover:text-accent-soft transition-colors">
-                + New deck
-              </Link>
+              <h2 className="text-base font-medium text-ink">Coming up</h2>
+              <span className="text-xs text-ink-faint">Cards due over the next {FORECAST_DAYS} days</span>
             </div>
 
-            {deckStats.filter(s => s.deck.isPinned).length === 0 ? (
-              <div className="panel text-ink-muted text-sm">
-                No pinned decks. Pin a deck from your Library using the ☆ icon.
+            {forecast.every(d => d.count === 0) ? (
+              <div className="panel text-ink-muted text-sm text-center py-6">
+                Nothing scheduled yet — keep studying to build up your review queue.
               </div>
             ) : (
-              <div className="space-y-2">
-                {deckStats.filter(s => s.deck.isPinned).map(({ deck, unlearned, learning, graduated, dueNow }) => (
-                  <Link
-                    key={deck.id}
-                    href={`/study/${deck.id}`}
-                    className="panel flex items-center gap-4 hover:border-white/10 transition-colors cursor-pointer"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="text-ink font-medium truncate">{deck.name}</div>
-                      <div className="text-xs text-ink-muted mt-0.5">{deck.targetLanguage.toUpperCase()}</div>
+              <div className="panel">
+                <div className="flex items-end gap-1 sm:gap-2 h-40">
+                  {forecast.map(day => (
+                    <div key={day.date} className="flex-1 flex flex-col items-center justify-end h-full gap-1 min-w-0">
+                      <div className="text-xs text-ink-muted h-4">{day.count > 0 ? day.count : ''}</div>
+                      <div
+                        className={`w-full rounded-t-sm transition-all ${day.count > 0 ? 'bg-accent' : 'bg-surface-raised'}`}
+                        style={{ height: `${day.count > 0 ? Math.max(6, Math.round((day.count / maxForecast) * 100)) : 2}%` }}
+                        title={`${day.label} ${day.dayNum}: ${day.count} card${day.count !== 1 ? 's' : ''} due`}
+                      />
+                      <div className="text-[10px] text-ink-faint text-center leading-tight">
+                        <div>{day.label}</div>
+                        <div>{day.dayNum}</div>
+                      </div>
                     </div>
-
-                    <div className="hidden sm:flex items-center gap-3 text-xs" onClick={e => e.stopPropagation()}>
-                      {[
-                        { label: `${unlearned} new`,     filter: 'new',       color: 'text-ink-muted hover:text-ink'     },
-                        { label: `${learning} learning`, filter: 'learning',  color: 'text-warning hover:text-yellow-300' },
-                        { label: `${graduated} done`,    filter: 'graduated', color: 'text-success hover:text-green-300'  },
-                        { label: `${dueNow} due`,        filter: 'due',       color: 'text-accent-soft hover:text-accent' },
-                      ].map(({ label, filter, color }) => (
-                        <button key={filter}
-                          onClick={e => { e.preventDefault(); e.stopPropagation(); router.push(`/study/${deck.id}?filter=${filter}`) }}
-                          className={`${color} transition-colors`}>
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div onClick={e => e.stopPropagation()} className="shrink-0">
-                      <Link href={`/study/${deck.id}/session`} className="btn-primary text-sm py-1.5 px-4">Study</Link>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* ── Library ─────────────────────────────────────────────────── */}
-          {/* ── Library ─────────────────────────────────────────────────── */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-medium text-ink">Library</h2>
-              <Link href="/library" className="text-sm text-accent hover:text-accent-soft transition-colors">
-                Open Library →
-              </Link>
-            </div>
-
-            {rootFolders.length === 0 ? (
-              <div className="panel text-ink-muted text-sm">
-                No folders yet. <Link href="/library" className="text-accent hover:text-accent-soft">Open Library</Link> to create one.
-              </div>
-            ) : (
-              <div className="panel p-1.5 space-y-0.5">
-                {rootFolders.slice(0, 5).map(folder => {
-                  const deckCount = allDecks.filter(d => d.folderId === folder.id).length
-                  return (
-                    <Link
-                      key={folder.id}
-                      href={`/library/${folder.id}`}
-                      className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-surface-raised/50 transition-colors"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className="text-accent-soft shrink-0">
-                        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
-                      </svg>
-                      <span className="flex-1 text-sm text-ink truncate">{folder.name}</span>
-                      {deckCount > 0 && (
-                        <span className="text-xs text-ink-faint">{deckCount} deck{deckCount !== 1 ? 's' : ''}</span>
-                      )}
-                    </Link>
-                  )
-                })}
-                {rootFolders.length > 5 && (
-                  <Link href="/library" className="block px-3 py-2 text-xs text-ink-muted hover:text-ink transition-colors">
-                    +{rootFolders.length - 5} more folders…
-                  </Link>
-                )}
+                  ))}
+                </div>
               </div>
             )}
           </div>
