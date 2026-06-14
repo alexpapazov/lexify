@@ -15,8 +15,17 @@ import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 
 // ─── Card edit modal ─────────────────────────────────────────────────────────
 
-function CardEditModal({ card, onSave, onClose }: {
+/** Format an ISO date/datetime string as a short, readable date — or a fallback. */
+function formatDate(iso: string | null, fallback = '—'): string {
+  if (!iso) return fallback
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return fallback
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+function CardEditModal({ card, state, onSave, onClose }: {
   card:    Card
+  state:   CardState | undefined
   onSave:  (id: string, front: string, back: string) => Promise<void>
   onClose: () => void
 }) {
@@ -25,6 +34,7 @@ function CardEditModal({ card, onSave, onClose }: {
   const [saving,   setSaving]   = useState(false)
   const [saved,    setSaved]    = useState(false)
   const [validErr, setValidErr] = useState<string | null>(null)
+  const [showStats, setShowStats] = useState(false)
   const frontRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { frontRef.current?.focus() }, [])
@@ -51,8 +61,52 @@ function CardEditModal({ card, onSave, onClose }: {
       <div className="panel w-full max-w-lg space-y-4 mx-4">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-ink">Edit card</h2>
-          <button onClick={onClose} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowStats(s => !s)}
+              title="Card stats"
+              className={`p-1.5 rounded-lg border transition-colors
+                ${showStats ? 'text-accent border-accent/40 bg-surface-raised' : 'border-white/10 text-ink-faint hover:text-ink hover:border-white/20'}`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+            </button>
+            <button onClick={onClose} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
+          </div>
         </div>
+
+        {showStats && (
+          <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 grid grid-cols-2 gap-3 text-sm">
+            {(() => {
+              const status = !state
+                ? 'New — not yet studied'
+                : state.graduated
+                  ? 'Graduated'
+                  : `Learning — Step ${state.currentStepOrder + 1}`
+              const rows: [string, string][] = [
+                ['Status',        status],
+                ['Reps',          String(state?.reps ?? 0)],
+                ['Lapses',        String(state?.lapses ?? 0)],
+                ['Ease',          state ? state.ease.toFixed(2) : '—'],
+                ['Interval',      state ? `${state.intervalDays} day${state.intervalDays === 1 ? '' : 's'}` : '—'],
+                ['Next due',      state?.graduated ? formatDate(state.dueAt) : '—'],
+                ['Last reviewed', formatDate(state?.lastReviewedAt ?? null, 'Never')],
+                ['Introduced',    formatDate(state?.introducedDate ?? null, 'Not yet')],
+                ['Last rating',   state?.lastRating ? state.lastRating[0].toUpperCase() + state.lastRating.slice(1) : '—'],
+                ['Recent lapses', String(state?.lapseClusterCount ?? 0)],
+              ]
+              return rows.map(([label, value]) => (
+                <div key={label} className="space-y-0.5">
+                  <div className="text-xs text-ink-faint uppercase tracking-wider">{label}</div>
+                  <div className="text-ink font-medium">{value}</div>
+                </div>
+              ))
+            })()}
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <label className="text-xs text-ink-muted uppercase tracking-wider">Front</label>
@@ -509,6 +563,7 @@ export default function DeckDetailPage() {
       {editingCard && (
         <CardEditModal
           card={editingCard}
+          state={stateMap.get(editingCard.id)}
           onSave={handleCardSave}
           onClose={() => setEditingCard(null)}
         />
