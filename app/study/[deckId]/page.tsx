@@ -555,23 +555,24 @@ export default function DeckDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Unlearned', value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new'       },
-          { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning'  },
-          { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated' },
-          { label: 'Due now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due'       },
-        ].map(({ label, value, color, border, filter }) => {
+          { label: 'Unlearned', value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new',       desc: 'Not yet started'  },
+          { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  desc: 'In pipeline'      },
+          { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', desc: 'Long-term review' },
+          { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'  },
+        ].map(({ label, value, color, border, filter, desc }) => {
           const isActive = activeFilter === filter
           return (
             <Link
               key={label}
               href={isActive ? `/study/${deckId}` : `/study/${deckId}?filter=${filter}`}
-              className={`panel border-t-2 ${border} text-center space-y-1 transition-colors
-                ${isActive ? 'bg-surface-raised' : 'hover:bg-surface-raised/50'}`}
+              className={`panel border-t-2 ${border} text-center space-y-1 transition-colors w-full
+                ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
             >
-              <div className={`text-xl font-semibold ${color}`}>{value}</div>
-              <div className="text-xs text-ink-muted">{label}</div>
+              <div className={`text-2xl font-semibold ${color}`}>{value}</div>
+              <div className="text-xs font-medium text-ink">{label}</div>
+              <div className="text-xs text-ink-faint">{desc}</div>
             </Link>
           )
         })}
