@@ -10,6 +10,8 @@ import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+
+const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { langName } from '@/lib/languages'
 import type { Folder, Deck, LanguagePair } from '@/domain'
@@ -99,6 +101,7 @@ function LibraryPageInner() {
   const [addingFolder, setAddingFolder] = useState(false)
   const [newName,      setNewName]      = useState('')
   const [folderCounts, setFolderCounts] = useState<Record<string, FolderCounts>>({})
+  const [pairCounts,   setPairCounts]   = useState<FolderCounts>(EMPTY_COUNTS)
 
   // "+ New language" form
   const [addingPair,    setAddingPair]    = useState(false)
@@ -157,6 +160,15 @@ function LibraryPageInner() {
       return [folder.id, counts] as const
     }))
     setFolderCounts(Object.fromEntries(entries))
+
+    // Pairing-wide totals (every deck in this language pairing, regardless
+    // of which folder it lives in).
+    if (pairSource && pairTarget) {
+      const pairDeckIds = decks.filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget).map(d => d.id)
+      setPairCounts(await computeDeckCounts(pairDeckIds, session.user.id, cardRepo, stateRepo))
+    } else {
+      setPairCounts(EMPTY_COUNTS)
+    }
   }
 
   useEffect(() => { load() }, [pairSource, pairTarget]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -445,6 +457,22 @@ function LibraryPageInner() {
             Delete language
           </button>
         </div>
+      </div>
+
+      {/* Pairing-wide stat counters */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Unlearned', value: pairCounts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
+          { label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
+          { label: 'Graduated', value: pairCounts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
+          { label: 'Due Now',   value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
+        ].map(({ label, value, color, border, desc }) => (
+          <div key={label} className={`panel border-t-2 ${border} space-y-1 text-center`}>
+            <div className={`text-2xl font-semibold ${color}`}>{value}</div>
+            <div className="text-xs font-medium text-ink">{label}</div>
+            <div className="text-xs text-ink-faint">{desc}</div>
+          </div>
+        ))}
       </div>
 
       {/* New folder input */}
