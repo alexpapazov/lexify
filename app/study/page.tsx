@@ -91,9 +91,19 @@ export default function StudyPage() {
     }), { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }))
 
     // ── Upcoming review forecast ────────────────────────────────────────
+    // Start from the epoch (not "now") so that overdue/due-now cards — whose
+    // stored dueAt is in the past — get folded into "Today" instead of
+    // disappearing from the chart entirely.
+    const EPOCH = '1970-01-01T00:00:00.000Z'
     const endDate = new Date(now)
     endDate.setUTCDate(endDate.getUTCDate() + FORECAST_DAYS)
-    const counts = await stateRepo.countDueByDateRange(session.user.id, now.toISOString(), endDate.toISOString())
+    const counts = await stateRepo.countDueByDateRange(session.user.id, EPOCH, endDate.toISOString())
+
+    const todayStr = now.toISOString().slice(0, 10)
+    let overdueAndTodayCount = 0
+    for (const [date, c] of counts) {
+      if (date <= todayStr) overdueAndTodayCount += c
+    }
 
     const days: ForecastDay[] = []
     for (let i = 0; i < FORECAST_DAYS; i++) {
@@ -104,7 +114,7 @@ export default function StudyPage() {
         date:   dateStr,
         label:  i === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
         dayNum: d.getUTCDate(),
-        count:  counts.get(dateStr) ?? 0,
+        count:  i === 0 ? overdueAndTodayCount : (counts.get(dateStr) ?? 0),
       })
     }
     setForecast(days)
