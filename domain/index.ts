@@ -364,7 +364,12 @@ export interface DeckPreferences {
    * introduces another new card to refill the batch. Decoupled from
    * dailyNewCards/spilloverDue. Null/0 = use the daily-limit logic instead.
    */
-  cardsPerSession:   number | null
+  cardsPerSession:      number | null
+  /**
+   * How many cards to show per elective (study-ahead / category) session batch.
+   * Null = use app default (20). 0 = no cap. Positive integer = cap at that value.
+   */
+  electiveSessionLimit: number | null
 }
 
 export const DEFAULT_DAILY_NEW_CARDS = 20

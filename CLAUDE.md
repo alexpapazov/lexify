@@ -10,16 +10,26 @@ session would need.
 These sessions implemented and **committed/pushed**: TypingMode
 never-auto-advance, the stages 3-5 same-day window (`stage3EnteredDate`,
 migration 024), persisted typed-answer overrides (`typed_answer_overrides`,
-migration 025), and confusion-driven distractor promotion (`answer_side` /
-`is_word_mixup` on `card_confusions`, migration 026) — see the dated
-subsections below for details. As of the end of the latest session:
+migration 025), confusion-driven distractor promotion (`answer_side` /
+`is_word_mixup` on `card_confusions`, migration 026), per-category
+"Study" buttons + an elective-study picker on the deck detail/session pages,
+elective session batch-cap (migration 027, `elective_session_limit`),
+"Study [Category]" button above filtered card list, "Study ahead" button
+on session done screen — see the dated subsections below for details.
 
-- `npm run build` / `npm test` had **not yet been run** by the user — results
-  not yet confirmed.
+As of the end of the latest session:
+
+- `npm run build` / `npm test` **not yet confirmed** by the user for the
+  latest changes (027 + "Study ahead" + category button above card list).
+- Migration `027_elective_session_limit.sql` **not yet applied** in Supabase.
 - Migrations `024_stage3_same_day_window.sql`,
   `025_typed_answer_overrides.sql`, and
-  `026_card_confusion_word_mixups.sql` had **not yet been applied** in the
-  Supabase SQL editor.
+  `026_card_confusion_word_mixups.sql` — status of application in Supabase
+  is unknown (user should verify).
+- The elective-study category buttons / picker were added **only** to
+  `study/[deckId]/page.tsx` + `study/[deckId]/session/page.tsx` —
+  `study/all/session/page.tsx` and `study/folder/[folderId]/session/page.tsx`
+  do not have `?category=` support or the picker yet (see Known backlog).
 
 If you're picking this up: check whether these migrations are live before
 assuming this work is fully deployed or debugging it as "broken".
@@ -232,6 +242,89 @@ answer_text`, `answer_text` stored as `gradeTyping()`'s `normalizedUser`) +
   - "Undo override" reverses whichever of the above the current `override`
     state represents.
 
+## Elective study mode (this session, 2026-06-15)
+
+Two related additions, both scoped to `study/[deckId]/page.tsx` (deck detail)
+and `study/[deckId]/session/page.tsx` (session) only — **not** `study/all` or
+`study/folder/[folderId]`.
+
+### Per-category "Study" buttons (deck detail page)
+
+Each of the 4 stat boxes (Unlearned / Learning / Graduated / Due Now) now has
+its own "Study" button below the existing clickable filter-link area, linking
+to `/study/[deckId]/session?category={new|learning|graduated|due}`. The
+button is disabled (greyed `<span>`, not a link) when that category's count is
+0.
+
+### `?category=` queue building (session page)
+
+`study/[deckId]/session/page.tsx` reads `?category=` via `useSearchParams()`.
+When present (`StudyCategory = 'new' | 'learning' | 'graduated' | 'due'`),
+`load()` takes an early branch that builds the queue from **only** that
+category — matching the deck-detail stat counts exactly — and skips all
+new-card-budget / daily-limit logic entirely:
+
+- `new` → cards with no `CardState` (via `initialCardState()`).
+- `learning` → cards with a state where `!graduated`.
+- `graduated` → cards with `state.graduated === true` (any due date).
+- `due` → cards with `state.graduated === true && dueAt <= now`.
+
+Each category's queue is shuffled and passed to the shared `finalizeQueue()`
+helper (prefetch + confusion-promotion — extracted from the old inline logic
+so it can run from multiple call sites). `electiveSession` is set to `true`
+and the in-session banner shows a category-specific message
+(`CATEGORY_BANNER`). If the category is empty, the "done" screen shows
+`CATEGORY_EMPTY_MESSAGE[category]` instead of the generic "all caught up"
+copy.
+
+### Elective session batch cap (migration 027)
+
+Elective and category sessions are capped at a configurable number of cards
+per batch (default: 20). Controlled via `DeckPreferences.electiveSessionLimit`
+(`user_deck_preferences.elective_session_limit`): `null` → 20 (default),
+`0` → no cap, positive integer → cap at that value.
+
+- `DeckSettingsPanel` has a new "Cap elective/study-ahead sessions" checkbox
+  (auto-checked by default at 20) with a number input for the limit.
+- In `study/[deckId]/session/page.tsx`, after building any elective/category
+  queue, the first `batchLimit` cards go into the session queue and the rest
+  are stored in `remainingElective` state.
+- The session done screen shows a "Study ahead (N more)" button when
+  `electiveSession && remainingElective.length > 0`. Clicking it runs
+  `continueElectiveSession()`, which pulls the next batch from `remainingElective`
+  and calls `finalizeQueue()` without a page reload.
+- `study/[deckId]/page.tsx`: when a category filter is active (`?filter=`),
+  a "Study [Category]" button now appears above the filtered card list,
+  linking to `?category=` on the session page.
+
+### Elective picker (session page, no `?category=`)
+
+Previously, when the normal new/due queue was empty, the session silently
+auto-loaded not-yet-due graduated cards ("electiveCards"). This is now a
+user choice:
+
+- If `unlearnedCards` (beyond today's budget) and/or `electiveCards`
+  (graduated, not yet due — "early review") are non-empty, `load()` sets
+  `electivePickerData` and `showElectivePicker = true` instead of
+  auto-starting.
+- The `ElectivePicker` component (bottom of the session page file) shows a
+  checkbox per non-empty category ("Unlearned" / "Early review"), each
+  pre-checked, with a "Start studying" button (disabled if both are
+  unchecked).
+- `startElectiveSession({ unlearned, earlyReview })` combines the selected
+  pools, shuffles, sets `electiveSession = true`, and calls
+  `finalizeQueue()`.
+- If *both* pools are empty, the old "Session complete!" screen is shown
+  as before (nothing to elect into).
+
+### TypingMode Enter-to-submit/Enter-to-continue — already correct, no change
+
+Verified against the existing implementation (see "TypingMode never
+auto-advances" above): the typing input's `onKeyDown` already calls `check()`
+on Enter, and the resulting "Continue" / retype-Continue buttons are
+`autoFocus`, so a second Enter press already advances. No code change was
+needed for this.
+
 ## Wrong-answer ("confusion") tracking
 
 `card_confusions` table (migration 021, extended by migration 026) +
@@ -293,7 +386,7 @@ distractors".
 
 ## Migrations
 
-Sequential, in `supabase/migrations/`. Latest is `026`:
+Sequential, in `supabase/migrations/`. Latest is `027`:
 
 - `001_initial.sql` … `020_scheduler_v2.sql` — core schema, folders, language
   pairs, shared cards, scheduler v1→v2, lapse clustering.
@@ -311,6 +404,9 @@ Sequential, in `supabase/migrations/`. Latest is `026`:
   `is_word_mixup` to `card_confusions` and updates `record_card_confusion()`
   to accept them; used to promote recurring word-level mix-ups into
   multiple-choice distractors.
+- `027_elective_session_limit.sql` — adds `elective_session_limit INTEGER`
+  (nullable) to `user_deck_preferences`. NULL = default (20 cards/batch),
+  0 = no cap, positive integer = cap at that value.
 
 **Migrations are not auto-applied.** When you add one, tell the user to run
 it in the Supabase SQL editor (or via CLI) — don't assume it's live just
@@ -340,6 +436,13 @@ built/pushed/deployed.
 #55 and #59 have not been actioned yet as of 2026-06-15. (The
 "confusions aren't fed back into distractors" item was addressed this
 session — see migration 026 above.)
+
+- **New (2026-06-15)**: `study/all/session/page.tsx` and
+  `study/folder/[folderId]/session/page.tsx` still use the old auto-elective
+  behavior (silently load not-yet-due graduated cards when nothing's due) and
+  have no per-category "Study" buttons or picker — only the single-deck
+  session page (`study/[deckId]/session/page.tsx`) got the elective-study-mode
+  treatment this session.
 
 ## Verifying changes
 

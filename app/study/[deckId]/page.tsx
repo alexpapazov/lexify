@@ -494,6 +494,13 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
   const [spillover,     setSpillover]     = useState(initialPrefs?.spilloverDue      ?? defaultSpillover)
   const [cardsPerSessionOn, setCardsPerSessionOn] = useState((initialPrefs?.cardsPerSession ?? 0) > 0)
   const [cardsPerSession,   setCardsPerSession]   = useState(initialPrefs?.cardsPerSession || 10)
+  // electiveSessionLimit: null = default (20, cap on), 0 = cap disabled, positive = cap at that value
+  const [electiveCapOn,    setElectiveCapOn]    = useState(initialPrefs?.electiveSessionLimit !== 0)
+  const [electiveCapLimit, setElectiveCapLimit] = useState(
+    initialPrefs?.electiveSessionLimit != null && initialPrefs.electiveSessionLimit > 0
+      ? initialPrefs.electiveSessionLimit
+      : 20
+  )
   const [saving,        setSaving]        = useState(false)
   const [saved,         setSaved]         = useState(false)
   const [saveError,     setSaveError]     = useState<string | null>(null)
@@ -512,7 +519,8 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
       dailyOverride:     onlyToday ? todayOverride : null,
       dailyOverrideDate: onlyToday ? today         : null,
       spilloverDue:      spillover,
-      cardsPerSession:   cardsPerSessionOn ? cardsPerSession : null,
+      cardsPerSession:      cardsPerSessionOn ? cardsPerSession : null,
+      electiveSessionLimit: electiveCapOn ? electiveCapLimit : 0,
     })
     setSaving(false)
     setSaved(true)
@@ -632,6 +640,26 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
                 <p className="text-xs text-ink-faint">
                   Keeps {cardsPerSession} new card{cardsPerSession !== 1 ? 's' : ''} in the learning pipeline at a time —
                   once a card graduates, the next session introduces another to take its place. Overrides the daily limit above.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Elective session limit */}
+          <div className="space-y-2 border-t border-white/10 pt-3">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={electiveCapOn} onChange={e => setElectiveCapOn(e.target.checked)} className="accent-accent w-4 h-4" />
+              <span className="text-sm text-ink">Cap elective/study-ahead sessions</span>
+            </label>
+            {electiveCapOn && (
+              <div className="space-y-1.5 pl-6">
+                <label className="text-sm text-ink-muted">Cards per elective session</label>
+                <input type="number" min={1} max={500} className="input"
+                  value={electiveCapLimit}
+                  onChange={e => setElectiveCapLimit(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
+                <p className="text-xs text-ink-faint">
+                  Limits each study-ahead or category session to {electiveCapLimit} card{electiveCapLimit !== 1 ? 's' : ''}.
+                  A &ldquo;Study ahead&rdquo; button appears after each batch to continue.
                 </p>
               </div>
             )}
@@ -871,23 +899,37 @@ export default function DeckDetailPage() {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Unlearned', value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new',       desc: 'Not yet started'  },
-          { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  desc: 'In pipeline'      },
-          { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', desc: 'Long-term review' },
-          { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'  },
-        ].map(({ label, value, color, border, filter, desc }) => {
+          { label: 'Unlearned', value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new',       category: 'new',       desc: 'Not yet started'  },
+          { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  category: 'learning',  desc: 'In pipeline'      },
+          { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', category: 'graduated', desc: 'Long-term review' },
+          { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       category: 'due',       desc: 'Ready to review'  },
+        ].map(({ label, value, color, border, filter, category, desc }) => {
           const isActive = activeFilter === filter
           return (
-            <Link
+            <div
               key={label}
-              href={isActive ? `/study/${deckId}` : `/study/${deckId}?filter=${filter}`}
-              className={`panel border-t-2 ${border} text-center space-y-1 transition-colors w-full
-                ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
+              className={`panel border-t-2 ${border} text-center space-y-2 transition-colors w-full
+                ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : ''}`}
             >
-              <div className={`text-2xl font-semibold ${color}`}>{value}</div>
-              <div className="text-xs font-medium text-ink">{label}</div>
-              <div className="text-xs text-ink-faint">{desc}</div>
-            </Link>
+              <Link
+                href={isActive ? `/study/${deckId}` : `/study/${deckId}?filter=${filter}`}
+                className={`block space-y-1 -m-1 p-1 rounded-lg transition-colors ${isActive ? '' : 'hover:bg-surface-raised/50'}`}
+              >
+                <div className={`text-2xl font-semibold ${color}`}>{value}</div>
+                <div className="text-xs font-medium text-ink">{label}</div>
+                <div className="text-xs text-ink-faint">{desc}</div>
+              </Link>
+              {value > 0 ? (
+                <Link
+                  href={`/study/${deckId}/session?category=${category}`}
+                  className="btn-ghost block w-full text-xs py-1.5"
+                >
+                  Study
+                </Link>
+              ) : (
+                <span className="block w-full text-xs py-1.5 text-ink-faint/40 select-none">Study</span>
+              )}
+            </div>
           )
         })}
       </div>
@@ -901,6 +943,24 @@ export default function DeckDetailPage() {
             </Link>
           )}
         </div>
+
+        {activeFilter && (() => {
+          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : dueNow
+          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : 'Due Now'
+          return filterCount > 0 ? (
+            <Link
+              href={`/study/${deckId}/session?category=${activeFilter}`}
+              className="btn-primary block w-full text-center"
+            >
+              Study {filterLabel}
+            </Link>
+          ) : (
+            <span className="block w-full text-center text-sm py-2 text-ink-faint/40 select-none">
+              Study {filterLabel}
+            </span>
+          )
+        })()}
+
         <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
           {cards.filter(card => {
             if (!activeFilter) return true

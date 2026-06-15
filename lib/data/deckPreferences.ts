@@ -11,7 +11,8 @@ function rowToPrefs(row: Record<string, unknown>): DeckPreferences {
     dailyOverride:     row.daily_override as number | null,
     dailyOverrideDate: row.daily_override_date as string | null,
     spilloverDue:      (row.spillover_due as boolean) ?? false,
-    cardsPerSession:   (row.cards_per_session as number | null) ?? null,
+    cardsPerSession:      (row.cards_per_session      as number | null) ?? null,
+    electiveSessionLimit: (row.elective_session_limit as number | null) ?? null,
   }
 }
 
@@ -39,7 +40,8 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
         daily_override:      prefs.dailyOverride,
         daily_override_date: prefs.dailyOverrideDate,
         spillover_due:       prefs.spilloverDue,
-        cards_per_session:   prefs.cardsPerSession,
+        cards_per_session:    prefs.cardsPerSession,
+        elective_session_limit: prefs.electiveSessionLimit,
       }, { onConflict: 'user_id,deck_id' })
       .select()
       .single()

@@ -105,6 +105,10 @@ export default function SessionPage() {
   // graduated ("early review") cards instead of auto-starting.
   const [showElectivePicker, setShowElectivePicker] = useState(false)
   const [electivePickerData, setElectivePickerData] = useState<ElectivePickerData | null>(null)
+  /** Cards not yet shown in this elective batch — available for "Study ahead". */
+  const [remainingElective, setRemainingElective] = useState<SessionCard[]>([])
+  /** Computed from deck prefs: null = no cap, positive = cap at that number. Default 20. */
+  const [electiveBatchLimit, setElectiveBatchLimit] = useState<number | null>(20)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
 
@@ -184,12 +188,28 @@ export default function SessionPage() {
       ...(selected.unlearned   ? electivePickerData.unlearned   : []),
       ...(selected.earlyReview ? electivePickerData.earlyReview : []),
     ])
+    const batch = electiveBatchLimit != null ? combined.slice(0, electiveBatchLimit) : combined
+    const rest  = electiveBatchLimit != null ? combined.slice(electiveBatchLimit)    : []
+    setRemainingElective(rest)
     setElectiveSession(true)
     setShowElectivePicker(false)
     setIndex(0)
     setLoading(true)
-    void finalizeQueue(combined, { deckCards: allCards, sourceLanguage, targetLanguage, userId })
-  }, [electivePickerData, finalizeQueue, allCards, sourceLanguage, targetLanguage, userId])
+    void finalizeQueue(batch, { deckCards: allCards, sourceLanguage, targetLanguage, userId })
+  }, [electivePickerData, electiveBatchLimit, finalizeQueue, allCards, sourceLanguage, targetLanguage, userId])
+
+  /** Pulls the next batch from the remaining elective cards when the user clicks "Study ahead". */
+  const continueElectiveSession = useCallback(() => {
+    if (remainingElective.length === 0) return
+    const batch = electiveBatchLimit != null ? remainingElective.slice(0, electiveBatchLimit) : remainingElective
+    const rest  = electiveBatchLimit != null ? remainingElective.slice(electiveBatchLimit)    : []
+    setRemainingElective(rest)
+    setDone(false)
+    setEmptySession(false)
+    setIndex(0)
+    setLoading(true)
+    void finalizeQueue(batch, { deckCards: allCards, sourceLanguage, targetLanguage, userId })
+  }, [remainingElective, electiveBatchLimit, finalizeQueue, allCards, sourceLanguage, targetLanguage, userId])
 
   const loadSession = useCallback(() => {
     setLoading(true)
@@ -197,6 +217,7 @@ export default function SessionPage() {
     setEmptySession(false)
     setShowElectivePicker(false)
     setElectivePickerData(null)
+    setRemainingElective([])
     setIndex(0)
     setQueue([])
 
@@ -239,6 +260,12 @@ export default function SessionPage() {
       }
       setOverrides(overrideMap)
 
+      // Compute elective batch limit from prefs:
+      // null = use default (20), 0 = no cap, positive = cap at that value.
+      const rawLimit = prefs?.electiveSessionLimit ?? 20
+      const batchLimit: number | null = rawLimit === 0 ? null : rawLimit
+      setElectiveBatchLimit(batchLimit)
+
       const now   = new Date()
       const today = now.toISOString().slice(0, 10)
 
@@ -275,8 +302,12 @@ export default function SessionPage() {
             )
             break
         }
+        // Slice to the elective batch limit; store the rest for "Study ahead".
+        const batch = batchLimit != null ? categoryQueue.slice(0, batchLimit) : categoryQueue
+        const rest  = batchLimit != null ? categoryQueue.slice(batchLimit)    : []
+        setRemainingElective(rest)
         setElectiveSession(true)
-        await finalizeQueue(categoryQueue, { deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, userId: session.user.id })
+        await finalizeQueue(batch, { deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, userId: session.user.id })
         return
       }
 
@@ -500,9 +531,19 @@ export default function SessionPage() {
         <div className="text-5xl">🎉</div>
         <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}.</p>
-        <div className="flex gap-3 justify-center">
+        {electiveSession && remainingElective.length > 0 && (
+          <p className="text-xs text-ink-faint">
+            {remainingElective.length} more card{remainingElective.length !== 1 ? 's' : ''} remaining in this category.
+          </p>
+        )}
+        <div className="flex gap-3 justify-center flex-wrap">
           <Link href={`/study/${deckId}`} className="btn-primary">Back to deck</Link>
-          {!allLearned && (
+          {electiveSession && remainingElective.length > 0 && (
+            <button onClick={continueElectiveSession} className="btn-ghost">
+              Study ahead ({Math.min(electiveBatchLimit ?? remainingElective.length, remainingElective.length)} more)
+            </button>
+          )}
+          {!electiveSession && !allLearned && (
             <button onClick={() => loadSession()} className="btn-ghost">Next round</button>
           )}
         </div>
