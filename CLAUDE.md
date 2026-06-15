@@ -5,6 +5,24 @@ chat sessions. Read it at the start of any session touching this codebase.
 Update it (briefly) whenever you ship a feature or learn something a future
 session would need.
 
+## ⚠️ Pending from 2026-06-15 session — verify before relying on this
+
+This session implemented (code written, NOT yet verified/applied/shipped):
+TypingMode never-auto-advance, the stages 3-5 same-day window
+(`stage3EnteredDate`, migration 024), and persisted typed-answer overrides
+(`typed_answer_overrides`, migration 025) — see the dated subsections below
+for details. As of the end of that session:
+
+- `npm run build` / `npm test` had **not yet been run** by the user — results
+  not yet confirmed.
+- Migrations `024_stage3_same_day_window.sql` and
+  `025_typed_answer_overrides.sql` had **not yet been applied** in the
+  Supabase SQL editor.
+- The changes had **not yet been committed/pushed**.
+
+If you're picking this up: check git status / whether these migrations are
+live before assuming this work is done or debugging it as "broken".
+
 ## Locating this codebase (read this first)
 
 The real "Lexify" app — the one deployed at lexify-flax.vercel.app — lives at:
