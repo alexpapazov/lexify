@@ -98,6 +98,16 @@ different KIND of distractor.
    looking verbs like "llamar", "llover", "llegar".
    Distinct from each other and from: ${avoidFront.join(', ') || '(none)'}.
 
+FORMATTING: if "${back}" or "${front}" contains punctuation that signals
+multiple alternate phrasings — e.g. a slash like "traffic jam / jam", or a
+parenthetical like "estate (property)" — that formatting itself is a clue to
+the learner about which option is correct. To avoid giving the answer away,
+every distractor on that side must follow the SAME formatting pattern (e.g.
+also "word / word" with two short alternates, or also "word (word)"), even if
+you have to supply a second short synonym/alternate yourself. If the correct
+answer on a side has no such punctuation, distractors on that side should
+likewise be plain, single phrases with no slashes or parentheses.
+
 CRITICAL: every "frontDistractors" value must be written in ${srcLang}, and
 every "backDistractors" value must be written in ${tgtLang}. Never mix
 languages within a list.
