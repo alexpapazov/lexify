@@ -12,6 +12,7 @@ import { SupabaseFolderRepository }          from '@/lib/data/folders'
 import type { Deck, Card, CardState, DeckPreferences, Folder } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
+import { classifyReviewMode } from '@/engine/scheduler'
 
 // ─── Card edit modal ─────────────────────────────────────────────────────────
 
@@ -21,6 +22,37 @@ function formatDate(iso: string | null, fallback = '—'): string {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return fallback
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+/** Format a (possibly fractional, sub-day) interval in days as a human-friendly duration. */
+function formatIntervalDays(days: number | null | undefined): string {
+  if (days == null) return '—'
+  if (days <= 0) return '0 days'
+  if (days < 1) {
+    const mins = Math.round(days * 24 * 60)
+    return `${mins} min${mins === 1 ? '' : 's'}`
+  }
+  const rounded = Math.round(days * 10) / 10
+  return `${rounded} day${rounded === 1 ? '' : 's'}`
+}
+
+/** A labeled group of stat rows inside the "Card stats" panel. */
+function StatGroup({ title, rows }: { title: string; rows: [string, string][] }) {
+  return (
+    <div className="space-y-2">
+      <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+        {title}
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {rows.map(([label, value]) => (
+          <div key={label} className="space-y-0.5">
+            <div className="text-xs text-ink-faint uppercase tracking-wider">{label}</div>
+            <div className="text-ink font-medium text-sm break-words">{value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function CardEditModal({ card, state, onSave, onClose }: {
@@ -65,46 +97,90 @@ function CardEditModal({ card, state, onSave, onClose }: {
             <button
               onClick={() => setShowStats(s => !s)}
               title="Card stats"
-              className={`p-1.5 rounded-lg border transition-colors
+              aria-label="Card stats"
+              className={`w-7 h-7 rounded-full border flex items-center justify-center transition-colors
                 ${showStats ? 'text-accent border-accent/40 bg-surface-raised' : 'border-white/10 text-ink-faint hover:text-ink hover:border-white/20'}`}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="12" y1="16" x2="12" y2="12"/>
-                <line x1="12" y1="8" x2="12.01" y2="8"/>
-              </svg>
+              <span className="font-serif italic font-bold text-[13px] leading-none select-none">i</span>
             </button>
             <button onClick={onClose} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
           </div>
         </div>
 
         {showStats && (
-          <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 grid grid-cols-2 gap-3 text-sm">
-            {(() => {
-              const status = !state
-                ? 'New — not yet studied'
-                : state.graduated
-                  ? 'Graduated'
-                  : `Learning — Step ${state.currentStepOrder + 1}`
-              const rating = state?.lastRating
-              const rows: [string, string][] = [
-                ['Status',        status],
-                ['Reps',          String(state?.reps ?? 0)],
-                ['Lapses',        String(state?.lapses ?? 0)],
-                ['Ease',          state ? state.ease.toFixed(2) : '—'],
-                ['Interval',      state ? `${state.intervalDays} day${state.intervalDays === 1 ? '' : 's'}` : '—'],
-                ['Next due',      state?.graduated ? formatDate(state.dueAt) : '—'],
-                ['Last reviewed', formatDate(state?.lastReviewedAt ?? null, 'Never')],
-                ['Introduced',    formatDate(state?.introducedDate ?? null, 'Not yet')],
-                ['Last rating',   rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
-                ['Recent lapses', String(state?.lapseClusterCount ?? 0)],
-              ]
-              return rows.map(([label, value]) => (
-                <div key={label} className="space-y-0.5">
-                  <div className="text-xs text-ink-faint uppercase tracking-wider">{label}</div>
-                  <div className="text-ink font-medium">{value}</div>
-                </div>
-              ))
+          <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm max-h-80 overflow-y-auto">
+            {!state ? (
+              <p className="text-ink-faint text-xs">New — not yet studied. No stats yet.</p>
+            ) : (() => {
+              const status = state.graduated
+                ? 'Graduated'
+                : `Learning — Step ${state.currentStepOrder + 1}`
+              const rating = state.lastRating
+              const reviewMode = state.graduated ? classifyReviewMode(state, new Date()) : null
+              const reviewModeLabel = reviewMode === 'due'
+                ? 'Due now'
+                : reviewMode === 'elective'
+                  ? 'Elective (early)'
+                  : '—'
+
+              const typedTotal = state.typedAccuracyWindow.length
+              const typedCorrect = state.typedAccuracyWindow.reduce((sum, v) => sum + v, 0)
+              const typedAccuracy = typedTotal > 0
+                ? `${Math.round((typedCorrect / typedTotal) * 100)}% (${typedCorrect}/${typedTotal})`
+                : '—'
+
+              const relearnLabel = state.relearningStep === 0
+                ? 'Not in relearn loop'
+                : `Step ${state.relearningStep} (10-min retry)`
+
+              const intervalHistoryLabel = state.intervalHistory.length > 0
+                ? state.intervalHistory.map(d => formatIntervalDays(d)).join(' → ')
+                : '—'
+
+              return (
+                <>
+                  <StatGroup title="Status" rows={[
+                    ['Status',        status],
+                    ['Review mode',   reviewModeLabel],
+                    ['Reps',          String(state.reps)],
+                    ['Lapses',        String(state.lapses)],
+                    ['Ease',          state.ease.toFixed(2)],
+                    ['Last rating',   rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
+                  ]} />
+
+                  <StatGroup title="Scheduling" rows={[
+                    ['Interval (ideal)',    formatIntervalDays(state.intervalDays)],
+                    ['Scheduled interval',  formatIntervalDays(state.scheduledIntervalDays)],
+                    ['Next due',            state.graduated ? formatDate(state.dueAt) : '—'],
+                    ['Last reviewed',       formatDate(state.lastReviewedAt, 'Never')],
+                    ['Introduced',          formatDate(state.introducedDate, 'Not yet')],
+                    ['Graduated at',        formatDate(state.graduatedAt, '—')],
+                  ]} />
+
+                  <StatGroup title="Lapses & relearning" rows={[
+                    ['Recent lapses (cluster)', String(state.lapseClusterCount)],
+                    ['Last lapse',              formatDate(state.lastLapseAt, '—')],
+                    ['Relearn step',            relearnLabel],
+                    ['Pending interval',        state.pendingIntervalDays != null
+                      ? `${formatIntervalDays(state.pendingIntervalDays)} (on recovery)`
+                      : '—'],
+                  ]} />
+
+                  <StatGroup title="Typed production" rows={[
+                    ['Typed reviews',          String(state.typedReviewCount)],
+                    ['Typed accuracy (recent)', typedAccuracy],
+                    ['Last typed review',      formatDate(state.lastTypedReviewAt, 'Never')],
+                    ['Forced typed remaining', String(state.forcedTypedRemaining)],
+                  ]} />
+
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                      Interval history
+                    </div>
+                    <div className="text-ink font-medium text-sm break-words">{intervalHistoryLabel}</div>
+                  </div>
+                </>
+              )
             })()}
           </div>
         )}
