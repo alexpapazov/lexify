@@ -112,10 +112,25 @@ export default function LibraryPage() {
 }
 
 function LibraryPageInner() {
-  const router = useRouter()
   const searchParams = useSearchParams()
   const pairSource = searchParams.get('source')
   const pairTarget = searchParams.get('target')
+  // Force a full remount whenever the active pairing changes (including
+  // navigating back to the plain `/library` with no pairing at all). Without
+  // this, clicking "← Library" only updates the URL's search params — the
+  // already-mounted component doesn't reliably re-derive `inPair` and switch
+  // views, so the click appears to do nothing.
+  return (
+    <LibraryPageBody
+      key={`${pairSource ?? ''}|${pairTarget ?? ''}`}
+      pairSource={pairSource}
+      pairTarget={pairTarget}
+    />
+  )
+}
+
+function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null; pairTarget: string | null }) {
+  const router = useRouter()
   const inPair = !!(pairSource && pairTarget)
 
   const [allFolders,   setAllFolders]   = useState<Folder[]>([])
