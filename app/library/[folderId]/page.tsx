@@ -516,6 +516,18 @@ function FolderPageInner() {
                 </button>
               </div>
 
+              {(() => {
+                const cfg = COUNTER_CONFIG.find(c => c.key === activeFilter)
+                return cfg && cfg.value > 0 ? (
+                  <Link
+                    href={`/study/folder/${folderId}/session?category=${activeFilter}`}
+                    className="btn-primary block w-full text-center"
+                  >
+                    Study {cfg.label}
+                  </Link>
+                ) : null
+              })()}
+
               {filteredCards.length === 0 ? (
                 <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
               ) : (

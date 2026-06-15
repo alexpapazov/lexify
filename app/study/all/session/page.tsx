@@ -5,8 +5,8 @@
  * Same engine as the per-deck session, just a different queue-builder.
  */
 
-import { useEffect, useState, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState, useCallback } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }        from '@/lib/data/decks'
@@ -55,16 +55,34 @@ function shuffle<T>(arr: T[]): T[] {
   return a
 }
 
+const ALL_ELECTIVE_LIMIT = 20
+type StudyCategory = 'new' | 'learning' | 'graduated' | 'due'
+
 export default function AllDueSessionPage() {
+  return (
+    <Suspense fallback={<div className="text-ink-muted pt-16 text-center">Loading session…</div>}>
+      <AllDueSessionInner />
+    </Suspense>
+  )
+}
+
+function AllDueSessionInner() {
   const router   = useRouter()
   const supabase = createClient()
-  const [queue,   setQueue]   = useState<SessionCard[]>([])
-  const [index,   setIndex]   = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [userId,  setUserId]  = useState('')
-  const [done,    setDone]    = useState(false)
-  const [answerError, setAnswerError] = useState<string | null>(null)
-  const [submitting,  setSubmitting]  = useState(false)
+  const searchParams = useSearchParams()
+  const categoryParam = searchParams.get('category')
+  const category: StudyCategory | null =
+    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due'
+      ? categoryParam : null
+
+  const [queue,           setQueue]           = useState<SessionCard[]>([])
+  const [index,           setIndex]           = useState(0)
+  const [loading,         setLoading]         = useState(true)
+  const [userId,          setUserId]          = useState('')
+  const [done,            setDone]            = useState(false)
+  const [electiveSession, setElectiveSession] = useState(false)
+  const [answerError,     setAnswerError]     = useState<string | null>(null)
+  const [submitting,      setSubmitting]      = useState(false)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,   setOverrides]   = useState<Map<string, Set<string>>>(new Map())
 
@@ -112,6 +130,46 @@ export default function AllDueSessionPage() {
 
       const now   = new Date()
       const today = now.toISOString().slice(0, 10)
+
+      // ?category= elective study: build queue from only that category across
+      // all decks, capped at ALL_ELECTIVE_LIMIT cards.
+      if (category) {
+        const categoryCards: SessionCard[] = []
+        for (const deck of decks) {
+          const [cards, states] = await Promise.all([
+            cardRepo.listByDeck(deck.id),
+            stateRepo.listByDeck(session.user.id, deck.id),
+          ])
+          const stateMap = new Map(states.map(s => [s.cardId, s]))
+          const common = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+          for (const card of cards) {
+            const state = stateMap.get(card.id)
+            if (category === 'new' && !state) {
+              categoryCards.push({ ...common, card, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
+            } else if (category === 'learning' && state && !state.graduated) {
+              categoryCards.push({ ...common, card, state, productionMode: null })
+            } else if (category === 'graduated' && state?.graduated) {
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now) })
+            } else if (category === 'due' && state?.graduated && state.dueAt && new Date(state.dueAt) <= now) {
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now) })
+            }
+          }
+        }
+        const finalQueue = shuffle(categoryCards).slice(0, ALL_ELECTIVE_LIMIT)
+        if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
+        setElectiveSession(true)
+        setQueue(finalQueue)
+        setLoading(false)
+        const prefetchItems: PrefetchItem[] = finalQueue.slice(1).map(item => {
+          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
+          if (item.state.graduated || step.stepType !== 'recognition') return null
+          return { card: item.card, side: step.answerSide, deckCards: item.deckCards, sourceLanguage: item.sourceLanguage, targetLanguage: item.targetLanguage }
+        }).filter((x): x is PrefetchItem => x !== null)
+        void prefetchChoices(prefetchItems, handleChoicesCached)
+        return
+      }
+
       const allCards: SessionCard[] = []
 
       for (const deck of decks) {
@@ -321,12 +379,23 @@ export default function AllDueSessionPage() {
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (done) {
+    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now' }
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
         <div className="text-5xl">🎉</div>
         <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''} across all decks.</p>
-        <Link href="/study" className="btn-primary inline-block">Back to study</Link>
+        <div className="flex gap-3 justify-center flex-wrap">
+          <Link href="/study" className="btn-primary">Back to study</Link>
+          {electiveSession && category && (
+            <button
+              onClick={() => router.push(`/study/all/session?category=${category}`)}
+              className="btn-ghost"
+            >
+              Study ahead ({CATEGORY_LABELS[category]})
+            </button>
+          )}
+        </div>
       </div>
     )
   }
@@ -347,6 +416,11 @@ export default function AllDueSessionPage() {
         <div className="h-full bg-accent rounded-full transition-all duration-300"
           style={{ width: `${Math.round((index / queue.length) * 100)}%` }} />
       </div>
+      {electiveSession && category && (
+        <p className="text-xs text-accent text-center">
+          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : 'Studying cards due now.'}
+        </p>
+      )}
       {answerError && (
         <div className="rounded-card border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger flex items-center justify-between gap-3">
           <span>Couldn&apos;t save your answer: {answerError}</span>

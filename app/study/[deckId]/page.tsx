@@ -899,16 +899,16 @@ export default function DeckDetailPage() {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Unlearned', value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new',       category: 'new',       desc: 'Not yet started'  },
-          { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  category: 'learning',  desc: 'In pipeline'      },
-          { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', category: 'graduated', desc: 'Long-term review' },
-          { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       category: 'due',       desc: 'Ready to review'  },
-        ].map(({ label, value, color, border, filter, category, desc }) => {
+          { label: 'Unlearned', value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new',       desc: 'Not yet started'  },
+          { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  desc: 'In pipeline'      },
+          { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', desc: 'Long-term review' },
+          { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'  },
+        ].map(({ label, value, color, border, filter, desc }) => {
           const isActive = activeFilter === filter
           return (
             <div
               key={label}
-              className={`panel border-t-2 ${border} text-center space-y-2 transition-colors w-full
+              className={`panel border-t-2 ${border} text-center transition-colors w-full
                 ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : ''}`}
             >
               <Link
@@ -919,16 +919,6 @@ export default function DeckDetailPage() {
                 <div className="text-xs font-medium text-ink">{label}</div>
                 <div className="text-xs text-ink-faint">{desc}</div>
               </Link>
-              {value > 0 ? (
-                <Link
-                  href={`/study/${deckId}/session?category=${category}`}
-                  className="btn-ghost block w-full text-xs py-1.5"
-                >
-                  Study
-                </Link>
-              ) : (
-                <span className="block w-full text-xs py-1.5 text-ink-faint/40 select-none">Study</span>
-              )}
             </div>
           )
         })}

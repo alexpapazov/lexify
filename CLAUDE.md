@@ -26,10 +26,17 @@ As of the end of the latest session:
   `025_typed_answer_overrides.sql`, and
   `026_card_confusion_word_mixups.sql` — status of application in Supabase
   is unknown (user should verify).
-- The elective-study category buttons / picker were added **only** to
-  `study/[deckId]/page.tsx` + `study/[deckId]/session/page.tsx` —
-  `study/all/session/page.tsx` and `study/folder/[folderId]/session/page.tsx`
-  do not have `?category=` support or the picker yet (see Known backlog).
+- `?category=` support was added to all three session pages in the latest
+  session (2026-06-15): `study/[deckId]/session`, `study/folder/[folderId]/session`,
+  and `study/all/session`. All three support `?category=new|learning|graduated|due`.
+  Folder and all-session use a hardcoded `FOLDER/ALL_ELECTIVE_LIMIT = 20`.
+  "Study ahead" in folder/all sessions is a page reload (router.push to same URL);
+  the deck session tracks remainingElective in-memory for seamless continuation.
+- The per-stat-box "Study" buttons were **removed** from the deck detail page
+  stat boxes; the category study button appears above the filtered card list instead.
+- `study/[deckId]/page.tsx`: "Study [Category]" button above filtered card list.
+- `library/[folderId]/page.tsx`: "Study [Category]" button above filtered card list → folder session.
+- `library/page.tsx` (pairing view): "Study [Category]" button above filtered card list → all session.
 
 If you're picking this up: check whether these migrations are live before
 assuming this work is fully deployed or debugging it as "broken".
@@ -437,12 +444,11 @@ built/pushed/deployed.
 "confusions aren't fed back into distractors" item was addressed this
 session — see migration 026 above.)
 
-- **New (2026-06-15)**: `study/all/session/page.tsx` and
-  `study/folder/[folderId]/session/page.tsx` still use the old auto-elective
-  behavior (silently load not-yet-due graduated cards when nothing's due) and
-  have no per-category "Study" buttons or picker — only the single-deck
-  session page (`study/[deckId]/session/page.tsx`) got the elective-study-mode
-  treatment this session.
+- **Partial (2026-06-15)**: `study/all/session` and `study/folder/[folderId]/session`
+  now have `?category=` support and "Study ahead" (page reload), but still use
+  the old auto-elective behavior (silently load not-yet-due graduated cards) when
+  no `?category=` is given, and have no ElectivePicker. The ElectivePicker + in-memory
+  remainingElective tracking + deck-prefs-driven batch limit are only in `study/[deckId]/session`.
 
 ## Verifying changes
 

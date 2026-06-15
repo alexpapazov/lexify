@@ -609,6 +609,18 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
             </button>
           </div>
 
+          {(() => {
+            const cfg = PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)
+            return cfg && cfg.value > 0 ? (
+              <Link
+                href={`/study/all/session?category=${activeFilter}`}
+                className="btn-primary block w-full text-center"
+              >
+                Study {cfg.label}
+              </Link>
+            ) : null
+          })()}
+
           {groupedCards.length === 0 ? (
             <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
           ) : (

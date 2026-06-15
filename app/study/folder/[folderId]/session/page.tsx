@@ -6,8 +6,8 @@
  * session, just with a folder-scoped queue-builder.
  */
 
-import { useEffect, useState, useCallback } from 'react'
-import { useRouter, useParams } from 'next/navigation'
+import { Suspense, useEffect, useState, useCallback } from 'react'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }        from '@/lib/data/decks'
@@ -58,19 +58,39 @@ function shuffle<T>(arr: T[]): T[] {
   return a
 }
 
+/** Cards-per-elective-batch for folder/all sessions (no per-deck pref available). */
+const FOLDER_ELECTIVE_LIMIT = 20
+
+type StudyCategory = 'new' | 'learning' | 'graduated' | 'due'
+
 export default function FolderSessionPage() {
+  return (
+    <Suspense fallback={<div className="text-ink-muted pt-16 text-center">Loading session…</div>}>
+      <FolderSessionInner />
+    </Suspense>
+  )
+}
+
+function FolderSessionInner() {
   const router   = useRouter()
   const params   = useParams()
   const folderId = params.folderId as string
   const supabase = createClient()
-  const [queue,      setQueue]      = useState<SessionCard[]>([])
-  const [index,      setIndex]      = useState(0)
-  const [loading,    setLoading]    = useState(true)
-  const [userId,     setUserId]     = useState('')
-  const [done,       setDone]       = useState(false)
-  const [folder,     setFolder]     = useState<Folder | null>(null)
-  const [answerError, setAnswerError] = useState<string | null>(null)
-  const [submitting,  setSubmitting]  = useState(false)
+  const searchParams = useSearchParams()
+  const categoryParam = searchParams.get('category')
+  const category: StudyCategory | null =
+    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due'
+      ? categoryParam : null
+
+  const [queue,           setQueue]           = useState<SessionCard[]>([])
+  const [index,           setIndex]           = useState(0)
+  const [loading,         setLoading]         = useState(true)
+  const [userId,          setUserId]          = useState('')
+  const [done,            setDone]            = useState(false)
+  const [electiveSession, setElectiveSession] = useState(false)
+  const [folder,          setFolder]          = useState<Folder | null>(null)
+  const [answerError,     setAnswerError]     = useState<string | null>(null)
+  const [submitting,      setSubmitting]      = useState(false)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,   setOverrides]   = useState<Map<string, Set<string>>>(new Map())
 
@@ -125,6 +145,47 @@ export default function FolderSessionPage() {
 
       const now   = new Date()
       const today = now.toISOString().slice(0, 10)
+
+      // ?category= elective study: build queue from only that category across
+      // all decks in the folder, capped at FOLDER_ELECTIVE_LIMIT cards.
+      if (category) {
+        const categoryCards: SessionCard[] = []
+        for (const deck of decks) {
+          const [cards, states] = await Promise.all([
+            cardRepo.listByDeck(deck.id),
+            stateRepo.listByDeck(session.user.id, deck.id),
+          ])
+          const stateMap = new Map(states.map(s => [s.cardId, s]))
+          const common = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+          for (const card of cards) {
+            const state = stateMap.get(card.id)
+            if (category === 'new' && !state) {
+              categoryCards.push({ ...common, card, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
+            } else if (category === 'learning' && state && !state.graduated) {
+              categoryCards.push({ ...common, card, state, productionMode: null })
+            } else if (category === 'graduated' && state?.graduated) {
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now) })
+            } else if (category === 'due' && state?.graduated && state.dueAt && new Date(state.dueAt) <= now) {
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now) })
+            }
+          }
+        }
+        const finalQueue = shuffle(categoryCards).slice(0, FOLDER_ELECTIVE_LIMIT)
+        if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
+        setElectiveSession(true)
+        setQueue(finalQueue)
+        setLoading(false)
+        // Background prefetch/promotion (same as normal path below)
+        const prefetchItems: PrefetchItem[] = finalQueue.slice(1).map(item => {
+          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
+          if (item.state.graduated || step.stepType !== 'recognition') return null
+          return { card: item.card, side: step.answerSide, deckCards: item.deckCards, sourceLanguage: item.sourceLanguage, targetLanguage: item.targetLanguage }
+        }).filter((x): x is PrefetchItem => x !== null)
+        void prefetchChoices(prefetchItems, handleChoicesCached)
+        return
+      }
+
       const allCards: SessionCard[] = []
 
       for (const deck of decks) {
@@ -336,6 +397,7 @@ export default function FolderSessionPage() {
   const backHref = folder ? `/library/${folder.id}` : '/library'
 
   if (done) {
+    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now' }
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
         <div className="text-5xl">🎉</div>
@@ -344,7 +406,17 @@ export default function FolderSessionPage() {
           You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}
           {folder ? ` in ${folder.name}` : ''}.
         </p>
-        <Link href={backHref} className="btn-primary inline-block">Back to library</Link>
+        <div className="flex gap-3 justify-center flex-wrap">
+          <Link href={backHref} className="btn-primary">Back to library</Link>
+          {electiveSession && category && (
+            <button
+              onClick={() => router.push(`/study/folder/${folderId}/session?category=${category}`)}
+              className="btn-ghost"
+            >
+              Study ahead ({CATEGORY_LABELS[category]})
+            </button>
+          )}
+        </div>
       </div>
     )
   }
@@ -365,6 +437,11 @@ export default function FolderSessionPage() {
         <div className="h-full bg-accent rounded-full transition-all duration-300"
           style={{ width: `${Math.round((index / queue.length) * 100)}%` }} />
       </div>
+      {electiveSession && category && (
+        <p className="text-xs text-accent text-center">
+          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : 'Studying cards due now.'}
+        </p>
+      )}
       {answerError && (
         <div className="rounded-card border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger flex items-center justify-between gap-3">
           <span>Couldn&apos;t save your answer: {answerError}</span>
