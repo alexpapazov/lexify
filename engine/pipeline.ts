@@ -6,6 +6,26 @@
 
 import type { CardState, Pipeline, ReviewInput, Rating } from '@/domain'
 import { scheduleNext } from './scheduler'
+import {
+  TYPED_ACCURACY_WINDOW_SIZE,
+  FORCED_TYPED_ON_TYPO_ERROR,
+  FORCED_TYPED_ON_LAPSE,
+} from './productionMode'
+
+/** How many `scheduledIntervalDays` snapshots to keep in `intervalHistory`. */
+const INTERVAL_HISTORY_SIZE = 50
+
+/**
+ * A wrong typed answer with a severity at or below this threshold is a
+ * "close" mistake (accent, spelling, article, gender) rather than a total
+ * miss — these are the cases that force the next few reviews back to typed
+ * production.
+ */
+const CLOSE_TYPO_SEVERITY_THRESHOLD = 0.3
+
+function appendHistory(history: number[], value: number): number[] {
+  return [...history, value].slice(-INTERVAL_HISTORY_SIZE)
+}
 
 export function initialCardState(
   userId:     string,
@@ -21,6 +41,7 @@ export function initialCardState(
     graduated:        false,
     dueAt:            null,
     intervalDays:     0,
+    scheduledIntervalDays: 0,
     ease:             2.5,
     reps:             0,
     lapses:           0,
@@ -29,6 +50,14 @@ export function initialCardState(
     introducedDate:   new Date().toISOString().slice(0, 10), // YYYY-MM-DD
     lapseClusterCount: 0,
     lastLapseAt:       null,
+    graduatedAt:       null,
+    relearningStep:    0,
+    pendingIntervalDays: null,
+    typedAccuracyWindow: [],
+    typedReviewCount:    0,
+    lastTypedReviewAt:   null,
+    forcedTypedRemaining: 0,
+    intervalHistory:   [],
   }
 }
 
@@ -36,59 +65,112 @@ export function progressAfterReview(
   state:    CardState,
   pipeline: Pipeline,
   input:    ReviewInput,
+  nowDate:  Date = new Date(),
 ): CardState {
-  const nowDate = new Date()
   const now = nowDate.toISOString()
   const { wasCorrect, rating, wrongSeverity } = input
 
   // ── Post-graduation ──────────────────────────────────────────────────────
   if (state.graduated) {
+    // Typed-production bookkeeping — applies to every post-graduation
+    // review, regardless of how it affects scheduling.
+    let typedAccuracyWindow  = state.typedAccuracyWindow
+    let typedReviewCount     = state.typedReviewCount
+    let lastTypedReviewAt    = state.lastTypedReviewAt
+    let forcedTypedRemaining = state.forcedTypedRemaining
+
+    if (input.wasTyped) {
+      typedAccuracyWindow = [...state.typedAccuracyWindow, wasCorrect ? 1 : 0].slice(-TYPED_ACCURACY_WINDOW_SIZE)
+      typedReviewCount    = state.typedReviewCount + 1
+      lastTypedReviewAt   = now
+      if (forcedTypedRemaining > 0) forcedTypedRemaining -= 1
+      if (!wasCorrect && (wrongSeverity ?? 0) <= CLOSE_TYPO_SEVERITY_THRESHOLD) {
+        // Spelling / accent / gender / article slip — force typed for the next few reviews.
+        forcedTypedRemaining = Math.max(forcedTypedRemaining, FORCED_TYPED_ON_TYPO_ERROR)
+      }
+    } else if (rating === 'again') {
+      // Self-graded "Again" — force the next review back to typed.
+      forcedTypedRemaining = Math.max(forcedTypedRemaining, FORCED_TYPED_ON_LAPSE)
+    }
+
+    const typedFields = { typedAccuracyWindow, typedReviewCount, lastTypedReviewAt, forcedTypedRemaining }
+
     if (rating === 'again') {
       const scheduled = scheduleNext(state, 'again', { now: nowDate, wrongSeverity })
 
       if (scheduled.relearn) {
-        // 3+ wrongs in a row on an elective review — send the card back
-        // into the learning pipeline instead of just shrinking its interval.
+        // 3+ "again"s within a lapse cluster — send the card back into the
+        // learning pipeline instead of just shrinking its interval.
         return {
           ...state,
+          ...typedFields,
           graduated:         false,
           currentStepOrder:  0,
           correctInStep:     0,
           dueAt:             null,
           intervalDays:      0,
+          scheduledIntervalDays: 0,
           ease:              scheduled.ease,
           lapses:            state.lapses + 1,
           lapseClusterCount: scheduled.lapseClusterCount,
           lastLapseAt:       scheduled.lastLapseAt,
           lastRating:        rating,
           lastReviewedAt:    now,
+          relearningStep:    0,
+          pendingIntervalDays: null,
+          graduatedAt:       null,
+          forcedTypedRemaining: Math.max(forcedTypedRemaining, FORCED_TYPED_ON_LAPSE),
         }
       }
 
+      // Either entering the 10-minute relearn loop for the first time, or
+      // failing another retry within it (relearningStep keeps incrementing).
       return {
         ...state,
+        ...typedFields,
         lapses:            state.lapses + 1,
         lastRating:        rating,
         lastReviewedAt:    now,
         dueAt:             scheduled.dueAt,
         intervalDays:      scheduled.intervalDays,
+        scheduledIntervalDays: scheduled.scheduledIntervalDays,
         ease:              scheduled.ease,
         lapseClusterCount: scheduled.lapseClusterCount,
         lastLapseAt:       scheduled.lastLapseAt,
+        relearningStep:    scheduled.relearningStep,
+        pendingIntervalDays: scheduled.pendingIntervalDays,
       }
     }
 
+    // hard / good / easy
     const scheduled = scheduleNext(state, rating, { now: nowDate, wrongSeverity })
+
+    if (scheduled.noChange) {
+      // Very-early correct review — counts as practice, but the schedule
+      // (dueAt / intervalDays / scheduledIntervalDays / lastReviewedAt) is
+      // left untouched.
+      return {
+        ...state,
+        ...typedFields,
+        lastRating: rating,
+      }
+    }
+
     return {
       ...state,
+      ...typedFields,
       reps:              rating !== 'hard' ? state.reps + 1 : state.reps,
       lastRating:        rating,
       lastReviewedAt:    now,
       dueAt:             scheduled.dueAt,
       intervalDays:      scheduled.intervalDays,
+      scheduledIntervalDays: scheduled.scheduledIntervalDays,
       ease:              scheduled.ease,
       lapseClusterCount: scheduled.lapseClusterCount,
       lastLapseAt:       scheduled.lastLapseAt,
+      relearningStep:    scheduled.relearningStep,
+      pendingIntervalDays: scheduled.pendingIntervalDays,
+      intervalHistory:   appendHistory(state.intervalHistory, scheduled.scheduledIntervalDays),
     }
   }
 
@@ -121,7 +203,16 @@ export function progressAfterReview(
         reps:             1,
         lastRating:       rating,
         lastReviewedAt:   now,
-        ...scheduled,
+        dueAt:                 scheduled.dueAt,
+        intervalDays:          scheduled.intervalDays,
+        scheduledIntervalDays: scheduled.scheduledIntervalDays,
+        ease:                  scheduled.ease,
+        lapseClusterCount:     scheduled.lapseClusterCount,
+        lastLapseAt:           scheduled.lastLapseAt,
+        relearningStep:        scheduled.relearningStep,
+        pendingIntervalDays:   scheduled.pendingIntervalDays,
+        graduatedAt:           now,
+        intervalHistory:       appendHistory(state.intervalHistory, scheduled.scheduledIntervalDays),
       }
     }
 

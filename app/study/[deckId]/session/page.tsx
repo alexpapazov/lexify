@@ -10,9 +10,11 @@ import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
-import { progressAfterReview, initialCardState, ratingToWasCorrect } from '@/engine/pipeline'
+import { progressAfterReview, initialCardState } from '@/engine/pipeline'
 import { classifyWrongAnswer } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
+import { scheduleNext, classifyReviewMode } from '@/engine/scheduler'
+import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Pipeline, Rating, GradingSettings } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
@@ -20,7 +22,16 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 
-interface SessionCard { card: Card; state: CardState; pipeline: Pipeline }
+/** How many slots ahead a graduated card is re-queued after starting the 10-minute relearn loop. */
+const RELEARN_REQUEUE_OFFSET = 3
+
+interface SessionCard {
+  card: Card
+  state: CardState
+  pipeline: Pipeline
+  /** For graduated cards: whether this review should use typed or self-graded production. Null pre-graduation. */
+  productionMode: ProductionMode | null
+}
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
@@ -49,6 +60,7 @@ export default function SessionPage() {
   const [gradingSettings, setGradingSettings] = useState<GradingSettings | null>(null)
   const [done,            setDone]            = useState(false)
   const [emptySession,    setEmptySession]    = useState(false)
+  const [electiveSession, setElectiveSession] = useState(false)
   const [cardStates,      setCardStates]      = useState<Map<string, CardState>>(new Map())
 
   const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
@@ -123,27 +135,39 @@ export default function SessionPage() {
         newCardBudget = Math.max(0, dailyLimit - budgetUsed)
       }
 
-      // Build three buckets
-      const newCards:    SessionCard[] = []
-      const inPipeline:  SessionCard[] = []
-      const dueCards:    SessionCard[] = []
+      // Build buckets
+      const newCards:      SessionCard[] = []
+      const inPipeline:    SessionCard[] = []
+      const dueCards:      SessionCard[] = []
+      const electiveCards: SessionCard[] = []
 
       for (const card of cards) {
         const state = stateMap.get(card.id)
         if (!state) {
           if (newCardBudget <= 0) continue
           newCardBudget--
-          newCards.push({ card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline })
+          newCards.push({ card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline, productionMode: null })
         } else if (!state.graduated) {
-          inPipeline.push({ card, state, pipeline })
+          inPipeline.push({ card, state, pipeline, productionMode: null })
         } else if (state.dueAt && new Date(state.dueAt) <= now) {
-          dueCards.push({ card, state, pipeline })
+          dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now) })
+        } else {
+          electiveCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now) })
         }
       }
 
       // New cards: keep in deck order (first session = ordered introduction)
       // In-pipeline + due: shuffle so session feels varied
-      const finalQueue = [...newCards, ...shuffle(inPipeline), ...shuffle(dueCards)]
+      let finalQueue = [...newCards, ...shuffle(inPipeline), ...shuffle(dueCards)]
+
+      // Elective study: if nothing new/due, let the learner continue with
+      // not-yet-due graduated cards via this same Study button.
+      if (finalQueue.length === 0 && electiveCards.length > 0) {
+        finalQueue = shuffle(electiveCards)
+        setElectiveSession(true)
+      } else {
+        setElectiveSession(false)
+      }
 
       if (finalQueue.length === 0) { setEmptySession(true); setDone(true); setLoading(false); return }
       setQueue(finalQueue)
@@ -175,11 +199,15 @@ export default function SessionPage() {
     const current = queue[index]
     if (!current) return
 
-    const { card, state, pipeline } = current
+    const { card, state, pipeline, productionMode } = current
     const stateRepo  = new SupabaseCardStateRepository()
     const eventRepo  = new SupabaseReviewEventRepository()
     const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
     const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+
+    const nowDate    = new Date()
+    const reviewMode = classifyReviewMode(state, nowDate)
+    const wasTyped   = state.graduated ? productionMode === 'typed' : null
 
     await eventRepo.create({
       userId: userId, cardId: card.id, mode: step.stepType,
@@ -187,16 +215,26 @@ export default function SessionPage() {
       promptShown: step.promptSide === 'front' ? card.front : card.back,
       expected:    step.answerSide === 'front' ? card.front : card.back,
       userAnswer, wasCorrect, rating, responseMs: null,
+      reviewMode, wasTyped,
     })
 
-    const wrongSeverity = !wasCorrect && step.stepType === 'typing'
+    const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
       ? classifyWrongAnswer(userAnswer, step.answerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
       : undefined
 
-    let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity })
+    // Computed independently (same `nowDate`) so the density-smoothing
+    // window matches exactly what progressAfterReview just applied.
+    const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity }) : null
 
-    if (newState.graduated && newState.dueAt && newState.intervalDays >= 7) {
-      const smoothed = await smoothDueDate(userId, newState.intervalDays, newState.dueAt, stateRepo)
+    let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
+
+    if (
+      newState.graduated && newState.dueAt && scheduled &&
+      !scheduled.noChange && !scheduled.relearn && scheduled.relearningStep === 0 &&
+      scheduled.smoothMinDays != null && scheduled.smoothMaxDays != null &&
+      scheduled.intervalDays >= 7
+    ) {
+      const smoothed = await smoothDueDate(userId, newState.dueAt, scheduled.smoothMinDays, scheduled.smoothMaxDays, scheduled.intervalDays, stateRepo)
       newState = { ...newState, dueAt: smoothed }
     }
 
@@ -207,6 +245,22 @@ export default function SessionPage() {
       next.set(card.id, newState)
       return next
     })
+
+    // 10-minute "Again" relearn loop: re-queue the card a few slots ahead so
+    // it resurfaces later in this session (dueAt is also set to +10min, so
+    // it'll come back due if the session ends first).
+    if (newState.graduated && newState.relearningStep > 0) {
+      const requeued: SessionCard = { card, state: newState, pipeline, productionMode: decideProductionMode(newState, nowDate) }
+      setQueue(prev => {
+        const next = [...prev]
+        next[index] = { ...current, state: newState }
+        const insertPos = Math.min(index + 1 + RELEARN_REQUEUE_OFFSET, next.length)
+        next.splice(insertPos, 0, requeued)
+        return next
+      })
+      setIndex(i => i + 1)
+      return
+    }
 
     if (index + 1 >= queue.length) setDone(true)
     else {
@@ -267,6 +321,9 @@ export default function SessionPage() {
         <div className="h-full bg-accent rounded-full transition-all duration-300"
           style={{ width: `${Math.round((index / queue.length) * 100)}%` }} />
       </div>
+      {electiveSession && (
+        <p className="text-xs text-accent text-center">Studying ahead — nothing else is due right now.</p>
+      )}
       <p className="text-xs text-ink-faint uppercase tracking-wider text-center">{deckName}</p>
 
       {!state.graduated && step.stepType === 'recognition' ? (
@@ -274,12 +331,16 @@ export default function SessionPage() {
           deckCards={allCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage}
           onChoicesCached={handleChoicesCached}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
-      ) : step.stepType === 'recognition' ? (
+      ) : !state.graduated ? (
+        <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
+          gradingSettings={gradingSettings!} gradedReview={false}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+      ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
-          onRate={rating => handleAnswer(rating, ratingToWasCorrect(rating))} />
+          onRate={rating => handleAnswer(rating, rating !== 'again')} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
-          gradingSettings={gradingSettings!} gradedReview={state.graduated}
+          gradingSettings={gradingSettings!} gradedReview={true}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       )}
     </div>

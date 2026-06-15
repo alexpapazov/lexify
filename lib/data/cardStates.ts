@@ -12,6 +12,7 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     graduated:        row.graduated as boolean,
     dueAt:            row.due_at as string | null,
     intervalDays:     Number(row.interval_days),
+    scheduledIntervalDays: Number(row.scheduled_interval_days ?? 0),
     ease:             Number(row.ease),
     reps:             row.reps as number,
     lapses:           row.lapses as number,
@@ -20,6 +21,14 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     introducedDate:   row.introduced_date as string | null,
     lapseClusterCount: Number(row.lapse_cluster_count ?? 0),
     lastLapseAt:       row.last_lapse_at as string | null,
+    graduatedAt:       row.graduated_at as string | null,
+    relearningStep:    Number(row.relearning_step ?? 0),
+    pendingIntervalDays: row.pending_interval_days != null ? Number(row.pending_interval_days) : null,
+    typedAccuracyWindow: Array.isArray(row.typed_accuracy_window) ? (row.typed_accuracy_window as number[]) : [],
+    typedReviewCount:    Number(row.typed_review_count ?? 0),
+    lastTypedReviewAt:   row.last_typed_review_at as string | null,
+    forcedTypedRemaining: Number(row.forced_typed_remaining ?? 0),
+    intervalHistory:     Array.isArray(row.interval_history) ? (row.interval_history as number[]) : [],
   }
 }
 
@@ -55,10 +64,16 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       user_id: state.userId, card_id: state.cardId, pipeline_id: state.pipelineId,
       current_step_order: state.currentStepOrder, correct_in_step: state.correctInStep,
       graduated: state.graduated, due_at: state.dueAt, interval_days: state.intervalDays,
+      scheduled_interval_days: state.scheduledIntervalDays,
       ease: state.ease, reps: state.reps, lapses: state.lapses,
       last_rating: state.lastRating, last_reviewed_at: state.lastReviewedAt,
       introduced_date: state.introducedDate,
       lapse_cluster_count: state.lapseClusterCount, last_lapse_at: state.lastLapseAt,
+      graduated_at: state.graduatedAt,
+      relearning_step: state.relearningStep, pending_interval_days: state.pendingIntervalDays,
+      typed_accuracy_window: state.typedAccuracyWindow, typed_review_count: state.typedReviewCount,
+      last_typed_review_at: state.lastTypedReviewAt, forced_typed_remaining: state.forcedTypedRemaining,
+      interval_history: state.intervalHistory,
     }, { onConflict: 'user_id,card_id' }).select().single()
     if (error) throw new Error(error.message)
     return rowToCardState(data)

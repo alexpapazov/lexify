@@ -164,7 +164,21 @@ export interface CardState {
   correctInStep:    number
   graduated:        boolean
   dueAt:            string | null
+  /**
+   * "Ideal" interval in days — a continuous, memory-state estimate of how
+   * long the learner can go before review (see engine/scheduler.ts). This is
+   * the value formulas multiply against; it is NOT necessarily the actual
+   * calendar gap to `dueAt` once density smoothing has run.
+   */
   intervalDays:     number
+  /**
+   * The actual calendar gap (days) between `lastReviewedAt` and `dueAt`,
+   * after density smoothing / relearn shortcuts. Used (with `lastReviewedAt`)
+   * to compute review-timing `progress` and classify a review as
+   * elective (early) vs due/overdue — per the spec, timing classification is
+   * based on `dueAt`, not on `intervalDays`.
+   */
+  scheduledIntervalDays: number
   ease:             number
   reps:             number
   lapses:           number
@@ -180,6 +194,42 @@ export interface CardState {
   lapseClusterCount: number
   /** Timestamp of the most recent post-graduation "again" rating, if any. */
   lastLapseAt:       string | null
+  /** Timestamp this card most recently (re-)graduated into long-term review. */
+  graduatedAt:       string | null
+  /**
+   * 0 = not in the 10-minute "Again" relearn loop. >= 1 = how many failed
+   * retries have happened since the last graduated-review lapse (the card
+   * stays "due" again ~10 minutes later until it recovers or hits a 3rd
+   * clustered lapse, which sends it back to the learning pipeline).
+   */
+  relearningStep:   number
+  /**
+   * The ideal interval (days) to apply once the 10-minute relearn loop is
+   * recovered with a correct answer. Null when not in the relearn loop.
+   */
+  pendingIntervalDays: number | null
+  /**
+   * Rolling window of recent typed-production results for this card
+   * (1 = correct, 0 = incorrect), most-recent last, capped at
+   * TYPED_ACCURACY_WINDOW_SIZE entries. Drives the typed-vs-self-graded
+   * production mode decision (engine/productionMode.ts).
+   */
+  typedAccuracyWindow: number[]
+  /** Total typed-production reviews ever completed post-graduation. */
+  typedReviewCount:    number
+  /** Timestamp of the most recent typed-production review, if any. */
+  lastTypedReviewAt:   string | null
+  /**
+   * Number of upcoming graduated reviews that must use typed production,
+   * forced by a recent typed error, a self-graded "Again", or a return to
+   * relearning.
+   */
+  forcedTypedRemaining: number
+  /**
+   * Running history of `scheduledIntervalDays` values over time (oldest
+   * first), capped at a small size — for analytics/debugging.
+   */
+  intervalHistory:   number[]
 }
 
 // ─── Ratings ──────────────────────────────────────────────────────────────────
@@ -202,6 +252,15 @@ export interface ReviewEvent {
   rating:      Rating | null
   responseMs:  number | null
   reviewedAt:  string
+  /**
+   * 'elective' = the card wasn't yet due (reviewed ahead of schedule);
+   * 'due' = the card was due/overdue, or this is a pre-graduation /
+   * first-ever review. Null for legacy rows recorded before this field
+   * existed.
+   */
+  reviewMode:  'elective' | 'due' | null
+  /** Whether this (post-graduation) review used typed production. Null pre-graduation / legacy rows. */
+  wasTyped:    boolean | null
 }
 
 // ─── Deck preferences ─────────────────────────────────────────────────────────
@@ -251,4 +310,9 @@ export interface ReviewInput {
    * when omitted, e.g. for recognition-mode misses.
    */
   wrongSeverity?: number
+  /**
+   * Whether this (post-graduation) review used typed production rather than
+   * self-graded recall. Ignored pre-graduation. Defaults to false.
+   */
+  wasTyped?: boolean
 }

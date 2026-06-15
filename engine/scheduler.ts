@@ -6,16 +6,26 @@
  * (engine/pipeline.ts) is unaffected by anything in this file.
  *
  * Core ideas (see "Language Learning App Brainstorm" spec):
- *  - Each rating (hard/good/easy) has a base interval multiplier that decays
- *    toward a floor as the card's interval grows (long-stable cards get
- *    smaller relative boosts).
- *  - Reviews are classified by `progress = elapsed / currentInterval`:
- *      progress < 1  → early/elective review (reviewed ahead of schedule)
- *      progress >= 1 → on-time or overdue review
- *  - Wrong ("again") answers shrink the interval based on whether the
- *    review was early/elective or due/overdue, how severe the mistake was
- *    (wrongSeverity, 0-1), and whether this is part of a "lapse cluster"
- *    (repeated wrongs close together).
+ *  - Each rating (hard/good/easy) has a [min, ideal, max] interval multiplier
+ *    range that decays toward a floor as the card's interval grows
+ *    (long-stable cards get smaller relative boosts). The "ideal" value
+ *    drives the new interval; the full range is exposed via
+ *    `idealIntervalRange()` for review-density smoothing.
+ *  - Review timing (elective vs. due/overdue) is determined from `dueAt`:
+ *      progress = elapsed / scheduledIntervalDays
+ *      progress < 0.30        → very-early — a correct answer is a no-op
+ *      0.30 <= progress < 1.0 → elective (early, but meaningful)
+ *      progress >= 1.0        → due / overdue
+ *  - Wrong ("again") answers on a graduated card start a 10-minute relearn
+ *    loop: the card comes back due ~10 minutes later, preserving a "pending"
+ *    shortened interval that's only applied once the learner recovers with a
+ *    correct answer. How much the pending interval shrinks depends on
+ *    whether the original lapse was elective or due/overdue, how severe the
+ *    mistake was (wrongSeverity, 0-1), and the lapse-cluster position.
+ *  - 3+ "again" ratings within a 24h lapse cluster — whether during normal
+ *    review or while already in the relearn loop — ALWAYS send the card back
+ *    into the learning pipeline, regardless of timing.
+ *  - All ideal intervals are capped at MAX_INTERVAL_DAYS.
  *
  * Swap in a different algorithm later by calling setActiveScheduler() —
  * nothing else changes.
@@ -27,15 +37,39 @@ export interface ScheduleResult {
   dueAt:             string
   /** "Ideal" interval in days (continuous, memory-state-based) — used as `currentInterval` next time. */
   intervalDays:      number
+  /** The actual calendar gap (days) between `lastReviewedAt` and `dueAt`. */
+  scheduledIntervalDays: number
   ease:              number
   lapseClusterCount: number
   lastLapseAt:       string | null
   /**
-   * Set when a 3rd+ "again" on an early/elective review should send the
-   * card back into the learning pipeline rather than just shrinking its
-   * interval.
+   * Set when a 3rd+ "again" within a lapse cluster — whether during normal
+   * review or while already in the relearn loop — should send the card back
+   * into the learning pipeline rather than just shrinking its interval.
    */
   relearn?:          boolean
+  /**
+   * 0 = not in the 10-minute "Again" relearn loop. >= 1 = how many failed
+   * retries have happened since the triggering lapse.
+   */
+  relearningStep:    number
+  /** The ideal interval (days) to apply once the relearn loop recovers. Null when not relearning. */
+  pendingIntervalDays: number | null
+  /** 'elective' = reviewed before the card was due; 'due' = on-time, overdue, first review, or relearn-loop activity. */
+  reviewMode:        'elective' | 'due'
+  /**
+   * True for a correct, very-early (progress < 0.30) review: scheduling is
+   * left completely unchanged (no-op) — the caller should not update
+   * dueAt/intervalDays/scheduledIntervalDays/lastReviewedAt.
+   */
+  noChange?:         boolean
+  /**
+   * For correct (hard/good/easy) reviews, the [min, max] interval-day window
+   * (around `intervalDays`) that engine/density.ts may smooth `dueAt` into.
+   * Undefined when smoothing doesn't apply (relearn, "again", graduation, no-op).
+   */
+  smoothMinDays?:    number
+  smoothMaxDays?:    number
 }
 
 export interface ScheduleContext {
@@ -55,14 +89,21 @@ export interface Scheduler {
 
 // ─── Tunable constants ──────────────────────────────────────────────────────
 
-/** "<7 days" base multipliers from the spec. */
-export const BASE_MULTIPLIER: Record<'hard' | 'good' | 'easy', number> = {
-  hard: 1.2,
-  good: 2.25,
-  easy: 3.5,
+/** [min, ideal, max] interval multiplier ranges (<7 days, before decay), per the spec. */
+export const MULTIPLIER_RANGE: Record<'hard' | 'good' | 'easy', { min: number; ideal: number; max: number }> = {
+  hard: { min: 1.1, ideal: 1.2,  max: 1.3 },
+  good: { min: 2.0, ideal: 2.25, max: 2.5 },
+  easy: { min: 3.0, ideal: 3.5,  max: 4.0 },
 }
 
-/** Floors that `BASE_MULTIPLIER` decays toward as the interval grows. */
+/** The "ideal" multiplier from MULTIPLIER_RANGE, kept for backwards compatibility. */
+export const BASE_MULTIPLIER: Record<'hard' | 'good' | 'easy', number> = {
+  hard: MULTIPLIER_RANGE.hard.ideal,
+  good: MULTIPLIER_RANGE.good.ideal,
+  easy: MULTIPLIER_RANGE.easy.ideal,
+}
+
+/** Floors that every multiplier in MULTIPLIER_RANGE decays toward as the interval grows. */
 export const MIN_EFFECTIVE_MULTIPLIER: Record<'hard' | 'good' | 'easy', number> = {
   hard: 1.0,
   good: 1.15,
@@ -77,6 +118,16 @@ const DECAY_CONSTANT_DAYS = 90
 
 /** "Close together" window for lapse clustering. */
 const LAPSE_CLUSTER_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/** Safety cap — no ideal interval is ever scheduled beyond this many days. */
+export const MAX_INTERVAL_DAYS = 1825 // ~5 years
+
+/** How long the post-"Again" relearn retry waits before coming due again. */
+const RELEARN_RETRY_MINUTES = 10
+const RELEARN_RETRY_DAYS = RELEARN_RETRY_MINUTES / (24 * 60)
+
+/** Below this fraction of the scheduled interval, a correct review is a pure no-op. */
+const VERY_EARLY_THRESHOLD = 0.30
 
 // Wrong-answer interval multiplier ranges, by lapse-cluster position.
 // [low, high] — `wrongSeverity` interpolates between them (0 = high/mild, 1 = low/severe).
@@ -116,15 +167,79 @@ export function applyMultiplierDecay(
   return 1 + (baseMultiplier - 1) * decayFactor
 }
 
-function effectiveMultiplier(rating: 'hard' | 'good' | 'easy', currentIntervalDays: number): number {
-  const decayed = applyMultiplierDecay(BASE_MULTIPLIER[rating], currentIntervalDays)
-  return Math.max(decayed, MIN_EFFECTIVE_MULTIPLIER[rating])
+export interface EffectiveMultiplierRange {
+  min:   number
+  ideal: number
+  max:   number
+}
+
+/**
+ * Decays each of [min, ideal, max] toward 1 as `currentIntervalDays` grows,
+ * then floors each at MIN_EFFECTIVE_MULTIPLIER[rating].
+ */
+export function effectiveMultiplierRange(
+  rating: 'hard' | 'good' | 'easy',
+  currentIntervalDays: number,
+): EffectiveMultiplierRange {
+  const range = MULTIPLIER_RANGE[rating]
+  const floor = MIN_EFFECTIVE_MULTIPLIER[rating]
+  return {
+    min:   Math.max(applyMultiplierDecay(range.min,   currentIntervalDays), floor),
+    ideal: Math.max(applyMultiplierDecay(range.ideal, currentIntervalDays), floor),
+    max:   Math.max(applyMultiplierDecay(range.max,   currentIntervalDays), floor),
+  }
+}
+
+/**
+ * The [min, ideal, max] interval-day range (around the ideal new interval)
+ * that review-density smoothing may pick a due date from. Intervals shorter
+ * than the smoothing threshold (engine/density.ts) aren't smoothed at all.
+ */
+export function idealIntervalRange(
+  rating: 'hard' | 'good' | 'easy',
+  currentIntervalDays: number,
+): { minDays: number; idealDays: number; maxDays: number } {
+  const r = effectiveMultiplierRange(rating, currentIntervalDays)
+  return {
+    minDays:   clamp(round3(currentIntervalDays * r.min),   1, MAX_INTERVAL_DAYS),
+    idealDays: clamp(round3(currentIntervalDays * r.ideal), 1, MAX_INTERVAL_DAYS),
+    maxDays:   clamp(round3(currentIntervalDays * r.max),   1, MAX_INTERVAL_DAYS),
+  }
 }
 
 /** Interpolates a [low, high] range by severity — 0 → high, 1 → low. */
 function severityMultiplier(range: readonly [number, number], severity: number): number {
   const [lo, hi] = range
   return hi - (hi - lo) * clamp(severity, 0, 1)
+}
+
+function newEaseFor(rating: Rating, ease: number): number {
+  if (rating === 'hard') return clamp(ease - 0.15, 1.3, 3.0)
+  if (rating === 'easy') return clamp(ease + 0.15, 1.3, 3.0)
+  return ease
+}
+
+/** Was the most recent post-graduation lapse "close together" with `now`? */
+function lapseClusterCountFor(state: CardState, now: Date): number {
+  const closeTogether = !!state.lastLapseAt
+    && (now.getTime() - new Date(state.lastLapseAt).getTime()) <= LAPSE_CLUSTER_WINDOW_MS
+  return closeTogether ? state.lapseClusterCount + 1 : 1
+}
+
+/**
+ * Classifies an *upcoming* review of `state` as 'elective' (the card isn't
+ * due yet) or 'due' (on-time, overdue, first-ever, or pre-graduation) —
+ * based on `dueAt`/`scheduledIntervalDays`, per the spec. Callers compute
+ * this BEFORE calling scheduleNext/progressAfterReview, since it describes
+ * the review that's about to happen.
+ */
+export function classifyReviewMode(state: CardState, now: Date = new Date()): 'elective' | 'due' {
+  if (!state.graduated || !state.lastReviewedAt || state.relearningStep > 0) return 'due'
+  const scheduledInterval = state.scheduledIntervalDays > 0 ? state.scheduledIntervalDays : state.intervalDays
+  if (scheduledInterval <= 0) return 'due'
+  const elapsed  = daysSince(state.lastReviewedAt, now)
+  const progress = elapsed / scheduledInterval
+  return progress < 1 ? 'elective' : 'due'
 }
 
 // ─── Scheduler ──────────────────────────────────────────────────────────────
@@ -140,86 +255,146 @@ class AdaptiveScheduler implements Scheduler {
     if (!state.lastReviewedAt || state.intervalDays <= 0) {
       const interval = INITIAL_INTERVAL[rating]
       return {
-        dueAt:             addDays(now, interval),
-        intervalDays:      interval,
-        ease:              state.ease,
-        lapseClusterCount: rating === 'again' ? 1 : 0,
-        lastLapseAt:       rating === 'again' ? now.toISOString() : state.lastLapseAt,
+        dueAt:                 addDays(now, interval),
+        intervalDays:          interval,
+        scheduledIntervalDays: interval,
+        ease:                  state.ease,
+        lapseClusterCount:     rating === 'again' ? 1 : 0,
+        lastLapseAt:           rating === 'again' ? now.toISOString() : state.lastLapseAt,
+        relearningStep:        0,
+        pendingIntervalDays:   null,
+        reviewMode:            'due',
       }
     }
 
     const currentInterval = state.intervalDays
     const elapsed         = Math.max(0, daysSince(state.lastReviewedAt, now))
-    const progress        = currentInterval > 0 ? elapsed / currentInterval : 1
-    const early           = progress < 1
+    // Timing classification is based on the actual scheduled calendar gap
+    // (dueAt - lastReviewedAt), not the "ideal" interval — falls back to
+    // `currentInterval` for rows from before this field existed.
+    const scheduledInterval = state.scheduledIntervalDays > 0 ? state.scheduledIntervalDays : currentInterval
+    const progress = scheduledInterval > 0 ? elapsed / scheduledInterval : 1
+    const early    = progress < 1
 
-    // ── Wrong answer ─────────────────────────────────────────────────────
-    if (rating === 'again') {
-      const closeTogether = !!state.lastLapseAt
-        && (now.getTime() - new Date(state.lastLapseAt).getTime()) <= LAPSE_CLUSTER_WINDOW_MS
-      const clusterCount = closeTogether ? state.lapseClusterCount + 1 : 1
+    // ── Recovery / continuation of the 10-minute relearn loop ──────────────
+    if (state.relearningStep > 0) {
+      if (rating === 'again') {
+        const clusterCount = lapseClusterCountFor(state, now)
 
-      if (early) {
         if (clusterCount >= 3) {
-          // Three wrongs in a row on an elective review — send back to the
-          // learning pipeline rather than just shrinking the interval further.
           return {
-            dueAt: addDays(now, 1), intervalDays: 1, ease: state.ease,
+            dueAt: addDays(now, 1), intervalDays: 1, scheduledIntervalDays: 1, ease: state.ease,
             lapseClusterCount: clusterCount, lastLapseAt: now.toISOString(), relearn: true,
+            relearningStep: 0, pendingIntervalDays: null, reviewMode: 'due',
           }
         }
-        const range    = clusterCount === 1 ? EARLY_WRONG_RANGE_1 : EARLY_WRONG_RANGE_2
-        const mult     = severityMultiplier(range, severity)
-        const interval = Math.max(1, round3(elapsed * mult))
+
+        // Failed the retry again — shrink the pending interval further and
+        // schedule another 10-minute retry.
+        const basePending = state.pendingIntervalDays ?? Math.max(1, round3(currentInterval * 0.3))
+        const pending      = Math.max(1, round3(basePending * 0.5))
         return {
-          dueAt: addDays(now, interval), intervalDays: interval, ease: state.ease,
+          dueAt: addDays(now, RELEARN_RETRY_DAYS), intervalDays: currentInterval,
+          scheduledIntervalDays: RELEARN_RETRY_DAYS, ease: state.ease,
           lapseClusterCount: clusterCount, lastLapseAt: now.toISOString(),
+          relearningStep: state.relearningStep + 1, pendingIntervalDays: pending, reviewMode: 'due',
         }
       }
 
-      // Due / overdue wrong — "don't reward overdue failure": shrink from
-      // currentInterval (the memory-state interval), never from elapsed.
-      if (clusterCount >= 3) {
-        return {
-          dueAt: addDays(now, 1), intervalDays: 1, ease: state.ease,
-          lapseClusterCount: clusterCount, lastLapseAt: now.toISOString(),
-        }
-      }
-      const range    = clusterCount === 1 ? DUE_WRONG_RANGE_1 : DUE_WRONG_RANGE_2
-      const mult     = severityMultiplier(range, severity)
-      const interval = Math.max(1, round3(currentInterval * mult))
+      // Recovered — apply the interval that was pending since the lapse.
+      const interval = clamp(state.pendingIntervalDays ?? currentInterval, 1, MAX_INTERVAL_DAYS)
       return {
-        dueAt: addDays(now, interval), intervalDays: interval, ease: state.ease,
-        lapseClusterCount: clusterCount, lastLapseAt: now.toISOString(),
+        dueAt: addDays(now, interval), intervalDays: interval, scheduledIntervalDays: interval,
+        ease: newEaseFor(rating, state.ease), lapseClusterCount: 0, lastLapseAt: state.lastLapseAt,
+        relearningStep: 0, pendingIntervalDays: null, reviewMode: 'due',
       }
     }
 
-    // ── Correct answer (hard / good / easy) ────────────────────────────────
-    const mult = effectiveMultiplier(rating, currentInterval)
+    const reviewMode: 'elective' | 'due' = early ? 'elective' : 'due'
+
+    // ── Very-early correct guard ────────────────────────────────────────────
+    // A correct answer well before the card is due records practice but does
+    // not change the schedule at all.
+    if (rating !== 'again' && progress < VERY_EARLY_THRESHOLD) {
+      return {
+        dueAt: state.dueAt ?? addDays(now, currentInterval),
+        intervalDays: currentInterval, scheduledIntervalDays: scheduledInterval,
+        ease: state.ease, lapseClusterCount: state.lapseClusterCount, lastLapseAt: state.lastLapseAt,
+        relearningStep: 0, pendingIntervalDays: null, reviewMode: 'elective', noChange: true,
+      }
+    }
+
+    // ── Wrong answer — start the 10-minute relearn loop ─────────────────────
+    if (rating === 'again') {
+      const clusterCount = lapseClusterCountFor(state, now)
+
+      if (clusterCount >= 3) {
+        // 3+ wrongs within a lapse cluster — ALWAYS send back to the
+        // learning pipeline, regardless of elective/due timing.
+        return {
+          dueAt: addDays(now, 1), intervalDays: 1, scheduledIntervalDays: 1, ease: state.ease,
+          lapseClusterCount: clusterCount, lastLapseAt: now.toISOString(), relearn: true,
+          relearningStep: 0, pendingIntervalDays: null, reviewMode,
+        }
+      }
+
+      // Compute the shortened interval that will be applied IF the learner
+      // recovers within the 10-minute retry — but don't apply it yet.
+      let pending: number
+      if (early) {
+        const range = clusterCount === 1 ? EARLY_WRONG_RANGE_1 : EARLY_WRONG_RANGE_2
+        const mult  = severityMultiplier(range, severity)
+        pending = Math.max(1, round3(elapsed * mult))
+      } else {
+        const range = clusterCount === 1 ? DUE_WRONG_RANGE_1 : DUE_WRONG_RANGE_2
+        const mult  = severityMultiplier(range, severity)
+        pending = Math.max(1, round3(currentInterval * mult))
+      }
+      pending = clamp(pending, 1, MAX_INTERVAL_DAYS)
+
+      return {
+        dueAt: addDays(now, RELEARN_RETRY_DAYS), intervalDays: currentInterval,
+        scheduledIntervalDays: RELEARN_RETRY_DAYS, ease: state.ease,
+        lapseClusterCount: clusterCount, lastLapseAt: now.toISOString(),
+        relearningStep: 1, pendingIntervalDays: pending, reviewMode,
+      }
+    }
+
+    // ── Correct answer (hard / good / easy) ─────────────────────────────────
+    const range = effectiveMultiplierRange(rating, currentInterval)
     let newInterval: number
+    let smoothMinDays: number
+    let smoothMaxDays: number
     if (early) {
       // Blend toward "no change" the further ahead of schedule we are.
-      const blended = 1 + progress * (mult - 1)
-      newInterval = currentInterval * blended
+      const blend = (m: number) => 1 + progress * (m - 1)
+      newInterval   = currentInterval * blend(range.ideal)
+      smoothMinDays = currentInterval * blend(range.min)
+      smoothMaxDays = currentInterval * blend(range.max)
     } else {
       // On-time or overdue: reward the longer real-world gap, then apply
       // the (decayed) multiplier on top of it.
       const baseInterval = Math.max(elapsed, currentInterval)
-      newInterval = baseInterval * mult
+      newInterval   = baseInterval * range.ideal
+      smoothMinDays = baseInterval * range.min
+      smoothMaxDays = baseInterval * range.max
     }
-    newInterval = Math.max(1, round3(newInterval))
-
-    const newEase =
-      rating === 'hard' ? clamp(state.ease - 0.15, 1.3, 3.0) :
-      rating === 'easy' ? clamp(state.ease + 0.15, 1.3, 3.0) :
-      state.ease
+    newInterval = clamp(Math.max(1, round3(newInterval)), 1, MAX_INTERVAL_DAYS)
+    smoothMinDays = clamp(Math.max(1, round3(smoothMinDays)), 1, MAX_INTERVAL_DAYS)
+    smoothMaxDays = clamp(Math.max(1, round3(smoothMaxDays)), 1, MAX_INTERVAL_DAYS)
 
     return {
-      dueAt:             addDays(now, newInterval),
-      intervalDays:      newInterval,
-      ease:              newEase,
-      lapseClusterCount: 0,
-      lastLapseAt:       state.lastLapseAt,
+      dueAt:                 addDays(now, newInterval),
+      intervalDays:          newInterval,
+      scheduledIntervalDays: newInterval,
+      ease:                  newEaseFor(rating, state.ease),
+      lapseClusterCount:     0,
+      lastLapseAt:           state.lastLapseAt,
+      relearningStep:        0,
+      pendingIntervalDays:   null,
+      reviewMode,
+      smoothMinDays,
+      smoothMaxDays,
     }
   }
 }

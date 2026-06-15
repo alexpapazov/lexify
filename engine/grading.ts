@@ -119,6 +119,17 @@ export function classifyWrongAnswer(
     return 0.3
   }
 
+  // Accent-only mistake: stripping accents from both sides makes them match,
+  // but they didn't match before stripping (only relevant when
+  // settings.accentInsensitive is false, since otherwise gradeTyping would
+  // already consider this correct).
+  if (
+    normalizedUser !== normalizedExpected &&
+    stripAccents(normalizedUser) === stripAccents(normalizedExpected)
+  ) {
+    return 0.05
+  }
+
   const distance = levenshtein(normalizedUser, normalizedExpected)
   const maxLen   = Math.max(normalizedUser.length, normalizedExpected.length, 1)
   const ratio    = distance / maxLen

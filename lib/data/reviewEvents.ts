@@ -17,6 +17,8 @@ function rowToEvent(row: Record<string, unknown>): ReviewEvent {
     rating:      row.rating as Rating | null,
     responseMs:  row.response_ms as number | null,
     reviewedAt:  row.reviewed_at as string,
+    reviewMode:  (row.review_mode as ReviewEvent['reviewMode']) ?? null,
+    wasTyped:    (row.was_typed as boolean | null) ?? null,
   }
 }
 
@@ -30,6 +32,7 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
       prompt_shown: input.promptShown, expected: input.expected,
       user_answer: input.userAnswer, was_correct: input.wasCorrect,
       rating: input.rating, response_ms: input.responseMs,
+      review_mode: input.reviewMode, was_typed: input.wasTyped,
     }).select().single()
     if (error) throw new Error(error.message)
     return rowToEvent(data)
