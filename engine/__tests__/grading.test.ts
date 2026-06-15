@@ -1,4 +1,4 @@
-import { gradeTyping, normalizeAnswer } from '../grading'
+import { gradeTyping, normalizeAnswer, isDifferentWordMistake } from '../grading'
 import type { GradingSettings } from '@/domain'
 
 const BASE: GradingSettings = {
@@ -67,5 +67,24 @@ describe('gradeTyping — one-typo tolerance', () => {
   })
   it('rejects two-character difference', () => {
     expect(gradeTyping('matres', 'mattress', s).correct).toBe(false)
+  })
+})
+
+describe('isDifferentWordMistake', () => {
+  const s: GradingSettings = { ...BASE, caseInsensitive: true, accentInsensitive: true }
+  it('is false for a blank answer', () => {
+    expect(isDifferentWordMistake('', 'mattress', s)).toBe(false)
+  })
+  it('is false for a close typo', () => {
+    expect(isDifferentWordMistake('matress', 'mattress', s)).toBe(false)
+  })
+  it('is false for an accent-only slip', () => {
+    expect(isDifferentWordMistake('corazon', 'corazón', { ...s, accentInsensitive: false })).toBe(false)
+  })
+  it('is false for an article/gender-only slip', () => {
+    expect(isDifferentWordMistake('la casa', 'el casa', { ...s, articleOptional: true })).toBe(false)
+  })
+  it('is true for a totally different word', () => {
+    expect(isDifferentWordMistake('pillow', 'mattress', s)).toBe(true)
   })
 })

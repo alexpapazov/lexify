@@ -116,14 +116,20 @@ export interface DismissedPairRepository {
 
 export interface CardConfusionRepository {
   /**
-   * Records (or increments) a mix-up: the learner was shown `cardId`'s
-   * native-language meaning and picked `confusedText` (another card's
-   * front-side text) instead of the correct answer. `confusedWithCardId`
-   * links to that other card when it's one the user owns.
+   * Records (or increments) a mix-up: the learner was asked to produce
+   * `answerSide` of `cardId` and instead produced `confusedText` (a
+   * multiple-choice pick or a typed answer). `isWordMixup` is true when
+   * `confusedText` is a genuinely different word (always true for
+   * multiple-choice picks; for typed answers, true unless it was just a
+   * close typo — see `engine/grading.ts: isDifferentWordMistake()`).
+   * `confusedWithCardId` links to another card the user owns when
+   * `confusedText` matches its text on `answerSide`.
    */
-  record(cardId: CardId, confusedText: string, confusedWithCardId?: CardId | null): Promise<void>
+  record(cardId: CardId, confusedText: string, answerSide: CardSide, isWordMixup: boolean, confusedWithCardId?: CardId | null): Promise<void>
   /** All tracked mix-ups for this card, most-frequent first. */
   listForCard(userId: UserId, cardId: CardId): Promise<CardConfusion[]>
+  /** All tracked mix-ups for this user across every card — fetched once per session. */
+  listForUser(userId: UserId): Promise<CardConfusion[]>
 }
 
 export interface TypedAnswerOverrideRepository {

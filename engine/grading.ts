@@ -143,3 +143,25 @@ export function classifyWrongAnswer(
   // Moderate mismatch — partial recall.
   return 0.6
 }
+
+/**
+ * True if a wrong typed answer represents a genuinely different word —
+ * i.e. `classifyWrongAnswer`'s "essentially a different word" case — rather
+ * than a close typo, spelling/accent slip, or article/gender slip. Blank
+ * answers are not "a different word" (they're a non-attempt).
+ *
+ * Used to decide whether a mix-up is eligible to be tracked as a
+ * `CardConfusion.isWordMixup` candidate for multiple-choice distractors
+ * (see `lib/distractors.ts: promoteConfusionDistractor()`) — repeatedly
+ * typing a *different real word* is a sign the two are easily confused,
+ * whereas repeatedly mistyping the same word is not.
+ */
+export function isDifferentWordMistake(
+  userAnswer: string,
+  expected:   string,
+  settings:   GradingSettings,
+): boolean {
+  const normalizedUser = normalizeAnswer(userAnswer, settings)
+  if (normalizedUser.length === 0) return false
+  return classifyWrongAnswer(userAnswer, expected, settings) >= 1.0
+}

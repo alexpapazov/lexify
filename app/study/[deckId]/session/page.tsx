@@ -14,16 +14,16 @@ import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import type { CardSide } from '@/domain'
 import { progressAfterReview, initialCardState } from '@/engine/pipeline'
-import { classifyWrongAnswer } from '@/engine/grading'
+import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
-import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
+import { prefetchChoices, promoteConfusionDistractors, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 
 /** How many slots ahead a graduated card is re-queued after starting the 10-minute relearn loop. */
 const RELEARN_REQUEUE_OFFSET = 3
@@ -218,6 +218,27 @@ export default function SessionPage() {
         })
         .filter((x): x is PrefetchItem => x !== null)
       void prefetchChoices(prefetchItems, handleChoicesCached)
+
+      // Promote frequently-confused words into cached distractors for
+      // upcoming recognition steps (all of them — this is cheap, no AI
+      // calls), so the next time these cards come up the mix-up is offered
+      // as one of the options.
+      const confusions = await new SupabaseCardConfusionRepository().listForUser(session.user.id)
+      const confusionsByCard = new Map<string, CardConfusion[]>()
+      for (const c of confusions) {
+        const arr = confusionsByCard.get(c.cardId) ?? []
+        arr.push(c)
+        confusionsByCard.set(c.cardId, arr)
+      }
+      const promotionItems: ConfusionPromotionItem[] = finalQueue
+        .map(item => {
+          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
+          if (item.state.graduated || step.stepType !== 'recognition') return null
+          return { card: item.card, side: step.answerSide }
+        })
+        .filter((x): x is ConfusionPromotionItem => x !== null)
+      void promoteConfusionDistractors(promotionItems, confusionsByCard, handleChoicesCached)
     }
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -244,14 +265,20 @@ export default function SessionPage() {
 
       // Confusion tracking: record every wrong answer (multiple-choice pick
       // or typed response, in either direction) so it can be surfaced later
-      // as easily-confused vocabulary. `answerSide` tells us which side of
-      // the card the learner was asked to produce — look up a possible
-      // "confused with" card on that same side.
+      // as easily-confused vocabulary, and — for word-level mix-ups —
+      // promoted into multiple-choice distractors once they recur (see
+      // lib/distractors.ts: promoteConfusionDistractor). `answerSide` tells
+      // us which side of the card the learner was asked to produce — look
+      // up a possible "confused with" card on that same side. A
+      // multiple-choice pick is always a real word; a typed answer only
+      // counts as a word-level mix-up if it's not just a close typo.
       if (!wasCorrect && userAnswer.trim()) {
         const confusedWithCardId = step.answerSide === 'front'
           ? allCards.find(c => c.front.trim().toLowerCase() === userAnswer.trim().toLowerCase())?.id ?? null
           : allCards.find(c => c.back.trim().toLowerCase()  === userAnswer.trim().toLowerCase())?.id ?? null
-        new SupabaseCardConfusionRepository().record(card.id, userAnswer.trim(), confusedWithCardId)
+        const isWordMixup = step.stepType !== 'typing'
+          || isDifferentWordMistake(userAnswer, step.answerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
+        new SupabaseCardConfusionRepository().record(card.id, userAnswer.trim(), step.answerSide, isWordMixup, confusedWithCardId)
           .catch(err => console.error('Failed to record card confusion:', err))
       }
 

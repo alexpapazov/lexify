@@ -5,23 +5,24 @@ chat sessions. Read it at the start of any session touching this codebase.
 Update it (briefly) whenever you ship a feature or learn something a future
 session would need.
 
-## ⚠️ Pending from 2026-06-15 session — verify before relying on this
+## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
-This session implemented (code written, NOT yet verified/applied/shipped):
-TypingMode never-auto-advance, the stages 3-5 same-day window
-(`stage3EnteredDate`, migration 024), and persisted typed-answer overrides
-(`typed_answer_overrides`, migration 025) — see the dated subsections below
-for details. As of the end of that session:
+These sessions implemented and **committed/pushed**: TypingMode
+never-auto-advance, the stages 3-5 same-day window (`stage3EnteredDate`,
+migration 024), persisted typed-answer overrides (`typed_answer_overrides`,
+migration 025), and confusion-driven distractor promotion (`answer_side` /
+`is_word_mixup` on `card_confusions`, migration 026) — see the dated
+subsections below for details. As of the end of the latest session:
 
 - `npm run build` / `npm test` had **not yet been run** by the user — results
   not yet confirmed.
-- Migrations `024_stage3_same_day_window.sql` and
-  `025_typed_answer_overrides.sql` had **not yet been applied** in the
+- Migrations `024_stage3_same_day_window.sql`,
+  `025_typed_answer_overrides.sql`, and
+  `026_card_confusion_word_mixups.sql` had **not yet been applied** in the
   Supabase SQL editor.
-- The changes had **not yet been committed/pushed**.
 
-If you're picking this up: check git status / whether these migrations are
-live before assuming this work is done or debugging it as "broken".
+If you're picking this up: check whether these migrations are live before
+assuming this work is fully deployed or debugging it as "broken".
 
 ## Locating this codebase (read this first)
 
@@ -233,9 +234,11 @@ answer_text`, `answer_text` stored as `gradeTyping()`'s `normalizedUser`) +
 
 ## Wrong-answer ("confusion") tracking
 
-`card_confusions` table (migration 021) + `record_card_confusion` RPC +
-`lib/data/cardConfusions.ts: SupabaseCardConfusionRepository.record()`.
-Surfaced in the deck detail page's card stats (CardEditModal-equivalent).
+`card_confusions` table (migration 021, extended by migration 026) +
+`record_card_confusion` RPC + `lib/data/cardConfusions.ts:
+SupabaseCardConfusionRepository.record()` /
+`listForCard()`/`listForUser()`. Surfaced in the deck detail page's card
+stats (CardEditModal-equivalent).
 
 As of this session (2026-06-15), all 3 session pages' `handleAnswer` record
 **every** wrong answer — multiple-choice pick or typed response, in either
@@ -243,9 +246,54 @@ direction — not just the original "English shown → pick Spanish, picked
 wrong" case. The "confused with" card lookup uses `step.answerSide` to know
 whether to match against `card.front` or `card.back` of the candidate cards.
 
+### Confused words promoted to multiple-choice distractors (migration 026, this session 2026-06-15)
+
+Addresses the former backlog item "Confusions aren't fed back into
+distractors".
+
+- `card_confusions` gained two columns: `answer_side` ('front'/'back' — which
+  side the learner was asked to produce) and `is_word_mixup` (boolean —
+  true if `confused_text` is a genuinely different word, not just a typo).
+  `record_card_confusion()` now takes `p_answer_side` and `p_is_word_mixup`
+  in addition to the existing params; on conflict, `is_word_mixup` is OR'd
+  (once word-level, stays word-level) and `answer_side` is overwritten with
+  the latest value. Existing rows (pre-migration) default to
+  `answer_side='front'`, `is_word_mixup=true` (the original use case was
+  always a multiple-choice pick on the front side).
+- `engine/grading.ts: isDifferentWordMistake()` — new pure helper, true when
+  `classifyWrongAnswer()` would return 1.0 for a non-blank answer (i.e.
+  "essentially a different word", not a typo/spelling/accent/article slip).
+  Has Jest tests in `engine/__tests__/grading.test.ts`.
+- In each session page's `handleAnswer`, `isWordMixup` passed to `record()`
+  is `true` for recognition-step wrong picks (always a real word) and, for
+  typing steps, `isDifferentWordMistake(userAnswer, expected, gradingSettings)`
+  — so repeatedly *mistyping* the same word doesn't count, but repeatedly
+  typing a *different real word* does.
+- `lib/distractors.ts`:
+  - `CONFUSION_PROMOTION_THRESHOLD = 3` — how many times a word-level mix-up
+    must recur before being promoted.
+  - `promoteConfusionDistractor(card, side, confusions)` — pure function.
+    If `card.choices[side]` already has a full cached distractor set
+    (`OPTIONS_NEEDED - 1` entries) and the highest-count eligible confusion
+    (`answerSide === side && isWordMixup && count >= THRESHOLD`, not already
+    a distractor, not the correct answer) exists, returns updated
+    `CardChoices` with that confusion word swapping in for the *last*
+    existing distractor. Returns `null` (no-op) if `choices[side]` isn't
+    fully populated yet — promotion is deferred to a later session once AI
+    choices are cached, to avoid racing with `ensureChoicesGenerated()`'s
+    cache write.
+  - `promoteConfusionDistractors(items, confusionsByCard, onCached)` —
+    background pass (same shape as `prefetchChoices`) that persists the
+    above via `cardRepo.update({ choices })` and reports through `onCached`.
+- All 3 session pages: at session load, fetch
+  `SupabaseCardConfusionRepository().listForUser()` once, group by
+  `cardId`, and run `promoteConfusionDistractors()` for every upcoming
+  recognition step in the queue (not just `slice(1)` — no AI calls, so it's
+  cheap), wired to the existing `handleChoicesCached` callback.
+
 ## Migrations
 
-Sequential, in `supabase/migrations/`. Latest is `025`:
+Sequential, in `supabase/migrations/`. Latest is `026`:
 
 - `001_initial.sql` … `020_scheduler_v2.sql` — core schema, folders, language
   pairs, shared cards, scheduler v1→v2, lapse clustering.
@@ -259,6 +307,10 @@ Sequential, in `supabase/migrations/`. Latest is `025`:
   (DATE, nullable) for the stages 3-5 same-day-window rule.
 - `025_typed_answer_overrides.sql` — adds `typed_answer_overrides` table
   (owner-RLS) for persisted typed-answer overrides.
+- `026_card_confusion_word_mixups.sql` — adds `answer_side` and
+  `is_word_mixup` to `card_confusions` and updates `record_card_confusion()`
+  to accept them; used to promote recurring word-level mix-ups into
+  multiple-choice distractors.
 
 **Migrations are not auto-applied.** When you add one, tell the user to run
 it in the Supabase SQL editor (or via CLI) — don't assume it's live just
@@ -284,13 +336,10 @@ built/pushed/deployed.
   of reusing the existing card.
 - **#59**: Exact-duplicate cards can still get duplicated on save (separate
   from #55).
-- **Confusions aren't fed back into distractors**: `card_confusions`
-  (migration 021) records every wrong answer, but `lib/distractors.ts:
-  buildOptions()` doesn't yet use that data to prioritize frequently-confused
-  words as multiple-choice distractors — it's still cached-AI-choices →
-  sibling-card fallback only.
 
-None of the above has been actioned yet as of 2026-06-15.
+#55 and #59 have not been actioned yet as of 2026-06-15. (The
+"confusions aren't fed back into distractors" item was addressed this
+session — see migration 026 above.)
 
 ## Verifying changes
 

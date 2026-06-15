@@ -19,7 +19,7 @@
  * `OPTIONS_NEEDED - 1` distractors (fewer if the deck is too small).
  */
 
-import type { Card, CardSide, CardChoices } from '@/domain'
+import type { Card, CardSide, CardChoices, CardConfusion } from '@/domain'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { langName } from '@/lib/languages'
 
@@ -143,6 +143,86 @@ export async function ensureChoicesGenerated(
     // Caching is best-effort — the caller still gets the freshly generated choices.
   }
   return aiChoices
+}
+
+/**
+ * Number of times a learner must mix up the same word with a card's answer
+ * (see `CardConfusion.count`/`isWordMixup`) before that word gets promoted
+ * into the card's cached multiple-choice distractors.
+ */
+export const CONFUSION_PROMOTION_THRESHOLD = 3
+
+/**
+ * If the learner has repeatedly (>= CONFUSION_PROMOTION_THRESHOLD times)
+ * confused a real word with `card`'s `side` answer — and that word isn't
+ * already one of `card`'s cached distractors for `side` — returns updated
+ * `CardChoices` with the confused word swapped in for the lowest-priority
+ * existing distractor (the last one). Returns `null` if there's nothing to
+ * promote, or if `card.choices[side]` doesn't yet have a full cached
+ * distractor set to swap from (in that case the AI-generation path will
+ * populate it first; promotion can happen on a later session).
+ *
+ * Pure/synchronous — callers are responsible for persisting the result
+ * (see `promoteConfusionDistractors`).
+ */
+export function promoteConfusionDistractor(
+  card: Card,
+  side: CardSide,
+  confusions: CardConfusion[],
+): CardChoices | null {
+  const correct = side === 'front' ? card.front : card.back
+  const distractorsNeeded = OPTIONS_NEEDED - 1
+
+  const current = dedupeAgainst(correct, card.choices?.[side] ?? [])
+  if (current.length < distractorsNeeded) return null
+
+  const best = confusions
+    .filter(c => c.answerSide === side && c.isWordMixup && c.count >= CONFUSION_PROMOTION_THRESHOLD)
+    .filter(c => norm(c.confusedText) !== norm(correct))
+    .sort((a, b) => b.count - a.count)[0]
+  if (!best) return null
+
+  const confusedText = best.confusedText.trim()
+  if (!confusedText) return null
+  if (current.some(x => norm(x) === norm(confusedText))) return null // already a distractor
+
+  const updated = [...current.slice(0, distractorsNeeded - 1), confusedText]
+  const base: CardChoices = card.choices ?? { front: [], back: [] }
+  return { ...base, [side]: updated }
+}
+
+export interface ConfusionPromotionItem {
+  card: Card
+  side: CardSide
+}
+
+/**
+ * Background pass over upcoming recognition-step cards: for each one, checks
+ * whether a frequently-confused word should be promoted into its cached
+ * distractors (`promoteConfusionDistractor`), and if so persists the updated
+ * `choices` via `cardRepo.update()` and reports it through `onCached` (same
+ * callback shape as `prefetchChoices`/`ensureChoicesGenerated`) so the
+ * session can update its in-memory card immediately. Best-effort — failures
+ * are swallowed per-card.
+ */
+export async function promoteConfusionDistractors(
+  items: ConfusionPromotionItem[],
+  confusionsByCard: Map<string, CardConfusion[]>,
+  onCached: (cardId: string, choices: CardChoices) => void,
+): Promise<void> {
+  const cardRepo = new SupabaseCardRepository()
+  for (const { card, side } of items) {
+    const confusions = confusionsByCard.get(card.id) ?? []
+    if (confusions.length === 0) continue
+    const updated = promoteConfusionDistractor(card, side, confusions)
+    if (!updated) continue
+    try {
+      await cardRepo.update(card.id, { choices: updated })
+      onCached(card.id, updated)
+    } catch {
+      // Best-effort — try again on a future session.
+    }
+  }
 }
 
 export interface PrefetchItem {

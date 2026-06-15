@@ -170,6 +170,22 @@ export interface CardConfusion {
   cardId:             CardId
   confusedWithCardId: CardId | null
   confusedText:       string
+  /**
+   * Which side of `cardId` the learner was asked to *produce* when this
+   * mix-up happened — 'front' for "shown back, pick/type front" steps,
+   * 'back' for the reverse. Used to match a confusion against the correct
+   * distractor pool (`buildOptions`'s `side`).
+   */
+  answerSide:         CardSide
+  /**
+   * True if `confusedText` represents a genuinely different word: always
+   * true for multiple-choice picks, and for typed answers true only when
+   * `engine/grading.ts: isDifferentWordMistake()` says the answer wasn't
+   * just a close typo/spelling/accent/article slip. Only word-level
+   * mix-ups are eligible for promotion into multiple-choice distractors
+   * (see `lib/distractors.ts: promoteConfusionDistractor()`).
+   */
+  isWordMixup:        boolean
   count:              number
   lastConfusedAt:     string
 }
