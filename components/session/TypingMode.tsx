@@ -99,12 +99,12 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
             <div className="flex items-center justify-center gap-3">
               {result.correct && override !== false && (
                 <button onClick={() => setOverride(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
-                  Actually mark wrong
+                  Override as incorrect
                 </button>
               )}
               {!result.correct && override !== true && (
                 <button onClick={() => setOverride(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
-                  Actually mark correct (typo)
+                  Override as correct
                 </button>
               )}
               {override !== null && (
@@ -125,8 +125,12 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
                     setRetype(value)
                     // A wrong typed answer always counts as "Again" — no
                     // rating choice. Auto-advance as soon as the retype
-                    // matches, no Enter/Continue needed.
-                    if (value.trim().toLowerCase() === expected.trim().toLowerCase()) {
+                    // matches, no Enter/Continue needed. Use the same
+                    // grading rules as the initial check (accents,
+                    // articles, slash-alternatives, parentheticals) —
+                    // a strict string match was too strict and could
+                    // reject a correctly-retyped answer.
+                    if (gradeTyping(value, expected, gradingSettings).correct) {
                       onRate('again', false, input)
                     }
                   }}
