@@ -31,6 +31,7 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     intervalHistory:     Array.isArray(row.interval_history) ? (row.interval_history as number[]) : [],
     typingMistakeStreak: Number(row.typing_mistake_streak ?? 0),
     typingFailCycles:    Number(row.typing_fail_cycles ?? 0),
+    stage3EnteredDate:   (row.stage3_entered_date as string | null) ?? null,
   }
 }
 
@@ -77,6 +78,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       last_typed_review_at: state.lastTypedReviewAt, forced_typed_remaining: state.forcedTypedRemaining,
       interval_history: state.intervalHistory,
       typing_mistake_streak: state.typingMistakeStreak, typing_fail_cycles: state.typingFailCycles,
+      stage3_entered_date: state.stage3EnteredDate,
     }, { onConflict: 'user_id,card_id' }).select().single()
     if (error) throw new Error(error.message)
     return rowToCardState(data)

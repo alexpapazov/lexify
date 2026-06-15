@@ -1,4 +1,4 @@
-import type { Deck, DeckId, Card, CardId, CardState, ReviewEvent, Pipeline, UserId, DeckPreferences, DismissedPair, CardConfusion } from '@/domain'
+import type { Deck, DeckId, Card, CardId, CardState, ReviewEvent, Pipeline, UserId, DeckPreferences, DismissedPair, CardConfusion, CardSide, TypedAnswerOverride } from '@/domain'
 
 export interface CreateDeckInput {
   name:           string
@@ -124,4 +124,16 @@ export interface CardConfusionRepository {
   record(cardId: CardId, confusedText: string, confusedWithCardId?: CardId | null): Promise<void>
   /** All tracked mix-ups for this card, most-frequent first. */
   listForCard(userId: UserId, cardId: CardId): Promise<CardConfusion[]>
+}
+
+export interface TypedAnswerOverrideRepository {
+  /** All persisted typed-answer overrides for this user, across every card — fetched once per session. */
+  listForUser(userId: UserId): Promise<TypedAnswerOverride[]>
+  /**
+   * Persists "this (normalized) typed answer counts as correct" for
+   * (cardId, answerSide). No-op if already present.
+   */
+  add(userId: UserId, cardId: CardId, answerSide: CardSide, answerText: string): Promise<void>
+  /** Removes a previously persisted override, if present. */
+  remove(userId: UserId, cardId: CardId, answerSide: CardSide, answerText: string): Promise<void>
 }

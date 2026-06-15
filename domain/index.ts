@@ -174,6 +174,23 @@ export interface CardConfusion {
   lastConfusedAt:     string
 }
 
+// ─── TypedAnswerOverride ────────────────────────────────────────────────────
+
+/**
+ * A persisted "this typed answer counts as correct" override for a given
+ * card + direction, set via TypingMode's "Override as correct" /
+ * "Override as incorrect" controls (see engine/grading.ts and
+ * components/session/TypingMode.tsx). `answerText` is stored normalized
+ * (per the deck's grading settings at the time it was set) — the same form
+ * gradeTyping() produces as `normalizedUser`.
+ */
+export interface TypedAnswerOverride {
+  userId:     UserId
+  cardId:     CardId
+  answerSide: CardSide
+  answerText: string
+}
+
 // ─── CardState ────────────────────────────────────────────────────────────────
 
 export interface CardState {
@@ -263,6 +280,17 @@ export interface CardState {
    * before resuming typing, and this resets to 0.
    */
   typingFailCycles:    number
+  /**
+   * Pre-graduation only. ISO date (YYYY-MM-DD) the card most recently
+   * *entered* the final "same-day window" — the last 3 pipeline steps
+   * (stages 3-5: typing back->front x2, typing front->back x2, final
+   * recognition front->back). All steps in this window must be completed on
+   * this same calendar day for the card to graduate; if a later step in the
+   * window is completed on a different day, the card is sent back to the
+   * window's first step and this is reset to that day. Null for cards that
+   * haven't reached this window yet (or pre-date this field).
+   */
+  stage3EnteredDate: string | null
 }
 
 // ─── Ratings ──────────────────────────────────────────────────────────────────

@@ -5,6 +5,35 @@ chat sessions. Read it at the start of any session touching this codebase.
 Update it (briefly) whenever you ship a feature or learn something a future
 session would need.
 
+## Locating this codebase (read this first)
+
+The real "Lexify" app — the one deployed at lexify-flax.vercel.app — lives at:
+
+    /Users/alexanderpapazov/Code/alex_creates/lang_learn_app
+
+If you don't already have access to this folder, **ask the user for access
+before doing anything else** (e.g. via the cowork directory-connection tool).
+Do not assume any other connected folder is this project — in particular,
+there is a separate, older/divergent folder elsewhere in this user's
+workspace (`.../Documents/Claude/Projects/Language Learning Application/
+lang_learn_app`, branded "LinguaStage") that is **not** Lexify and should not
+be read or edited for Lexify work.
+
+Once you have access, before making any changes:
+
+1. Read this file (`CLAUDE.md`) in full.
+2. Read `domain/index.ts`, all of `engine/*.ts` (`pipeline.ts`, `scheduler.ts`,
+   `grading.ts`, `productionMode.ts`, `density.ts`), `lib/data/interfaces.ts`
+   and the relevant `lib/data/*.ts` repo implementations, the
+   `components/session/*.tsx` UI, the `app/study/**` pages, and the most
+   recent `supabase/migrations/*.sql` files — enough to build an accurate,
+   *current* understanding of how the pipeline, grading, scheduler,
+   distractors, and confusion-tracking actually work (this file describes the
+   state as of the last update, but the code is the source of truth).
+3. If asked to plan or scope a change, report your understanding back to the
+   user for correction first — don't start implementing until that's
+   confirmed.
+
 ## What Lexify is
 
 A Quizlet-style vocabulary app with an Anki-style spaced-repetition engine,
@@ -17,7 +46,7 @@ vocabulary pipeline, but the domain model is language-pair-generic.
 - Next.js App Router + TypeScript (strict mode), all pages are `'use client'`.
 - Supabase (Postgres + Auth + RLS) as the backend. SQL migrations live in
   `supabase/migrations/`, numbered sequentially (`001_...` through
-  `023_...` as of 2026-06-15).
+  `025_...` as of 2026-06-15).
 - Tailwind for styling.
 - Jest for engine unit tests (`npm test`).
 
@@ -107,6 +136,29 @@ As of migration 023, the default pipeline has 5 steps (`step_order` 0–4):
    *(new, migration 023)* one final Spanish→English multiple-choice check
    before the card graduates.
 
+### Same-day window for stages 3-5 (migration 024, this session 2026-06-15)
+
+The last 3 steps of the default pipeline (stages 3-5: typing back→front x2,
+typing front→back x2, final front→back recognition) must all be completed
+**on the same calendar day** for a card to graduate. Generically, the
+"window" is `sortedSteps.slice(-3)` — the final 3 steps of *any* pipeline,
+not hardcoded to the 5-step default.
+
+- Tracked via `CardState.stage3EnteredDate` (ISO date `YYYY-MM-DD`, column
+  `card_states.stage3_entered_date`, migration 024). Set to "today" whenever
+  the card enters the window's first step (stage 3).
+- In `engine/pipeline.ts: progressAfterReview()`: when the learner passes a
+  step *inside* the window (but not the first step of the window) on a
+  different calendar day than `stage3EnteredDate`, the card is sent back to
+  the window's first step (stage 3), `correctInStep` resets to 0, and
+  `stage3EnteredDate` is reset to today (restarting the window).
+- `stage3EnteredDate: null` (new/legacy cards that haven't reached the window
+  yet) skips this check entirely — backward compatible.
+- This rule is **independent of and coexists with** the typing-mistake-streak
+  → stage-1 redo below: that path returns via spread and leaves
+  `stage3EnteredDate` untouched, so a stage-1 redo doesn't reset the same-day
+  window's start date.
+
 ### Typing-mistake-streak → multiple-choice redo (migration 022)
 
 Tracked via `CardState.typingMistakeStreak` / `typingFailCycles` (stored
@@ -136,6 +188,31 @@ per-card, not per-step, so it applies whether the learner is typing Spanish
   **"Override as incorrect"** / "Undo override" (renamed from "Actually mark
   right/wrong" this session).
 
+### Persisted typed-answer overrides (migration 025, this session 2026-06-15)
+
+`typed_answer_overrides` table (one row per `user_id, card_id, answer_side,
+answer_text`, `answer_text` stored as `gradeTyping()`'s `normalizedUser`) +
+`lib/data/typedAnswerOverrides.ts: SupabaseTypedAnswerOverrideRepository`
+(`listForUser`/`add`/`remove`, imported directly — not re-exported from
+`lib/data/index.ts`, same as `cardConfusions`).
+
+- All 3 session pages load every override for the user once at session start
+  into a `Map<string, Set<string>>` keyed by `` `${cardId}:${answerSide}` ``,
+  and pass the relevant set to each `TypingMode` as `overrideAnswers`, plus a
+  `handleOverrideAnswer(cardId, answerSide, answerText, accept)` callback as
+  `onOverrideAnswer` (fire-and-forget, `.catch(console.error)`).
+- In `TypingMode.tsx`: `check()` computes `gradeTyping()`'s `normalizedUser`
+  and treats the answer as correct (`viaOverride: true`) if it's a naturally
+  wrong answer that matches a persisted override — shown as "(remembered
+  override)".
+- `setOverrideAndPersist()` wraps the three override buttons:
+  - "Override as correct" on a naturally-wrong answer → persists an add.
+  - "Override as incorrect" on an answer that was correct *only* via
+    `viaOverride` → persists a remove. Naturally-correct answers marked
+    incorrect stay session-local (not persisted), as before.
+  - "Undo override" reverses whichever of the above the current `override`
+    state represents.
+
 ## Wrong-answer ("confusion") tracking
 
 `card_confusions` table (migration 021) + `record_card_confusion` RPC +
@@ -150,7 +227,7 @@ whether to match against `card.front` or `card.back` of the candidate cards.
 
 ## Migrations
 
-Sequential, in `supabase/migrations/`. Latest is `023`:
+Sequential, in `supabase/migrations/`. Latest is `025`:
 
 - `001_initial.sql` … `020_scheduler_v2.sql` — core schema, folders, language
   pairs, shared cards, scheduler v1→v2, lapse clustering.
@@ -160,6 +237,10 @@ Sequential, in `supabase/migrations/`. Latest is `023`:
   if you need the exact DDL).
 - `023_pipeline_step5_recognition_redo.sql` — adds pipeline step 4 (final
   Spanish→English MC) to the default pipeline.
+- `024_stage3_same_day_window.sql` — adds `card_states.stage3_entered_date`
+  (DATE, nullable) for the stages 3-5 same-day-window rule.
+- `025_typed_answer_overrides.sql` — adds `typed_answer_overrides` table
+  (owner-RLS) for persisted typed-answer overrides.
 
 **Migrations are not auto-applied.** When you add one, tell the user to run
 it in the Supabase SQL editor (or via CLI) — don't assume it's live just
@@ -185,8 +266,13 @@ built/pushed/deployed.
   of reusing the existing card.
 - **#59**: Exact-duplicate cards can still get duplicated on save (separate
   from #55).
+- **Confusions aren't fed back into distractors**: `card_confusions`
+  (migration 021) records every wrong answer, but `lib/distractors.ts:
+  buildOptions()` doesn't yet use that data to prioritize frequently-confused
+  words as multiple-choice distractors — it's still cached-AI-choices →
+  sibling-card fallback only.
 
-Neither has been actioned yet as of 2026-06-15.
+None of the above has been actioned yet as of 2026-06-15.
 
 ## Verifying changes
 

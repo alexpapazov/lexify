@@ -10,7 +10,20 @@ const PIPELINE: Pipeline = {
   ],
 }
 
+/** The real default pipeline (migration 023): 5 steps, stages 1-5. */
+const PIPELINE5: Pipeline = {
+  id: 'pipeline-5', ownerId: null, name: 'Default-5', isDefault: true,
+  steps: [
+    { pipelineId: 'pipeline-5', stepOrder: 0, stepType: 'recognition', promptSide: 'front', answerSide: 'back',  requiredCorrect: 1 }, // stage 1
+    { pipelineId: 'pipeline-5', stepOrder: 1, stepType: 'recognition', promptSide: 'back',  answerSide: 'front', requiredCorrect: 1 }, // stage 2
+    { pipelineId: 'pipeline-5', stepOrder: 2, stepType: 'typing',      promptSide: 'back',  answerSide: 'front', requiredCorrect: 2 }, // stage 3
+    { pipelineId: 'pipeline-5', stepOrder: 3, stepType: 'typing',      promptSide: 'front', answerSide: 'back',  requiredCorrect: 2 }, // stage 4
+    { pipelineId: 'pipeline-5', stepOrder: 4, stepType: 'recognition', promptSide: 'front', answerSide: 'back',  requiredCorrect: 1 }, // stage 5
+  ],
+}
+
 function fresh(): CardState { return initialCardState('user-1', 'card-1', 'pipeline-1') }
+function fresh5(): CardState { return initialCardState('user-1', 'card-1', 'pipeline-5') }
 
 describe('pre-graduation', () => {
   it('advances to step 1 after 1 correct on step 0', () => {
@@ -166,6 +179,108 @@ describe('typing-mistake streak → multiple-choice redo', () => {
     expect(s.typingMistakeStreak).toBe(0)
     expect(s.typingFailCycles).toBe(0)
     expect(s.currentStepOrder).toBe(0)
+  })
+})
+
+describe('same-day window (stages 3-5)', () => {
+  /** Drive a fresh 5-step card to stage 3 (step 2) via two correct recognition answers. */
+  function atStage3(now?: Date): CardState {
+    let s = fresh5()
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, now) // stage1 -> stage2
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, now) // stage2 -> stage3
+    expect(s.currentStepOrder).toBe(2)
+    return s
+  }
+
+  it('graduates normally when stages 3-5 are all completed the same day', () => {
+    const day = new Date('2026-06-10T12:00:00Z')
+    let s = atStage3(day)
+
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day) // stage3 1/2
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day) // stage3 -> stage4
+    expect(s.currentStepOrder).toBe(3)
+    expect(s.stage3EnteredDate).toBe('2026-06-10')
+
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day) // stage4 1/2
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day) // stage4 -> stage5
+    expect(s.currentStepOrder).toBe(4)
+
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day) // stage5 -> graduate
+    expect(s.graduated).toBe(true)
+    expect(s.stage3EnteredDate).toBe('2026-06-10')
+  })
+
+  it('sends the card back to stage 3 if a later step is completed on a different day', () => {
+    const day1 = new Date('2026-06-10T12:00:00Z')
+    const day2 = new Date('2026-06-11T12:00:00Z')
+
+    let s = atStage3(day1)
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day1) // stage3 1/2
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day1) // stage3 -> stage4
+    expect(s.currentStepOrder).toBe(3)
+    expect(s.stage3EnteredDate).toBe('2026-06-10')
+
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day1) // stage4 1/2 (still day1)
+
+    // Second stage-4 correct happens the next day — violates the window.
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day2)
+    expect(s.currentStepOrder).toBe(2) // sent back to stage 3
+    expect(s.correctInStep).toBe(0)
+    expect(s.graduated).toBe(false)
+    expect(s.stage3EnteredDate).toBe('2026-06-11') // window restarted today
+  })
+
+  it('graduates after redoing stages 3-5 within the restarted window', () => {
+    const day1 = new Date('2026-06-10T12:00:00Z')
+    const day2 = new Date('2026-06-11T12:00:00Z')
+
+    let s = atStage3(day1)
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day1) // stage3 1/2
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day1) // stage3 -> stage4
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day1) // stage4 1/2 (day1)
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day2) // violation -> back to stage3
+    expect(s.currentStepOrder).toBe(2)
+
+    // Redo stages 3-5 entirely on day2.
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day2) // stage3 1/2
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day2) // stage3 -> stage4
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day2) // stage4 1/2
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day2) // stage4 -> stage5
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day2) // stage5 -> graduate
+    expect(s.graduated).toBe(true)
+    expect(s.stage3EnteredDate).toBe('2026-06-11')
+  })
+
+  it('does not apply the same-day check to in-flight cards with stage3EnteredDate = null (backward compat)', () => {
+    // Simulate a card that was already at stage 4 (step 3) before this
+    // feature shipped — stage3EnteredDate is null.
+    let s: CardState = { ...fresh5(), currentStepOrder: 3, correctInStep: 1, stage3EnteredDate: null }
+
+    const day1 = new Date('2026-06-10T12:00:00Z')
+    const day2 = new Date('2026-06-11T12:00:00Z')
+
+    // Second stage-4 correct on a different day — no violation since
+    // stage3EnteredDate is null.
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day1)
+    expect(s.currentStepOrder).toBe(4) // advanced to stage5, not reset
+    expect(s.stage3EnteredDate).toBeNull()
+
+    // Stage5 on yet another day — still no violation (null skips the check).
+    s = progressAfterReview(s, PIPELINE5, { wasCorrect: true, rating: 'good' }, day2)
+    expect(s.graduated).toBe(true)
+  })
+
+  it('typing-mistake-streak redo to stage 1 leaves stage3EnteredDate untouched', () => {
+    let s = atStage3() // stage3EnteredDate still null — never successfully passed stage3
+    expect(s.stage3EnteredDate).toBeNull()
+
+    for (let cycle = 0; cycle < 3; cycle++) {
+      for (let i = 0; i < 3; i++) {
+        s = progressAfterReview(s, PIPELINE5, { wasCorrect: false, rating: 'again' })
+      }
+    }
+    expect(s.currentStepOrder).toBe(0) // redo recognition steps
+    expect(s.stage3EnteredDate).toBeNull()
   })
 })
 

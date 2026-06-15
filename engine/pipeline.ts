@@ -60,6 +60,7 @@ export function initialCardState(
     intervalHistory:   [],
     typingMistakeStreak: 0,
     typingFailCycles:    0,
+    stage3EnteredDate: null,
   }
 }
 
@@ -230,6 +231,39 @@ export function progressAfterReview(
 
   if (newCorrectInStep >= currentStep.requiredCorrect) {
     const nextStep = sortedSteps.find(s => s.stepOrder > state.currentStepOrder)
+    const today    = now.slice(0, 10)
+
+    // "Same-day window": the final 3 pipeline steps (stages 3-5 in the
+    // default 5-step pipeline — typing x2, typing x2, final recognition)
+    // must all be completed on the same calendar day. If a step AFTER the
+    // window's first step is completed on a different day than the window
+    // was entered, the card is sent back to the window's first step and the
+    // window restarts today. This is independent of (and composes with) the
+    // typingMistakeStreak/typingFailCycles → redo-to-stage-1 logic above.
+    const windowStartStep = sortedSteps[Math.max(0, sortedSteps.length - 3)]!
+    const inWindow        = currentStep.stepOrder >= windowStartStep.stepOrder
+
+    if (
+      inWindow &&
+      currentStep.stepOrder > windowStartStep.stepOrder &&
+      state.stage3EnteredDate != null &&
+      state.stage3EnteredDate !== today
+    ) {
+      return {
+        ...state,
+        currentStepOrder:  windowStartStep.stepOrder,
+        correctInStep:     0,
+        stage3EnteredDate: today,
+        typingMistakeStreak,
+        typingFailCycles,
+        lastRating:        rating,
+        lastReviewedAt:    now,
+      }
+    }
+
+    const stage3EnteredDate = currentStep.stepOrder === windowStartStep.stepOrder
+      ? today
+      : state.stage3EnteredDate
 
     if (!nextStep) {
       // Graduate
@@ -242,6 +276,7 @@ export function progressAfterReview(
         reps:             1,
         typingMistakeStreak,
         typingFailCycles,
+        stage3EnteredDate,
         lastRating:       rating,
         lastReviewedAt:   now,
         dueAt:                 scheduled.dueAt,
@@ -257,7 +292,7 @@ export function progressAfterReview(
       }
     }
 
-    return { ...state, currentStepOrder: nextStep.stepOrder, correctInStep: 0, typingMistakeStreak, typingFailCycles, lastRating: rating, lastReviewedAt: now }
+    return { ...state, currentStepOrder: nextStep.stepOrder, correctInStep: 0, typingMistakeStreak, typingFailCycles, stage3EnteredDate, lastRating: rating, lastReviewedAt: now }
   }
 
   return { ...state, correctInStep: newCorrectInStep, typingMistakeStreak, typingFailCycles, lastRating: rating, lastReviewedAt: now }

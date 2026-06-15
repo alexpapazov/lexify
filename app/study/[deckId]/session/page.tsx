@@ -11,6 +11,8 @@ import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
+import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
+import type { CardSide } from '@/domain'
 import { progressAfterReview, initialCardState } from '@/engine/pipeline'
 import { classifyWrongAnswer } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
@@ -65,6 +67,23 @@ export default function SessionPage() {
   const [cardStates,      setCardStates]      = useState<Map<string, CardState>>(new Map())
   const [answerError,     setAnswerError]     = useState<string | null>(null)
   const [submitting,      setSubmitting]      = useState(false)
+  /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
+  const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
+
+  const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
+    const repo = new SupabaseTypedAnswerOverrideRepository()
+    const key  = `${cardId}:${answerSide}`
+    setOverrides(prev => {
+      const next = new Map(prev)
+      const set  = new Set(next.get(key) ?? [])
+      if (accept) set.add(answerText)
+      else set.delete(answerText)
+      next.set(key, set)
+      return next
+    })
+    const op = accept ? repo.add(userId, cardId, answerSide, answerText) : repo.remove(userId, cardId, answerSide, answerText)
+    op.catch(err => console.error('Failed to save typed-answer override:', err))
+  }, [userId])
 
   const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
     setAllCards(prev => prev.map(c => c.id === cardId ? { ...c, choices } : c))
@@ -106,6 +125,16 @@ export default function SessionPage() {
       const existingStates = await stateRepo.listByDeck(session.user.id, deckId)
       const stateMap = new Map(existingStates.map(s => [s.cardId, s]))
       setCardStates(stateMap)
+
+      const existingOverrides = await new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id)
+      const overrideMap = new Map<string, Set<string>>()
+      for (const o of existingOverrides) {
+        const key = `${o.cardId}:${o.answerSide}`
+        const set = overrideMap.get(key) ?? new Set<string>()
+        set.add(o.answerText)
+        overrideMap.set(key, set)
+      }
+      setOverrides(overrideMap)
 
       const now   = new Date()
       const today = now.toISOString().slice(0, 10)
@@ -370,6 +399,8 @@ export default function SessionPage() {
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings!} gradedReview={false}
+          overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
+          onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
@@ -377,6 +408,8 @@ export default function SessionPage() {
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings!} gradedReview={true}
+          overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
+          onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       )}
     </div>

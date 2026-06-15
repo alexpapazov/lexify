@@ -18,19 +18,33 @@ import { RatingButtons } from './RatingButtons'
  * - "Override as correct" / "Override as incorrect" buttons let the learner
  *   correct a typo (mark a wrong answer as correct, skipping the retype) or
  *   flag a lucky/right answer as wrong (so it comes back sooner).
+ * - Persisted overrides: when "Override as correct" is used on an answer
+ *   gradeTyping() marked wrong, that exact (normalized) answer is remembered
+ *   for this card+direction (via `onOverrideAnswer`/`overrideAnswers`) — the
+ *   next time it's typed, it's automatically accepted. "Override as
+ *   incorrect" on such an auto-accepted answer forgets it again. Overriding
+ *   a *naturally* correct answer as incorrect stays session-local, as before.
  * - `gradedReview = true` (post-graduation, long-term retention): shows
  *   Again/Hard/Good/Easy instead of a single Continue button.
  */
-export function TypingMode({ card, promptSide, gradingSettings, gradedReview, deckName, onRate }: {
+export function TypingMode({ card, promptSide, gradingSettings, gradedReview, deckName, overrideAnswers, onOverrideAnswer, onRate }: {
   card: Card
   promptSide: 'front' | 'back'
   gradingSettings: GradingSettings
   gradedReview: boolean
   deckName?: string
+  /**
+   * Normalized typed answers (matching gradeTyping()'s `normalizedUser`)
+   * previously persisted via "Override as correct" for this card+direction —
+   * treated as correct even though gradeTyping() alone would mark them wrong.
+   */
+  overrideAnswers?: string[]
+  /** Sets (accept=true) or clears (accept=false) a persisted typed-answer override for `normalizedAnswer`. */
+  onOverrideAnswer?: (normalizedAnswer: string, accept: boolean) => void
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
 }) {
   const [input,       setInput]       = useState('')
-  const [result,      setResult]      = useState<{ correct: boolean; expected: string } | null>(null)
+  const [result,      setResult]      = useState<{ correct: boolean; expected: string; viaOverride: boolean; normalizedUser: string } | null>(null)
   const [override,    setOverride]    = useState<boolean | null>(null)
   const [retype,      setRetype]      = useState('')
 
@@ -57,13 +71,16 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   }
 
   function check() {
-    setResult({ correct: gradeTyping(input, expected, gradingSettings).correct, expected })
+    const base = gradeTyping(input, expected, gradingSettings)
+    const viaOverride = !base.correct && (overrideAnswers ?? []).includes(base.normalizedUser)
+    setResult({ correct: base.correct || viaOverride, expected, viaOverride, normalizedUser: base.normalizedUser })
     setOverride(null)
     setRetype('')
   }
 
   function dontKnow() {
-    setResult({ correct: false, expected })
+    const normalizedUser = gradeTyping(input, expected, gradingSettings).normalizedUser
+    setResult({ correct: false, expected, viaOverride: false, normalizedUser })
     setOverride(null)
     setRetype('')
     setInput('')
@@ -71,6 +88,28 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
 
   function tryAdvance(rating: Rating) {
     onRate(rating, finalCorrect, input)
+  }
+
+  // Sets (or clears) the session-local override, and persists/un-persists a
+  // remembered typed-answer override to match — see the doc comment above
+  // for the exact semantics (matches the "loup/wold" example).
+  function setOverrideAndPersist(next: boolean | null) {
+    if (result) {
+      const { normalizedUser, viaOverride } = result
+      if (next === true && override !== true) {
+        // Marking a wrong answer as correct — remember it.
+        onOverrideAnswer?.(normalizedUser, true)
+      } else if (next === false && override !== false) {
+        // Marking a (auto-accepted-via-override) correct answer as
+        // incorrect — forget it. Naturally-correct answers stay session-local.
+        if (viaOverride) onOverrideAnswer?.(normalizedUser, false)
+      } else if (next === null) {
+        // Undo — reverse whichever persistence change `override` made.
+        if (override === true) onOverrideAnswer?.(normalizedUser, false)
+        else if (override === false && viaOverride) onOverrideAnswer?.(normalizedUser, true)
+      }
+    }
+    setOverride(next)
   }
 
   return (
@@ -93,7 +132,11 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
           <div className="space-y-4">
             <div className={`panel text-center py-3 ${finalCorrect ? 'border-success/30 bg-success/5' : 'border-danger/30 bg-danger/5'}`}>
               {finalCorrect ? (
-                <p className="text-success font-medium">Correct!{override === true && <span className="text-ink-faint font-normal"> (marked correct)</span>}</p>
+                <p className="text-success font-medium">
+                  Correct!
+                  {override === true && <span className="text-ink-faint font-normal"> (marked correct)</span>}
+                  {override === null && result.viaOverride && <span className="text-ink-faint font-normal"> (remembered override)</span>}
+                </p>
               ) : (
                 <div className="space-y-1">
                   <p className="text-danger font-medium">Not quite{override === false && <span className="text-ink-faint font-normal"> (marked wrong)</span>}</p>
@@ -105,17 +148,17 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
             {/* Override controls — fix a typo or flag a lucky guess. */}
             <div className="flex items-center justify-center gap-3">
               {result.correct && override !== false && (
-                <button onClick={() => setOverride(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
+                <button onClick={() => setOverrideAndPersist(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
                   Override as incorrect
                 </button>
               )}
               {!result.correct && override !== true && (
-                <button onClick={() => setOverride(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
+                <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
                   Override as correct
                 </button>
               )}
               {override !== null && (
-                <button onClick={() => setOverride(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
+                <button onClick={() => setOverrideAndPersist(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
                   Undo override
                 </button>
               )}

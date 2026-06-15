@@ -17,6 +17,8 @@ import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }    from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
+import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
+import type { CardSide } from '@/domain'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { descendantDeckIds } from '@/lib/folderStats'
 import { progressAfterReview, initialCardState } from '@/engine/pipeline'
@@ -69,12 +71,39 @@ export default function FolderSessionPage() {
   const [folder,     setFolder]     = useState<Folder | null>(null)
   const [answerError, setAnswerError] = useState<string | null>(null)
   const [submitting,  setSubmitting]  = useState(false)
+  /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
+  const [overrides,   setOverrides]   = useState<Map<string, Set<string>>>(new Map())
+
+  const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
+    const repo = new SupabaseTypedAnswerOverrideRepository()
+    const key  = `${cardId}:${answerSide}`
+    setOverrides(prev => {
+      const next = new Map(prev)
+      const set  = new Set(next.get(key) ?? [])
+      if (accept) set.add(answerText)
+      else set.delete(answerText)
+      next.set(key, set)
+      return next
+    })
+    const op = accept ? repo.add(userId, cardId, answerSide, answerText) : repo.remove(userId, cardId, answerSide, answerText)
+    op.catch(err => console.error('Failed to save typed-answer override:', err))
+  }, [userId])
 
   useEffect(() => {
     async function load() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth'); return }
       setUserId(session.user.id)
+
+      const existingOverrides = await new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id)
+      const overrideMap = new Map<string, Set<string>>()
+      for (const o of existingOverrides) {
+        const key = `${o.cardId}:${o.answerSide}`
+        const set = overrideMap.get(key) ?? new Set<string>()
+        set.add(o.answerText)
+        overrideMap.set(key, set)
+      }
+      setOverrides(overrideMap)
 
       const deckRepo     = new SupabaseDeckRepository()
       const cardRepo     = new SupabaseCardRepository()
@@ -325,6 +354,8 @@ export default function FolderSessionPage() {
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings} gradedReview={false} deckName={deckName}
+          overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
+          onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} deckName={deckName}
@@ -332,6 +363,8 @@ export default function FolderSessionPage() {
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings} gradedReview={true} deckName={deckName}
+          overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
+          onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       )}
     </div>
