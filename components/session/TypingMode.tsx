@@ -8,14 +8,14 @@ import { RatingButtons } from './RatingButtons'
 /**
  * Type-the-answer recall.
  *
- * - After checking, the session never auto-advances — the learner presses
- *   Continue (or Enter, since the relevant button is auto-focused) to move
- *   on.
+ * - The session never auto-advances, in any scenario — the learner always
+ *   presses Continue (or Enter, since the relevant button/input is
+ *   auto-focused) to move on.
  * - If the answer was wrong (and not overridden as correct), the learner
  *   must retype the correct answer exactly — reinforcing the right form.
- *   Once the retype matches, it auto-advances immediately (no Enter/Continue
- *   needed) and always counts as "Again".
- * - "Mark as correct" / "Mark as wrong" override buttons let the learner
+ *   Once the retype matches, a Continue button appears (and Enter works)
+ *   to advance; it always counts as "Again".
+ * - "Override as correct" / "Override as incorrect" buttons let the learner
  *   correct a typo (mark a wrong answer as correct, skipping the retype) or
  *   flag a lucky/right answer as wrong (so it comes back sooner).
  * - `gradedReview = true` (post-graduation, long-term retention): shows
@@ -47,7 +47,14 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   const finalCorrect = override ?? result?.correct ?? false
   // Wrong answers (and "marked wrong" overrides) require retyping the
   // correct answer before continuing. Typo overrides skip this.
-  const needsRetype  = !!result && !finalCorrect
+  const needsRetype   = !!result && !finalCorrect
+  const retypeCorrect = needsRetype && gradeTyping(retype, expected, gradingSettings).correct
+
+  function advanceRetype() {
+    if (!retypeCorrect) return
+    // A wrong typed answer always counts as "Again" — no rating choice.
+    onRate('again', false, input)
+  }
 
   function check() {
     setResult({ correct: gradeTyping(input, expected, gradingSettings).correct, expected })
@@ -118,24 +125,23 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
               <div className="space-y-2">
                 <p className="text-xs text-ink-muted text-center">Type the correct answer to continue:</p>
                 <input
-                  className="input text-center text-lg font-mono"
+                  className={`input text-center text-lg font-mono ${retypeCorrect ? 'border-success/60 bg-success/5' : ''}`}
                   placeholder="Retype the answer…" value={retype}
-                  onChange={e => {
-                    const value = e.target.value
-                    setRetype(value)
-                    // A wrong typed answer always counts as "Again" — no
-                    // rating choice. Auto-advance as soon as the retype
-                    // matches, no Enter/Continue needed. Use the same
-                    // grading rules as the initial check (accents,
-                    // articles, slash-alternatives, parentheticals) —
-                    // a strict string match was too strict and could
-                    // reject a correctly-retyped answer.
-                    if (gradeTyping(value, expected, gradingSettings).correct) {
-                      onRate('again', false, input)
-                    }
-                  }}
+                  onChange={e => setRetype(e.target.value)}
+                  // Grading uses the same rules as the initial check
+                  // (accents, articles, slash-alternatives, parentheticals).
+                  // Never auto-advances — Enter only continues once the
+                  // retype is correct.
+                  onKeyDown={e => { if (e.key === 'Enter') advanceRetype() }}
                   autoFocus
                 />
+                {retypeCorrect && (
+                  <div className="flex justify-center">
+                    <button onClick={advanceRetype} autoFocus className="btn-primary px-10">
+                      Continue
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

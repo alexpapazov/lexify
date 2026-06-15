@@ -177,12 +177,15 @@ export default function AllDueSessionPage() {
       const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
       const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
 
-      // Confusion tracking: the learner was shown the native-language meaning
-      // (back) and had to pick the matching word in the language being learned
-      // (front), but picked a different word. Record it (fire-and-forget) to
-      // help surface easily-confused vocabulary later.
-      if (step.stepType === 'recognition' && step.promptSide === 'back' && step.answerSide === 'front' && !wasCorrect && userAnswer.trim()) {
-        const confusedWithCardId = deckCards.find(c => c.front.trim().toLowerCase() === userAnswer.trim().toLowerCase())?.id ?? null
+      // Confusion tracking: record every wrong answer (multiple-choice pick
+      // or typed response, in either direction) so it can be surfaced later
+      // as easily-confused vocabulary. `answerSide` tells us which side of
+      // the card the learner was asked to produce — look up a possible
+      // "confused with" card on that same side.
+      if (!wasCorrect && userAnswer.trim()) {
+        const confusedWithCardId = step.answerSide === 'front'
+          ? deckCards.find(c => c.front.trim().toLowerCase() === userAnswer.trim().toLowerCase())?.id ?? null
+          : deckCards.find(c => c.back.trim().toLowerCase()  === userAnswer.trim().toLowerCase())?.id ?? null
         new SupabaseCardConfusionRepository().record(card.id, userAnswer.trim(), confusedWithCardId)
           .catch(err => console.error('Failed to record card confusion:', err))
       }
