@@ -250,6 +250,19 @@ export interface CardState {
    * first), capped at a small size — for analytics/debugging.
    */
   intervalHistory:   number[]
+  /**
+   * Pre-graduation only. Consecutive wrong answers on a *typing* step
+   * (stepType === 'typing'), reset to 0 by any correct typing-step answer.
+   * When this reaches 3, it rolls into `typingFailCycles` and resets to 0.
+   */
+  typingMistakeStreak: number
+  /**
+   * Pre-graduation only. Counts how many times `typingMistakeStreak` has
+   * hit 3 since the last multiple-choice "redo". On the 3rd such cycle, the
+   * card is sent back to redo both recognition (multiple-choice) steps
+   * before resuming typing, and this resets to 0.
+   */
+  typingFailCycles:    number
 }
 
 // ─── Ratings ──────────────────────────────────────────────────────────────────

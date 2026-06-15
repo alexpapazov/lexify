@@ -78,7 +78,12 @@ describe('post-graduation', () => {
 
   it('advances reps on good review', () => {
     const s = graduated()
-    const next = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' })
+    // A review immediately after graduation (elapsed ~0) is "very early"
+    // (progress < 0.30 of the 3-day post-good interval) and is a no-op by
+    // design (see scheduler.ts VERY_EARLY_THRESHOLD) — so push `now` past
+    // that threshold to exercise the normal "reps increments" path.
+    const later = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    const next = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' }, later)
     expect(next.reps).toBeGreaterThan(s.reps)
   })
 
@@ -101,6 +106,66 @@ describe('post-graduation', () => {
     expect(s.currentStepOrder).toBe(0)
     expect(s.dueAt).toBeNull()
     expect(s.lapses).toBe(3)
+  })
+})
+
+describe('typing-mistake streak → multiple-choice redo', () => {
+  /** Drive a fresh card to its typing step (step 2) via two correct recognition answers. */
+  function atTypingStep(): CardState {
+    let s = fresh()
+    s = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' }) // step 0 -> 1
+    s = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' }) // step 1 -> 2 (typing)
+    expect(s.currentStepOrder).toBe(2)
+    return s
+  }
+
+  function typeWrong(s: CardState): CardState {
+    return progressAfterReview(s, PIPELINE, { wasCorrect: false, rating: 'again' })
+  }
+
+  it('increments typingMistakeStreak on wrong typing answers, without leaving the typing step', () => {
+    let s = atTypingStep()
+    s = typeWrong(s)
+    expect(s.typingMistakeStreak).toBe(1)
+    expect(s.typingFailCycles).toBe(0)
+    expect(s.currentStepOrder).toBe(2)
+  })
+
+  it('a correct typing answer resets the streak', () => {
+    let s = atTypingStep()
+    s = typeWrong(s)
+    s = typeWrong(s)
+    expect(s.typingMistakeStreak).toBe(2)
+    s = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' })
+    expect(s.typingMistakeStreak).toBe(0)
+  })
+
+  it('3 wrong typing answers in a row rolls into 1 fail-cycle without sending the card back', () => {
+    let s = atTypingStep()
+    s = typeWrong(s); s = typeWrong(s); s = typeWrong(s)
+    expect(s.typingMistakeStreak).toBe(0)
+    expect(s.typingFailCycles).toBe(1)
+    expect(s.currentStepOrder).toBe(2) // still on typing — no redo yet
+  })
+
+  it('on the 3rd fail-cycle (9th wrong-in-a-row, in groups of 3), sends the card back to redo recognition steps', () => {
+    let s = atTypingStep()
+    for (let cycle = 0; cycle < 3; cycle++) {
+      s = typeWrong(s); s = typeWrong(s); s = typeWrong(s)
+    }
+    expect(s.typingFailCycles).toBe(0)
+    expect(s.typingMistakeStreak).toBe(0)
+    expect(s.currentStepOrder).toBe(0) // sent back to redo both recognition steps
+    expect(s.correctInStep).toBe(0)
+    expect(s.graduated).toBe(false)
+  })
+
+  it('recognition-step wrong answers do not affect the typing streak', () => {
+    let s = fresh()
+    s = typeWrong(s) // wrong on step 0 (recognition)
+    expect(s.typingMistakeStreak).toBe(0)
+    expect(s.typingFailCycles).toBe(0)
+    expect(s.currentStepOrder).toBe(0)
   })
 })
 

@@ -51,6 +51,8 @@ function baseState(overrides: Partial<CardState> = {}): CardState {
     lastTypedReviewAt: daysAgo(1),
     forcedTypedRemaining: 0,
     intervalHistory: [],
+    typingMistakeStreak: 0,
+    typingFailCycles: 0,
     ...overrides,
   }
 }

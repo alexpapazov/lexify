@@ -58,6 +58,8 @@ export function initialCardState(
     lastTypedReviewAt:   null,
     forcedTypedRemaining: 0,
     intervalHistory:   [],
+    typingMistakeStreak: 0,
+    typingFailCycles:    0,
   }
 }
 
@@ -183,8 +185,45 @@ export function progressAfterReview(
   // hard / again = does not advance
   const countAsCorrect = wasCorrect && rating !== 'again' && rating !== 'hard'
 
+  // Track consecutive wrong *typing*-step answers. Every 3rd time this streak
+  // hits 3, the card is sent back to redo both multiple-choice recognition
+  // steps before resuming typing (see below).
+  let typingMistakeStreak = state.typingMistakeStreak
+  let typingFailCycles    = state.typingFailCycles
+  let triggerMcRedo       = false
+
+  if (currentStep.stepType === 'typing') {
+    if (countAsCorrect) {
+      typingMistakeStreak = 0
+    } else {
+      typingMistakeStreak += 1
+      if (typingMistakeStreak >= 3) {
+        typingMistakeStreak = 0
+        typingFailCycles += 1
+        if (typingFailCycles >= 3) {
+          typingFailCycles = 0
+          triggerMcRedo = true
+        }
+      }
+    }
+  }
+
   if (!countAsCorrect) {
-    return { ...state, correctInStep: 0, lastRating: rating, lastReviewedAt: now }
+    if (triggerMcRedo) {
+      // Send the learner back to redo both recognition (multiple-choice)
+      // steps — i.e. back to the first pipeline step — before resuming
+      // typing.
+      return {
+        ...state,
+        currentStepOrder:   sortedSteps[0]!.stepOrder,
+        correctInStep:      0,
+        typingMistakeStreak,
+        typingFailCycles,
+        lastRating:         rating,
+        lastReviewedAt:     now,
+      }
+    }
+    return { ...state, correctInStep: 0, typingMistakeStreak, typingFailCycles, lastRating: rating, lastReviewedAt: now }
   }
 
   const newCorrectInStep = state.correctInStep + 1
@@ -201,6 +240,8 @@ export function progressAfterReview(
         graduated:        true,
         currentStepOrder: currentStep.stepOrder,
         reps:             1,
+        typingMistakeStreak,
+        typingFailCycles,
         lastRating:       rating,
         lastReviewedAt:   now,
         dueAt:                 scheduled.dueAt,
@@ -216,10 +257,10 @@ export function progressAfterReview(
       }
     }
 
-    return { ...state, currentStepOrder: nextStep.stepOrder, correctInStep: 0, lastRating: rating, lastReviewedAt: now }
+    return { ...state, currentStepOrder: nextStep.stepOrder, correctInStep: 0, typingMistakeStreak, typingFailCycles, lastRating: rating, lastReviewedAt: now }
   }
 
-  return { ...state, correctInStep: newCorrectInStep, lastRating: rating, lastReviewedAt: now }
+  return { ...state, correctInStep: newCorrectInStep, typingMistakeStreak, typingFailCycles, lastRating: rating, lastReviewedAt: now }
 }
 
 export function ratingToWasCorrect(rating: Rating): boolean {
