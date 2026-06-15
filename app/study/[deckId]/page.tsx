@@ -906,20 +906,16 @@ export default function DeckDetailPage() {
         ].map(({ label, value, color, border, filter, desc }) => {
           const isActive = activeFilter === filter
           return (
-            <div
+            <Link
               key={label}
-              className={`panel border-t-2 ${border} text-center transition-colors w-full
-                ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : ''}`}
+              href={isActive ? `/study/${deckId}` : `/study/${deckId}?filter=${filter}`}
+              className={`panel border-t-2 ${border} text-center transition-colors w-full block space-y-1
+                ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
             >
-              <Link
-                href={isActive ? `/study/${deckId}` : `/study/${deckId}?filter=${filter}`}
-                className={`block space-y-1 -m-1 p-1 rounded-lg transition-colors ${isActive ? '' : 'hover:bg-surface-raised/50'}`}
-              >
-                <div className={`text-2xl font-semibold ${color}`}>{value}</div>
-                <div className="text-xs font-medium text-ink">{label}</div>
-                <div className="text-xs text-ink-faint">{desc}</div>
-              </Link>
-            </div>
+              <div className={`text-2xl font-semibold ${color}`}>{value}</div>
+              <div className="text-xs font-medium text-ink">{label}</div>
+              <div className="text-xs text-ink-faint">{desc}</div>
+            </Link>
           )
         })}
       </div>
