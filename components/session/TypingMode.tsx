@@ -131,7 +131,17 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
                 <input
                   className={`input text-center text-lg font-mono ${retypeError ? 'border-danger/60 bg-danger/5' : ''}`}
                   placeholder="Retype the answer…" value={retype}
-                  onChange={e => { setRetype(e.target.value); setRetypeError(false) }}
+                  onChange={e => {
+                    const value = e.target.value
+                    setRetype(value)
+                    setRetypeError(false)
+                    // Graded review: a wrong typed answer always counts as
+                    // "Again" — no rating choice. Auto-advance as soon as the
+                    // retype matches, no extra button press needed.
+                    if (gradedReview && value.trim().toLowerCase() === expected.trim().toLowerCase()) {
+                      onRate('again', false, input)
+                    }
+                  }}
                   onKeyDown={e => { if (e.key === 'Enter' && !gradedReview) tryAdvance(finalCorrect ? 'good' : 'again') }}
                   autoFocus
                 />
@@ -139,16 +149,16 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
               </div>
             )}
 
-            {gradedReview ? (
+            {gradedReview && !needsRetype ? (
               <RatingButtons onRate={tryAdvance} />
-            ) : (
+            ) : !gradedReview ? (
               <div className="flex justify-center">
                 {/* Auto-focused (when no retype is needed) so pressing Enter continues. */}
                 <button onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')} autoFocus={!needsRetype} className="btn-primary px-10">
                   Continue
                 </button>
               </div>
-            )}
+            ) : null}
           </div>
         )}
       </div>
