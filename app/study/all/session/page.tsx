@@ -60,6 +60,8 @@ export default function AllDueSessionPage() {
   const [loading, setLoading] = useState(true)
   const [userId,  setUserId]  = useState('')
   const [done,    setDone]    = useState(false)
+  const [answerError, setAnswerError] = useState<string | null>(null)
+  const [submitting,  setSubmitting]  = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -162,70 +164,81 @@ export default function AllDueSessionPage() {
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
     const current = queue[index]
     if (!current) return
+    if (submitting) return
 
-    const { card, state, pipeline, gradingSettings, productionMode } = current
-    const stateRepo  = new SupabaseCardStateRepository()
-    const eventRepo  = new SupabaseReviewEventRepository()
-    const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
-    const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+    setSubmitting(true)
+    setAnswerError(null)
 
-    const nowDate    = new Date()
-    const reviewMode = classifyReviewMode(state, nowDate)
-    const wasTyped   = state.graduated ? productionMode === 'typed' : null
+    try {
+      const { card, state, pipeline, gradingSettings, productionMode } = current
+      const stateRepo  = new SupabaseCardStateRepository()
+      const eventRepo  = new SupabaseReviewEventRepository()
+      const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+      const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
 
-    await eventRepo.create({
-      userId: userId, cardId: card.id, mode: step.stepType,
-      promptSide: step.promptSide, answerSide: step.answerSide,
-      promptShown: step.promptSide === 'front' ? card.front : card.back,
-      expected:    step.answerSide === 'front' ? card.front : card.back,
-      userAnswer, wasCorrect, rating, responseMs: null,
-      reviewMode, wasTyped,
-    })
+      const nowDate    = new Date()
+      const reviewMode = classifyReviewMode(state, nowDate)
+      const wasTyped   = state.graduated ? productionMode === 'typed' : null
 
-    const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
-      ? classifyWrongAnswer(userAnswer, step.answerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
-      : undefined
-
-    // Computed independently (same `nowDate`) so the density-smoothing
-    // window matches exactly what progressAfterReview just applied.
-    const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity }) : null
-
-    let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
-
-    if (
-      newState.graduated && newState.dueAt && scheduled &&
-      !scheduled.noChange && !scheduled.relearn && scheduled.relearningStep === 0 &&
-      scheduled.smoothMinDays != null && scheduled.smoothMaxDays != null &&
-      scheduled.intervalDays >= 7
-    ) {
-      const smoothed = await smoothDueDate(userId, newState.dueAt, scheduled.smoothMinDays, scheduled.smoothMaxDays, scheduled.intervalDays, stateRepo)
-      newState = { ...newState, dueAt: smoothed }
-    }
-
-    await stateRepo.upsert(newState)
-
-    // 10-minute "Again" relearn loop: re-queue the card a few slots ahead so
-    // it resurfaces later in this session (dueAt is also set to +10min, so
-    // it'll come back due if the session ends first).
-    if (newState.graduated && newState.relearningStep > 0) {
-      const requeued: SessionCard = { ...current, state: newState, productionMode: decideProductionMode(newState, nowDate) }
-      setQueue(prev => {
-        const next = [...prev]
-        next[index] = { ...current, state: newState }
-        const insertPos = Math.min(index + 1 + RELEARN_REQUEUE_OFFSET, next.length)
-        next.splice(insertPos, 0, requeued)
-        return next
+      await eventRepo.create({
+        userId: userId, cardId: card.id, mode: step.stepType,
+        promptSide: step.promptSide, answerSide: step.answerSide,
+        promptShown: step.promptSide === 'front' ? card.front : card.back,
+        expected:    step.answerSide === 'front' ? card.front : card.back,
+        userAnswer, wasCorrect, rating, responseMs: null,
+        reviewMode, wasTyped,
       })
-      setIndex(i => i + 1)
-      return
-    }
 
-    if (index + 1 >= queue.length) setDone(true)
-    else {
-      setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
-      setIndex(i => i + 1)
+      const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
+        ? classifyWrongAnswer(userAnswer, step.answerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
+        : undefined
+
+      // Computed independently (same `nowDate`) so the density-smoothing
+      // window matches exactly what progressAfterReview just applied.
+      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity }) : null
+
+      let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
+
+      if (
+        newState.graduated && newState.dueAt && scheduled &&
+        !scheduled.noChange && !scheduled.relearn && scheduled.relearningStep === 0 &&
+        scheduled.smoothMinDays != null && scheduled.smoothMaxDays != null &&
+        scheduled.intervalDays >= 7
+      ) {
+        const smoothed = await smoothDueDate(userId, newState.dueAt, scheduled.smoothMinDays, scheduled.smoothMaxDays, scheduled.intervalDays, stateRepo)
+        newState = { ...newState, dueAt: smoothed }
+      }
+
+      await stateRepo.upsert(newState)
+
+      // 10-minute "Again" relearn loop: re-queue the card a few slots ahead so
+      // it resurfaces later in this session (dueAt is also set to +10min, so
+      // it'll come back due if the session ends first).
+      if (newState.graduated && newState.relearningStep > 0) {
+        const requeued: SessionCard = { ...current, state: newState, productionMode: decideProductionMode(newState, nowDate) }
+        setQueue(prev => {
+          const next = [...prev]
+          next[index] = { ...current, state: newState }
+          const insertPos = Math.min(index + 1 + RELEARN_REQUEUE_OFFSET, next.length)
+          next.splice(insertPos, 0, requeued)
+          return next
+        })
+        setIndex(i => i + 1)
+        return
+      }
+
+      if (index + 1 >= queue.length) setDone(true)
+      else {
+        setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
+        setIndex(i => i + 1)
+      }
+    } catch (err: unknown) {
+      console.error('Failed to record answer:', err)
+      setAnswerError(err instanceof Error ? err.message : 'Something went wrong saving your answer. Please try again.')
+    } finally {
+      setSubmitting(false)
     }
-  }, [queue, index, userId])
+  }, [queue, index, userId, submitting])
 
   const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
     setQueue(prev => prev.map(item => {
@@ -264,6 +277,14 @@ export default function AllDueSessionPage() {
         <div className="h-full bg-accent rounded-full transition-all duration-300"
           style={{ width: `${Math.round((index / queue.length) * 100)}%` }} />
       </div>
+      {answerError && (
+        <div className="rounded-card border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger flex items-center justify-between gap-3">
+          <span>Couldn&apos;t save your answer: {answerError}</span>
+          <button onClick={() => setAnswerError(null)} className="text-danger/70 hover:text-danger text-xs underline shrink-0">
+            Dismiss
+          </button>
+        </div>
+      )}
       {!state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
