@@ -9,10 +9,12 @@ import { SupabaseCardRepository }            from '@/lib/data/cards'
 import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseFolderRepository }          from '@/lib/data/folders'
+import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import type { Deck, Card, CardState, DeckPreferences, Folder } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { classifyReviewMode } from '@/engine/scheduler'
+import { initialCardState } from '@/engine/pipeline'
 
 // ─── Card edit modal ─────────────────────────────────────────────────────────
 
@@ -55,10 +57,16 @@ function StatGroup({ title, rows }: { title: string; rows: [string, string][] })
   )
 }
 
-function CardEditModal({ card, state, onSave, onClose }: {
-  card:    Card
-  state:   CardState | undefined
+function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose }: {
+  card:           Card
+  state:          CardState | undefined
+  userId:         string
+  deckCards:      Card[]
+  sourceLanguage: string
+  targetLanguage: string
   onSave:  (id: string, front: string, back: string) => Promise<void>
+  onCardChange:  (card: Card) => void
+  onStateChange: (state: CardState) => void
   onClose: () => void
 }) {
   const [front,   setFront]   = useState(card.front)
@@ -67,6 +75,11 @@ function CardEditModal({ card, state, onSave, onClose }: {
   const [saved,    setSaved]    = useState(false)
   const [validErr, setValidErr] = useState<string | null>(null)
   const [showStats, setShowStats] = useState(false)
+  const [showResetMenu, setShowResetMenu] = useState(false)
+  const [resetAction, setResetAction] = useState<'distractors' | 'progress' | 'all' | null>(null)
+  const [resetting,   setResetting]   = useState(false)
+  const [resetError,  setResetError]  = useState<string | null>(null)
+  const [resetDone,   setResetDone]   = useState<string | null>(null)
   const frontRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { frontRef.current?.focus() }, [])
@@ -87,6 +100,55 @@ function CardEditModal({ card, state, onSave, onClose }: {
     }
   }
 
+  /** Clears cached AI distractors and kicks off background regeneration. */
+  async function resetDistractors() {
+    const cardRepo = new SupabaseCardRepository()
+    const updated  = await cardRepo.update(card.id, { choices: null })
+    onCardChange(updated)
+
+    const resetCard      = { ...updated, choices: null }
+    const resetDeckCards = deckCards.map(c => c.id === card.id ? resetCard : c)
+    void prefetchChoices(
+      [{ card: resetCard, side: 'front', deckCards: resetDeckCards, sourceLanguage, targetLanguage }],
+      (_cardId, choices) => onCardChange({ ...resetCard, choices }),
+    )
+  }
+
+  /** Wipes spaced-repetition progress back to "never studied", preserving when the card was first introduced. */
+  async function resetProgress() {
+    const stateRepo = new SupabaseCardStateRepository()
+    let pipelineId = state?.pipelineId
+    if (!pipelineId) {
+      const pipelineRepo = new SupabasePipelineRepository()
+      pipelineId = (await pipelineRepo.getDefault()).id
+    }
+    const fresh    = initialCardState(userId, card.id, pipelineId)
+    const preserved = { ...fresh, introducedDate: state?.introducedDate ?? fresh.introducedDate }
+    const updated  = await stateRepo.upsert(preserved)
+    onStateChange(updated)
+  }
+
+  async function handleConfirmReset() {
+    if (!resetAction) return
+    setResetting(true)
+    setResetError(null)
+    try {
+      if (resetAction === 'distractors' || resetAction === 'all') await resetDistractors()
+      if (resetAction === 'progress'    || resetAction === 'all') await resetProgress()
+      setResetDone(
+        resetAction === 'distractors' ? 'Distractors reset — new ones are being generated.'
+        : resetAction === 'progress'  ? 'Progress reset.'
+        : 'Card fully reset.'
+      )
+      setTimeout(() => setResetDone(null), 2500)
+    } catch (err: unknown) {
+      setResetError(err instanceof Error ? err.message : 'Reset failed')
+    } finally {
+      setResetting(false)
+      setResetAction(null)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
@@ -94,6 +156,42 @@ function CardEditModal({ card, state, onSave, onClose }: {
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-ink">Edit card</h2>
           <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                onClick={() => setShowResetMenu(s => !s)}
+                title="Reset card"
+                aria-label="Reset card"
+                disabled={resetting}
+                className="w-7 h-7 rounded-full border border-white/10 text-danger/80 hover:text-danger hover:border-danger/40 flex items-center justify-center transition-colors disabled:opacity-40"
+              >
+                <span className="text-base leading-none select-none">↺</span>
+              </button>
+              {showResetMenu && (
+                <div className="absolute right-0 top-9 z-10 w-56 rounded-card border border-white/10 bg-surface-raised shadow-xl py-1 text-sm">
+                  <button
+                    onClick={() => { setShowResetMenu(false); setResetAction('distractors') }}
+                    className="w-full text-left px-3 py-2 hover:bg-white/5 text-ink"
+                  >
+                    Reset distractors
+                    <span className="block text-xs text-ink-faint">Clears cached multiple-choice options and regenerates them.</span>
+                  </button>
+                  <button
+                    onClick={() => { setShowResetMenu(false); setResetAction('progress') }}
+                    className="w-full text-left px-3 py-2 hover:bg-white/5 text-ink"
+                  >
+                    Reset progress
+                    <span className="block text-xs text-ink-faint">Erases reps, lapses, schedule, etc. Keeps distractors and when it was introduced.</span>
+                  </button>
+                  <button
+                    onClick={() => { setShowResetMenu(false); setResetAction('all') }}
+                    className="w-full text-left px-3 py-2 hover:bg-white/5 text-danger"
+                  >
+                    Reset entirely
+                    <span className="block text-xs text-ink-faint">Resets both progress and distractors.</span>
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setShowStats(s => !s)}
               title="Card stats"
@@ -106,6 +204,27 @@ function CardEditModal({ card, state, onSave, onClose }: {
             <button onClick={onClose} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
           </div>
         </div>
+
+        {resetAction && (
+          <ConfirmDialog
+            message={
+              resetAction === 'distractors'
+                ? 'Clear the cached multiple-choice distractors for this card? Fresh ones will be generated in the background.'
+                : resetAction === 'progress'
+                  ? 'Erase this card\'s study progress (reps, lapses, ease, schedule, etc.)? It will go back to "never studied" but keep its cached distractors and introduction date.'
+                  : 'Reset this card entirely — clears study progress AND cached distractors? This can\'t be undone.'
+            }
+            onConfirm={handleConfirmReset}
+            onCancel={() => setResetAction(null)}
+          />
+        )}
+
+        {resetError && (
+          <p className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">⚠ {resetError}</p>
+        )}
+        {resetDone && (
+          <p className="text-success text-xs bg-success/10 border border-success/20 rounded-lg px-3 py-2">✓ {resetDone}</p>
+        )}
 
         {showStats && (
           <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm max-h-80 overflow-y-auto">
@@ -606,6 +725,18 @@ export default function DeckDetailPage() {
     setCards(prev => prev.map(c => c.id === cardId ? updated : c))
   }
 
+  function handleCardUpdate(updated: Card) {
+    setCards(prev => prev.map(c => c.id === updated.id ? updated : c))
+    setEditingCard(updated)
+  }
+
+  function handleStateUpdate(updated: CardState) {
+    setStates(prev => {
+      const exists = prev.some(s => s.cardId === updated.cardId)
+      return exists ? prev.map(s => s.cardId === updated.cardId ? updated : s) : [...prev, updated]
+    })
+  }
+
   async function handleNewCardSave(front: string, back: string) {
     if (!deck) return
     const cardRepo = new SupabaseCardRepository()
@@ -641,7 +772,13 @@ export default function DeckDetailPage() {
         <CardEditModal
           card={editingCard}
           state={stateMap.get(editingCard.id)}
+          userId={userId}
+          deckCards={cards}
+          sourceLanguage={deck.sourceLanguage}
+          targetLanguage={deck.targetLanguage}
           onSave={handleCardSave}
+          onCardChange={handleCardUpdate}
+          onStateChange={handleStateUpdate}
           onClose={() => setEditingCard(null)}
         />
       )}
