@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }            from '@/lib/data/decks'
@@ -36,6 +36,29 @@ interface SessionCard {
   productionMode: ProductionMode | null
 }
 
+/** A single elective study category, chosen either via a deck-stat "Study" button (?category=) or the elective picker. */
+type StudyCategory = 'new' | 'learning' | 'graduated' | 'due'
+
+/** Cards available for elective study once the normal due/new queue is empty, offered via a picker. */
+interface ElectivePickerData {
+  unlearned:  SessionCard[]
+  earlyReview: SessionCard[]
+}
+
+const CATEGORY_BANNER: Record<StudyCategory, string> = {
+  new:       'Studying unlearned cards electively.',
+  learning:  'Studying cards still in the learning pipeline.',
+  graduated: 'Studying graduated cards for early review.',
+  due:       'Studying cards that are due now.',
+}
+
+const CATEGORY_EMPTY_MESSAGE: Record<StudyCategory, string> = {
+  new:       'You have no unlearned cards in this deck.',
+  learning:  'You have no cards currently in the learning pipeline.',
+  graduated: 'You have no graduated cards yet.',
+  due:       'You have no cards due right now.',
+}
+
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
   for (let i = a.length - 1; i > 0; i--) {
@@ -50,7 +73,17 @@ function shuffle<T>(arr: T[]): T[] {
 export default function SessionPage() {
   const { deckId } = useParams<{ deckId: string }>()
   const router     = useRouter()
+  const searchParams = useSearchParams()
   const supabase   = createClient()
+
+  // ?category=new|learning|graduated|due — set by the per-stat "Study" buttons
+  // on the deck detail page to study only that category, bypassing the
+  // normal new/due queue-building below entirely.
+  const categoryParam = searchParams.get('category')
+  const category: StudyCategory | null =
+    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due'
+      ? categoryParam
+      : null
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [allCards,        setAllCards]        = useState<Card[]>([])
@@ -67,6 +100,11 @@ export default function SessionPage() {
   const [cardStates,      setCardStates]      = useState<Map<string, CardState>>(new Map())
   const [answerError,     setAnswerError]     = useState<string | null>(null)
   const [submitting,      setSubmitting]      = useState(false)
+  // When the normal new/due queue is empty (and no ?category= was given),
+  // offer a picker to elect into studying unlearned and/or not-yet-due
+  // graduated ("early review") cards instead of auto-starting.
+  const [showElectivePicker, setShowElectivePicker] = useState(false)
+  const [electivePickerData, setElectivePickerData] = useState<ElectivePickerData | null>(null)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
 
@@ -90,10 +128,75 @@ export default function SessionPage() {
     setQueue(prev => prev.map(item => item.card.id === cardId ? { ...item, card: { ...item.card, choices } } : item))
   }, [])
 
+  /**
+   * Commits a built queue (from the normal new/due flow, a ?category=
+   * elective queue, or the elective picker) and kicks off the same
+   * background prefetch/confusion-promotion work the normal flow does.
+   * `ctx` is passed explicitly rather than read from state, since this can
+   * run mid-`load()` before `setAllCards`/`setUserId`/etc. have flushed.
+   */
+  const finalizeQueue = useCallback(async (
+    finalQueue: SessionCard[],
+    ctx: { deckCards: Card[]; sourceLanguage: string; targetLanguage: string; userId: string },
+  ) => {
+    if (finalQueue.length === 0) { setEmptySession(true); setDone(true); setLoading(false); return }
+    setQueue(finalQueue)
+    setLoading(false)
+
+    // Pre-generate multiple-choice distractors for upcoming recognition
+    // steps in the background, so cards rarely show "Loading choices…".
+    // Skip index 0 — that card's own component will fetch on mount.
+    const prefetchItems: PrefetchItem[] = finalQueue
+      .slice(1)
+      .map(item => {
+        const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+        const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
+        if (item.state.graduated || step.stepType !== 'recognition') return null
+        return { card: item.card, side: step.answerSide, deckCards: ctx.deckCards, sourceLanguage: ctx.sourceLanguage, targetLanguage: ctx.targetLanguage }
+      })
+      .filter((x): x is PrefetchItem => x !== null)
+    void prefetchChoices(prefetchItems, handleChoicesCached)
+
+    // Promote frequently-confused words into cached distractors for
+    // upcoming recognition steps (all of them — this is cheap, no AI calls).
+    const confusions = await new SupabaseCardConfusionRepository().listForUser(ctx.userId)
+    const confusionsByCard = new Map<string, CardConfusion[]>()
+    for (const c of confusions) {
+      const arr = confusionsByCard.get(c.cardId) ?? []
+      arr.push(c)
+      confusionsByCard.set(c.cardId, arr)
+    }
+    const promotionItems: ConfusionPromotionItem[] = finalQueue
+      .map(item => {
+        const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+        const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
+        if (item.state.graduated || step.stepType !== 'recognition') return null
+        return { card: item.card, side: step.answerSide }
+      })
+      .filter((x): x is ConfusionPromotionItem => x !== null)
+    void promoteConfusionDistractors(promotionItems, confusionsByCard, handleChoicesCached)
+  }, [handleChoicesCached])
+
+  /** User picked categories in the elective picker — build and start that queue. */
+  const startElectiveSession = useCallback((selected: { unlearned: boolean; earlyReview: boolean }) => {
+    if (!electivePickerData) return
+    const combined = shuffle([
+      ...(selected.unlearned   ? electivePickerData.unlearned   : []),
+      ...(selected.earlyReview ? electivePickerData.earlyReview : []),
+    ])
+    setElectiveSession(true)
+    setShowElectivePicker(false)
+    setIndex(0)
+    setLoading(true)
+    void finalizeQueue(combined, { deckCards: allCards, sourceLanguage, targetLanguage, userId })
+  }, [electivePickerData, finalizeQueue, allCards, sourceLanguage, targetLanguage, userId])
+
   const loadSession = useCallback(() => {
     setLoading(true)
     setDone(false)
     setEmptySession(false)
+    setShowElectivePicker(false)
+    setElectivePickerData(null)
     setIndex(0)
     setQueue([])
 
@@ -138,6 +241,44 @@ export default function SessionPage() {
 
       const now   = new Date()
       const today = now.toISOString().slice(0, 10)
+
+      // ?category= elective study: build a queue from exactly that category
+      // (matching the deck-detail page's stat counts) and skip the normal
+      // new/due budgeting entirely.
+      if (category) {
+        let categoryQueue: SessionCard[] = []
+        switch (category) {
+          case 'new':
+            categoryQueue = shuffle(
+              cards.filter(c => !stateMap.has(c.id))
+                .map(card => ({ card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline, productionMode: null }))
+            )
+            break
+          case 'learning':
+            categoryQueue = shuffle(
+              cards.filter(c => stateMap.has(c.id) && !stateMap.get(c.id)!.graduated)
+                .map(card => ({ card, state: stateMap.get(card.id)!, pipeline, productionMode: null }))
+            )
+            break
+          case 'graduated':
+            categoryQueue = shuffle(
+              cards.filter(c => stateMap.get(c.id)?.graduated)
+                .map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now) } })
+            )
+            break
+          case 'due':
+            categoryQueue = shuffle(
+              cards.filter(c => {
+                const s = stateMap.get(c.id)
+                return !!s && s.graduated && !!s.dueAt && new Date(s.dueAt) <= now
+              }).map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now) } })
+            )
+            break
+        }
+        setElectiveSession(true)
+        await finalizeQueue(categoryQueue, { deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, userId: session.user.id })
+        return
+      }
 
       const cardsPerSession = prefs?.cardsPerSession ?? null
 
@@ -190,59 +331,32 @@ export default function SessionPage() {
 
       // New cards: keep in deck order (first session = ordered introduction)
       // In-pipeline + due: shuffle so session feels varied
-      let finalQueue = [...newCards, ...shuffle(inPipeline), ...shuffle(dueCards)]
+      const finalQueue = [...newCards, ...shuffle(inPipeline), ...shuffle(dueCards)]
 
-      // Elective study: if nothing new/due, let the learner continue with
-      // not-yet-due graduated cards via this same Study button.
-      if (finalQueue.length === 0 && electiveCards.length > 0) {
-        finalQueue = shuffle(electiveCards)
-        setElectiveSession(true)
-      } else {
-        setElectiveSession(false)
+      if (finalQueue.length === 0) {
+        // Nothing new/due. Offer a picker to elect into studying unlearned
+        // cards (beyond today's budget) and/or not-yet-due graduated cards
+        // ("early review") — rather than auto-starting either.
+        const unlearnedCards: SessionCard[] = cards
+          .filter(c => !stateMap.has(c.id))
+          .map(card => ({ card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline, productionMode: null }))
+
+        if (unlearnedCards.length > 0 || electiveCards.length > 0) {
+          setElectivePickerData({ unlearned: unlearnedCards, earlyReview: electiveCards })
+          setShowElectivePicker(true)
+          setLoading(false)
+          return
+        }
+
+        setEmptySession(true); setDone(true); setLoading(false); return
       }
 
-      if (finalQueue.length === 0) { setEmptySession(true); setDone(true); setLoading(false); return }
-      setQueue(finalQueue)
-      setLoading(false)
-
-      // Pre-generate multiple-choice distractors for upcoming recognition
-      // steps in the background, so cards rarely show "Loading choices…".
-      // Skip index 0 — that card's own component will fetch on mount.
-      const prefetchItems: PrefetchItem[] = finalQueue
-        .slice(1)
-        .map(item => {
-          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
-          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
-          if (item.state.graduated || step.stepType !== 'recognition') return null
-          return { card: item.card, side: step.answerSide, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
-        })
-        .filter((x): x is PrefetchItem => x !== null)
-      void prefetchChoices(prefetchItems, handleChoicesCached)
-
-      // Promote frequently-confused words into cached distractors for
-      // upcoming recognition steps (all of them — this is cheap, no AI
-      // calls), so the next time these cards come up the mix-up is offered
-      // as one of the options.
-      const confusions = await new SupabaseCardConfusionRepository().listForUser(session.user.id)
-      const confusionsByCard = new Map<string, CardConfusion[]>()
-      for (const c of confusions) {
-        const arr = confusionsByCard.get(c.cardId) ?? []
-        arr.push(c)
-        confusionsByCard.set(c.cardId, arr)
-      }
-      const promotionItems: ConfusionPromotionItem[] = finalQueue
-        .map(item => {
-          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
-          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
-          if (item.state.graduated || step.stepType !== 'recognition') return null
-          return { card: item.card, side: step.answerSide }
-        })
-        .filter((x): x is ConfusionPromotionItem => x !== null)
-      void promoteConfusionDistractors(promotionItems, confusionsByCard, handleChoicesCached)
+      setElectiveSession(false)
+      await finalizeQueue(finalQueue, { deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, userId: session.user.id })
     }
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deckId])
+  }, [deckId, category, finalizeQueue])
 
   useEffect(() => {
     loadSession()
@@ -354,17 +468,25 @@ export default function SessionPage() {
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
+  if (showElectivePicker && electivePickerData) {
+    return <ElectivePicker deckId={deckId} data={electivePickerData} onStart={startElectiveSession} />
+  }
+
   if (done) {
     if (emptySession) {
-      return (
-        <div className="max-w-md mx-auto pt-20 text-center space-y-6">
-          <div className="text-5xl">✅</div>
-          <h2 className="text-2xl font-semibold text-ink">All caught up!</h2>
-          <p className="text-ink-muted">
+      const heading = category ? 'Nothing to study' : 'All caught up!'
+      const message = category
+        ? CATEGORY_EMPTY_MESSAGE[category]
+        : <>
             You&apos;ve gone through everything available for this deck right now.
             To keep studying, add more cards to the deck or increase your new-cards
             limit (or cards-per-session batch size) in the deck&apos;s study settings.
-          </p>
+          </>
+      return (
+        <div className="max-w-md mx-auto pt-20 text-center space-y-6">
+          <div className="text-5xl">{category ? '🤷' : '✅'}</div>
+          <h2 className="text-2xl font-semibold text-ink">{heading}</h2>
+          <p className="text-ink-muted">{message}</p>
           <div className="flex justify-center">
             <Link href={`/study/${deckId}`} className="btn-primary">Back to deck</Link>
           </div>
@@ -405,7 +527,9 @@ export default function SessionPage() {
           style={{ width: `${Math.round((index / queue.length) * 100)}%` }} />
       </div>
       {electiveSession && (
-        <p className="text-xs text-accent text-center">Studying ahead — nothing else is due right now.</p>
+        <p className="text-xs text-accent text-center">
+          {category ? CATEGORY_BANNER[category] : 'Studying ahead — nothing else is due right now.'}
+        </p>
       )}
       <p className="text-xs text-ink-faint uppercase tracking-wider text-center">{deckName}</p>
 
@@ -439,6 +563,66 @@ export default function SessionPage() {
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       )}
+    </div>
+  )
+}
+
+// ─── Elective study picker ─────────────────────────────────────────────────────
+
+/**
+ * Shown when the learner has finished everything new/due for today and
+ * presses "Study" — lets them choose to keep going with unlearned cards
+ * (beyond today's new-card budget) and/or graduated cards that aren't due
+ * yet ("early review"), either or both.
+ */
+function ElectivePicker({ deckId, data, onStart }: {
+  deckId: string
+  data:   ElectivePickerData
+  onStart: (selected: { unlearned: boolean; earlyReview: boolean }) => void
+}) {
+  const hasUnlearned  = data.unlearned.length > 0
+  const hasEarlyReview = data.earlyReview.length > 0
+
+  const [unlearned,   setUnlearned]   = useState(hasUnlearned)
+  const [earlyReview, setEarlyReview] = useState(hasEarlyReview)
+
+  const canStart = (hasUnlearned && unlearned) || (hasEarlyReview && earlyReview)
+
+  return (
+    <div className="max-w-md mx-auto pt-16 text-center space-y-6">
+      <div className="text-5xl">✅</div>
+      <h2 className="text-2xl font-semibold text-ink">All caught up for today!</h2>
+      <p className="text-ink-muted">
+        Nothing new or due right now. Want to keep going? Pick what to study electively:
+      </p>
+
+      <div className="space-y-3 text-left">
+        {hasUnlearned && (
+          <label className="panel flex items-center gap-3 cursor-pointer hover:bg-surface-raised/50 transition-colors">
+            <input type="checkbox" checked={unlearned} onChange={e => setUnlearned(e.target.checked)} className="accent-accent w-4 h-4" />
+            <span className="flex-1">
+              <span className="block text-sm font-medium text-ink">Unlearned</span>
+              <span className="block text-xs text-ink-faint">{data.unlearned.length} card{data.unlearned.length !== 1 ? 's' : ''} not yet started</span>
+            </span>
+          </label>
+        )}
+        {hasEarlyReview && (
+          <label className="panel flex items-center gap-3 cursor-pointer hover:bg-surface-raised/50 transition-colors">
+            <input type="checkbox" checked={earlyReview} onChange={e => setEarlyReview(e.target.checked)} className="accent-accent w-4 h-4" />
+            <span className="flex-1">
+              <span className="block text-sm font-medium text-ink">Early review</span>
+              <span className="block text-xs text-ink-faint">{data.earlyReview.length} graduated card{data.earlyReview.length !== 1 ? 's' : ''} not due yet</span>
+            </span>
+          </label>
+        )}
+      </div>
+
+      <div className="flex gap-3 justify-center">
+        <button onClick={() => onStart({ unlearned, earlyReview })} disabled={!canStart} className="btn-primary">
+          Start studying
+        </button>
+        <Link href={`/study/${deckId}`} className="btn-ghost">Back to deck</Link>
+      </div>
     </div>
   )
 }
