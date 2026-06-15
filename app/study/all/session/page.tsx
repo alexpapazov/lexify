@@ -15,6 +15,7 @@ import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
 import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }    from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
+import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { progressAfterReview, initialCardState } from '@/engine/pipeline'
 import { classifyWrongAnswer } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
@@ -170,11 +171,21 @@ export default function AllDueSessionPage() {
     setAnswerError(null)
 
     try {
-      const { card, state, pipeline, gradingSettings, productionMode } = current
+      const { card, state, pipeline, gradingSettings, productionMode, deckCards } = current
       const stateRepo  = new SupabaseCardStateRepository()
       const eventRepo  = new SupabaseReviewEventRepository()
       const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
       const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+
+      // Confusion tracking: the learner was shown the native-language meaning
+      // (back) and had to pick the matching word in the language being learned
+      // (front), but picked a different word. Record it (fire-and-forget) to
+      // help surface easily-confused vocabulary later.
+      if (step.stepType === 'recognition' && step.promptSide === 'back' && step.answerSide === 'front' && !wasCorrect && userAnswer.trim()) {
+        const confusedWithCardId = deckCards.find(c => c.front.trim().toLowerCase() === userAnswer.trim().toLowerCase())?.id ?? null
+        new SupabaseCardConfusionRepository().record(card.id, userAnswer.trim(), confusedWithCardId)
+          .catch(err => console.error('Failed to record card confusion:', err))
+      }
 
       const nowDate    = new Date()
       const reviewMode = classifyReviewMode(state, nowDate)

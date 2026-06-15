@@ -10,7 +10,8 @@ import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseFolderRepository }          from '@/lib/data/folders'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
-import type { Deck, Card, CardState, DeckPreferences, Folder } from '@/domain'
+import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
+import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { classifyReviewMode } from '@/engine/scheduler'
@@ -57,7 +58,7 @@ function StatGroup({ title, rows }: { title: string; rows: [string, string][] })
   )
 }
 
-function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose }: {
+function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard }: {
   card:           Card
   state:          CardState | undefined
   userId:         string
@@ -68,6 +69,8 @@ function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetL
   onCardChange:  (card: Card) => void
   onStateChange: (state: CardState) => void
   onClose: () => void
+  /** Jump the editor to another card in this deck (used by the "Often confused with" list). */
+  onJumpToCard?: (cardId: string) => void
 }) {
   const [front,   setFront]   = useState(card.front)
   const [back,    setBack]    = useState(card.back)
@@ -80,9 +83,18 @@ function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetL
   const [resetting,   setResetting]   = useState(false)
   const [resetError,  setResetError]  = useState<string | null>(null)
   const [resetDone,   setResetDone]   = useState<string | null>(null)
+  const [confusions,  setConfusions]  = useState<CardConfusion[]>([])
   const frontRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { frontRef.current?.focus() }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    new SupabaseCardConfusionRepository().listForCard(userId, card.id)
+      .then(rows => { if (!cancelled) setConfusions(rows) })
+      .catch(err => console.error('Failed to load card confusions:', err))
+    return () => { cancelled = true }
+  }, [userId, card.id])
 
   async function handleSave() {
     if (!front.trim()) { setValidErr('Front cannot be empty.'); return }
@@ -301,6 +313,35 @@ function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetL
                 </>
               )
             })()}
+
+            {confusions.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                  Often confused with
+                </div>
+                <div className="space-y-1.5">
+                  {confusions.map(c => {
+                    const linked = c.confusedWithCardId ? deckCards.find(d => d.id === c.confusedWithCardId) : undefined
+                    return (
+                      <div key={c.confusedText} className="flex items-center justify-between gap-2">
+                        <div className="min-w-0 text-sm">
+                          <span className="text-ink font-medium break-words">{c.confusedText}</span>
+                          {linked && <span className="text-ink-faint"> — {linked.back}</span>}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="chip">{c.count}×</span>
+                          {linked && onJumpToCard && (
+                            <button onClick={() => onJumpToCard(linked.id)} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                              Open
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -780,6 +821,10 @@ export default function DeckDetailPage() {
           onCardChange={handleCardUpdate}
           onStateChange={handleStateUpdate}
           onClose={() => setEditingCard(null)}
+          onJumpToCard={cardId => {
+            const target = cards.find(c => c.id === cardId)
+            if (target) setEditingCard(target)
+          }}
         />
       )}
 

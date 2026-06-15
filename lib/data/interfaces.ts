@@ -1,4 +1,4 @@
-import type { Deck, DeckId, Card, CardId, CardState, ReviewEvent, Pipeline, UserId, DeckPreferences, DismissedPair } from '@/domain'
+import type { Deck, DeckId, Card, CardId, CardState, ReviewEvent, Pipeline, UserId, DeckPreferences, DismissedPair, CardConfusion } from '@/domain'
 
 export interface CreateDeckInput {
   name:           string
@@ -112,4 +112,16 @@ export interface DismissedPairRepository {
   isDismissed(userId: UserId, cardAId: CardId, cardBId: CardId): Promise<boolean>
   /** Records a "keep both" decision so this pair isn't flagged again. */
   create(userId: UserId, cardAId: CardId, cardBId: CardId): Promise<DismissedPair>
+}
+
+export interface CardConfusionRepository {
+  /**
+   * Records (or increments) a mix-up: the learner was shown `cardId`'s
+   * native-language meaning and picked `confusedText` (another card's
+   * front-side text) instead of the correct answer. `confusedWithCardId`
+   * links to that other card when it's one the user owns.
+   */
+  record(cardId: CardId, confusedText: string, confusedWithCardId?: CardId | null): Promise<void>
+  /** All tracked mix-ups for this card, most-frequent first. */
+  listForCard(userId: UserId, cardId: CardId): Promise<CardConfusion[]>
 }

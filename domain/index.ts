@@ -154,6 +154,26 @@ export interface DismissedPair {
   createdAt: string
 }
 
+// ─── CardConfusion ────────────────────────────────────────────────────────────
+
+/**
+ * A tracked "mix-up": in a recognition step where the learner was shown the
+ * native-language meaning (back) and had to pick the matching word in the
+ * language being learned (front), they picked `confusedText` instead of
+ * `cardId`'s actual front-side text. `count` is how many times this exact
+ * mix-up has happened. `confusedWithCardId` links to the other card when
+ * `confusedText` matches a real card's front the user owns; null for
+ * AI-generated distractor text.
+ */
+export interface CardConfusion {
+  userId:             UserId
+  cardId:             CardId
+  confusedWithCardId: CardId | null
+  confusedText:       string
+  count:              number
+  lastConfusedAt:     string
+}
+
 // ─── CardState ────────────────────────────────────────────────────────────────
 
 export interface CardState {
