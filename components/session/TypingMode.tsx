@@ -12,8 +12,9 @@ import { RatingButtons } from './RatingButtons'
  *   Continue (or Enter, since the relevant button is auto-focused) to move
  *   on.
  * - If the answer was wrong (and not overridden as correct), the learner
- *   must retype the correct answer exactly before they can continue —
- *   reinforcing the right form.
+ *   must retype the correct answer exactly — reinforcing the right form.
+ *   Once the retype matches, it auto-advances immediately (no Enter/Continue
+ *   needed) and always counts as "Again".
  * - "Mark as correct" / "Mark as wrong" override buttons let the learner
  *   correct a typo (mark a wrong answer as correct, skipping the retype) or
  *   flag a lucky/right answer as wrong (so it comes back sooner).
@@ -32,14 +33,12 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   const [result,      setResult]      = useState<{ correct: boolean; expected: string } | null>(null)
   const [override,    setOverride]    = useState<boolean | null>(null)
   const [retype,      setRetype]      = useState('')
-  const [retypeError, setRetypeError] = useState(false)
 
   useEffect(() => {
     setInput('')
     setResult(null)
     setOverride(null)
     setRetype('')
-    setRetypeError(false)
   }, [card.id])
 
   const prompt   = promptSide === 'front' ? card.front : card.back
@@ -54,26 +53,16 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
     setResult({ correct: gradeTyping(input, expected, gradingSettings).correct, expected })
     setOverride(null)
     setRetype('')
-    setRetypeError(false)
   }
 
   function dontKnow() {
     setResult({ correct: false, expected })
     setOverride(null)
     setRetype('')
-    setRetypeError(false)
     setInput('')
   }
 
-  function retypeMatches(): boolean {
-    return retype.trim().toLowerCase() === expected.trim().toLowerCase()
-  }
-
   function tryAdvance(rating: Rating) {
-    if (needsRetype && !retypeMatches()) {
-      setRetypeError(true)
-      return
-    }
     onRate(rating, finalCorrect, input)
   }
 
@@ -129,36 +118,35 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
               <div className="space-y-2">
                 <p className="text-xs text-ink-muted text-center">Type the correct answer to continue:</p>
                 <input
-                  className={`input text-center text-lg font-mono ${retypeError ? 'border-danger/60 bg-danger/5' : ''}`}
+                  className="input text-center text-lg font-mono"
                   placeholder="Retype the answer…" value={retype}
                   onChange={e => {
                     const value = e.target.value
                     setRetype(value)
-                    setRetypeError(false)
-                    // Graded review: a wrong typed answer always counts as
-                    // "Again" — no rating choice. Auto-advance as soon as the
-                    // retype matches, no extra button press needed.
-                    if (gradedReview && value.trim().toLowerCase() === expected.trim().toLowerCase()) {
+                    // A wrong typed answer always counts as "Again" — no
+                    // rating choice. Auto-advance as soon as the retype
+                    // matches, no Enter/Continue needed.
+                    if (value.trim().toLowerCase() === expected.trim().toLowerCase()) {
                       onRate('again', false, input)
                     }
                   }}
-                  onKeyDown={e => { if (e.key === 'Enter' && !gradedReview) tryAdvance(finalCorrect ? 'good' : 'again') }}
                   autoFocus
                 />
-                {retypeError && <p className="text-danger text-xs text-center">Doesn&apos;t match — try again.</p>}
               </div>
             )}
 
-            {gradedReview && !needsRetype ? (
-              <RatingButtons onRate={tryAdvance} />
-            ) : !gradedReview ? (
-              <div className="flex justify-center">
-                {/* Auto-focused (when no retype is needed) so pressing Enter continues. */}
-                <button onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')} autoFocus={!needsRetype} className="btn-primary px-10">
-                  Continue
-                </button>
-              </div>
-            ) : null}
+            {!needsRetype && (
+              gradedReview ? (
+                <RatingButtons onRate={tryAdvance} />
+              ) : (
+                <div className="flex justify-center">
+                  {/* Auto-focused so pressing Enter continues. */}
+                  <button onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')} autoFocus className="btn-primary px-10">
+                    Continue
+                  </button>
+                </div>
+              )
+            )}
           </div>
         )}
       </div>
