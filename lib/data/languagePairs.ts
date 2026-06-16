@@ -44,6 +44,16 @@ export class SupabaseLanguagePairRepository {
     return rowToPair(data)
   }
 
+  /** Bulk-update positions for reordering the library grid. */
+  async updatePositions(updates: Array<{ sourceLanguage: string; targetLanguage: string; position: number }>): Promise<void> {
+    await Promise.all(
+      updates.map(({ sourceLanguage, targetLanguage, position }) =>
+        this.db.from('language_pairs').update({ position })
+          .match({ source_language: sourceLanguage, target_language: targetLanguage })
+      )
+    )
+  }
+
   /**
    * Permanently delete a language pairing: hard-deletes all cards in this
    * direction (cascading to deck_cards/card_states/review_events/duplicate

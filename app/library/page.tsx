@@ -13,7 +13,7 @@ import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCou
 
 const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }
 import { LanguageCombobox } from '@/components/LanguageCombobox'
-import { langName } from '@/lib/languages'
+import { langName, langNativeName, langFlag } from '@/lib/languages'
 import type { Folder, Deck, LanguagePair, Card, CardState } from '@/domain'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -151,9 +151,14 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
   const [newPairSource, setNewPairSource] = useState('')
   const [newPairTarget, setNewPairTarget] = useState('')
 
-  // Drag state
+  // Drag state (folder/deck tree — only active in the inPair view)
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
   const [dropTarget,  setDropTarget]  = useState<DropTarget>(null)
+
+  // Drag state for the language-pair grid (only active in the !inPair view)
+  const [pairOrder,        setPairOrder]        = useState<string[] | null>(null)
+  const [draggingPairKey,  setDraggingPairKey]  = useState<string | null>(null)
+  const [dropPairKey,      setDropPairKey]      = useState<string | null>(null)
 
   // Touch drag state
   const [touchGhost,   setTouchGhost]  = useState<{ x: number; y: number; type: 'folder' | 'deck' } | null>(null)
@@ -427,6 +432,65 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
     router.push('/library')
   }
 
+  // ── Language-pair grid helpers ─────────────────────────────────────────────
+
+  function getAllPairs(): LanguagePair[] {
+    const seen = new Set<string>()
+    const result: LanguagePair[] = []
+    for (const p of pairs) {
+      const key = `${p.sourceLanguage}|${p.targetLanguage}`
+      if (!seen.has(key)) { seen.add(key); result.push(p) }
+    }
+    for (const d of allDecks) {
+      const key = `${d.sourceLanguage}|${d.targetLanguage}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        result.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, createdAt: '' })
+      }
+    }
+    if (pairOrder) {
+      result.sort((a, b) => {
+        const ak = `${a.sourceLanguage}|${a.targetLanguage}`
+        const bk = `${b.sourceLanguage}|${b.targetLanguage}`
+        const ai = pairOrder.indexOf(ak)
+        const bi = pairOrder.indexOf(bk)
+        return (ai === -1 ? Infinity : ai) - (bi === -1 ? Infinity : bi)
+      })
+    }
+    return result
+  }
+
+  function applyPairDragImage(e: React.DragEvent, sourceCode: string, targetCode: string) {
+    const ghost = document.createElement('div')
+    ghost.textContent = langFlag(sourceCode)
+    ghost.style.cssText = 'font-size:48px;line-height:1;position:fixed;top:-200px;left:-200px;pointer-events:none'
+    document.body.appendChild(ghost)
+    e.dataTransfer.setDragImage(ghost, 30, 30)
+    setTimeout(() => document.body.removeChild(ghost), 0)
+  }
+
+  async function commitPairDrop() {
+    if (!draggingPairKey || !dropPairKey || draggingPairKey === dropPairKey) {
+      setDraggingPairKey(null); setDropPairKey(null); return
+    }
+    const current = getAllPairs()
+    const keys = current.map(p => `${p.sourceLanguage}|${p.targetLanguage}`)
+    const fromIdx = keys.indexOf(draggingPairKey)
+    const toIdx   = keys.indexOf(dropPairKey)
+    if (fromIdx === -1 || toIdx === -1) { setDraggingPairKey(null); setDropPairKey(null); return }
+
+    const newKeys = reorder(keys, fromIdx, toIdx, 'before')
+    setPairOrder(newKeys)
+    setDraggingPairKey(null)
+    setDropPairKey(null)
+
+    const pairRepo = new SupabaseLanguagePairRepository()
+    await pairRepo.updatePositions(newKeys.map((key, i) => {
+      const [sourceLanguage, targetLanguage] = key.split('|') as [string, string]
+      return { sourceLanguage, targetLanguage, position: i }
+    }))
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -441,22 +505,10 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
   // ── Pairing "boxes" view (root, no pairing selected) ───────────────────────
 
   if (!inPair) {
-    const seen = new Set<string>()
-    const allPairs: LanguagePair[] = []
-    for (const p of pairs) {
-      const key = `${p.sourceLanguage}|${p.targetLanguage}`
-      if (!seen.has(key)) { seen.add(key); allPairs.push(p) }
-    }
-    for (const d of allDecks) {
-      const key = `${d.sourceLanguage}|${d.targetLanguage}`
-      if (!seen.has(key)) {
-        seen.add(key)
-        allPairs.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, createdAt: '' })
-      }
-    }
+    const allPairs = getAllPairs()
 
     return (
-      <div className="space-y-5">
+      <div className="space-y-5" onDragEnd={() => { setDraggingPairKey(null); setDropPairKey(null) }}>
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold text-ink">Library</h1>
           <button
@@ -486,16 +538,36 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {allPairs.map(p => (
-              <Link
-                key={`${p.sourceLanguage}|${p.targetLanguage}`}
-                href={`/library?source=${p.sourceLanguage}&target=${p.targetLanguage}`}
-                className="panel flex flex-col items-center justify-center gap-1 py-6 text-center hover:border-accent/40 hover:bg-surface-raised/50 transition-colors"
-              >
-                <span className="text-sm font-semibold text-ink">{langName(p.sourceLanguage)}</span>
-                <span className="text-xs text-ink-muted">{langName(p.targetLanguage)}</span>
-              </Link>
-            ))}
+            {allPairs.map(p => {
+              const key        = `${p.sourceLanguage}|${p.targetLanguage}`
+              const isDragging = draggingPairKey === key
+              const isDropTarget = dropPairKey === key
+              return (
+                <div
+                  key={key}
+                  draggable
+                  onDragStart={e => { applyPairDragImage(e, p.sourceLanguage, p.targetLanguage); setDraggingPairKey(key) }}
+                  onDragOver={e => { e.preventDefault(); if (draggingPairKey && draggingPairKey !== key) setDropPairKey(key) }}
+                  onDragLeave={() => setDropPairKey(null)}
+                  onDrop={e => { e.preventDefault(); commitPairDrop() }}
+                  className={`panel flex flex-col items-center justify-center gap-1 py-6 text-center transition-colors cursor-grab active:cursor-grabbing select-none ${
+                    isDragging   ? 'opacity-40' :
+                    isDropTarget ? 'border-accent bg-accent/5 scale-[1.01]' :
+                    'hover:border-accent/40 hover:bg-surface-raised/50'
+                  }`}
+                >
+                  <Link
+                    href={`/library?source=${p.sourceLanguage}&target=${p.targetLanguage}`}
+                    onClick={e => { if (draggingPairKey) e.preventDefault() }}
+                    className="flex flex-col items-center gap-1 w-full"
+                  >
+                    <span className="text-2xl mb-1">{langFlag(p.sourceLanguage)}</span>
+                    <span className="text-sm font-semibold text-ink">{langNativeName(p.sourceLanguage)}</span>
+                    <span className="text-xs text-ink-muted">{langNativeName(p.targetLanguage)}</span>
+                  </Link>
+                </div>
+              )
+            })}
           </div>
         )}
       </div>

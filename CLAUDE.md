@@ -433,6 +433,12 @@ built/pushed/deployed.
   verified otherwise. Give build/test/migration/commit commands as chat code
   blocks for the user to run locally and paste results back.
 
+## Library pair-grid improvements (2026-06-15)
+
+- `lib/languages.ts`: Added `nativeName` (language name in its own language, e.g. "Français" for French) and `flag` (emoji flag) fields to every `Language` entry. Added `langNativeName(code)` and `langFlag(code)` helpers. Signed languages (ASL, BSL) keep English abbreviations as their native name. The `Language` interface now includes these two new fields — any code importing it via `LANGUAGES` or the helpers should be checked if the type shape matters.
+- `lib/data/languagePairs.ts`: Added `updatePositions(updates: {sourceLanguage, targetLanguage, position}[])` to `SupabaseLanguagePairRepository` for persisting grid reorder.
+- `app/library/page.tsx`: Library pair boxes now show native language names + flag emoji. Boxes are draggable — drag to reorder the grid, the flag emoji of the source language appears as the drag image. Order is persisted to `language_pairs.position`. New state: `pairOrder` (local override for optimistic reorder), `draggingPairKey`, `dropPairKey`. New helpers: `getAllPairs()`, `applyPairDragImage()`, `commitPairDrop()`.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
