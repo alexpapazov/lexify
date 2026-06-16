@@ -14,6 +14,7 @@ import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
+import { langName } from '@/lib/languages'
 import { classifyReviewMode } from '@/engine/scheduler'
 import { initialCardState } from '@/engine/pipeline'
 
@@ -313,6 +314,59 @@ function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetL
                 </>
               )
             })()}
+
+            {/* Distractors */}
+            <div className="space-y-2">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                Distractors
+              </div>
+              {card.choices ? (
+                <div className="space-y-2.5">
+                  {card.choices.back.length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-ink-faint mb-1">
+                        Prompt {langName(sourceLanguage)} → pick {langName(targetLanguage)}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {card.choices.back.map(d => <span key={d} className="chip">{d}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {card.choices.front.length > 0 && (
+                    <div>
+                      <div className="text-[10px] text-ink-faint mb-1">
+                        Prompt {langName(targetLanguage)} → pick {langName(sourceLanguage)}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {card.choices.front.map(d => <span key={d} className="chip">{d}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {(card.choices.backSynonyms?.length ?? 0) > 0 && (
+                    <div>
+                      <div className="text-[10px] text-ink-faint mb-1">
+                        {langName(targetLanguage)} synonyms (accepted as correct)
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {card.choices.backSynonyms!.map(s => <span key={s} className="chip text-success/80">{s}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {(card.choices.frontSynonyms?.length ?? 0) > 0 && (
+                    <div>
+                      <div className="text-[10px] text-ink-faint mb-1">
+                        {langName(sourceLanguage)} synonyms (accepted as correct)
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {card.choices.frontSynonyms!.map(s => <span key={s} className="chip text-success/80">{s}</span>)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-ink-faint text-xs italic">Not yet generated — will be created during your next study session.</p>
+              )}
+            </div>
 
             {confusions.length > 0 && (
               <div className="space-y-2">
@@ -627,7 +681,7 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
                 title="Reset options"
               >↺</button>
               {showResetMenu && (
-                <div className="absolute right-6 top-0 z-10 bg-surface-raised border border-white/10 rounded-lg py-1 w-52 shadow-xl">
+                <div className="absolute right-0 top-full mt-1 z-10 bg-surface-raised border border-white/10 rounded-lg py-1 w-52 shadow-xl">
                   <button
                     onClick={() => { setShowResetMenu(false); setConfirmReset(true) }}
                     className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-white/5 transition-colors"

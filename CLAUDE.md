@@ -517,6 +517,19 @@ response now includes these in `choices`. max_tokens bumped to 800.
   and shown in amber with a "(synonym)" note. The green highlight remains on the
   exact-match correct answer.
 
+## CardEditModal info panel additions (2026-06-15)
+
+`app/study/[deckId]/page.tsx` — `CardEditModal` info (ℹ) panel:
+
+- Added a **Distractors** section to the `showStats` panel (always shown, not gated on `state`). Displays the cached `card.choices` pools:
+  - "Prompt [source] → pick [target]" — `choices.back` (wrong target-language options)
+  - "Prompt [target] → pick [source]" — `choices.front` (wrong source-language options)
+  - Target synonyms (green chips) — `choices.backSynonyms`
+  - Source synonyms (green chips) — `choices.frontSynonyms`
+  - If `choices === null`: italic "Not yet generated" message
+- Section appears before "Often confused with".
+- Uses `langName()` (imported from `@/lib/languages`) for language display names.
+
 ## DeckSettingsPanel UX refactor (2026-06-15)
 
 `app/study/[deckId]/page.tsx` — `DeckSettingsPanel`:
@@ -528,6 +541,7 @@ response now includes these in `choices`. max_tokens bumped to 800.
   - Reset distractors: clears `choices = null` for all cards in the deck via a direct Supabase `update().in('id', cardIds)`, then triggers background `prefetchChoices()` regeneration. Does NOT touch `card_states`.
   - Reset all progress: calls existing `deckRepo.resetProgress()` (SQL RPC, clears both `card_states` and `choices`), then triggers background `prefetchChoices()`.
 - All three reset operations share `resetting`/`resetError` state (only one runs at a time).
+- **Fix**: reset menu now uses `top-full mt-1 right-0` (drops below the header row) instead of `top-0 right-6` (which overlapped the ↺ button and prevented clicking it again to close).
 
 ## Known backlog / open issues
 
