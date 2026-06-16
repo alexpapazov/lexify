@@ -18,6 +18,7 @@ export const runtime = 'nodejs'
 
 const MODEL = 'claude-haiku-4-5-20251001'
 const DISTRACTORS_PER_SIDE = 6
+const SYNONYMS_PER_SIDE = 4
 
 interface RequestBody {
   front:          string
@@ -70,52 +71,63 @@ The real flashcard pair is:
 - ${srcLang}: "${front}"
 - ${tgtLang}: "${back}"
 
-You need to generate TWO separate lists of wrong-answer options, one for each
-side of the card, because each side is quizzed differently and needs a
-different KIND of distractor.
+You need to generate FOUR separate lists:
+
+━━━ DISTRACTORS (wrong-answer options) ━━━
 
 1. "backDistractors" — used when the learner sees "${front}" (in ${srcLang})
    and must pick its meaning in ${tgtLang}. Generate ${DISTRACTORS_PER_SIDE}
-   words/phrases in ${tgtLang} that are SEMANTICALLY RELATED to "${back}" —
-   same general category, theme, or domain — but are clearly DIFFERENT in
-   meaning, NOT synonyms, near-synonyms, or alternate valid translations of
-   "${back}" (or of "${front}"). The goal is plausible-but-wrong options, never
-   options that could also be considered correct.
-   Example: if "${back}" means "joy", good distractors are other emotions like
-   "anger", "excitement", "sadness" — NOT "happiness", since that's a synonym
-   and would make the question ambiguous.
-   Similar in part of speech and length to "${back}". Distinct from each other
-   and from: ${avoidBack.join(', ') || '(none)'}.
+   words/phrases in ${tgtLang} that are from the SAME SEMANTIC CATEGORY as
+   "${back}" but have CLEARLY DIFFERENT DENOTATIONS — not synonyms, not
+   near-synonyms, not alternate translations. The learner must be genuinely
+   wrong to pick one.
+   CRITICAL: if "${back}" means "puppy", then "pup" and "puppy dog" are
+   INVALID (synonyms). Valid distractors are "kitten", "bunny", "duckling" —
+   different animals in the same category.
+   Example: if "${back}" is "joy", valid distractors are "anger", "sadness",
+   "fear" — NOT "happiness", "delight", or "elation" (all synonyms of joy).
+   Similar in part of speech and grammatical form to "${back}". Distinct from
+   each other and from: ${avoidBack.join(', ') || '(none)'}.
 
 2. "frontDistractors" — used when the learner sees "${back}" (in ${tgtLang})
    and must pick the matching word in ${srcLang}. Generate ${DISTRACTORS_PER_SIDE}
    words/phrases in ${srcLang} that LOOK / SOUND SIMILAR to "${front}" —
    similar spelling, letter patterns, length, or word root — so the learner
    has to recall the exact word rather than just recognizing the "shape" of
-   it. These do NOT need to be related in meaning to "${front}" or "${back}"
-   at all — visual/phonetic similarity is what matters.
-   Example: if "${front}" is "llenar", good distractors are other similar-
-   looking verbs like "llamar", "llover", "llegar".
-   Distinct from each other and from: ${avoidFront.join(', ') || '(none)'}.
+   it. These do NOT need to be related in meaning to "${front}" at all.
+   Example: if "${front}" is "llenar", valid distractors are "llamar",
+   "llover", "llegar". Distinct from each other and from: ${avoidFront.join(', ') || '(none)'}.
 
-FORMATTING: if "${back}" or "${front}" contains punctuation that signals
-multiple alternate phrasings — e.g. a slash like "traffic jam / jam", or a
-parenthetical like "estate (property)" — that formatting itself is a clue to
-the learner about which option is correct. To avoid giving the answer away,
-every distractor on that side must follow the SAME formatting pattern (e.g.
-also "word / word" with two short alternates, or also "word (word)"), even if
-you have to supply a second short synonym/alternate yourself. If the correct
-answer on a side has no such punctuation, distractors on that side should
-likewise be plain, single phrases with no slashes or parentheses.
+━━━ SYNONYMS (alternate correct answers to ACCEPT, NOT show as distractors) ━━━
 
-CRITICAL: every "frontDistractors" value must be written in ${srcLang}, and
-every "backDistractors" value must be written in ${tgtLang}. Never mix
-languages within a list.
+3. "backSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${tgtLang}
+   that are genuine synonyms, near-synonyms, or equally valid translations of
+   "${back}". These will be accepted as correct if the learner types or picks
+   them. If "${back}" has no common synonyms, return an empty list [].
+   Example: if "${back}" is "puppy", return ["pup", "puppy dog"].
+   Example: if "${back}" is "joy", return ["happiness", "delight"].
 
-Respond with ONLY a JSON object, no other text, in exactly this shape:
+4. "frontSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${srcLang}
+   that are genuine synonyms or equally valid forms of "${front}". If none
+   exist, return []. Example: if "${front}" is "el auto", return ["el coche",
+   "el carro"].
+
+━━━ FORMATTING RULE ━━━
+
+If "${back}" or "${front}" uses a slash ("traffic jam / jam") or parenthetical
+("estate (property)"), every distractor on that side must follow the SAME
+pattern so the format isn't a giveaway. If the correct answer has no such
+punctuation, distractors should also be plain.
+
+CRITICAL LANGUAGE CHECK: "frontDistractors" and "frontSynonyms" must be in
+${srcLang}. "backDistractors" and "backSynonyms" must be in ${tgtLang}.
+
+Respond with ONLY a JSON object, no other text:
 {
-  "frontDistractors": ["<word in ${srcLang}>", "<word in ${srcLang}>", "<word in ${srcLang}>", "<word in ${srcLang}>", "<word in ${srcLang}>", "<word in ${srcLang}>"],
-  "backDistractors": ["<word in ${tgtLang}>", "<word in ${tgtLang}>", "<word in ${tgtLang}>", "<word in ${tgtLang}>", "<word in ${tgtLang}>", "<word in ${tgtLang}>"]
+  "frontDistractors": ["...", "...", "...", "...", "...", "..."],
+  "backDistractors":  ["...", "...", "...", "...", "...", "..."],
+  "frontSynonyms":    ["...", "..."],
+  "backSynonyms":     ["...", "..."]
 }`
 
   try {
@@ -128,7 +140,7 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 600,
+        max_tokens: 800,
         messages: [{ role: 'user', content: prompt }],
       }),
     })
@@ -139,7 +151,12 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
 
     const data = await res.json()
     const text: string = data?.content?.[0]?.text ?? ''
-    const parsed = extractJson(text) as { frontDistractors?: unknown; backDistractors?: unknown } | null
+    const parsed = extractJson(text) as {
+      frontDistractors?: unknown
+      backDistractors?:  unknown
+      frontSynonyms?:    unknown
+      backSynonyms?:     unknown
+    } | null
 
     if (!parsed) {
       return NextResponse.json({ ok: false, reason: 'parse-error' })
@@ -160,11 +177,16 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
       return NextResponse.json({ ok: false, reason: 'parse-error' })
     }
 
+    const frontSynonyms = toStringList(parsed.frontSynonyms)
+    const backSynonyms  = toStringList(parsed.backSynonyms)
+
     return NextResponse.json({
       ok: true,
       choices: {
         front: frontDistractors,
         back:  backDistractors,
+        ...(frontSynonyms.length > 0 && { frontSynonyms }),
+        ...(backSynonyms.length  > 0 && { backSynonyms }),
       },
     })
   } catch {

@@ -50,11 +50,30 @@ export function dedupeAgainst(correct: string, pool: string[]): string[] {
   return out
 }
 
-/** Random sibling-card fallback: pull `count` other values from `side` of other cards in the deck. */
+/**
+ * Returns true if `candidate` is likely a synonym / near-form of `correct`
+ * and should therefore NOT appear as a distractor. Heuristics:
+ *  - One contains the other (e.g. "puppy" / "puppy dog")
+ *  - Same first N characters (e.g. "pup" / "puppy")
+ */
+function isPotentialSynonym(correct: string, candidate: string): boolean {
+  const nc = norm(correct)
+  const nd = norm(candidate)
+  if (nc === nd) return true
+  if (nc.includes(nd) || nd.includes(nc)) return true
+  // Shared prefix of length ≥ 3 (catches "pup" / "puppy", "auto" / "automobile")
+  const prefixLen = Math.min(nc.length, nd.length)
+  if (prefixLen >= 3 && nc.slice(0, prefixLen) === nd.slice(0, prefixLen)) return true
+  return false
+}
+
+/** Random sibling-card fallback: pull `count` other values from `side` of other cards in the deck.
+ *  Filters out values that look like synonyms of the correct answer. */
 function deckFallback(card: Card, side: CardSide, deckCards: Card[], correct: string, count: number): string[] {
   const pool = deckCards
     .filter(c => c.id !== card.id)
     .map(c => (side === 'front' ? c.front : c.back))
+    .filter(v => !isPotentialSynonym(correct, v))
   return shuffle(dedupeAgainst(correct, pool)).slice(0, count)
 }
 
@@ -98,9 +117,13 @@ export function buildOptions(
   deckCards: Card[],
 ): string[] {
   const correct = side === 'front' ? card.front : card.back
+  const synonyms = (side === 'front' ? card.choices?.frontSynonyms : card.choices?.backSynonyms) ?? []
   const distractorsNeeded = OPTIONS_NEEDED - 1
 
-  let pool = dedupeAgainst(correct, card.choices?.[side] ?? [])
+  // Filter out synonyms from cached AI distractors so they're never shown as wrong options
+  const cachedFiltered = (card.choices?.[side] ?? []).filter(d => !synonyms.some(s => norm(s) === norm(d)))
+
+  let pool = dedupeAgainst(correct, cachedFiltered)
   if (pool.length < distractorsNeeded) {
     const fallback = deckFallback(card, side, deckCards, correct, distractorsNeeded - pool.length)
     pool = dedupeAgainst(correct, [...pool, ...fallback])

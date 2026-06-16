@@ -111,6 +111,10 @@ export interface Deck {
 export interface CardChoices {
   front: string[]
   back:  string[]
+  /** Synonyms/alternate phrasings of the correct front answer — accepted as correct in multiple choice. */
+  frontSynonyms?: string[]
+  /** Synonyms/alternate phrasings of the correct back answer — accepted as correct in multiple choice. */
+  backSynonyms?: string[]
 }
 
 export interface Card {

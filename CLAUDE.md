@@ -82,9 +82,10 @@ vocabulary pipeline, but the domain model is language-pair-generic.
 - Next.js App Router + TypeScript (strict mode), all pages are `'use client'`.
 - Supabase (Postgres + Auth + RLS) as the backend. SQL migrations live in
   `supabase/migrations/`, numbered sequentially (`001_...` through
-  `025_...` as of 2026-06-15).
+  `029_...` as of 2026-06-15).
 - Tailwind for styling.
 - Jest for engine unit tests (`npm test`).
+- `lib/dates.ts` — `getToday(tz?)` utility for timezone-aware YYYY-MM-DD dates.
 
 ## Directory layout
 
@@ -393,7 +394,7 @@ distractors".
 
 ## Migrations
 
-Sequential, in `supabase/migrations/`. Latest is `027`:
+Sequential, in `supabase/migrations/`. Latest is `029`:
 
 - `001_initial.sql` … `020_scheduler_v2.sql` — core schema, folders, language
   pairs, shared cards, scheduler v1→v2, lapse clustering.
@@ -417,6 +418,8 @@ Sequential, in `supabase/migrations/`. Latest is `027`:
 - `028_language_pair_flags.sql` — adds `flag TEXT` (nullable) to
   `language_pairs` for per-pair custom flag emoji. NULL = use the language's
   default flag from `lib/languages.ts`.
+- `029_profile_timezone.sql` — adds `timezone TEXT` (nullable) to `profiles`.
+  NULL = UTC. Controls which calendar day is "today" for daily study tracking.
 
 **Migrations are not auto-applied.** When you add one, tell the user to run
 it in the Supabase SQL editor (or via CLI) — don't assume it's live just
@@ -444,6 +447,71 @@ built/pushed/deployed.
 - `supabase/migrations/028_language_pair_flags.sql`: Adds `flag TEXT` (nullable) to `language_pairs`. **Must be applied in Supabase before flag-picker will persist.**
 - `domain/index.ts`: `LanguagePair` now has `flag: string | null`.
 - `app/library/page.tsx`: Library pair boxes show native language names + per-pair custom flag (falls back to default). Boxes are draggable — left half = insert before, right half = insert after; accent border shows drop position. Drag image = source language flag emoji. Flag picker modal to change existing pair flags. Flag picker inline in "New language" form. Fix: drag-and-drop uses refs (`draggingPairKeyRef`, `pairDropPosRef`) to avoid stale-closure bugs; `effectAllowed='move'` and `dropEffect='move'` suppress the green "+" cursor.
+
+## Session features (2026-06-15 continued)
+
+### "I don't know" button (all 3 session pages)
+
+`components/session/MultipleChoiceMode.tsx`:
+- New `onIDontKnow?: () => void` prop. Renders a subtle "I don't know" link
+  below the prompt (before the learner commits to a choice). Clicking it calls
+  the callback; the parent applies the penalty.
+
+All 3 session pages (`study/[deckId]/session`, `study/folder/[folderId]/session`,
+`study/all/session`):
+- `handleIDontKnow`: runs `progressAfterReview` 3 times with `rating:'again'`
+  (heavier SRS penalty than a single wrong answer), records 3 review events,
+  upserts the final state, then re-queues the card `IDONTKNOW_REQUEUE_OFFSET = 4`
+  slots ahead so it resurfaces this session.
+- `handleUndoIDontKnow`: restores the pre-IDontKnow state via `stateRepo.upsert`,
+  removes the re-queued copy (tagged `idontknow: true` on `SessionCard`), inserts
+  the card at the current queue index, and clears the undo state.
+- `iDontKnowUndo` state holds `{ cardId, prevState }`.
+- An undo banner appears above the current card while `iDontKnowUndo` is set.
+  Banner is cleared when any other answer is submitted.
+
+### Timezone in settings (migration 029)
+
+`supabase/migrations/029_profile_timezone.sql`: adds `timezone TEXT` (nullable)
+to `profiles`. NULL = UTC.
+
+`app/settings/page.tsx`: new "Time zone" panel with a select populated from
+`Intl.supportedValuesOf('timeZone')` (falls back to a text input). Auto-detects
+the browser's timezone as default. Saved to `profiles.timezone`.
+
+`lib/dates.ts`: new `getToday(tz = 'UTC'): string` helper that returns the
+current date as YYYY-MM-DD in the given IANA timezone.
+
+All 3 session pages: load `profiles.timezone` at session start and use
+`getToday(tz)` instead of `now.toISOString().slice(0, 10)` for the `today`
+variable (used for `introducedToday` counts and in-code date comparisons).
+
+**Migration `029_profile_timezone.sql` must be applied in Supabase before
+timezone settings take effect.**
+
+### Synonym-aware multiple choice (no migration needed)
+
+`domain/index.ts`: `CardChoices` extended with optional `frontSynonyms?: string[]`
+and `backSynonyms?: string[]` — lists of words/phrases that are valid alternate
+answers and should be accepted as correct, not shown as distractors.
+
+`app/api/distractors/route.ts`: updated prompt explicitly asks the AI for
+non-synonym distractors (same semantic category, different denotation) and also
+returns `frontSynonyms`/`backSynonyms` lists for the correct answer. The
+response now includes these in `choices`. max_tokens bumped to 800.
+
+`lib/distractors.ts`:
+- `isPotentialSynonym(correct, candidate)`: heuristic filter — returns true if
+  one string contains the other, or if they share a prefix of length ≥ 3.
+- `deckFallback`: filters out potential synonyms before choosing random sibling
+  values, so "puppy" doesn't get "pup" or "puppy dog" as distractors.
+- `buildOptions`: strips known synonyms from the cached AI distractor pool
+  before building options (prevents old cached synonyms from appearing).
+
+`components/session/MultipleChoiceMode.tsx`:
+- If the learner picks a synonym of the correct answer, it's accepted as correct
+  and shown in amber with a "(synonym)" note. The green highlight remains on the
+  exact-match correct answer.
 
 ## Known backlog / open issues
 

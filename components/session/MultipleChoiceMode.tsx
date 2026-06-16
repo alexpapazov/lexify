@@ -11,8 +11,12 @@ import { buildOptions, ensureChoicesGenerated, needsChoices } from '@/lib/distra
  * option gives immediate color-coded feedback, then waits for the learner
  * to press Continue (or hit Enter, since the Continue button is
  * auto-focused) before advancing — no auto-advance.
+ *
+ * An "I don't know" button appears before a choice is made. Pressing it
+ * counts as a heavy penalty (3 agains) handled by the parent. A synonym
+ * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, onChoicesCached, onRate }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, onChoicesCached, onRate, onIDontKnow }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -23,20 +27,18 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   /** Called when AI generation produced a new choices pool, so the caller can cache it locally too. */
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
+  /** Called when the learner pressed "I don't know" — parent applies a heavier penalty. */
+  onIDontKnow?: () => void
 }) {
-  // Show options immediately — cached AI choices if there are enough,
-  // otherwise sibling-card values from the deck as a temporary stand-in.
   const [choices,  setChoices]  = useState<string[]>(() => buildOptions(card, answerSide, deckCards))
   const [selected, setSelected] = useState<string | null>(null)
+  const [viaSynonym, setViaSynonym] = useState(false)
 
   useEffect(() => {
     setChoices(buildOptions(card, answerSide, deckCards))
     setSelected(null)
+    setViaSynonym(false)
 
-    // If we're still relying on the deck-based fallback, try to generate and
-    // permanently cache real AI distractors in the background. This doesn't
-    // affect the options already shown for this card — it just means future
-    // visits to this card will use the AI-generated choices.
     if (!needsChoices(card, answerSide)) return
     let cancelled = false
     ensureChoicesGenerated(card, answerSide, deckCards, sourceLanguage, targetLanguage)
@@ -48,17 +50,28 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id])
 
-  const prompt  = promptSide === 'front' ? card.front : card.back
-  const correct = answerSide === 'front' ? card.front : card.back
+  const prompt   = promptSide  === 'front' ? card.front : card.back
+  const correct  = answerSide  === 'front' ? card.front : card.back
+  const synonyms = (answerSide === 'front' ? card.choices?.frontSynonyms : card.choices?.backSynonyms) ?? []
+
+  function norm(s: string) { return s.trim().toLowerCase() }
+
+  function isSynonym(choice: string): boolean {
+    return synonyms.some(s => norm(s) === norm(choice))
+  }
 
   function choose(choice: string) {
     if (selected) return
     setSelected(choice)
+    const isExactMatch = norm(choice) === norm(correct)
+    setViaSynonym(!isExactMatch && isSynonym(choice))
   }
 
   function continueNext() {
     if (!selected) return
-    const wasCorrect = selected.trim().toLowerCase() === correct.trim().toLowerCase()
+    const isExactMatch  = norm(selected) === norm(correct)
+    const isSyn         = !isExactMatch && isSynonym(selected)
+    const wasCorrect    = isExactMatch || isSyn
     onRate(wasCorrect ? 'good' : 'again', wasCorrect, selected)
   }
 
@@ -68,15 +81,31 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
       <div className="panel min-h-[120px] flex items-center justify-center text-center">
         <p className="text-2xl font-medium text-ink">{prompt}</p>
       </div>
+
+      {/* "I don't know" button — only shown before the learner commits to a choice */}
+      {!selected && onIDontKnow && (
+        <div className="flex justify-center">
+          <button
+            onClick={onIDontKnow}
+            className="text-xs text-ink-faint hover:text-ink-muted underline underline-offset-2 transition-colors"
+          >
+            I don&apos;t know
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {choices.map(choice => {
-          const isCorrect  = choice.trim().toLowerCase() === correct.trim().toLowerCase()
+          const isCorrect  = norm(choice) === norm(correct)
           const isSelected = choice === selected
+          const isSyn      = !isCorrect && isSynonym(choice)
           let style = 'border-white/10 hover:border-accent/40 hover:bg-surface-raised/50 text-ink'
           if (selected) {
-            if (isCorrect)       style = 'border-success/60 bg-success/10 text-success'
-            else if (isSelected) style = 'border-danger/60 bg-danger/10 text-danger'
-            else                 style = 'border-white/5 text-ink-faint opacity-50'
+            if (isCorrect)        style = 'border-success/60 bg-success/10 text-success'
+            else if (isSyn && isSelected) style = 'border-warning/60 bg-warning/10 text-warning'
+            else if (isSyn)       style = 'border-warning/30 bg-warning/5 text-warning/60 opacity-60'
+            else if (isSelected)  style = 'border-danger/60 bg-danger/10 text-danger'
+            else                  style = 'border-white/5 text-ink-faint opacity-50'
           }
           return (
             <button key={choice} onClick={() => choose(choice)} disabled={!!selected}
@@ -86,9 +115,13 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
           )
         })}
       </div>
+
+      {selected && viaSynonym && (
+        <p className="text-xs text-center text-warning/80">Also accepted — this is a synonym of the correct answer.</p>
+      )}
+
       {selected && (
         <div className="flex justify-center">
-          {/* Auto-focused so pressing Enter continues. */}
           <button onClick={continueNext} autoFocus className="btn-primary px-10">
             Continue
           </button>

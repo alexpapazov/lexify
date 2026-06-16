@@ -35,27 +35,39 @@ function ConfirmDialog({ message, onConfirm, onCancel }: {
   )
 }
 
+function detectBrowserTimezone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return 'UTC' }
+}
+
 export default function SettingsPage() {
   const [displayName,   setDisplayName]   = useState('')
   const [selectedLangs, setSelectedLangs] = useState<string[]>([])
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
   const [spilloverDue,  setSpilloverDue]  = useState(false)
+  const [timezone,      setTimezone]      = useState('')
   const [loading,       setLoading]       = useState(true)
   const [saved,         setSaved]         = useState(false)
   const [confirmReset,  setConfirmReset]  = useState(false)
   const [resetDone,     setResetDone]     = useState(false)
+  const [tzList,        setTzList]        = useState<string[]>([])
 
   const router   = useRouter()
   const supabase = createClient()
 
   useEffect(() => {
+    // Populate timezone list from browser (en-CA locale gives YYYY-MM-DD dates)
+    try {
+      const zones = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? []
+      setTzList(zones)
+    } catch { setTzList([]) }
+
     supabase.auth.getSession().then(async ({ data }) => {
       const uid = data.session?.user.id
       if (!uid) { router.push('/auth'); return }
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, default_daily_new_cards, spillover_due, learning_languages')
+        .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone')
         .eq('user_id', uid)
         .single()
 
@@ -64,6 +76,9 @@ export default function SettingsPage() {
         setDailyNewCards(profile.default_daily_new_cards ?? DEFAULT_DAILY_NEW_CARDS)
         setSpilloverDue(profile.spillover_due ?? false)
         setSelectedLangs((profile.learning_languages as string[]) ?? [])
+        setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
+      } else {
+        setTimezone(detectBrowserTimezone())
       }
       setLoading(false)
     })
@@ -77,6 +92,7 @@ export default function SettingsPage() {
       default_daily_new_cards: dailyNewCards,
       spillover_due:           spilloverDue,
       learning_languages:      selectedLangs,
+      timezone:                timezone || null,
     }).eq('user_id', session.user.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -121,6 +137,35 @@ export default function SettingsPage() {
           <label className="text-sm text-ink-muted">Password</label>
           <input type="password" className="input" placeholder="••••••••" disabled />
           <p className="text-xs text-ink-faint">Password changes via Supabase email link — coming soon.</p>
+        </div>
+      </div>
+
+      {/* Timezone */}
+      <div className="panel space-y-4">
+        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Time zone</h2>
+        <div className="space-y-1.5">
+          <label className="text-sm text-ink-muted">Your time zone</label>
+          {tzList.length > 0 ? (
+            <select
+              className="input"
+              value={timezone}
+              onChange={e => setTimezone(e.target.value)}
+            >
+              {tzList.map(tz => (
+                <option key={tz} value={tz}>{tz}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              className="input"
+              placeholder="e.g. America/New_York"
+              value={timezone}
+              onChange={e => setTimezone(e.target.value)}
+            />
+          )}
+          <p className="text-xs text-ink-faint">
+            Used to determine when &ldquo;today&rdquo; starts for daily study limits and card scheduling.
+          </p>
         </div>
       </div>
 
