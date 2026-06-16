@@ -130,9 +130,17 @@ function LibraryPageInner() {
   )
 }
 
-function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null; pairTarget: string | null }) {
+function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarget }: { pairSource: string | null; pairTarget: string | null }) {
   const router = useRouter()
+  const [pairSource, setPairSource] = useState(initPairSource)
+  const [pairTarget, setPairTarget] = useState(initPairTarget)
   const inPair = !!(pairSource && pairTarget)
+
+  // Sync with URL-driven navigation (browser back/forward, direct URL entry)
+  useEffect(() => {
+    setPairSource(initPairSource)
+    setPairTarget(initPairTarget)
+  }, [initPairSource, initPairTarget])
 
   const [allFolders,   setAllFolders]   = useState<Folder[]>([])
   const [allDecks,     setAllDecks]     = useState<Deck[]>([])
@@ -649,7 +657,11 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
                   <Link
                     href={`/library?source=${p.sourceLanguage}&target=${p.targetLanguage}`}
                     draggable={false}
-                    onClick={e => { if (draggingPairKeyRef.current) e.preventDefault() }}
+                    onClick={e => {
+                      if (draggingPairKeyRef.current) { e.preventDefault(); return }
+                      setPairSource(p.sourceLanguage)
+                      setPairTarget(p.targetLanguage)
+                    }}
                     className="flex flex-col items-center gap-0.5 w-full"
                   >
                     <span className="text-sm font-semibold text-ink">{langNativeName(p.sourceLanguage)}</span>
@@ -744,7 +756,10 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <Link href="/library" className="text-xs text-ink-muted hover:text-ink transition-colors">← Library</Link>
+          <button
+            onClick={() => { setPairSource(null); setPairTarget(null); router.push('/library') }}
+            className="text-xs text-ink-muted hover:text-ink transition-colors cursor-pointer"
+          >← Library</button>
           <h1 className="text-2xl font-semibold text-ink">
             {langName(pairSource!)} <span className="text-ink-faint text-base font-normal">/ {langName(pairTarget!)}</span>
           </h1>
