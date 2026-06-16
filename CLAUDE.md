@@ -292,8 +292,11 @@ per batch (default: 20). Controlled via `DeckPreferences.electiveSessionLimit`
 (`user_deck_preferences.elective_session_limit`): `null` → 20 (default),
 `0` → no cap, positive integer → cap at that value.
 
-- `DeckSettingsPanel` has a new "Cap elective/study-ahead sessions" checkbox
-  (auto-checked by default at 20) with a number input for the limit.
+- **As of 2026-06-15 (refactor)**: `DeckSettingsPanel` no longer shows a
+  separate "Cap elective/study-ahead sessions" section. The elective cap is
+  now always set equal to `cardsPerSession` when batch mode is on, and 0
+  (disabled) when batch mode is off. `handleSave()` sets
+  `electiveSessionLimit = cardsPerSessionOn ? cardsPerSession : 0`.
 - In `study/[deckId]/session/page.tsx`, after building any elective/category
   queue, the first `batchLimit` cards go into the session queue and the rest
   are stored in `remainingElective` state.
@@ -513,6 +516,18 @@ response now includes these in `choices`. max_tokens bumped to 800.
 - If the learner picks a synonym of the correct answer, it's accepted as correct
   and shown in amber with a "(synonym)" note. The green highlight remains on the
   exact-match correct answer.
+
+## DeckSettingsPanel UX refactor (2026-06-15)
+
+`app/study/[deckId]/page.tsx` — `DeckSettingsPanel`:
+
+- **Scrollable modal**: split into sticky header + `overflow-y-auto flex-1` body + sticky footer (Save/Cancel). `max-h-[85vh]` on the panel prevents it from overflowing the viewport.
+- **Merged batch/elective cap**: removed the separate "Cap elective/study-ahead sessions" checkbox. The single "Study in fixed-size batches" checkbox now controls both `cardsPerSession` and `electiveSessionLimit` (both set to the same number). Updated description copy to reflect this.
+- **Reset menu**: removed the two inline reset buttons at the bottom. Added a red ↺ icon button in the header (left of ✕) that opens a small dropdown with three options: "Reset backlog", "Reset distractors", "Reset all progress". Each triggers its own `ConfirmDialog`.
+  - Reset backlog: calls existing `prefRepo.resetDeckBacklog()` (unchanged).
+  - Reset distractors: clears `choices = null` for all cards in the deck via a direct Supabase `update().in('id', cardIds)`, then triggers background `prefetchChoices()` regeneration. Does NOT touch `card_states`.
+  - Reset all progress: calls existing `deckRepo.resetProgress()` (SQL RPC, clears both `card_states` and `choices`), then triggers background `prefetchChoices()`.
+- All three reset operations share `resetting`/`resetError` state (only one runs at a time).
 
 ## Known backlog / open issues
 

@@ -488,75 +488,101 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
   const today    = new Date().toISOString().slice(0, 10)
   const prefRepo = new SupabaseDeckPreferencesRepository()
 
-  const [dailyLimit,    setDailyLimit]    = useState(Math.min(initialPrefs?.dailyNewCards ?? defaultLimit, maxCards))
-  const [onlyToday,     setOnlyToday]     = useState(false)
-  const [todayOverride, setTodayOverride] = useState(initialPrefs?.dailyOverride     ?? defaultLimit)
-  const [spillover,     setSpillover]     = useState(initialPrefs?.spilloverDue      ?? defaultSpillover)
+  const [dailyLimit,        setDailyLimit]        = useState(Math.min(initialPrefs?.dailyNewCards ?? defaultLimit, maxCards))
+  const [onlyToday,         setOnlyToday]         = useState(false)
+  const [todayOverride,     setTodayOverride]     = useState(initialPrefs?.dailyOverride ?? defaultLimit)
+  const [spillover,         setSpillover]         = useState(initialPrefs?.spilloverDue  ?? defaultSpillover)
   const [cardsPerSessionOn, setCardsPerSessionOn] = useState((initialPrefs?.cardsPerSession ?? 0) > 0)
-  const [cardsPerSession,   setCardsPerSession]   = useState(initialPrefs?.cardsPerSession || 10)
-  // electiveSessionLimit: null = default (20, cap on), 0 = cap disabled, positive = cap at that value
-  const [electiveCapOn,    setElectiveCapOn]    = useState(initialPrefs?.electiveSessionLimit !== 0)
-  const [electiveCapLimit, setElectiveCapLimit] = useState(
-    initialPrefs?.electiveSessionLimit != null && initialPrefs.electiveSessionLimit > 0
-      ? initialPrefs.electiveSessionLimit
-      : 20
-  )
-  const [saving,        setSaving]        = useState(false)
-  const [saved,         setSaved]         = useState(false)
-  const [saveError,     setSaveError]     = useState<string | null>(null)
-  const [confirmReset,  setConfirmReset]  = useState(false)
-  const [confirmFullReset, setConfirmFullReset] = useState(false)
-  const [fullResetting,   setFullResetting]   = useState(false)
-  const [fullResetError,  setFullResetError]  = useState<string | null>(null)
+  const [cardsPerSession,   setCardsPerSession]   = useState(initialPrefs?.cardsPerSession || 20)
+  const [saving,            setSaving]            = useState(false)
+  const [saved,             setSaved]             = useState(false)
+  const [saveError,         setSaveError]         = useState<string | null>(null)
+
+  // Reset menu + confirm states
+  const [showResetMenu,        setShowResetMenu]        = useState(false)
+  const [confirmReset,         setConfirmReset]         = useState(false)
+  const [confirmResetChoices,  setConfirmResetChoices]  = useState(false)
+  const [confirmFullReset,     setConfirmFullReset]     = useState(false)
+  const [resetting,            setResetting]            = useState(false)
+  const [resetError,           setResetError]           = useState<string | null>(null)
 
   async function handleSave() {
     setSaving(true)
     setSaveError(null)
     try {
-    await prefRepo.upsert({
-      userId, deckId,
-      dailyNewCards:     dailyLimit,
-      dailyOverride:     onlyToday ? todayOverride : null,
-      dailyOverrideDate: onlyToday ? today         : null,
-      spilloverDue:      spillover,
-      cardsPerSession:      cardsPerSessionOn ? cardsPerSession : null,
-      electiveSessionLimit: electiveCapOn ? electiveCapLimit : 0,
-    })
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => { setSaved(false); onClose() }, 800)
+      await prefRepo.upsert({
+        userId, deckId,
+        dailyNewCards:     dailyLimit,
+        dailyOverride:     onlyToday ? todayOverride : null,
+        dailyOverrideDate: onlyToday ? today         : null,
+        spilloverDue:      spillover,
+        cardsPerSession:      cardsPerSessionOn ? cardsPerSession : null,
+        electiveSessionLimit: cardsPerSessionOn ? cardsPerSession : 0,
+      })
+      setSaving(false)
+      setSaved(true)
+      setTimeout(() => { setSaved(false); onClose() }, 800)
     } catch (err: unknown) {
       setSaving(false)
       setSaveError(err instanceof Error ? err.message : 'Save failed — did you run the SQL migrations?')
     }
   }
 
-  async function handleReset() {
-    await prefRepo.resetDeckBacklog(userId, deckId)
-    setConfirmReset(false)
-    onClose()
+  async function handleResetBacklog() {
+    setResetting(true)
+    setResetError(null)
+    try {
+      await prefRepo.resetDeckBacklog(userId, deckId)
+      setConfirmReset(false)
+      onClose()
+    } catch (err: unknown) {
+      setResetError(err instanceof Error ? err.message : 'Reset failed')
+    } finally {
+      setResetting(false)
+    }
+  }
+
+  async function handleResetChoices() {
+    setResetting(true)
+    setResetError(null)
+    try {
+      const supabase = createClient()
+      const cardIds = cards.map(c => c.id)
+      if (cardIds.length > 0) {
+        const { error } = await supabase.from('cards').update({ choices: null }).in('id', cardIds)
+        if (error) throw new Error(error.message)
+      }
+      setConfirmResetChoices(false)
+      onClose()
+      const resetCards = cards.map(c => ({ ...c, choices: null }))
+      const prefetchItems: PrefetchItem[] = resetCards.map(card => ({
+        card, side: 'front' as const, deckCards: resetCards, sourceLanguage, targetLanguage,
+      }))
+      void prefetchChoices(prefetchItems, () => {})
+    } catch (err: unknown) {
+      setResetError(err instanceof Error ? err.message : 'Reset failed')
+    } finally {
+      setResetting(false)
+    }
   }
 
   async function handleFullReset() {
-    setFullResetting(true)
-    setFullResetError(null)
+    setResetting(true)
+    setResetError(null)
     try {
       const deckRepo = new SupabaseDeckRepository()
       await deckRepo.resetProgress(deckId)
       setConfirmFullReset(false)
       onClose()
-
-      // Kick off background regeneration of AI answer choices for every
-      // card now that the cached pools were just cleared.
       const resetCards = cards.map(c => ({ ...c, choices: null }))
       const prefetchItems: PrefetchItem[] = resetCards.map(card => ({
-        card, side: 'front', deckCards: resetCards, sourceLanguage, targetLanguage,
+        card, side: 'front' as const, deckCards: resetCards, sourceLanguage, targetLanguage,
       }))
       void prefetchChoices(prefetchItems, () => {})
     } catch (err: unknown) {
-      setFullResetError(err instanceof Error ? err.message : 'Reset failed')
+      setResetError(err instanceof Error ? err.message : 'Reset failed')
     } finally {
-      setFullResetting(false)
+      setResetting(false)
     }
   }
 
@@ -564,151 +590,148 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
     <>
       {confirmReset && (
         <ConfirmDialog
-          message="Are you sure you want to reset and stray from your study routine? This will clear the backlog for this deck and treat all in-progress cards as starting fresh today."
-          onConfirm={handleReset}
+          message="This will clear the backlog for this deck — only today's cards will be due. Study progress is kept."
+          onConfirm={handleResetBacklog}
           onCancel={() => setConfirmReset(false)}
         />
       )}
-
+      {confirmResetChoices && (
+        <ConfirmDialog
+          message="This will clear all cached distractor choices for every card in this deck. New distractors will be generated in the background. Study progress is kept."
+          onConfirm={handleResetChoices}
+          onCancel={() => setConfirmResetChoices(false)}
+        />
+      )}
       {confirmFullReset && (
         <ConfirmDialog
-          message="This will erase ALL study progress for this deck — every card goes back to never studied, and cached answer choices are cleared and regenerated. The cards themselves and your other settings are not affected. This can't be undone."
+          message="This will erase ALL study progress for this deck — every card goes back to never studied, and cached answer choices are cleared and regenerated. Cards and settings are kept. This can't be undone."
           onConfirm={handleFullReset}
           onCancel={() => setConfirmFullReset(false)}
         />
       )}
 
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-        onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-        <div className="panel w-full max-w-sm space-y-5 mx-4">
-          <div className="flex items-center justify-between">
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        onClick={e => { if (e.target === e.currentTarget) { onClose(); setShowResetMenu(false) } }}
+      >
+        <div className="panel w-full max-w-sm mx-4 flex flex-col max-h-[85vh]">
+
+          {/* ── Header (non-scrolling) ── */}
+          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/10 shrink-0">
             <h2 className="text-base font-semibold text-ink">Deck study settings</h2>
-            <button onClick={onClose} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
+            <div className="flex items-center gap-2 relative">
+              {/* Reset menu trigger */}
+              <button
+                onClick={() => setShowResetMenu(v => !v)}
+                className="text-danger/70 hover:text-danger transition-colors text-lg leading-none"
+                title="Reset options"
+              >↺</button>
+              {showResetMenu && (
+                <div className="absolute right-6 top-0 z-10 bg-surface-raised border border-white/10 rounded-lg py-1 w-52 shadow-xl">
+                  <button
+                    onClick={() => { setShowResetMenu(false); setConfirmReset(true) }}
+                    className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-white/5 transition-colors"
+                  >Reset backlog</button>
+                  <button
+                    onClick={() => { setShowResetMenu(false); setConfirmResetChoices(true) }}
+                    className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-white/5 transition-colors"
+                  >Reset distractors</button>
+                  <button
+                    onClick={() => { setShowResetMenu(false); setConfirmFullReset(true) }}
+                    className="w-full text-left px-4 py-2 text-sm text-danger/80 hover:bg-white/5 transition-colors"
+                  >Reset all progress</button>
+                </div>
+              )}
+              <button onClick={onClose} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
+            </div>
           </div>
 
-          {/* Persistent daily limit */}
-          <div className="space-y-1.5">
-            <label className="text-sm text-ink-muted">New cards per day (persistent)</label>
-            <input type="number" min={1} max={500} className="input"
-              value={dailyLimit}
-              onChange={e => setDailyLimit(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
-            <p className="text-xs text-ink-faint">Stays until you change it. Max: {maxCards} (deck size).</p>
-          </div>
+          {/* ── Scrollable body ── */}
+          <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
 
-          {/* Today-only override */}
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={onlyToday} onChange={e => setOnlyToday(e.target.checked)} className="accent-accent w-4 h-4" />
-              <span className="text-sm text-ink">Override for today only</span>
-            </label>
-            {onlyToday && (
-              <div className="space-y-1.5 pl-6">
-                <label className="text-sm text-ink-muted">New cards just for today</label>
-                <input type="number" min={0} max={500} className="input"
-                  value={todayOverride}
-                  onChange={e => setTodayOverride(Math.min(maxCards, Math.max(0, parseInt(e.target.value) || 0)))} />
-                <p className="text-xs text-ink-faint">Tomorrow reverts to {dailyLimit} cards/day.</p>
-              </div>
-            )}
-          </div>
+            {/* Persistent daily limit */}
+            <div className="space-y-1.5">
+              <label className="text-sm text-ink-muted">New cards per day (persistent)</label>
+              <input type="number" min={1} max={500} className="input"
+                value={dailyLimit}
+                onChange={e => setDailyLimit(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
+              <p className="text-xs text-ink-faint">Stays until you change it. Max: {maxCards} (deck size).</p>
+            </div>
 
-          {/* Spillover toggle */}
-          <div className="space-y-1">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={spillover} onChange={e => setSpillover(e.target.checked)} className="accent-accent w-4 h-4" />
-              <span className="text-sm text-ink">Due cards spill over</span>
-            </label>
-            <p className="text-xs text-ink-faint pl-6">
-              {spillover
-                ? 'Cards you miss accumulate — tomorrow you may see more than your daily limit.'
-                : 'Missed cards count toward tomorrow\'s limit — total stays at ' + dailyLimit + '/day.'}
-            </p>
-          </div>
+            {/* Today-only override */}
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={onlyToday} onChange={e => setOnlyToday(e.target.checked)} className="accent-accent w-4 h-4" />
+                <span className="text-sm text-ink">Override for today only</span>
+              </label>
+              {onlyToday && (
+                <div className="space-y-1.5 pl-6">
+                  <label className="text-sm text-ink-muted">New cards just for today</label>
+                  <input type="number" min={0} max={500} className="input"
+                    value={todayOverride}
+                    onChange={e => setTodayOverride(Math.min(maxCards, Math.max(0, parseInt(e.target.value) || 0)))} />
+                  <p className="text-xs text-ink-faint">Tomorrow reverts to {dailyLimit} cards/day.</p>
+                </div>
+              )}
+            </div>
 
-          {/* Cards per session (batch mode) */}
-          <div className="space-y-2 border-t border-white/10 pt-3">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={cardsPerSessionOn} onChange={e => setCardsPerSessionOn(e.target.checked)} className="accent-accent w-4 h-4" />
-              <span className="text-sm text-ink">Study in fixed-size batches</span>
-            </label>
-            {cardsPerSessionOn && (
-              <div className="space-y-1.5 pl-6">
-                <label className="text-sm text-ink-muted">Cards per session</label>
-                <input type="number" min={1} max={500} className="input"
-                  value={cardsPerSession}
-                  onChange={e => setCardsPerSession(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
-                <p className="text-xs text-ink-faint">
-                  Keeps {cardsPerSession} new card{cardsPerSession !== 1 ? 's' : ''} in the learning pipeline at a time —
-                  once a card graduates, the next session introduces another to take its place. Overrides the daily limit above.
-                </p>
-              </div>
-            )}
-          </div>
+            {/* Spillover toggle */}
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={spillover} onChange={e => setSpillover(e.target.checked)} className="accent-accent w-4 h-4" />
+                <span className="text-sm text-ink">Due cards spill over</span>
+              </label>
+              <p className="text-xs text-ink-faint pl-6">
+                {spillover
+                  ? 'Cards you miss accumulate — tomorrow you may see more than your daily limit.'
+                  : 'Missed cards count toward tomorrow\'s limit — total stays at ' + dailyLimit + '/day.'}
+              </p>
+            </div>
 
-          {/* Elective session limit */}
-          <div className="space-y-2 border-t border-white/10 pt-3">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={electiveCapOn} onChange={e => setElectiveCapOn(e.target.checked)} className="accent-accent w-4 h-4" />
-              <span className="text-sm text-ink">Cap elective/study-ahead sessions</span>
-            </label>
-            {electiveCapOn && (
-              <div className="space-y-1.5 pl-6">
-                <label className="text-sm text-ink-muted">Cards per elective session</label>
-                <input type="number" min={1} max={500} className="input"
-                  value={electiveCapLimit}
-                  onChange={e => setElectiveCapLimit(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
-                <p className="text-xs text-ink-faint">
-                  Limits each study-ahead or category session to {electiveCapLimit} card{electiveCapLimit !== 1 ? 's' : ''}.
-                  A &ldquo;Study ahead&rdquo; button appears after each batch to continue.
-                </p>
-              </div>
-            )}
-          </div>
+            {/* Cards per session (batch mode) — also controls elective/study-ahead cap */}
+            <div className="space-y-2 border-t border-white/10 pt-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={cardsPerSessionOn} onChange={e => setCardsPerSessionOn(e.target.checked)} className="accent-accent w-4 h-4" />
+                <span className="text-sm text-ink">Study in fixed-size batches</span>
+              </label>
+              {cardsPerSessionOn && (
+                <div className="space-y-1.5 pl-6">
+                  <label className="text-sm text-ink-muted">Cards per session</label>
+                  <input type="number" min={1} max={500} className="input"
+                    value={cardsPerSession}
+                    onChange={e => setCardsPerSession(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
+                  <p className="text-xs text-ink-faint">
+                    Keeps {cardsPerSession} new card{cardsPerSession !== 1 ? 's' : ''} in the learning pipeline at a time.
+                    Once a card graduates, the next session introduces another to take its place.
+                    Also caps study-ahead and elective sessions to {cardsPerSession} cards per batch.
+                    Overrides the daily limit above.
+                  </p>
+                </div>
+              )}
+            </div>
 
-          {saveError && (
-            <p className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
-              ⚠ {saveError}
-            </p>
-          )}
-
-          <div className="flex gap-3">
-            <button className="btn-primary flex-1" onClick={handleSave} disabled={saving}>
-              {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
-            </button>
-            <button className="btn-ghost" onClick={onClose}>Cancel</button>
-          </div>
-
-          {/* Reset divider */}
-          <div className="border-t border-white/10 pt-3">
-            <button
-              onClick={() => setConfirmReset(true)}
-              className="text-sm text-danger/70 hover:text-danger transition-colors w-full text-left"
-            >
-              ↺ Reset backlog for this deck
-            </button>
-            <p className="text-xs text-ink-faint mt-1">
-              Clears accumulated missed cards — only today&apos;s {dailyLimit} will be due.
-            </p>
-          </div>
-
-          {/* Full progress reset */}
-          <div className="border-t border-white/10 pt-3">
-            <button
-              onClick={() => setConfirmFullReset(true)}
-              disabled={fullResetting}
-              className="text-sm text-danger/70 hover:text-danger transition-colors w-full text-left disabled:opacity-40"
-            >
-              ↺ Reset all progress for this deck
-            </button>
-            <p className="text-xs text-ink-faint mt-1">
-              Resets every card to never studied and clears cached answer choices. Cards and settings are kept.
-            </p>
-            {fullResetError && (
-              <p className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-lg px-3 py-2 mt-2">
-                ⚠ {fullResetError}
+            {resetError && (
+              <p className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
+                ⚠ {resetError}
               </p>
             )}
           </div>
+
+          {/* ── Footer (non-scrolling) ── */}
+          <div className="px-5 pb-5 pt-4 border-t border-white/10 shrink-0 space-y-3">
+            {saveError && (
+              <p className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
+                ⚠ {saveError}
+              </p>
+            )}
+            <div className="flex gap-3">
+              <button className="btn-primary flex-1" onClick={handleSave} disabled={saving || resetting}>
+                {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
+              </button>
+              <button className="btn-ghost" onClick={onClose} disabled={saving || resetting}>Cancel</button>
+            </div>
+          </div>
+
         </div>
       </div>
     </>
