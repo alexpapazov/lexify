@@ -517,6 +517,22 @@ response now includes these in `choices`. max_tokens bumped to 800.
   and shown in amber with a "(synonym)" note. The green highlight remains on the
   exact-match correct answer.
 
+## TypingMode synonym detection (2026-06-15)
+
+`components/session/TypingMode.tsx`:
+
+- New `synonyms?: string[]` prop — accepted alternate phrasings for the answer side, sourced from `card.choices.frontSynonyms` / `card.choices.backSynonyms`.
+- `result` state shape extended with `viaSynonym: boolean`.
+- `check()` now also tests the typed input against each synonym using the same `gradeTyping()` normalization. If a synonym matches, `viaSynonym = true` and the answer is counted correct.
+- Display: a synonym match shows "Correct! (synonym)" in amber, plus a "The original term is: [expected]" note below. The learner can still press "Override as incorrect" to force the card back (ensuring they can recall the exact canonical form, not just a synonym).
+- When overridden as incorrect, the "(synonym)" note and "The original term is:" line are hidden (the card enters the wrong-answer retype flow as normal).
+
+All 3 session pages pass:
+```tsx
+synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+```
+to each `TypingMode` usage (2 per page — pre-graduation and graduated/graded-review).
+
 ## CardEditModal info panel additions (2026-06-15)
 
 `app/study/[deckId]/page.tsx` — `CardEditModal` info (ℹ) panel:

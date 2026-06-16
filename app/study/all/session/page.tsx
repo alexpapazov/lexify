@@ -520,6 +520,7 @@ function AllDueSessionInner() {
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
+          synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => { setIDontKnowUndo(null); handleAnswer(rating, wasCorrect, userAnswer) }} />
       ) : current.productionMode === 'self-graded' ? (
@@ -529,6 +530,7 @@ function AllDueSessionInner() {
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
+          synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => { setIDontKnowUndo(null); handleAnswer(rating, wasCorrect, userAnswer) }} />
       )}

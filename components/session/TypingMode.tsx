@@ -27,7 +27,7 @@ import { RatingButtons } from './RatingButtons'
  * - `gradedReview = true` (post-graduation, long-term retention): shows
  *   Again/Hard/Good/Easy instead of a single Continue button.
  */
-export function TypingMode({ card, promptSide, gradingSettings, gradedReview, deckName, overrideAnswers, onOverrideAnswer, onRate }: {
+export function TypingMode({ card, promptSide, gradingSettings, gradedReview, deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate }: {
   card: Card
   promptSide: 'front' | 'back'
   gradingSettings: GradingSettings
@@ -39,12 +39,20 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
    * treated as correct even though gradeTyping() alone would mark them wrong.
    */
   overrideAnswers?: string[]
+  /**
+   * Accepted synonym/alternate phrasings for the answer side (from
+   * card.choices.frontSynonyms / backSynonyms). When the learner types a
+   * synonym, the answer is marked correct but shows "The original term is…"
+   * so they know the canonical answer. They can still override as incorrect
+   * to force exact recall.
+   */
+  synonyms?: string[]
   /** Sets (accept=true) or clears (accept=false) a persisted typed-answer override for `normalizedAnswer`. */
   onOverrideAnswer?: (normalizedAnswer: string, accept: boolean) => void
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
 }) {
   const [input,       setInput]       = useState('')
-  const [result,      setResult]      = useState<{ correct: boolean; expected: string; viaOverride: boolean; normalizedUser: string } | null>(null)
+  const [result,      setResult]      = useState<{ correct: boolean; expected: string; viaOverride: boolean; viaSynonym: boolean; normalizedUser: string } | null>(null)
   const [override,    setOverride]    = useState<boolean | null>(null)
   const [retype,      setRetype]      = useState('')
 
@@ -73,14 +81,16 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   function check() {
     const base = gradeTyping(input, expected, gradingSettings)
     const viaOverride = !base.correct && (overrideAnswers ?? []).includes(base.normalizedUser)
-    setResult({ correct: base.correct || viaOverride, expected, viaOverride, normalizedUser: base.normalizedUser })
+    const viaSynonym  = !base.correct && !viaOverride &&
+      (synonyms ?? []).some(s => gradeTyping(input, s, gradingSettings).correct)
+    setResult({ correct: base.correct || viaOverride || viaSynonym, expected, viaOverride, viaSynonym, normalizedUser: base.normalizedUser })
     setOverride(null)
     setRetype('')
   }
 
   function dontKnow() {
     const normalizedUser = gradeTyping(input, expected, gradingSettings).normalizedUser
-    setResult({ correct: false, expected, viaOverride: false, normalizedUser })
+    setResult({ correct: false, expected, viaOverride: false, viaSynonym: false, normalizedUser })
     setOverride(null)
     setRetype('')
     setInput('')
@@ -132,11 +142,19 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
           <div className="space-y-4">
             <div className={`panel text-center py-3 ${finalCorrect ? 'border-success/30 bg-success/5' : 'border-danger/30 bg-danger/5'}`}>
               {finalCorrect ? (
-                <p className="text-success font-medium">
-                  Correct!
-                  {override === true && <span className="text-ink-faint font-normal"> (marked correct)</span>}
-                  {override === null && result.viaOverride && <span className="text-ink-faint font-normal"> (remembered override)</span>}
-                </p>
+                <div className="space-y-1">
+                  <p className="text-success font-medium">
+                    Correct!
+                    {override === true && <span className="text-ink-faint font-normal"> (marked correct)</span>}
+                    {override === null && result.viaOverride && <span className="text-ink-faint font-normal"> (remembered override)</span>}
+                    {override === null && result.viaSynonym && <span className="text-amber-400/80 font-normal"> (synonym)</span>}
+                  </p>
+                  {result.viaSynonym && override !== false && (
+                    <p className="text-xs text-ink-muted">
+                      The original term is: <span className="font-mono text-ink">{result.expected}</span>
+                    </p>
+                  )}
+                </div>
               ) : (
                 <div className="space-y-1">
                   <p className="text-danger font-medium">Not quite{override === false && <span className="text-ink-faint font-normal"> (marked wrong)</span>}</p>
