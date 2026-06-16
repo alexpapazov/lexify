@@ -414,6 +414,9 @@ Sequential, in `supabase/migrations/`. Latest is `027`:
 - `027_elective_session_limit.sql` — adds `elective_session_limit INTEGER`
   (nullable) to `user_deck_preferences`. NULL = default (20 cards/batch),
   0 = no cap, positive integer = cap at that value.
+- `028_language_pair_flags.sql` — adds `flag TEXT` (nullable) to
+  `language_pairs` for per-pair custom flag emoji. NULL = use the language's
+  default flag from `lib/languages.ts`.
 
 **Migrations are not auto-applied.** When you add one, tell the user to run
 it in the Supabase SQL editor (or via CLI) — don't assume it's live just
@@ -436,8 +439,11 @@ built/pushed/deployed.
 ## Library pair-grid improvements (2026-06-15)
 
 - `lib/languages.ts`: Added `nativeName` (language name in its own language, e.g. "Français" for French) and `flag` (emoji flag) fields to every `Language` entry. Added `langNativeName(code)` and `langFlag(code)` helpers. Signed languages (ASL, BSL) keep English abbreviations as their native name. The `Language` interface now includes these two new fields — any code importing it via `LANGUAGES` or the helpers should be checked if the type shape matters.
-- `lib/data/languagePairs.ts`: Added `updatePositions(updates: {sourceLanguage, targetLanguage, position}[])` to `SupabaseLanguagePairRepository` for persisting grid reorder.
-- `app/library/page.tsx`: Library pair boxes now show native language names + flag emoji. Boxes are draggable — drag to reorder the grid, the flag emoji of the source language appears as the drag image. Order is persisted to `language_pairs.position`. New state: `pairOrder` (local override for optimistic reorder), `draggingPairKey`, `dropPairKey`. New helpers: `getAllPairs()`, `applyPairDragImage()`, `commitPairDrop()`.
+- `lib/data/languagePairs.ts`: Added `updatePositions()`, `updateFlag()`, updated `create()` to accept optional `flag`, updated `rowToPair()` to read `flag`.
+- `lib/flagOptions.ts`: New file — ~130 country flags with names for the flag picker.
+- `supabase/migrations/028_language_pair_flags.sql`: Adds `flag TEXT` (nullable) to `language_pairs`. **Must be applied in Supabase before flag-picker will persist.**
+- `domain/index.ts`: `LanguagePair` now has `flag: string | null`.
+- `app/library/page.tsx`: Library pair boxes show native language names + per-pair custom flag (falls back to default). Boxes are draggable — left half = insert before, right half = insert after; accent border shows drop position. Drag image = source language flag emoji. Flag picker modal to change existing pair flags. Flag picker inline in "New language" form. Fix: drag-and-drop uses refs (`draggingPairKeyRef`, `pairDropPosRef`) to avoid stale-closure bugs; `effectAllowed='move'` and `dropEffect='move'` suppress the green "+" cursor.
 
 ## Known backlog / open issues
 

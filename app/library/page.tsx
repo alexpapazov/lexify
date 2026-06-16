@@ -14,6 +14,7 @@ import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCou
 const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { langName, langNativeName, langFlag } from '@/lib/languages'
+import { FLAG_OPTIONS } from '@/lib/flagOptions'
 import type { Folder, Deck, LanguagePair, Card, CardState } from '@/domain'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -150,15 +151,22 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
   const [addingPair,    setAddingPair]    = useState(false)
   const [newPairSource, setNewPairSource] = useState('')
   const [newPairTarget, setNewPairTarget] = useState('')
+  const [newPairFlag,   setNewPairFlag]   = useState('')
+  const [showNewPairFlagPicker, setShowNewPairFlagPicker] = useState(false)
+
+  // Flag editor for existing pairs
+  const [editFlagFor, setEditFlagFor] = useState<string | null>(null)  // "src|tgt" key
 
   // Drag state (folder/deck tree — only active in the inPair view)
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
   const [dropTarget,  setDropTarget]  = useState<DropTarget>(null)
 
   // Drag state for the language-pair grid (only active in the !inPair view)
-  const [pairOrder,        setPairOrder]        = useState<string[] | null>(null)
-  const [draggingPairKey,  setDraggingPairKey]  = useState<string | null>(null)
-  const [dropPairKey,      setDropPairKey]      = useState<string | null>(null)
+  const [pairOrder,      setPairOrder]      = useState<string[] | null>(null)
+  const [draggingPairKey, setDraggingPairKey] = useState<string | null>(null)
+  const [pairDropTarget,  setPairDropTarget]  = useState<{ key: string; pos: 'before' | 'after' } | null>(null)
+  const draggingPairKeyRef = useRef<string | null>(null)
+  const pairDropPosRef     = useRef<'before' | 'after'>('before')
 
   // Touch drag state
   const [touchGhost,   setTouchGhost]  = useState<{ x: number; y: number; type: 'folder' | 'deck' } | null>(null)
@@ -388,11 +396,23 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
   async function handleAddPair() {
     if (!newPairSource || !newPairTarget || !userId) return
     const pairRepo = new SupabaseLanguagePairRepository()
-    await pairRepo.create(userId, newPairSource, newPairTarget)
+    await pairRepo.create(userId, newPairSource, newPairTarget, newPairFlag || undefined)
     setNewPairSource('')
     setNewPairTarget('')
+    setNewPairFlag('')
+    setShowNewPairFlagPicker(false)
     setAddingPair(false)
     load()
+  }
+
+  async function handleChangePairFlag(pairKey: string, flag: string) {
+    const [src, tgt] = pairKey.split('|') as [string, string]
+    const pairRepo = new SupabaseLanguagePairRepository()
+    await pairRepo.updateFlag(src, tgt, flag)
+    setPairs(prev => prev.map(p =>
+      p.sourceLanguage === src && p.targetLanguage === tgt ? { ...p, flag } : p
+    ))
+    setEditFlagFor(null)
   }
 
   async function handleDeletePair() {
@@ -445,7 +465,7 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
       const key = `${d.sourceLanguage}|${d.targetLanguage}`
       if (!seen.has(key)) {
         seen.add(key)
-        result.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, createdAt: '' })
+        result.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, flag: null, createdAt: '' })
       }
     }
     if (pairOrder) {
@@ -460,33 +480,28 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
     return result
   }
 
-  function applyPairDragImage(e: React.DragEvent, sourceCode: string, targetCode: string) {
+  function applyPairDragImage(e: React.DragEvent, pairFlag: string) {
     const ghost = document.createElement('div')
-    ghost.textContent = langFlag(sourceCode)
-    ghost.style.cssText = 'font-size:48px;line-height:1;position:fixed;top:-200px;left:-200px;pointer-events:none'
+    ghost.textContent = pairFlag
+    ghost.style.cssText = 'font-size:52px;line-height:1;position:fixed;top:-200px;left:-200px;pointer-events:none'
     document.body.appendChild(ghost)
     e.dataTransfer.setDragImage(ghost, 30, 30)
     setTimeout(() => document.body.removeChild(ghost), 0)
   }
 
-  async function commitPairDrop() {
-    if (!draggingPairKey || !dropPairKey || draggingPairKey === dropPairKey) {
-      setDraggingPairKey(null); setDropPairKey(null); return
-    }
+  async function commitPairDrop(fromKey: string, toKey: string, pos: 'before' | 'after') {
     const current = getAllPairs()
     const keys = current.map(p => `${p.sourceLanguage}|${p.targetLanguage}`)
-    const fromIdx = keys.indexOf(draggingPairKey)
-    const toIdx   = keys.indexOf(dropPairKey)
-    if (fromIdx === -1 || toIdx === -1) { setDraggingPairKey(null); setDropPairKey(null); return }
+    const fromIdx = keys.indexOf(fromKey)
+    const toIdx   = keys.indexOf(toKey)
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return
 
-    const newKeys = reorder(keys, fromIdx, toIdx, 'before')
+    const newKeys = reorder(keys, fromIdx, toIdx, pos)
     setPairOrder(newKeys)
-    setDraggingPairKey(null)
-    setDropPairKey(null)
 
     const pairRepo = new SupabaseLanguagePairRepository()
-    await pairRepo.updatePositions(newKeys.map((key, i) => {
-      const [sourceLanguage, targetLanguage] = key.split('|') as [string, string]
+    await pairRepo.updatePositions(newKeys.map((k, i) => {
+      const [sourceLanguage, targetLanguage] = k.split('|') as [string, string]
       return { sourceLanguage, targetLanguage, position: i }
     }))
   }
@@ -507,12 +522,14 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
   if (!inPair) {
     const allPairs = getAllPairs()
 
+    const activePairFlag = (p: LanguagePair) => p.flag || langFlag(p.sourceLanguage)
+
     return (
-      <div className="space-y-5" onDragEnd={() => { setDraggingPairKey(null); setDropPairKey(null) }}>
+      <div className="space-y-5">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold text-ink">Library</h1>
           <button
-            onClick={() => { setAddingPair(true); setNewPairSource(''); setNewPairTarget('') }}
+            onClick={() => { setAddingPair(true); setNewPairSource(''); setNewPairTarget(''); setNewPairFlag(''); setShowNewPairFlagPicker(false) }}
             className="text-sm text-accent hover:text-accent-soft transition-colors"
           >
             + New language
@@ -522,12 +539,45 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
         {addingPair && (
           <div className="panel space-y-3 py-3">
             <div className="grid grid-cols-2 gap-3">
-              <LanguageCombobox label="Target language" value={newPairSource} onChange={setNewPairSource} />
+              <LanguageCombobox label="Target language" value={newPairSource} onChange={v => { setNewPairSource(v); setNewPairFlag('') }} />
               <LanguageCombobox label="Basis language"  value={newPairTarget} onChange={setNewPairTarget} />
             </div>
+            {newPairSource && (
+              <div className="relative">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-ink-muted">Flag:</span>
+                  <button
+                    onClick={() => setShowNewPairFlagPicker(v => !v)}
+                    className="text-2xl hover:bg-white/10 rounded p-1 transition-colors leading-none"
+                    title="Choose flag"
+                  >
+                    {newPairFlag || langFlag(newPairSource)}
+                  </button>
+                  {newPairFlag && (
+                    <button onClick={() => setNewPairFlag('')} className="text-xs text-ink-faint hover:text-ink transition-colors">Reset</button>
+                  )}
+                </div>
+                {showNewPairFlagPicker && (
+                  <div className="absolute left-0 top-10 z-30 bg-surface border border-white/10 rounded-lg p-3 shadow-xl w-72">
+                    <div className="grid grid-cols-8 gap-0.5 max-h-48 overflow-y-auto">
+                      {FLAG_OPTIONS.map(({ flag, name }) => (
+                        <button
+                          key={flag}
+                          onClick={() => { setNewPairFlag(flag); setShowNewPairFlagPicker(false) }}
+                          className="text-xl hover:bg-white/10 rounded p-1 transition-colors leading-none"
+                          title={name}
+                        >
+                          {flag}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <button onClick={handleAddPair} className="btn-primary text-xs py-1 px-3" disabled={!newPairSource || !newPairTarget}>Create</button>
-              <button onClick={() => setAddingPair(false)} className="text-ink-faint hover:text-ink text-xs transition-colors">Cancel</button>
+              <button onClick={() => { setAddingPair(false); setShowNewPairFlagPicker(false) }} className="text-ink-faint hover:text-ink text-xs transition-colors">Cancel</button>
             </div>
           </div>
         )}
@@ -541,33 +591,98 @@ function LibraryPageBody({ pairSource, pairTarget }: { pairSource: string | null
             {allPairs.map(p => {
               const key        = `${p.sourceLanguage}|${p.targetLanguage}`
               const isDragging = draggingPairKey === key
-              const isDropTarget = dropPairKey === key
+              const pdt        = pairDropTarget?.key === key ? pairDropTarget : null
+              const flag       = activePairFlag(p)
               return (
                 <div
                   key={key}
                   draggable
-                  onDragStart={e => { applyPairDragImage(e, p.sourceLanguage, p.targetLanguage); setDraggingPairKey(key) }}
-                  onDragOver={e => { e.preventDefault(); if (draggingPairKey && draggingPairKey !== key) setDropPairKey(key) }}
-                  onDragLeave={() => setDropPairKey(null)}
-                  onDrop={e => { e.preventDefault(); commitPairDrop() }}
-                  className={`panel flex flex-col items-center justify-center gap-1 py-6 text-center transition-colors cursor-grab active:cursor-grabbing select-none ${
-                    isDragging   ? 'opacity-40' :
-                    isDropTarget ? 'border-accent bg-accent/5 scale-[1.01]' :
-                    'hover:border-accent/40 hover:bg-surface-raised/50'
-                  }`}
+                  onDragStart={e => {
+                    e.dataTransfer.effectAllowed = 'move'
+                    applyPairDragImage(e, flag)
+                    draggingPairKeyRef.current = key
+                    setDraggingPairKey(key)
+                  }}
+                  onDragOver={e => {
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                    if (!draggingPairKeyRef.current || draggingPairKeyRef.current === key) return
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                    const pos: 'before' | 'after' = (e.clientX - rect.left) / rect.width < 0.5 ? 'before' : 'after'
+                    pairDropPosRef.current = pos
+                    setPairDropTarget({ key, pos })
+                  }}
+                  onDragLeave={e => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                      setPairDropTarget(t => t?.key === key ? null : t)
+                    }
+                  }}
+                  onDragEnd={() => {
+                    draggingPairKeyRef.current = null
+                    setDraggingPairKey(null)
+                    setPairDropTarget(null)
+                  }}
+                  onDrop={e => {
+                    e.preventDefault()
+                    const fromKey = draggingPairKeyRef.current
+                    const pos     = pairDropPosRef.current
+                    draggingPairKeyRef.current = null
+                    setDraggingPairKey(null)
+                    setPairDropTarget(null)
+                    if (fromKey && fromKey !== key) commitPairDrop(fromKey, key, pos)
+                  }}
+                  className={`panel flex flex-col items-center justify-center gap-1 py-6 text-center transition-all cursor-grab active:cursor-grabbing select-none relative ${
+                    isDragging ? 'opacity-40' : 'hover:bg-surface-raised/50'
+                  } ${pdt?.pos === 'before' ? 'border-l-2 border-l-accent' : pdt?.pos === 'after' ? 'border-r-2 border-r-accent' : ''}`}
                 >
+                  {/* Flag — click to change */}
+                  <div className="relative group/flag mb-1">
+                    <span className="text-2xl leading-none">{flag}</span>
+                    <button
+                      className="absolute inset-0 opacity-0 group-hover/flag:opacity-100 bg-black/50 rounded text-white text-xs flex items-center justify-center transition-opacity"
+                      onClick={e => { e.stopPropagation(); e.preventDefault(); setEditFlagFor(key) }}
+                      title="Change flag"
+                    >
+                      ✎
+                    </button>
+                  </div>
                   <Link
                     href={`/library?source=${p.sourceLanguage}&target=${p.targetLanguage}`}
-                    onClick={e => { if (draggingPairKey) e.preventDefault() }}
-                    className="flex flex-col items-center gap-1 w-full"
+                    draggable={false}
+                    onClick={e => { if (draggingPairKeyRef.current) e.preventDefault() }}
+                    className="flex flex-col items-center gap-0.5 w-full"
                   >
-                    <span className="text-2xl mb-1">{langFlag(p.sourceLanguage)}</span>
                     <span className="text-sm font-semibold text-ink">{langNativeName(p.sourceLanguage)}</span>
                     <span className="text-xs text-ink-muted">{langNativeName(p.targetLanguage)}</span>
                   </Link>
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {/* Flag picker modal for existing pairs */}
+        {editFlagFor && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+            onClick={() => setEditFlagFor(null)}
+          >
+            <div className="panel p-4 max-w-xs w-full mx-4" onClick={e => e.stopPropagation()}>
+              <p className="text-sm font-medium text-ink mb-3">Choose flag</p>
+              <div className="grid grid-cols-8 gap-0.5 max-h-56 overflow-y-auto">
+                {FLAG_OPTIONS.map(({ flag: f, name }) => (
+                  <button
+                    key={f}
+                    onClick={() => handleChangePairFlag(editFlagFor, f)}
+                    className="text-xl hover:bg-white/10 rounded p-1 transition-colors leading-none"
+                    title={name}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setEditFlagFor(null)} className="mt-3 text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+            </div>
           </div>
         )}
       </div>

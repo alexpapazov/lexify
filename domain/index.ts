@@ -82,6 +82,7 @@ export interface LanguagePair {
   sourceLanguage: string
   targetLanguage: string
   position:       number
+  flag:           string | null
   createdAt:      string
 }
 
