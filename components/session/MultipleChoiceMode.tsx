@@ -78,21 +78,18 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   return (
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
-      <div className="panel min-h-[120px] flex items-center justify-center text-center">
+      <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
         <p className="text-2xl font-medium text-ink">{prompt}</p>
-      </div>
-
-      {/* "I don't know" button — only shown before the learner commits to a choice */}
-      {!selected && onIDontKnow && (
-        <div className="flex justify-center">
+        {!selected && onIDontKnow && (
           <button
             onClick={onIDontKnow}
-            className="text-xs text-ink-faint hover:text-ink-muted underline underline-offset-2 transition-colors"
+            title="I don't know"
+            className="absolute bottom-3 right-3 text-lg text-danger/70 hover:text-danger transition-colors leading-none"
           >
-            I don&apos;t know
+            ?
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {choices.map(choice => {
