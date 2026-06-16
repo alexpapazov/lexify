@@ -88,7 +88,6 @@ function AllDueSessionInner() {
   const [submitting,      setSubmitting]      = useState(false)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
-  const [iDontKnowUndo,   setIDontKnowUndo]   = useState<{ cardId: string; prevState: CardState } | null>(null)
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -400,18 +399,16 @@ function AllDueSessionInner() {
         })
         newState = progressAfterReview(newState, pipeline, { wasCorrect: false, rating: 'again', wrongSeverity: undefined, wasTyped: false }, nowDate)
       }
-      await stateRepo.upsert(newState)
-      setIDontKnowUndo({ cardId: card.id, prevState })
-      const requeued: SessionCard = { ...current, state: newState, idontknow: true }
+      const counted = { ...newState, iDontKnowCount: (prevState.iDontKnowCount ?? 0) + 1 }
+      await stateRepo.upsert(counted)
+      const requeued: SessionCard = { ...current, state: counted, idontknow: true }
       setQueue(prev => {
         const next = [...prev]
-        next[index] = { ...current, state: newState }
+        next[index] = { ...current, state: counted }
         const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
         next.splice(insertPos, 0, requeued)
         return next
       })
-      if (index + 1 >= queue.length) setDone(true)
-      else setIndex(i => i + 1)
     } catch (err: unknown) {
       console.error('Failed to record I don\'t know:', err)
       setAnswerError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
@@ -420,26 +417,6 @@ function AllDueSessionInner() {
     }
   }, [queue, index, userId, submitting])
 
-  const handleUndoIDontKnow = useCallback(async () => {
-    if (!iDontKnowUndo) return
-    const { cardId, prevState } = iDontKnowUndo
-    try {
-      const stateRepo = new SupabaseCardStateRepository()
-      await stateRepo.upsert(prevState)
-      setQueue(prev => {
-        const withoutRequeue = prev.filter((item, i) => i <= index || !(item.idontknow && item.card.id === cardId))
-        const original = withoutRequeue.find(item => item.card.id === cardId)
-        if (!original) return withoutRequeue
-        const restoredItem: SessionCard = { ...original, state: prevState, idontknow: undefined }
-        const next = [...withoutRequeue]
-        next.splice(index, 0, restoredItem)
-        return next
-      })
-      setIDontKnowUndo(null)
-    } catch (err) {
-      console.error('Failed to undo I don\'t know:', err)
-    }
-  }, [iDontKnowUndo, index])
 
   const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
     setQueue(prev => prev.map(item => {
@@ -502,37 +479,34 @@ function AllDueSessionInner() {
           </button>
         </div>
       )}
-      {iDontKnowUndo && (
-        <div className="rounded-card border border-ink-faint/20 bg-surface-raised/50 px-4 py-2 text-xs text-ink-faint flex items-center justify-between gap-3">
-          <span>Marked &ldquo;I don&apos;t know&rdquo; — heavy penalty applied.</span>
-          <button onClick={handleUndoIDontKnow} className="text-accent hover:text-accent/80 underline shrink-0">
-            Undo
-          </button>
-        </div>
-      )}
       {!state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
-          onRate={(rating, wasCorrect, userAnswer) => { setIDontKnowUndo(null); handleAnswer(rating, wasCorrect, userAnswer) }} />
+          onAdvance={() => setIndex(i => i + 1)}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
-          onRate={(rating, wasCorrect, userAnswer) => { setIDontKnowUndo(null); handleAnswer(rating, wasCorrect, userAnswer) }} />
+          onIDontKnow={handleIDontKnow}
+          onAdvance={() => setIndex(i => i + 1)}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} deckName={deckName}
-          onRate={rating => { setIDontKnowUndo(null); handleAnswer(rating, rating !== 'again') }} />
+          onRate={rating => handleAnswer(rating, rating !== 'again')} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
-          onRate={(rating, wasCorrect, userAnswer) => { setIDontKnowUndo(null); handleAnswer(rating, wasCorrect, userAnswer) }} />
+          onIDontKnow={handleIDontKnow}
+          onAdvance={() => setIndex(i => i + 1)}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       )}
     </div>
   )

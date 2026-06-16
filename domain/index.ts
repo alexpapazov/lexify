@@ -312,6 +312,8 @@ export interface CardState {
    * haven't reached this window yet (or pre-date this field).
    */
   stage3EnteredDate: string | null
+  /** Total number of times the learner pressed "I don't know" on this card (across all sessions). */
+  iDontKnowCount: number
 }
 
 // ─── Ratings ──────────────────────────────────────────────────────────────────

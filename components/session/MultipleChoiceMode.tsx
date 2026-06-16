@@ -16,7 +16,7 @@ import { buildOptions, ensureChoicesGenerated, needsChoices } from '@/lib/distra
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, onChoicesCached, onRate, onIDontKnow }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, onChoicesCached, onRate, onIDontKnow, onAdvance }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -27,17 +27,21 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   /** Called when AI generation produced a new choices pool, so the caller can cache it locally too. */
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
-  /** Called when the learner pressed "I don't know" — parent applies a heavier penalty. */
+  /** Called when the learner pressed "?" — parent applies a heavy penalty behind the scenes. */
   onIDontKnow?: () => void
+  /** Called when Continue is pressed after "?" revealed the answer (penalty already applied via onIDontKnow). */
+  onAdvance?: () => void
 }) {
-  const [choices,  setChoices]  = useState<string[]>(() => buildOptions(card, answerSide, deckCards))
-  const [selected, setSelected] = useState<string | null>(null)
+  const [choices,   setChoices]   = useState<string[]>(() => buildOptions(card, answerSide, deckCards))
+  const [selected,  setSelected]  = useState<string | null>(null)
   const [viaSynonym, setViaSynonym] = useState(false)
+  const [revealed,  setRevealed]  = useState(false)
 
   useEffect(() => {
     setChoices(buildOptions(card, answerSide, deckCards))
     setSelected(null)
     setViaSynonym(false)
+    setRevealed(false)
 
     if (!needsChoices(card, answerSide)) return
     let cancelled = false
@@ -80,9 +84,9 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
         <p className="text-2xl font-medium text-ink">{prompt}</p>
-        {!selected && onIDontKnow && (
+        {!selected && !revealed && onIDontKnow && (
           <button
-            onClick={onIDontKnow}
+            onClick={() => { onIDontKnow(); setRevealed(true); setSelected(correct) }}
             title="I don't know"
             className="absolute bottom-3 right-3 text-lg text-danger/70 hover:text-danger transition-colors leading-none"
           >
@@ -119,7 +123,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
 
       {selected && (
         <div className="flex justify-center">
-          <button onClick={continueNext} autoFocus className="btn-primary px-10">
+          <button onClick={revealed ? onAdvance : continueNext} autoFocus className="btn-primary px-10">
             Continue
           </button>
         </div>

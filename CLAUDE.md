@@ -517,6 +517,15 @@ response now includes these in `choices`. max_tokens bumped to 800.
   and shown in amber with a "(synonym)" note. The green highlight remains on the
   exact-match correct answer.
 
+## "I don't know" UX overhaul (2026-06-15)
+
+- **No more banner**: removed the "Marked 'I don't know' — heavy penalty applied. Undo" banner and all undo state/logic from all 3 session pages.
+- **Answer revealed in-card**: pressing `?` no longer auto-advances. Instead:
+  - *MultipleChoiceMode*: `?` sets `revealed=true` and `selected=correct`, showing the correct answer highlighted green. Continue (via new `onAdvance` prop) advances.
+  - *TypingMode*: `?` in corner of prompt card sets `revealed=true`, shows expected answer in the input (disabled, faded), shows a neutral "Answer: [expected]" panel. Continue via `onAdvance` advances. The old "Don't know" button is removed.
+- **Heavy penalty still applied**: `handleIDontKnow` still runs 3× `again` + requeues the card — just no longer auto-advances; advance is via `onAdvance`.
+- **`iDontKnowCount`**: `CardState.iDontKnowCount` (integer, default 0) tracks cumulative `?` presses per card. Requires migration `030_i_dont_know_count.sql`. `initialCardState()` initializes to 0. All 3 session pages increment and persist it on each press.
+
 ## TypingMode synonym detection (2026-06-15)
 
 `components/session/TypingMode.tsx`:

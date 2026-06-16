@@ -27,7 +27,7 @@ import { RatingButtons } from './RatingButtons'
  * - `gradedReview = true` (post-graduation, long-term retention): shows
  *   Again/Hard/Good/Easy instead of a single Continue button.
  */
-export function TypingMode({ card, promptSide, gradingSettings, gradedReview, deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate }: {
+export function TypingMode({ card, promptSide, gradingSettings, gradedReview, deckName, overrideAnswers, synonyms, onOverrideAnswer, onIDontKnow, onAdvance, onRate }: {
   card: Card
   promptSide: 'front' | 'back'
   gradingSettings: GradingSettings
@@ -49,18 +49,24 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   synonyms?: string[]
   /** Sets (accept=true) or clears (accept=false) a persisted typed-answer override for `normalizedAnswer`. */
   onOverrideAnswer?: (normalizedAnswer: string, accept: boolean) => void
+  /** Called when the learner pressed "?" — parent applies a heavy penalty behind the scenes. */
+  onIDontKnow?: () => void
+  /** Called when Continue is pressed after "?" revealed the answer (penalty already applied via onIDontKnow). */
+  onAdvance?: () => void
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
 }) {
   const [input,       setInput]       = useState('')
   const [result,      setResult]      = useState<{ correct: boolean; expected: string; viaOverride: boolean; viaSynonym: boolean; normalizedUser: string } | null>(null)
   const [override,    setOverride]    = useState<boolean | null>(null)
   const [retype,      setRetype]      = useState('')
+  const [revealed,    setRevealed]    = useState(false)
 
   useEffect(() => {
     setInput('')
     setResult(null)
     setOverride(null)
     setRetype('')
+    setRevealed(false)
   }, [card.id])
 
   const prompt   = promptSide === 'front' ? card.front : card.back
@@ -86,14 +92,6 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
     setResult({ correct: base.correct || viaOverride || viaSynonym, expected, viaOverride, viaSynonym, normalizedUser: base.normalizedUser })
     setOverride(null)
     setRetype('')
-  }
-
-  function dontKnow() {
-    const normalizedUser = gradeTyping(input, expected, gradingSettings).normalizedUser
-    setResult({ correct: false, expected, viaOverride: false, viaSynonym: false, normalizedUser })
-    setOverride(null)
-    setRetype('')
-    setInput('')
   }
 
   function tryAdvance(rating: Rating) {
@@ -125,18 +123,37 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   return (
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
-      <div className="panel min-h-[120px] flex items-center justify-center text-center">
+      <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
         <p className="text-2xl font-medium text-ink">{prompt}</p>
+        {!result && !revealed && onIDontKnow && (
+          <button
+            onClick={() => { onIDontKnow(); setRevealed(true) }}
+            title="I don't know"
+            className="absolute bottom-3 right-3 text-lg text-danger/70 hover:text-danger transition-colors leading-none"
+          >
+            ?
+          </button>
+        )}
       </div>
       <div className="space-y-3">
         <input
-          className={`input text-center text-lg font-mono ${result ? result.correct ? 'border-success/60 bg-success/5' : 'border-danger/60 bg-danger/5' : ''}`}
-          placeholder="Type your answer…" value={input} onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !result) check() }} disabled={!!result} autoFocus />
-        {!result ? (
+          className={`input text-center text-lg font-mono ${revealed ? 'opacity-50' : result ? result.correct ? 'border-success/60 bg-success/5' : 'border-danger/60 bg-danger/5' : ''}`}
+          placeholder="Type your answer…" value={revealed ? expected : input}
+          onChange={e => { if (!revealed) setInput(e.target.value) }}
+          onKeyDown={e => { if (e.key === 'Enter' && !result && !revealed) check() }}
+          disabled={!!result || revealed} autoFocus />
+        {revealed ? (
+          <div className="space-y-4">
+            <div className="panel text-center py-3 border-ink-faint/20 bg-surface-raised/20">
+              <p className="text-ink-muted text-sm">Answer: <span className="font-mono text-ink">{expected}</span></p>
+            </div>
+            <div className="flex justify-center">
+              <button onClick={onAdvance} autoFocus className="btn-primary px-10">Continue</button>
+            </div>
+          </div>
+        ) : !result ? (
           <div className="flex gap-3 justify-center">
             <button onClick={check} disabled={!input.trim()} className="btn-primary">Check</button>
-            <button onClick={dontKnow} className="text-xs text-ink-faint hover:text-ink-muted pt-2">Don&apos;t know</button>
           </div>
         ) : (
           <div className="space-y-4">

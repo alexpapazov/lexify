@@ -116,10 +116,7 @@ export default function SessionPage() {
   const [electiveBatchLimit, setElectiveBatchLimit] = useState<number | null>(20)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
-  /** Undo state for the most recent "I don't know" press. */
-  const [iDontKnowUndo,   setIDontKnowUndo]   = useState<{ cardId: string; prevState: CardState } | null>(null)
-
-  const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
+const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
     setOverrides(prev => {
@@ -543,24 +540,19 @@ export default function SessionPage() {
         newState = progressAfterReview(newState, pipeline, { wasCorrect: false, rating: 'again', wrongSeverity: undefined, wasTyped: false }, nowDate)
       }
 
-      await stateRepo.upsert(newState)
-      setCardStates(prev => { const m = new Map(prev); m.set(card.id, newState); return m })
-
-      // Save undo state BEFORE advancing the queue
-      setIDontKnowUndo({ cardId: card.id, prevState })
+      const counted = { ...newState, iDontKnowCount: (prevState.iDontKnowCount ?? 0) + 1 }
+      await stateRepo.upsert(counted)
+      setCardStates(prev => { const m = new Map(prev); m.set(card.id, counted); return m })
 
       // Re-queue the card a few slots ahead so it resurfaces this session
-      const requeued: SessionCard = { card, state: newState, pipeline, productionMode, idontknow: true }
+      const requeued: SessionCard = { card, state: counted, pipeline, productionMode, idontknow: true }
       setQueue(prev => {
         const next = [...prev]
-        next[index] = { ...current, state: newState }
+        next[index] = { ...current, state: counted }
         const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
         next.splice(insertPos, 0, requeued)
         return next
       })
-
-      if (index + 1 >= queue.length) setDone(true)
-      else setIndex(i => i + 1)
     } catch (err: unknown) {
       console.error('Failed to record I don\'t know:', err)
       setAnswerError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
@@ -568,33 +560,6 @@ export default function SessionPage() {
       setSubmitting(false)
     }
   }, [queue, index, userId, submitting])
-
-  /**
-   * Undo the most recent "I don't know": restore the previous card state,
-   * remove the re-queued copy, and bring the card back at the current position.
-   */
-  const handleUndoIDontKnow = useCallback(async () => {
-    if (!iDontKnowUndo) return
-    const { cardId, prevState } = iDontKnowUndo
-    try {
-      const stateRepo = new SupabaseCardStateRepository()
-      await stateRepo.upsert(prevState)
-      setCardStates(prev => { const m = new Map(prev); m.set(cardId, prevState); return m })
-
-      setQueue(prev => {
-        const withoutRequeue = prev.filter((item, i) => i <= index || !(item.idontknow && item.card.id === cardId))
-        const original = withoutRequeue.find(item => item.card.id === cardId)
-        if (!original) return withoutRequeue
-        const restoredItem: SessionCard = { ...original, state: prevState, idontknow: undefined }
-        const next = [...withoutRequeue]
-        next.splice(index, 0, restoredItem)
-        return next
-      })
-      setIDontKnowUndo(null)
-    } catch (err) {
-      console.error('Failed to undo I don\'t know:', err)
-    }
-  }, [iDontKnowUndo, index])
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
@@ -682,38 +647,34 @@ export default function SessionPage() {
         </div>
       )}
 
-      {iDontKnowUndo && (
-        <div className="rounded-card border border-ink-faint/20 bg-surface-raised/50 px-4 py-2 text-xs text-ink-faint flex items-center justify-between gap-3">
-          <span>Marked &ldquo;I don&apos;t know&rdquo; — heavy penalty applied.</span>
-          <button onClick={handleUndoIDontKnow} className="text-accent hover:text-accent/80 underline shrink-0">
-            Undo
-          </button>
-        </div>
-      )}
-
       {!state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={allCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage}
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
-          onRate={(rating, wasCorrect, userAnswer) => { setIDontKnowUndo(null); handleAnswer(rating, wasCorrect, userAnswer) }} />
+          onAdvance={() => setIndex(i => i + 1)}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings!} gradedReview={false}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
-          onRate={(rating, wasCorrect, userAnswer) => { setIDontKnowUndo(null); handleAnswer(rating, wasCorrect, userAnswer) }} />
+          onIDontKnow={handleIDontKnow}
+          onAdvance={() => setIndex(i => i + 1)}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
-          onRate={rating => { setIDontKnowUndo(null); handleAnswer(rating, rating !== 'again') }} />
+          onRate={rating => handleAnswer(rating, rating !== 'again')} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           gradingSettings={gradingSettings!} gradedReview={true}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
-          onRate={(rating, wasCorrect, userAnswer) => { setIDontKnowUndo(null); handleAnswer(rating, wasCorrect, userAnswer) }} />
+          onIDontKnow={handleIDontKnow}
+          onAdvance={() => setIndex(i => i + 1)}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       )}
     </div>
   )

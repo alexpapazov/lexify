@@ -61,6 +61,7 @@ export function initialCardState(
     typingMistakeStreak: 0,
     typingFailCycles:    0,
     stage3EnteredDate: null,
+    iDontKnowCount:    0,
   }
 }
 
