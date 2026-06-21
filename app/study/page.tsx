@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }      from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { getToday } from '@/lib/dates'
 import type { Deck, Card, CardState } from '@/domain'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
@@ -64,8 +65,16 @@ export default function StudyPage() {
     const cardRepo  = new SupabaseCardRepository()
     const stateRepo = new SupabaseCardStateRepository()
 
-    const decks = await deckRepo.list(session.user.id)
-    const now = new Date()
+    const [decks, profileRes] = await Promise.all([
+      deckRepo.list(session.user.id),
+      supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
+    ])
+
+    const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'
+    const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
+    const todayStr     = getToday(tz, turnoverHour)
+    const todayDate    = new Date(todayStr + 'T00:00:00.000Z')
+    const now          = new Date()
 
     const stats = await Promise.all(decks.map(async deck => {
       const [cards, states] = await Promise.all([
@@ -95,11 +104,10 @@ export default function StudyPage() {
     // stored dueAt is in the past — get folded into "Today" instead of
     // disappearing from the chart entirely.
     const EPOCH = '1970-01-01T00:00:00.000Z'
-    const endDate = new Date(now)
+    const endDate = new Date(todayDate)
     endDate.setUTCDate(endDate.getUTCDate() + FORECAST_DAYS)
     const counts = await stateRepo.countDueByDateRange(session.user.id, EPOCH, endDate.toISOString())
 
-    const todayStr = now.toISOString().slice(0, 10)
     let overdueAndTodayCount = 0
     for (const [date, c] of counts) {
       if (date <= todayStr) overdueAndTodayCount += c
@@ -107,7 +115,7 @@ export default function StudyPage() {
 
     const days: ForecastDay[] = []
     for (let i = 0; i < FORECAST_DAYS; i++) {
-      const d = new Date(now)
+      const d = new Date(todayDate)
       d.setUTCDate(d.getUTCDate() + i)
       const dateStr = d.toISOString().slice(0, 10)
       days.push({
