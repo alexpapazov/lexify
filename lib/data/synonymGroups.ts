@@ -86,9 +86,10 @@ export class SupabaseSynonymGroupRepository {
    * Link a card to a synonym group. Also handles creating the group if needed.
    */
   async addMember(synonymGroupId: string, cardId: string): Promise<void> {
-    const { error } = await this.db.from('cards')
-      .update({ synonym_group_id: synonymGroupId })
-      .eq('id', cardId)
+    const { error } = await this.db.rpc('link_card_to_synonym_group', {
+      p_card_id:          cardId,
+      p_synonym_group_id: synonymGroupId,
+    })
     if (error) throw new Error(error.message)
   }
 
