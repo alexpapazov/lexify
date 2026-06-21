@@ -26,8 +26,6 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, promoteConfusionDistractors, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday } from '@/lib/dates'
 
-/** How many slots ahead a graduated card is re-queued after starting the 10-minute relearn loop. */
-const RELEARN_REQUEUE_OFFSET = 3
 /** How many slots ahead an "I don't know" card is re-queued to resurface in the same session. */
 const IDONTKNOW_REQUEUE_OFFSET = 4
 
@@ -116,6 +114,8 @@ export default function SessionPage() {
   const [electiveBatchLimit, setElectiveBatchLimit] = useState<number | null>(20)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
+  /** Graduated cards in the 10-minute relearn loop — held out of the main queue until their dueAt passes (or the queue runs out). */
+  const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
 const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
@@ -401,6 +401,21 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     loadSession()
   }, [loadSession])
 
+  // When the main queue runs out, inject the most-elapsed relearn card so the
+  // session continues. Cards are sorted by dueAt ASC (soonest due = most of
+  // their relearn interval has already elapsed).
+  useEffect(() => {
+    if (loading || done || index < queue.length) return
+    if (relearnPool.length === 0) { setDone(true); return }
+    const sorted = [...relearnPool].sort((a, b) =>
+      (a.state.dueAt ? new Date(a.state.dueAt).getTime() : 0) -
+      (b.state.dueAt ? new Date(b.state.dueAt).getTime() : 0)
+    )
+    setQueue(prev => [...prev, sorted[0]!])
+    setRelearnPool(sorted.slice(1))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, queue.length, done, loading])
+
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
     const current = queue[index]
     if (!current) return
@@ -478,26 +493,22 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         return next
       })
 
-      // 10-minute "Again" relearn loop: re-queue the card a few slots ahead so
-      // it resurfaces later in this session (dueAt is also set to +10min, so
-      // it'll come back due if the session ends first).
+      // 10-minute "Again" relearn loop: hold the card in the relearn pool until
+      // its dueAt passes. The pool-injection useEffect above reintroduces it
+      // once the main queue runs out, ordered by elapsed percentage.
       if (newState.graduated && newState.relearningStep > 0) {
         const requeued: SessionCard = { card, state: newState, pipeline, productionMode: decideProductionMode(newState, nowDate) }
-        setQueue(prev => {
-          const next = [...prev]
-          next[index] = { ...current, state: newState }
-          const insertPos = Math.min(index + 1 + RELEARN_REQUEUE_OFFSET, next.length)
-          next.splice(insertPos, 0, requeued)
-          return next
-        })
+        setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
+        setRelearnPool(prev => [...prev, requeued])
         setIndex(i => i + 1)
         return
       }
 
-      if (index + 1 >= queue.length) setDone(true)
-      else {
-        setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
+      setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
+      if (index + 1 < queue.length || relearnPool.length > 0) {
         setIndex(i => i + 1)
+      } else {
+        setDone(true)
       }
     } catch (err: unknown) {
       console.error('Failed to record answer:', err)
@@ -505,7 +516,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     } finally {
       setSubmitting(false)
     }
-  }, [queue, index, userId, gradingSettings, submitting])
+  }, [queue, index, userId, gradingSettings, submitting, relearnPool])
 
   /**
    * "I don't know" — heavier penalty than a single wrong answer.
@@ -550,15 +561,21 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       await stateRepo.upsert(counted)
       setCardStates(prev => { const m = new Map(prev); m.set(card.id, counted); return m })
 
-      // Re-queue the card a few slots ahead so it resurfaces this session
       const requeued: SessionCard = { card, state: counted, pipeline, productionMode, idontknow: true }
-      setQueue(prev => {
-        const next = [...prev]
-        next[index] = { ...current, state: counted }
-        const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
-        next.splice(insertPos, 0, requeued)
-        return next
-      })
+      if (counted.graduated && counted.relearningStep > 0) {
+        // Graduated card entered relearn loop — hold in pool until timer elapses
+        setQueue(prev => prev.map((item, i) => i === index ? { ...current, state: counted } : item))
+        setRelearnPool(prev => [...prev, requeued])
+      } else {
+        // Pre-graduation or relapsed back into pipeline — reinsert ahead in queue
+        setQueue(prev => {
+          const next = [...prev]
+          next[index] = { ...current, state: counted }
+          const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
+          next.splice(insertPos, 0, requeued)
+          return next
+        })
+      }
     } catch (err: unknown) {
       console.error('Failed to record I don\'t know:', err)
       setAnswerError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')
@@ -621,7 +638,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     )
   }
 
-  const current = queue[index]!
+  const current = queue[index]
+  if (!current) return null // pool-injection useEffect will add a card momentarily
   const { card, state, pipeline } = current
   const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
