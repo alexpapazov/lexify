@@ -657,6 +657,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
+          promptLanguage={step.promptSide === 'front' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings!} gradedReview={false}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
@@ -669,6 +670,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onRate={rating => handleAnswer(rating, rating !== 'again')} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
+          promptLanguage={step.promptSide === 'front' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings!} gradedReview={true}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
