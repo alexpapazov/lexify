@@ -144,7 +144,7 @@ export default function StudyPage() {
       })
   }) : []
 
-  const totalDue = global.dueNow + global.learning
+  const totalDue = global.dueNow
   const maxForecast = Math.max(1, ...forecast.map(d => d.count))
 
   const COUNTER_CONFIG = [
@@ -228,17 +228,13 @@ export default function StudyPage() {
 
           {/* ── Study all due ───────────────────────────────────────────── */}
           {deckStats.length > 0 && (
-            <div className="flex items-center gap-4">
-              <Link
-                href="/study/all/session"
-                className={totalDue === 0 ? 'btn-primary opacity-40 pointer-events-none' : 'btn-primary'}
-              >
+            totalDue === 0 ? (
+              <button disabled className="btn-primary opacity-40 cursor-not-allowed">No cards due</button>
+            ) : (
+              <Link href="/study/all/session?category=due" className="btn-primary">
                 Study all due ({totalDue})
               </Link>
-              {totalDue === 0 && (
-                <p className="text-ink-muted text-sm">Nothing due right now — check back later!</p>
-              )}
-            </div>
+            )
           )}
 
           {/* ── Upcoming reviews ─────────────────────────────────────────── */}

@@ -517,6 +517,26 @@ response now includes these in `choices`. max_tokens bumped to 800.
   and shown in amber with a "(synonym)" note. The green highlight remains on the
   exact-match correct answer.
 
+## Graduated card review direction (2026-06-20)
+
+Post-graduation ("due now") reviews always show **English (native / `card.back`) as the prompt** and ask the learner to **produce Spanish (target / `card.front`)**. This is enforced in all 3 session pages with:
+
+```ts
+const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
+const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
+```
+
+These two derived variables replace `step.promptSide`/`step.answerSide` everywhere for graduated cards: in `handleAnswer` (event recording, confusion tracking, `wrongSeverity` calculation), `handleIDontKnow` (event recording), and in the render (both `FlashcardMode` and `TypingMode` components). Pre-graduation steps continue to use the pipeline step's configured sides unchanged.
+
+Background: when a card graduates from step 4 (the final recognition step, `prompt=front`/`answer=back`), `state.currentStepOrder` stays at 4. Without this override, graduated cards would continue showing Spanish and asking the learner to produce English — the opposite of long-term retention review.
+
+## Study dashboard — "Study all due" button (2026-06-20)
+
+`app/study/page.tsx`:
+- **`totalDue`** is now `global.dueNow` only (previously included `global.learning`).
+- **Button when `dueNow > 0`**: links to `/study/all/session?category=due` (was `/study/all/session` without the filter, which included learning pipeline cards).
+- **Button when `dueNow === 0`**: renders a disabled `<button>` with text "No cards due" (was an opacity-dimmed link + separate "Nothing due right now" text).
+
 ## TypingMode Enter double-trigger fix (2026-06-20)
 
 Pre-graduation typing cards were auto-advancing after a single Enter press. Root cause: pressing Enter on the text input called `check()`, React committed the render (showing the Continue button with `autoFocus`), and the browser's `keypress` event then fired on the now-focused button, triggering its click. Fix: removed `autoFocus` from the Continue button and replaced with `useRef` + `useEffect` + `setTimeout(100ms)`. The button only gets focus 100ms after the result appears — well after the original key event cycle has finished.
@@ -536,7 +556,7 @@ Allows night-owl users to count late-night study sessions as part of the previou
 - **Answer revealed in-card**: pressing `?` no longer auto-advances. Instead:
   - *MultipleChoiceMode*: `?` sets `revealed=true` and `selected=correct`, showing the correct answer highlighted green. Continue (via new `onAdvance` prop) advances.
   - *TypingMode*: `?` in corner of prompt card sets `revealed=true`, shows expected answer in the input (disabled, faded), shows a neutral "Answer: [expected]" panel. Continue via `onAdvance` advances. The old "Don't know" button is removed.
-- **Heavy penalty still applied**: `handleIDontKnow` still runs 3× `again` + requeues the card — just no longer auto-advances; advance is via `onAdvance`.
+- **Penalty is context-sensitive** (as of 2026-06-20): pre-graduation cards get 3× `again`; graduated/due cards get 1× `again` (same as a regular "Again" rating — the triple penalty was too harsh for long-term review). The loop count is `const penaltyCount = state.graduated ? 1 : 3`.
 - **`iDontKnowCount`**: `CardState.iDontKnowCount` (integer, default 0) tracks cumulative `?` presses per card. Requires migration `030_i_dont_know_count.sql`. `initialCardState()` initializes to 0. All 3 session pages increment and persist it on each press.
 
 ## TypingMode synonym detection (2026-06-15)

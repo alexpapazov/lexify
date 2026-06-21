@@ -415,6 +415,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const eventRepo  = new SupabaseReviewEventRepository()
       const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
       const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+      const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
+      const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
 
       // Confusion tracking: record every wrong answer (multiple-choice pick
       // or typed response, in either direction) so it can be surfaced later
@@ -426,12 +428,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // multiple-choice pick is always a real word; a typed answer only
       // counts as a word-level mix-up if it's not just a close typo.
       if (!wasCorrect && userAnswer.trim()) {
-        const confusedWithCardId = step.answerSide === 'front'
+        const confusedWithCardId = reviewAnswerSide === 'front'
           ? allCards.find(c => c.front.trim().toLowerCase() === userAnswer.trim().toLowerCase())?.id ?? null
           : allCards.find(c => c.back.trim().toLowerCase()  === userAnswer.trim().toLowerCase())?.id ?? null
         const isWordMixup = step.stepType !== 'typing'
-          || isDifferentWordMistake(userAnswer, step.answerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
-        new SupabaseCardConfusionRepository().record(card.id, userAnswer.trim(), step.answerSide, isWordMixup, confusedWithCardId)
+          || isDifferentWordMistake(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
+        new SupabaseCardConfusionRepository().record(card.id, userAnswer.trim(), reviewAnswerSide, isWordMixup, confusedWithCardId)
           .catch(err => console.error('Failed to record card confusion:', err))
       }
 
@@ -441,15 +443,15 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
-        promptSide: step.promptSide, answerSide: step.answerSide,
-        promptShown: step.promptSide === 'front' ? card.front : card.back,
-        expected:    step.answerSide === 'front' ? card.front : card.back,
+        promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
+        promptShown: reviewPromptSide === 'front' ? card.front : card.back,
+        expected:    reviewAnswerSide === 'front' ? card.front : card.back,
         userAnswer, wasCorrect, rating, responseMs: null,
         reviewMode, wasTyped,
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
-        ? classifyWrongAnswer(userAnswer, step.answerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
+        ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
         : undefined
 
       // Computed independently (same `nowDate`) so the density-smoothing
@@ -523,18 +525,21 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const eventRepo  = new SupabaseReviewEventRepository()
       const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
       const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+      const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
+      const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
 
       const nowDate    = new Date()
       const reviewMode = classifyReviewMode(state, nowDate)
       const prevState  = { ...state }
 
       let newState = state
-      for (let i = 0; i < 3; i++) {
+      const penaltyCount = state.graduated ? 1 : 3
+      for (let i = 0; i < penaltyCount; i++) {
         await eventRepo.create({
           userId: userId, cardId: card.id, mode: step.stepType,
-          promptSide: step.promptSide, answerSide: step.answerSide,
-          promptShown: step.promptSide === 'front' ? card.front : card.back,
-          expected:    step.answerSide === 'front' ? card.front : card.back,
+          promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
+          promptShown: reviewPromptSide === 'front' ? card.front : card.back,
+          expected:    reviewAnswerSide === 'front' ? card.front : card.back,
           userAnswer: '', wasCorrect: false, rating: 'again', responseMs: null,
           reviewMode, wasTyped: state.graduated ? productionMode === 'typed' : null,
         })
@@ -620,6 +625,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   const { card, state, pipeline } = current
   const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+  const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
+  const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
@@ -666,15 +673,15 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : current.productionMode === 'self-graded' ? (
-        <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
+        <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           onRate={rating => handleAnswer(rating, rating !== 'again')} />
       ) : (
-        <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
-          promptLanguage={step.promptSide === 'front' ? sourceLanguage : targetLanguage}
+        <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
+          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings!} gradedReview={true}
-          overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
-          synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
-          onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
+          overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
+          synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+          onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
