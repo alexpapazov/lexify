@@ -517,6 +517,19 @@ response now includes these in `choices`. max_tokens bumped to 800.
   and shown in amber with a "(synonym)" note. The green highlight remains on the
   exact-match correct answer.
 
+## TypingMode Enter double-trigger fix (2026-06-20)
+
+Pre-graduation typing cards were auto-advancing after a single Enter press. Root cause: pressing Enter on the text input called `check()`, React committed the render (showing the Continue button with `autoFocus`), and the browser's `keypress` event then fired on the now-focused button, triggering its click. Fix: removed `autoFocus` from the Continue button and replaced with `useRef` + `useEffect` + `setTimeout(100ms)`. The button only gets focus 100ms after the result appears — well after the original key event cycle has finished.
+
+## Day turnover setting (2026-06-20)
+
+Allows night-owl users to count late-night study sessions as part of the previous calendar day.
+
+- **Migration `031_day_turnover_hour.sql`**: adds `day_turnover_hour INTEGER NOT NULL DEFAULT 0` to `profiles`. 0 = midnight (no adjustment).
+- **`lib/dates.ts: getToday(tz, turnoverHour)`**: new optional `turnoverHour` parameter (0-23). If the current local hour is before `turnoverHour`, returns yesterday's date in the user's timezone — so studying at 3 AM with turnoverHour=4 counts as the previous calendar day.
+- **Settings page**: "Day turnover time" select (12:00 AM to 12:00 PM in hourly steps) inside the Time zone panel. Loaded and saved with `day_turnover_hour` in `profiles`.
+- **All 3 session pages**: load `day_turnover_hour` alongside `timezone` from profiles, pass both to `getToday()`.
+
 ## "I don't know" UX overhaul (2026-06-15)
 
 - **No more banner**: removed the "Marked 'I don't know' — heavy penalty applied. Undo" banner and all undo state/logic from all 3 session pages.

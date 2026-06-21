@@ -142,17 +142,18 @@ function FolderSessionInner() {
         folderRepo.list(session.user.id),
         pipelineRepo.getDefault(),
         folderRepo.get(folderId),
-        supabase.from('profiles').select('timezone').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
       ])
       setFolder(thisFolder)
 
-      const tz = (profileData.data?.timezone as string | null) ?? 'UTC'
+      const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
+      const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
 
       const deckIds = new Set(descendantDeckIds(folderId, allFolders, allDecks))
       const decks   = allDecks.filter(d => deckIds.has(d.id))
 
       const now   = new Date()
-      const today = getToday(tz)
+      const today = getToday(tz, turnoverHour)
 
       // ?category= elective study: build queue from only that category across
       // all decks in the folder, capped at FOLDER_ELECTIVE_LIMIT cards.

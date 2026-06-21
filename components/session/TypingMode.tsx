@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Card, GradingSettings, Rating } from '@/domain'
 import { gradeTyping } from '@/engine/grading'
 import { RatingButtons } from './RatingButtons'
@@ -60,6 +60,7 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   const [override,    setOverride]    = useState<boolean | null>(null)
   const [retype,      setRetype]      = useState('')
   const [revealed,    setRevealed]    = useState(false)
+  const continueRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     setInput('')
@@ -76,6 +77,15 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
   // Wrong answers (and "marked wrong" overrides) require retyping the
   // correct answer before continuing. Typo overrides skip this.
   const needsRetype   = !!result && !finalCorrect
+
+  // Delay-focus the Continue button so the Enter keypress that triggered check()
+  // doesn't immediately fire a click on the newly-focused button.
+  useEffect(() => {
+    if (!result || needsRetype || revealed) return
+    const t = setTimeout(() => continueRef.current?.focus(), 100)
+    return () => clearTimeout(t)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!result, needsRetype, revealed])
   const retypeCorrect = needsRetype && gradeTyping(retype, expected, gradingSettings).correct
 
   function advanceRetype() {
@@ -228,8 +238,7 @@ export function TypingMode({ card, promptSide, gradingSettings, gradedReview, de
                 <RatingButtons onRate={tryAdvance} />
               ) : (
                 <div className="flex justify-center">
-                  {/* Auto-focused so pressing Enter continues. */}
-                  <button onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')} autoFocus className="btn-primary px-10">
+                  <button ref={continueRef} onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')} className="btn-primary px-10">
                     Continue
                   </button>
                 </div>

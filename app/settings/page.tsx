@@ -45,6 +45,7 @@ export default function SettingsPage() {
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
   const [spilloverDue,  setSpilloverDue]  = useState(false)
   const [timezone,      setTimezone]      = useState('')
+  const [turnoverHour,  setTurnoverHour]  = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [saved,         setSaved]         = useState(false)
   const [confirmReset,  setConfirmReset]  = useState(false)
@@ -67,7 +68,7 @@ export default function SettingsPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone')
+        .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour')
         .eq('user_id', uid)
         .single()
 
@@ -77,6 +78,7 @@ export default function SettingsPage() {
         setSpilloverDue(profile.spillover_due ?? false)
         setSelectedLangs((profile.learning_languages as string[]) ?? [])
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
+        setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
       } else {
         setTimezone(detectBrowserTimezone())
       }
@@ -93,6 +95,7 @@ export default function SettingsPage() {
       spillover_due:           spilloverDue,
       learning_languages:      selectedLangs,
       timezone:                timezone || null,
+      day_turnover_hour:       turnoverHour,
     }).eq('user_id', session.user.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -165,6 +168,25 @@ export default function SettingsPage() {
           )}
           <p className="text-xs text-ink-faint">
             Used to determine when &ldquo;today&rdquo; starts for daily study limits and card scheduling.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-sm text-ink-muted">Day turnover time</label>
+          <select
+            className="input"
+            value={turnoverHour}
+            onChange={e => setTurnoverHour(parseInt(e.target.value, 10))}
+          >
+            {Array.from({ length: 13 }, (_, h) => (
+              <option key={h} value={h}>
+                {h === 0 ? '12:00 AM — midnight (default)' : h < 12 ? `${h}:00 AM` : '12:00 PM — noon'}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-ink-faint">
+            If you study past midnight, cards completed before this time count toward the previous day&rsquo;s session.
+            E.g. set to 4:00 AM and studying at 3 AM is part of yesterday.
           </p>
         </div>
       </div>

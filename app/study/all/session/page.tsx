@@ -129,12 +129,13 @@ function AllDueSessionInner() {
       const [decks, pipeline, profileData] = await Promise.all([
         deckRepo.list(session.user.id),
         pipelineRepo.getDefault(),
-        supabase.from('profiles').select('timezone').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
       ])
 
-      const tz    = (profileData.data?.timezone as string | null) ?? 'UTC'
+      const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
+      const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
       const now   = new Date()
-      const today = getToday(tz)
+      const today = getToday(tz, turnoverHour)
 
       // ?category= elective study: build queue from only that category across
       // all decks, capped at ALL_ELECTIVE_LIMIT cards.

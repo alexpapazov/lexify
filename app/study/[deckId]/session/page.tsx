@@ -241,10 +241,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         cardRepo.listByDeck(deckId),
         pipelineRepo.getDefault(),
         prefRepo.get(session.user.id, deckId),
-        supabase.from('profiles').select('timezone').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
       ])
 
-      const tz = (profileData.data?.timezone as string | null) ?? 'UTC'
+      const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
+      const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
 
       if (!deck || cards.length === 0) { router.push(`/study/${deckId}`); return }
       setDeckName(deck.name)
@@ -274,7 +275,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       setElectiveBatchLimit(batchLimit)
 
       const now   = new Date()
-      const today = getToday(tz)
+      const today = getToday(tz, turnoverHour)
 
       // ?category= elective study: build a queue from exactly that category
       // (matching the deck-detail page's stat counts) and skip the normal
