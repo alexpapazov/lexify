@@ -228,13 +228,15 @@ export default function StudyPage() {
 
           {/* ── Study all due ───────────────────────────────────────────── */}
           {deckStats.length > 0 && (
-            totalDue === 0 ? (
-              <button disabled className="btn-primary opacity-40 cursor-not-allowed">No cards due</button>
-            ) : (
-              <Link href="/study/all/session?category=due" className="btn-primary">
-                Study all due ({totalDue})
-              </Link>
-            )
+            <div className="mt-8">
+              {totalDue === 0 ? (
+                <button disabled className="btn-primary opacity-40 cursor-not-allowed">No cards due</button>
+              ) : (
+                <Link href="/study/all/session?category=due" className="btn-primary">
+                  Study all due ({totalDue})
+                </Link>
+              )}
+            </div>
           )}
 
           {/* ── Upcoming reviews ─────────────────────────────────────────── */}
