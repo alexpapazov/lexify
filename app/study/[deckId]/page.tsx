@@ -528,11 +528,16 @@ function ConfirmDialog({ message, onConfirm, onCancel }: {
 
 // ─── Synonym scan ─────────────────────────────────────────────────────────────
 
-function detectCommaSplit(text: string): string[] | null {
-  const segments = text.split(',').map(s => s.trim()).filter(Boolean)
+/** Detects comma, slash, or semicolon as synonym separators. Returns null if not a multi-synonym string. */
+function detectSynonymSplit(text: string): string[] | null {
+  // Find the first separator character present
+  const sepMatch = text.match(/[,/;]/)
+  if (!sepMatch) return null
+  const sep = sepMatch[0]
+  const segments = text.split(sep).map(s => s.trim()).filter(Boolean)
   if (segments.length < 2) return null
-  const allShort = segments.every(s => s.split(/\s+/).filter(Boolean).length <= 5)
-  if (!allShort) return null
+  // Each segment must be short (≤ 5 words) — filters out sentences with commas
+  if (!segments.every(s => s.split(/\s+/).filter(Boolean).length <= 5)) return null
   return segments
 }
 
@@ -1129,7 +1134,7 @@ export default function DeckDetailPage() {
   const synonymCandidates: SynonymCandidate[] = cards
     .filter(c => !c.synonymGroupId)
     .flatMap(c => {
-      const segs = detectCommaSplit(c.front)
+      const segs = detectSynonymSplit(c.front)
       return segs ? [{ card: c, segments: segs, split: true }] : []
     })
   const unlearned = cards.filter(c => !stateMap.has(c.id)).length

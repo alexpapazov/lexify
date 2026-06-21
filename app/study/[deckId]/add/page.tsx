@@ -54,12 +54,14 @@ interface ReviewItem {
   splitIntoCards?: boolean
 }
 
-/** Returns comma-split segments if the string looks like multiple short words/phrases, null otherwise. */
-function detectCommaSplit(text: string): string[] | null {
-  const segments = text.split(',').map(s => s.trim()).filter(Boolean)
+/** Detects comma, slash, or semicolon as synonym separators. Returns null if not a multi-synonym string. */
+function detectSynonymSplit(text: string): string[] | null {
+  const sepMatch = text.match(/[,/;]/)
+  if (!sepMatch) return null
+  const sep = sepMatch[0]
+  const segments = text.split(sep).map(s => s.trim()).filter(Boolean)
   if (segments.length < 2) return null
-  const allShort = segments.every(s => s.split(/\s+/).filter(Boolean).length <= 5)
-  if (!allShort) return null
+  if (!segments.every(s => s.split(/\s+/).filter(Boolean).length <= 5)) return null
   return segments
 }
 
@@ -162,10 +164,9 @@ export default function AddCardsPage() {
         return
       }
 
-      const splitEnabled = deck.gradingSettings?.commaAlternativesMode === 'split_into_cards'
       const reviewItems: ReviewItem[] = (data.cards as CandidateCard[]).map(c => {
         const duplicate = analyzeDuplicate({ front: c.front, back: c.back }, existingCards, deck.sourceLanguage, deck.targetLanguage)
-        const splitSegments = splitEnabled ? detectCommaSplit(c.front) ?? undefined : undefined
+        const splitSegments = detectSynonymSplit(c.front) ?? undefined
         return {
           front:           c.front,
           back:            c.back,
