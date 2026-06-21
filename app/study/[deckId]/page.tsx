@@ -1081,6 +1081,9 @@ export default function DeckDetailPage() {
   const [editingCard,      setEditingCard]      = useState<Card | null>(null)
   const [addingCard,       setAddingCard]       = useState(false)
   const [showSynonymScan,  setShowSynonymScan]  = useState(false)
+  const [synonymScanIgnored, setSynonymScanIgnored] = useState(() =>
+    typeof window !== 'undefined' && !!localStorage.getItem(`syn_scan_ignored_${deckId}`)
+  )
   const searchParams = useSearchParams()
   const activeFilter = searchParams.get('filter') as 'new' | 'learning' | 'graduated' | 'due' | null
 
@@ -1270,18 +1273,29 @@ export default function DeckDetailPage() {
         </div>
       </div>
 
-      {synonymCandidates.length > 0 && (
+      {synonymCandidates.length > 0 && !synonymScanIgnored && (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
           <span className="text-ink">
             <span className="font-medium">{synonymCandidates.length} card{synonymCandidates.length !== 1 ? 's' : ''}</span>
             {' '}may contain multiple translations — split into separate synonym cards?
           </span>
-          <button
-            className="btn-ghost shrink-0 text-xs"
-            onClick={() => setShowSynonymScan(true)}
-          >
-            Review
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              className="btn-ghost text-xs"
+              onClick={() => setShowSynonymScan(true)}
+            >
+              Review
+            </button>
+            <button
+              className="btn-ghost text-xs text-ink-faint"
+              onClick={() => {
+                localStorage.setItem(`syn_scan_ignored_${deckId}`, '1')
+                setSynonymScanIgnored(true)
+              }}
+            >
+              Ignore
+            </button>
+          </div>
         </div>
       )}
 
