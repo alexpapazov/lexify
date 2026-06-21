@@ -323,6 +323,11 @@ export default function DeckEditPage() {
       const stateRepo    = new SupabaseCardStateRepository()
       const dismissedRepo = new SupabaseDismissedPairRepository()
 
+      // Remove cards that were X'd out (present in originalCards but no longer in cards state).
+      const currentIds = new Set(cards.map(c => c.id).filter(Boolean))
+      const deletedIds = Array.from(originalCards.keys()).filter(id => !currentIds.has(id))
+      await Promise.all(deletedIds.map(id => cardRepo.removeFromDeck(deckId, id)))
+
       // Only push updates for cards whose front/back actually changed —
       // for a large deck, re-saving every card on every save is what makes
       // this slow. Untouched cards are skipped entirely.
