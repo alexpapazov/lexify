@@ -40,7 +40,9 @@ ON synonym_groups FOR SELECT USING (
 );
 
 CREATE POLICY "owner_insert_synonym_groups"
-ON synonym_groups FOR INSERT WITH CHECK (true);
+ON synonym_groups FOR INSERT
+TO authenticated
+WITH CHECK (auth.uid() IS NOT NULL);
 
 CREATE POLICY "owner_update_synonym_groups"
 ON synonym_groups FOR UPDATE USING (
