@@ -35,22 +35,66 @@ export interface Pipeline {
 
 // ─── Grading settings ─────────────────────────────────────────────────────────
 
+export type GradingMode = 'strict' | 'flexible' | 'smart_ai'
+
+/**
+ * 'strict'   — match after trim/spaces/case only; no accent/article/typo leniency.
+ * 'almost'   — the 3-state result between correct and incorrect.
+ * 'incorrect' — fundamentally wrong.
+ */
+export type GradingStatus = 'correct' | 'almost' | 'incorrect'
+
+export type GradingIssueType =
+  | 'none'
+  | 'accent'
+  | 'article'
+  | 'gender'
+  | 'typo'
+  | 'semantic'
+  | 'punctuation'
+  | 'parenthetical'
+  | 'missing_required_part'
+  | 'wrong_synonym'
+  | 'multiple_answers_required'
+
 export interface GradingSettings {
-  accentInsensitive:       boolean
-  articleOptional:         boolean
-  caseInsensitive:         boolean
-  allowOneTypo:            boolean
-  acceptSlashAlternatives: boolean
-  ignoreParentheticals:    boolean
+  /** Which overall mode drives grading. Default: 'strict' for new decks. */
+  gradingMode:                 GradingMode
+  // ── Flexible mode toggles ─────────────────────────────────────────────────
+  ignoreAccents:               boolean
+  ignoreCapitalization:        boolean
+  ignoreMinorTypos:            boolean
+  ignoreDefiniteArticles:      boolean
+  /** When true, content inside parens is required in the typed answer. */
+  requireParentheticalContent: boolean
+  slashAlternativesMode:       'accept_any' | 'require_all'
+  commaAlternativesMode:       'accept_any' | 'require_all' | 'split_into_cards'
+  // ── Smart AI mode ─────────────────────────────────────────────────────────
+  /** Optional per-deck instructions for the AI grader (≤250 chars). */
+  aiGradingInstructions?:      string
 }
 
+/** Default for new decks — strict mode, case-insensitive only. */
 export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
-  accentInsensitive:       true,
-  articleOptional:         false,
-  caseInsensitive:         true,
-  allowOneTypo:            false,
-  acceptSlashAlternatives: true,
-  ignoreParentheticals:    true,
+  gradingMode:                 'strict',
+  ignoreAccents:               false,
+  ignoreCapitalization:        true,
+  ignoreMinorTypos:            false,
+  ignoreDefiniteArticles:      false,
+  requireParentheticalContent: true,
+  slashAlternativesMode:       'accept_any',
+  commaAlternativesMode:       'split_into_cards',
+}
+
+/** Defaults when converting an existing deck to flexible mode. */
+export const DEFAULT_FLEXIBLE_SETTINGS: Omit<GradingSettings, 'gradingMode'> = {
+  ignoreAccents:               false,
+  ignoreCapitalization:        true,
+  ignoreMinorTypos:            false,
+  ignoreDefiniteArticles:      false,
+  requireParentheticalContent: true,
+  slashAlternativesMode:       'accept_any',
+  commaAlternativesMode:       'split_into_cards',
 }
 
 // ─── Folder ───────────────────────────────────────────────────────────────────
@@ -117,6 +161,8 @@ export interface CardChoices {
   backSynonyms?: string[]
 }
 
+export type Register = 'neutral' | 'informal' | 'formal' | 'regional' | 'vulgar'
+
 export interface Card {
   id:             CardId
   /** Cards are owned by a user (within a target/native language direction), not by a deck. */
@@ -133,6 +179,67 @@ export interface Card {
   createdAt: string
   updatedAt: string
   deletedAt: string | null
+  // ── Synonym group ─────────────────────────────────────────────────────────
+  /** Links this card to a SynonymGroup when multiple target-language items share a gloss. */
+  synonymGroupId?:           string | null
+  /** Sociolinguistic register of the front-side item. */
+  register?:                 Register | null
+  /** Geographic region associated with the front-side item. */
+  region?:                   string | null
+  /** Other valid typed answers for the front side (not synonyms — same item, alternate phrasing). */
+  acceptedFrontAlternatives?: string[]
+  /** Other valid typed answers for the back side. */
+  acceptedBackAlternatives?:  string[]
+}
+
+// ─── Synonym groups ───────────────────────────────────────────────────────────
+
+/**
+ * Groups lexical items (Cards) that share the same gloss/meaning but are
+ * distinct target-language forms — each with its own SRS schedule.
+ * E.g. el cerdo / el chancho / el puerco all mean "pig".
+ */
+export interface SynonymGroup {
+  id:           string
+  gloss:        string        // shared native-language meaning, e.g. "pig"
+  glossLanguage: string       // language of the gloss, e.g. "en"
+  itemLanguage:  string       // language of the items, e.g. "es"
+  itemIds:       string[]     // Card ids in this group (ordered)
+  createdAt:     string
+  updatedAt:     string
+}
+
+export type SynonymFieldStatus = 'prefilled' | 'due_blank' | 'completed'
+export type SynonymDueState    = 'due' | 'not_due' | 'already_completed_this_session'
+
+export interface SynonymAnswerField {
+  lexicalItemId: string
+  expectedAnswer: string
+  status: SynonymFieldStatus
+  value: string
+  dueState: SynonymDueState
+  register?: Register | null
+  region?: string | null
+}
+
+export interface SynonymProductionPrompt {
+  synonymGroupId: string
+  gloss: string
+  fields: SynonymAnswerField[]
+}
+
+export type GradingFieldStatus = 'correct' | 'almost' | 'incorrect' | 'missing'
+
+export interface MultiFieldGradingResult {
+  overallStatus: GradingStatus
+  fieldResults: {
+    lexicalItemId:   string
+    expectedAnswer:  string
+    typedAnswer?:    string
+    status:          GradingFieldStatus
+    issueType:       GradingIssueType
+    reason:          string
+  }[]
 }
 
 // ─── DeckCard (join table) ─────────────────────────────────────────────────────
@@ -314,6 +421,13 @@ export interface CardState {
   stage3EnteredDate: string | null
   /** Total number of times the learner pressed "I don't know" on this card (across all sessions). */
   iDontKnowCount: number
+  // ── Per-card error tracking (for adaptive strictness) ─────────────────────
+  accentMistakeCount:   number
+  articleMistakeCount:  number
+  genderMistakeCount:   number
+  typoMistakeCount:     number
+  semanticMistakeCount: number
+  wrongSynonymCount:    number
 }
 
 // ─── Ratings ──────────────────────────────────────────────────────────────────
@@ -383,10 +497,38 @@ export const DEFAULT_DAILY_NEW_CARDS = 20
 
 // ─── Session helpers ──────────────────────────────────────────────────────────
 
+/**
+ * Structured result from gradeTyping().
+ *
+ * `status`:
+ *   'correct'   — normalized match; default rating Good
+ *   'almost'    — off by accent/article/typo only; default rating Hard
+ *   'incorrect' — substantially wrong; default rating Again
+ *
+ * `correct` is a convenience alias for `status === 'correct'` kept for
+ * backward-compat with callers that haven't migrated to the status field yet.
+ */
 export interface GradingResult {
-  correct:            boolean
+  status:             GradingStatus
+  reason:             string            // human-readable explanation (empty string when correct)
+  issueType:          GradingIssueType
+  expectedAnswer:     string
+  typedAnswer:        string
+  matchedAnswer?:     string            // the specific slash-alternative that matched (if any)
+  // ── Backward-compat ───────────────────────────────────────────────────────
+  correct:            boolean           // true iff status === 'correct'
   normalizedUser:     string
   normalizedExpected: string
+}
+
+/** Per-card error counters for adaptive strictness and analytics. */
+export interface ErrorStats {
+  accentMistakeCount:   number
+  articleMistakeCount:  number
+  genderMistakeCount:   number
+  typoMistakeCount:     number
+  semanticMistakeCount: number
+  wrongSynonymCount:    number
 }
 
 export interface ReviewInput {

@@ -17,6 +17,13 @@ function rowToCard(row: Record<string, unknown>): Card {
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     deletedAt: row.deleted_at as string | null,
+    synonymGroupId:            (row.synonym_group_id as string | null) ?? null,
+    register:                  (row.register as Card['register']) ?? null,
+    region:                    (row.region as string | null) ?? null,
+    acceptedFrontAlternatives: Array.isArray(row.accepted_front_alternatives)
+      ? (row.accepted_front_alternatives as string[]) : undefined,
+    acceptedBackAlternatives:  Array.isArray(row.accepted_back_alternatives)
+      ? (row.accepted_back_alternatives as string[]) : undefined,
   }
 }
 

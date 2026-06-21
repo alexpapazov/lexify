@@ -527,9 +527,10 @@ function ConfirmDialog({ message, onConfirm, onCancel }: {
 
 // ─── Gear settings panel ──────────────────────────────────────────────────────
 
-function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, defaultSpillover, maxCards, cards, sourceLanguage, targetLanguage, onClose }: {
+function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, defaultSpillover, maxCards, cards, sourceLanguage, targetLanguage, onClose }: {
   deckId:           string
   userId:           string
+  deck:             Deck
   initialPrefs:     DeckPreferences | null
   defaultLimit:     number
   defaultSpillover: boolean
@@ -541,6 +542,17 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
 }) {
   const today    = new Date().toISOString().slice(0, 10)
   const prefRepo = new SupabaseDeckPreferencesRepository()
+
+  // ── Grading settings state ──────────────────────────────────────────────────
+  const gs = deck.gradingSettings
+  const [gradingMode,          setGradingMode]          = useState(gs.gradingMode)
+  const [ignoreAccents,        setIgnoreAccents]        = useState(gs.ignoreAccents)
+  const [ignoreCapitalization, setIgnoreCapitalization] = useState(gs.ignoreCapitalization)
+  const [ignoreMinorTypos,     setIgnoreMinorTypos]     = useState(gs.ignoreMinorTypos)
+  const [ignoreDefiniteArticles, setIgnoreDefiniteArticles] = useState(gs.ignoreDefiniteArticles)
+  const [requireParenContent,  setRequireParenContent]  = useState(gs.requireParentheticalContent)
+  const [slashMode,            setSlashMode]            = useState(gs.slashAlternativesMode)
+  const [aiInstructions,       setAiInstructions]       = useState(gs.aiGradingInstructions ?? '')
 
   const [dailyLimit,        setDailyLimit]        = useState(Math.min(initialPrefs?.dailyNewCards ?? defaultLimit, maxCards))
   const [onlyToday,         setOnlyToday]         = useState(false)
@@ -564,15 +576,29 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
     setSaving(true)
     setSaveError(null)
     try {
-      await prefRepo.upsert({
-        userId, deckId,
-        dailyNewCards:     dailyLimit,
-        dailyOverride:     onlyToday ? todayOverride : null,
-        dailyOverrideDate: onlyToday ? today         : null,
-        spilloverDue:      spillover,
-        cardsPerSession:      cardsPerSessionOn ? cardsPerSession : null,
-        electiveSessionLimit: cardsPerSessionOn ? cardsPerSession : 0,
-      })
+      const newGradingSettings = {
+        ...deck.gradingSettings,
+        gradingMode,
+        ignoreAccents,
+        ignoreCapitalization,
+        ignoreMinorTypos,
+        ignoreDefiniteArticles,
+        requireParentheticalContent: requireParenContent,
+        slashAlternativesMode: slashMode,
+        aiGradingInstructions: aiInstructions.trim() || undefined,
+      }
+      await Promise.all([
+        prefRepo.upsert({
+          userId, deckId,
+          dailyNewCards:     dailyLimit,
+          dailyOverride:     onlyToday ? todayOverride : null,
+          dailyOverrideDate: onlyToday ? today         : null,
+          spilloverDue:      spillover,
+          cardsPerSession:      cardsPerSessionOn ? cardsPerSession : null,
+          electiveSessionLimit: cardsPerSessionOn ? cardsPerSession : 0,
+        }),
+        new SupabaseDeckRepository().update(deckId, { gradingSettings: newGradingSettings }),
+      ])
       setSaving(false)
       setSaved(true)
       setTimeout(() => { setSaved(false); onClose() }, 800)
@@ -764,6 +790,68 @@ function DeckSettingsPanel({ deckId, userId, initialPrefs, defaultLimit, default
               )}
             </div>
 
+            {/* ── Grading mode ──────────────────────────────────────────────── */}
+            <div className="space-y-3 border-t border-white/10 pt-3">
+              <p className="text-sm text-ink-muted">Grading mode</p>
+              <div className="space-y-1.5">
+                {(['strict', 'flexible', 'smart_ai'] as const).map(mode => (
+                  <label key={mode} className="flex items-start gap-2 cursor-pointer select-none">
+                    <input type="radio" name="gradingMode" value={mode}
+                      checked={gradingMode === mode}
+                      onChange={() => setGradingMode(mode)}
+                      className="accent-accent mt-0.5" />
+                    <span className="text-sm text-ink">
+                      {mode === 'strict'   ? 'Strict — exact match (case-insensitive)' :
+                       mode === 'flexible' ? 'Flexible — configurable leniency'        :
+                                            'Smart AI — semantic evaluation (requires internet)'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {gradingMode === 'flexible' && (
+                <div className="pl-4 space-y-2 border-l border-white/10">
+                  {([
+                    ['ignoreAccents',          'Ignore accents',               ignoreAccents,          setIgnoreAccents]          as const,
+                    ['ignoreCapitalization',   'Ignore capitalization',        ignoreCapitalization,   setIgnoreCapitalization]   as const,
+                    ['ignoreMinorTypos',       'Ignore minor typos',           ignoreMinorTypos,       setIgnoreMinorTypos]       as const,
+                    ['ignoreDefiniteArticles', 'Ignore definite articles',     ignoreDefiniteArticles, setIgnoreDefiniteArticles] as const,
+                  ] as [string, string, boolean, (v: boolean) => void][]).map(([key, label, value, setter]) => (
+                    <label key={key} className="flex items-center gap-2 cursor-pointer select-none">
+                      <input type="checkbox" checked={value} onChange={e => setter(e.target.checked)} className="accent-accent w-4 h-4" />
+                      <span className="text-sm text-ink">{label}</span>
+                    </label>
+                  ))}
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={requireParenContent} onChange={e => setRequireParenContent(e.target.checked)} className="accent-accent w-4 h-4" />
+                    <span className="text-sm text-ink">Require parenthetical content</span>
+                  </label>
+                  <div className="space-y-1">
+                    <p className="text-xs text-ink-faint">Slash alternatives (e.g. "a / b")</p>
+                    <select value={slashMode} onChange={e => setSlashMode(e.target.value as 'accept_any' | 'require_all')} className="input text-sm">
+                      <option value="accept_any">Accept any</option>
+                      <option value="require_all">Require all</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {gradingMode === 'smart_ai' && (
+                <div className="pl-4 space-y-1.5 border-l border-white/10">
+                  <label className="text-sm text-ink-muted">AI grading instructions (optional, ≤250 chars)</label>
+                  <textarea
+                    className="input text-sm resize-none"
+                    rows={3}
+                    maxLength={250}
+                    value={aiInstructions}
+                    onChange={e => setAiInstructions(e.target.value)}
+                    placeholder="e.g. Accept regional synonyms, but require correct gender and article."
+                  />
+                  <p className="text-xs text-ink-faint">{aiInstructions.length}/250</p>
+                </div>
+              )}
+            </div>
+
             {resetError && (
               <p className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
                 ⚠ {resetError}
@@ -935,7 +1023,7 @@ export default function DeckDetailPage() {
 
       {showGear && (
         <DeckSettingsPanel
-          deckId={deckId} userId={userId} initialPrefs={prefs}
+          deckId={deckId} userId={userId} deck={deck} initialPrefs={prefs}
           defaultLimit={defaultLimit} defaultSpillover={defaultSpillover}
           maxCards={cards.length}
           cards={cards} sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage}

@@ -33,6 +33,12 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     typingFailCycles:    Number(row.typing_fail_cycles ?? 0),
     stage3EnteredDate:   (row.stage3_entered_date as string | null) ?? null,
     iDontKnowCount:      Number(row.i_dont_know_count ?? 0),
+    accentMistakeCount:   Number(row.accent_mistake_count   ?? 0),
+    articleMistakeCount:  Number(row.article_mistake_count  ?? 0),
+    genderMistakeCount:   Number(row.gender_mistake_count   ?? 0),
+    typoMistakeCount:     Number(row.typo_mistake_count     ?? 0),
+    semanticMistakeCount: Number(row.semantic_mistake_count ?? 0),
+    wrongSynonymCount:    Number(row.wrong_synonym_count    ?? 0),
   }
 }
 
@@ -81,6 +87,12 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       typing_mistake_streak: state.typingMistakeStreak, typing_fail_cycles: state.typingFailCycles,
       stage3_entered_date: state.stage3EnteredDate,
       i_dont_know_count: state.iDontKnowCount,
+      accent_mistake_count:   state.accentMistakeCount,
+      article_mistake_count:  state.articleMistakeCount,
+      gender_mistake_count:   state.genderMistakeCount,
+      typo_mistake_count:     state.typoMistakeCount,
+      semantic_mistake_count: state.semanticMistakeCount,
+      wrong_synonym_count:    state.wrongSynonymCount,
     }, { onConflict: 'user_id,card_id' }).select().single()
     if (error) throw new Error(error.message)
     return rowToCardState(data)

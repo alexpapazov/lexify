@@ -23,6 +23,7 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
+import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { langName } from '@/lib/languages'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
@@ -47,6 +48,19 @@ interface ReviewItem {
   include:         boolean
   duplicate:       DuplicateAnalysis
   action:          'create' | 'merge' | 'keep-both'
+  /** Detected comma-separated synonym segments, if applicable. */
+  splitSegments?:  string[]
+  /** Whether to split into separate synonym-linked cards (default true when splitSegments set). */
+  splitIntoCards?: boolean
+}
+
+/** Returns comma-split segments if `back` looks like multiple short translations, null otherwise. */
+function detectCommaSplit(back: string): string[] | null {
+  const segments = back.split(',').map(s => s.trim()).filter(Boolean)
+  if (segments.length < 2) return null
+  const allShort = segments.every(s => s.split(/\s+/).filter(Boolean).length <= 5)
+  if (!allShort) return null
+  return segments
 }
 
 function wordCount(text: string): number {
@@ -148,8 +162,10 @@ export default function AddCardsPage() {
         return
       }
 
+      const splitEnabled = deck.gradingSettings?.commaAlternativesMode === 'split_into_cards'
       const reviewItems: ReviewItem[] = (data.cards as CandidateCard[]).map(c => {
         const duplicate = analyzeDuplicate({ front: c.front, back: c.back }, existingCards, deck.sourceLanguage, deck.targetLanguage)
+        const splitSegments = splitEnabled ? detectCommaSplit(c.back) ?? undefined : undefined
         return {
           front:           c.front,
           back:            c.back,
@@ -157,6 +173,8 @@ export default function AddCardsPage() {
           include:         true,
           duplicate,
           action:          duplicate.tier === 'near' ? 'merge' : 'create',
+          splitSegments,
+          splitIntoCards:  splitSegments ? true : undefined,
         }
       })
       setItems(reviewItems)
@@ -182,9 +200,24 @@ export default function AddCardsPage() {
     try {
       const cardRepo      = new SupabaseCardRepository()
       const dismissedRepo = new SupabaseDismissedPairRepository()
+      const synonymRepo   = new SupabaseSynonymGroupRepository()
 
-      const toMerge  = items.filter(it => it.action === 'merge' && it.duplicate.existingCard)
-      const toCreate = items.filter(it => it.action !== 'merge')
+      const includedItems = items.filter(it => it.include)
+      const toMerge  = includedItems.filter(it => it.action === 'merge' && it.duplicate.existingCard)
+      const toCreate = includedItems.filter(it => it.action !== 'merge')
+
+      // Expand split items into individual synonym card specs.
+      type CardSpec = { front: string; back: string; originalItem: ReviewItem }
+      const specs: CardSpec[] = []
+      for (const it of toCreate) {
+        if (it.splitIntoCards && it.splitSegments && it.splitSegments.length >= 2) {
+          for (const seg of it.splitSegments) {
+            specs.push({ front: it.front, back: seg, originalItem: it })
+          }
+        } else {
+          specs.push({ front: it.front, back: it.back, originalItem: it })
+        }
+      }
 
       let position = existingCount
 
@@ -192,17 +225,40 @@ export default function AddCardsPage() {
         await cardRepo.addToDeck(deckId, it.duplicate.existingCard!.id, position++)
       }
 
-      if (toCreate.length > 0) {
+      if (specs.length > 0) {
         const created = await cardRepo.bulkCreate(
           deckId, userId, deck.sourceLanguage, deck.targetLanguage,
-          toCreate.map(it => ({ front: it.front, back: it.back, position: position++ })),
+          specs.map(s => ({ front: s.front, back: s.back, position: position++ })),
         )
 
-        for (let i = 0; i < toCreate.length; i++) {
-          const it          = toCreate[i]!
+        // Persist dismissed-pair choices.
+        for (let i = 0; i < specs.length; i++) {
+          const s           = specs[i]!
           const createdCard = created[i]
-          if (it.action === 'keep-both' && it.duplicate.existingCard && createdCard && createdCard.id !== it.duplicate.existingCard.id) {
-            await dismissedRepo.create(userId, it.duplicate.existingCard.id, createdCard.id)
+          if (s.originalItem.action === 'keep-both' && s.originalItem.duplicate.existingCard && createdCard && createdCard.id !== s.originalItem.duplicate.existingCard.id) {
+            await dismissedRepo.create(userId, s.originalItem.duplicate.existingCard.id, createdCard.id)
+          }
+        }
+
+        // Link synonym groups for split items.
+        const splitItems = toCreate.filter(it => it.splitIntoCards && it.splitSegments && it.splitSegments.length >= 2)
+        let specIdx = 0
+        for (const it of toCreate) {
+          if (splitItems.includes(it) && it.splitSegments) {
+            const groupCards = created.slice(specIdx, specIdx + it.splitSegments.length).filter(Boolean)
+            specIdx += it.splitSegments.length
+            if (groupCards.length >= 2) {
+              const group = await synonymRepo.create({
+                gloss: it.front,
+                glossLanguage: deck.sourceLanguage,
+                itemLanguage:  deck.targetLanguage,
+              })
+              for (const card of groupCards) {
+                await synonymRepo.addMember(group.id, card.id)
+              }
+            }
+          } else {
+            specIdx++
           }
         }
       }
@@ -218,7 +274,9 @@ export default function AddCardsPage() {
 
   const srcLang = langName(deck.sourceLanguage)
   const tgtLang = langName(deck.targetLanguage)
-  const includedCount = items.filter(it => it.include).length
+  const includedCount = items.filter(it => it.include).reduce((sum, it) =>
+    sum + (it.splitIntoCards && it.splitSegments ? it.splitSegments.length : 1), 0
+  )
   const nearCount     = items.filter(it => it.duplicate.tier === 'near').length
   const exactCount    = items.filter(it => it.duplicate.tier === 'exact').length
 
@@ -422,6 +480,29 @@ export default function AddCardsPage() {
                       <label className="flex items-center gap-1.5 cursor-pointer text-ink">
                         <input type="radio" name={`dup-${i}`} checked={item.action === 'keep-both'} onChange={() => updateItem(i, { action: 'keep-both' })} className="accent-accent" />
                         Keep both
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {item.splitSegments && item.splitSegments.length >= 2 && (
+                  <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
+                    <p className="text-xs text-ink-muted">
+                      Looks like multiple translations — create as separate synonym-linked cards?
+                    </p>
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {item.splitSegments.map((seg, si) => (
+                        <span key={si} className="rounded bg-surface-raised px-2 py-0.5 text-xs text-ink font-mono">{seg}</span>
+                      ))}
+                    </div>
+                    <div className="flex gap-4 text-sm">
+                      <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+                        <input type="radio" name={`split-${i}`} checked={item.splitIntoCards !== false} onChange={() => updateItem(i, { splitIntoCards: true })} className="accent-accent" />
+                        Split into {item.splitSegments.length} cards
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer text-ink-muted">
+                        <input type="radio" name={`split-${i}`} checked={item.splitIntoCards === false} onChange={() => updateItem(i, { splitIntoCards: false })} className="accent-accent" />
+                        Keep as one card
                       </label>
                     </div>
                   </div>

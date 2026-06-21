@@ -3,11 +3,16 @@
 import type { Rating } from '@/domain'
 
 /**
- * Again / Hard / Good / Easy — shown only for post-graduation reviews,
- * where the learner is recalling a card for long-term retention and the
- * SM2-style scheduler needs a confidence signal.
+ * Again / Hard / Good / Easy — shown for post-graduation reviews.
+ * Pass `suggestedRating` to visually highlight the app's recommendation.
  */
-export function RatingButtons({ onRate }: { onRate: (r: Rating) => void }) {
+export function RatingButtons({
+  onRate,
+  suggestedRating,
+}: {
+  onRate: (r: Rating) => void
+  suggestedRating?: Rating
+}) {
   const buttons: { rating: Rating; label: string; color: string }[] = [
     { rating: 'again', label: 'Again', color: 'border-danger/60 text-danger hover:bg-danger/10'      },
     { rating: 'hard',  label: 'Hard',  color: 'border-warning/60 text-warning hover:bg-warning/10'   },
@@ -17,9 +22,17 @@ export function RatingButtons({ onRate }: { onRate: (r: Rating) => void }) {
   return (
     <div className="flex gap-3 justify-center">
       {buttons.map(({ rating, label, color }) => (
-        <button key={rating} onClick={() => onRate(rating)}
-          className={`border rounded-lg px-5 py-2 text-sm font-medium transition-colors ${color}`}>
+        <button
+          key={rating}
+          onClick={() => onRate(rating)}
+          autoFocus={rating === suggestedRating}
+          className={`border rounded-lg px-5 py-2 text-sm font-medium transition-colors ${color}
+            ${rating === suggestedRating ? 'ring-2 ring-white/30 ring-offset-1 ring-offset-surface' : ''}`}
+        >
           {label}
+          {rating === suggestedRating && (
+            <span className="ml-1 text-[10px] opacity-60 align-middle">↵</span>
+          )}
         </button>
       ))}
     </div>
