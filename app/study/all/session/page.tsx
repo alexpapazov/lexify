@@ -462,7 +462,7 @@ function AllDueSessionInner() {
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''} across all decks.</p>
         <div className="flex gap-3 justify-center flex-wrap">
           <Link href="/study" className="btn-primary">Back to study</Link>
-          {electiveSession && category && (
+          {electiveSession && category && category !== 'due' && (
             <button
               onClick={() => router.push(`/study/all/session?category=${category}`)}
               className="btn-ghost"
