@@ -756,10 +756,11 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <button
-            onClick={() => { setPairSource(null); setPairTarget(null); router.push('/library') }}
-            className="text-xs text-ink-muted hover:text-ink transition-colors cursor-pointer"
-          >← Library</button>
+          <Link
+            href="/library"
+            onClick={() => { setPairSource(null); setPairTarget(null) }}
+            className="text-xs text-ink-muted hover:text-ink transition-colors"
+          >← Library</Link>
           <h1 className="text-2xl font-semibold text-ink">
             {langName(pairSource!)} <span className="text-ink-faint text-base font-normal">/ {langName(pairTarget!)}</span>
           </h1>

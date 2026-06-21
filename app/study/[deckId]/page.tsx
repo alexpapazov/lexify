@@ -1247,7 +1247,7 @@ export default function DeckDetailPage() {
           <Link
             href={parentFolder
               ? `/library/${parentFolder.id}?source=${deck.sourceLanguage}&target=${deck.targetLanguage}`
-              : `/library?source=${deck.sourceLanguage}&target=${deck.targetLanguage}`}
+              : '/library'}
             className="text-xs text-ink-muted hover:text-ink mb-2 inline-block"
           >
             ← {parentFolder ? parentFolder.name : 'Library'}
