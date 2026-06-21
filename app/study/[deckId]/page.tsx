@@ -11,6 +11,7 @@ import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseFolderRepository }          from '@/lib/data/folders'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
+import { SupabaseSynonymGroupRepository }    from '@/lib/data/synonymGroups'
 import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
@@ -525,6 +526,146 @@ function ConfirmDialog({ message, onConfirm, onCancel }: {
   )
 }
 
+// ─── Synonym scan ─────────────────────────────────────────────────────────────
+
+function detectCommaSplit(back: string): string[] | null {
+  const segments = back.split(',').map(s => s.trim()).filter(Boolean)
+  if (segments.length < 2) return null
+  const allShort = segments.every(s => s.split(/\s+/).filter(Boolean).length <= 5)
+  if (!allShort) return null
+  return segments
+}
+
+interface SynonymCandidate {
+  card:     Card
+  segments: string[]
+  split:    boolean
+}
+
+function SynonymScanModal({ deckId, userId, candidates, sourceLanguage, targetLanguage, onDone, onClose }: {
+  deckId:         string
+  userId:         string
+  candidates:     SynonymCandidate[]
+  sourceLanguage: string
+  targetLanguage: string
+  onDone:         (removedIds: string[], addedCards: Card[]) => void
+  onClose:        () => void
+}) {
+  const [items,   setItems]   = useState<SynonymCandidate[]>(candidates)
+  const [saving,  setSaving]  = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  const splitCount = items.filter(it => it.split).length
+
+  function toggle(cardId: string) {
+    setItems(prev => prev.map(it => it.card.id === cardId ? { ...it, split: !it.split } : it))
+  }
+
+  async function handleConfirm() {
+    const toSplit = items.filter(it => it.split)
+    if (toSplit.length === 0) { onClose(); return }
+    setSaving(true)
+    setError(null)
+    try {
+      const cardRepo    = new SupabaseCardRepository()
+      const stateRepo   = new SupabaseCardStateRepository()
+      const synonymRepo = new SupabaseSynonymGroupRepository()
+
+      const removedIds: string[] = []
+      const addedCards: Card[]   = []
+
+      for (const item of toSplit) {
+        // Create N replacement cards (one per segment), same front.
+        const created = await cardRepo.bulkCreate(
+          deckId, userId, sourceLanguage, targetLanguage,
+          item.segments.map((seg, idx) => ({ front: item.card.front, back: seg, position: idx })),
+        )
+
+        // Copy learning state from the original card to all split cards.
+        for (const c of created) {
+          await stateRepo.copy(userId, item.card.id, c.id)
+        }
+
+        // Link all split cards to a new SynonymGroup.
+        if (created.length >= 2) {
+          const group = await synonymRepo.create({
+            gloss:         item.card.front,
+            glossLanguage: sourceLanguage,
+            itemLanguage:  targetLanguage,
+          })
+          for (const c of created) {
+            await synonymRepo.addMember(group.id, c.id)
+          }
+        }
+
+        // Remove original from deck and soft-delete it.
+        await cardRepo.removeFromDeck(deckId, item.card.id)
+        await cardRepo.softDelete(item.card.id)
+
+        removedIds.push(item.card.id)
+        addedCards.push(...created)
+      }
+
+      onDone(removedIds, addedCards)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Something went wrong')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div className="bg-surface rounded-xl border border-white/10 w-full max-w-lg max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 shrink-0">
+          <h2 className="text-base font-semibold text-ink">Split multi-translation cards</h2>
+          <button onClick={onClose} className="text-ink-muted hover:text-ink text-lg leading-none">✕</button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-3">
+          <p className="text-sm text-ink-muted">
+            These cards look like they contain multiple translations. Select the ones to split into separate synonym-linked cards.
+          </p>
+          {items.map(item => (
+            <label key={item.card.id} className="flex items-start gap-3 cursor-pointer panel hover:border-white/20 transition-colors">
+              <input
+                type="checkbox"
+                checked={item.split}
+                onChange={() => toggle(item.card.id)}
+                className="accent-accent w-4 h-4 mt-1 shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-ink">{item.card.front}</p>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {item.segments.map((seg, si) => (
+                    <span key={si} className="rounded bg-surface-raised px-2 py-0.5 text-xs text-ink font-mono">{seg}</span>
+                  ))}
+                </div>
+                {item.split && (
+                  <p className="text-xs text-ink-faint mt-1">
+                    → {item.segments.length} cards · learning progress will be copied to each
+                  </p>
+                )}
+              </div>
+            </label>
+          ))}
+          {error && <p className="text-sm text-danger">{error}</p>}
+        </div>
+
+        <div className="flex gap-3 px-5 py-4 border-t border-white/10 shrink-0">
+          <button
+            className="btn-primary"
+            disabled={saving || splitCount === 0}
+            onClick={handleConfirm}
+          >
+            {saving ? 'Splitting…' : `Split ${splitCount} card${splitCount !== 1 ? 's' : ''}`}
+          </button>
+          <button className="btn-ghost" disabled={saving} onClick={onClose}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Gear settings panel ──────────────────────────────────────────────────────
 
 function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, defaultSpillover, maxCards, cards, sourceLanguage, targetLanguage, onClose }: {
@@ -899,6 +1040,7 @@ export default function DeckDetailPage() {
   const [showGear,         setShowGear]         = useState(false)
   const [editingCard,      setEditingCard]      = useState<Card | null>(null)
   const [addingCard,       setAddingCard]       = useState(false)
+  const [showSynonymScan,  setShowSynonymScan]  = useState(false)
   const searchParams = useSearchParams()
   const activeFilter = searchParams.get('filter') as 'new' | 'learning' | 'graduated' | 'due' | null
 
@@ -983,6 +1125,13 @@ export default function DeckDetailPage() {
 
   const stateMap  = new Map(states.map(s => [s.cardId, s]))
   const now       = new Date()
+
+  const synonymCandidates: SynonymCandidate[] = cards
+    .filter(c => !c.synonymGroupId)
+    .flatMap(c => {
+      const segs = detectCommaSplit(c.back)
+      return segs ? [{ card: c, segments: segs, split: true }] : []
+    })
   const unlearned = cards.filter(c => !stateMap.has(c.id)).length
   const learning  = states.filter(s => !s.graduated).length
   const graduated = states.filter(s => s.graduated).length
@@ -1018,6 +1167,24 @@ export default function DeckDetailPage() {
             const target = cards.find(c => c.id === cardId)
             if (target) setEditingCard(target)
           }}
+        />
+      )}
+
+      {showSynonymScan && synonymCandidates.length > 0 && (
+        <SynonymScanModal
+          deckId={deckId}
+          userId={userId}
+          candidates={synonymCandidates}
+          sourceLanguage={deck.sourceLanguage}
+          targetLanguage={deck.targetLanguage}
+          onDone={(removedIds, addedCards) => {
+            setCards(prev => [
+              ...prev.filter(c => !removedIds.includes(c.id)),
+              ...addedCards,
+            ])
+            setShowSynonymScan(false)
+          }}
+          onClose={() => setShowSynonymScan(false)}
         />
       )}
 
@@ -1061,6 +1228,21 @@ export default function DeckDetailPage() {
           <Link href={`/study/${deckId}/session`} className="btn-primary">Study</Link>
         </div>
       </div>
+
+      {synonymCandidates.length > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
+          <span className="text-ink">
+            <span className="font-medium">{synonymCandidates.length} card{synonymCandidates.length !== 1 ? 's' : ''}</span>
+            {' '}may contain multiple translations — split into separate synonym cards?
+          </span>
+          <button
+            className="btn-ghost shrink-0 text-xs"
+            onClick={() => setShowSynonymScan(true)}
+          >
+            Review
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
