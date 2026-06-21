@@ -23,6 +23,11 @@ ALTER TABLE cards
   ADD COLUMN IF NOT EXISTS accepted_back_alternatives  JSONB;
 
 -- ── 3. RLS policies (cards.synonym_group_id now exists) ───────────────────────
+-- Drop first so re-runs are safe.
+DROP POLICY IF EXISTS "owner_read_synonym_groups"   ON synonym_groups;
+DROP POLICY IF EXISTS "owner_insert_synonym_groups" ON synonym_groups;
+DROP POLICY IF EXISTS "owner_update_synonym_groups" ON synonym_groups;
+
 CREATE POLICY "owner_read_synonym_groups"
 ON synonym_groups FOR SELECT USING (
   id IN (
