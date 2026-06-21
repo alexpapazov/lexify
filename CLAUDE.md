@@ -167,8 +167,8 @@ As of migration 023, the default pipeline has 5 steps (`step_order` 0–4):
 2. **typing**, prompt=back, answer=front, requiredCorrect=2 —
    English shown, type Spanish. Must get this right **twice in a row**
    before moving on.
-3. **typing**, prompt=front, answer=back, requiredCorrect=2 —
-   Spanish shown, type English.
+3. **typing**, prompt=front, answer=back, requiredCorrect=1 —
+   Spanish shown, type English (only needs 1 correct, unlike step 2's 2-in-a-row).
 4. **recognition**, prompt=front, answer=back, requiredCorrect=1 —
    *(new, migration 023)* one final Spanish→English multiple-choice check
    before the card graduates.
