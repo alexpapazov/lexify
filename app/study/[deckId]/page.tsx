@@ -547,10 +547,11 @@ interface SynonymCandidate {
   split:    boolean
 }
 
-function SynonymScanModal({ deckId, userId, candidates, sourceLanguage, targetLanguage, onDone, onClose }: {
+function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguage, targetLanguage, onDone, onClose }: {
   deckId:         string
   userId:         string
   candidates:     SynonymCandidate[]
+  deckCards:      Card[]
   sourceLanguage: string
   targetLanguage: string
   onDone:         (removedIds: string[], addedCards: Card[]) => void
@@ -559,6 +560,11 @@ function SynonymScanModal({ deckId, userId, candidates, sourceLanguage, targetLa
   const [items,   setItems]   = useState<SynonymCandidate[]>(candidates)
   const [saving,  setSaving]  = useState(false)
   const [error,   setError]   = useState<string | null>(null)
+
+  // Build a lookup of existing front values → card (case-insensitive) for duplicate detection.
+  const existingByFront = new Map(
+    deckCards.map(c => [c.front.trim().toLowerCase(), c])
+  )
 
   const splitCount = items.filter(it => it.split).length
 
@@ -580,30 +586,45 @@ function SynonymScanModal({ deckId, userId, candidates, sourceLanguage, targetLa
       const addedCards: Card[]   = []
 
       for (const item of toSplit) {
-        // Create N replacement cards (one per segment), each with a different front, same back.
-        const created = await cardRepo.bulkCreate(
-          deckId, userId, sourceLanguage, targetLanguage,
-          item.segments.map((seg, idx) => ({ front: seg, back: item.card.back, position: idx })),
-        )
+        // Separate segments into: already-existing cards vs. new ones to create.
+        const reusedCards:  Card[]   = []
+        const newSegments:  string[] = []
+        for (const seg of item.segments) {
+          const existing = existingByFront.get(seg.trim().toLowerCase())
+          if (existing && existing.id !== item.card.id) {
+            reusedCards.push(existing)
+          } else {
+            newSegments.push(seg)
+          }
+        }
 
-        // Copy learning state from the original card to all split cards.
+        // Create only the truly new cards.
+        const created: Card[] = newSegments.length > 0
+          ? await cardRepo.bulkCreate(
+              deckId, userId, sourceLanguage, targetLanguage,
+              newSegments.map((seg, idx) => ({ front: seg, back: item.card.back, position: idx })),
+            )
+          : []
+
+        // Copy learning state from the original to each new card.
         for (const c of created) {
           await stateRepo.copy(userId, item.card.id, c.id)
         }
 
-        // Link all split cards to a new SynonymGroup.
-        if (created.length >= 2) {
+        // Link all cards (reused + new) to a SynonymGroup.
+        const allGroupCards = [...reusedCards, ...created]
+        if (allGroupCards.length >= 2) {
           const group = await synonymRepo.create({
             gloss:         item.card.back,
             glossLanguage: targetLanguage,
             itemLanguage:  sourceLanguage,
           })
-          for (const c of created) {
+          for (const c of allGroupCards) {
             await synonymRepo.addMember(group.id, c.id)
           }
         }
 
-        // Remove original from deck and soft-delete it.
+        // Remove the original comma-grouped card and soft-delete it.
         await cardRepo.removeFromDeck(deckId, item.card.id)
         await cardRepo.softDelete(item.card.id)
 
@@ -630,29 +651,43 @@ function SynonymScanModal({ deckId, userId, candidates, sourceLanguage, targetLa
           <p className="text-sm text-ink-muted">
             These cards look like they contain multiple translations. Select the ones to split into separate synonym-linked cards.
           </p>
-          {items.map(item => (
-            <label key={item.card.id} className="flex items-start gap-3 cursor-pointer panel hover:border-white/20 transition-colors">
-              <input
-                type="checkbox"
-                checked={item.split}
-                onChange={() => toggle(item.card.id)}
-                className="accent-accent w-4 h-4 mt-1 shrink-0"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-ink">{item.card.front}</p>
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {item.segments.map((seg, si) => (
-                    <span key={si} className="rounded bg-surface-raised px-2 py-0.5 text-xs text-ink font-mono">{seg}</span>
-                  ))}
+          {items.map(item => {
+            const dupeSegs = item.segments.filter(seg => {
+              const ex = existingByFront.get(seg.trim().toLowerCase())
+              return ex && ex.id !== item.card.id
+            })
+            return (
+              <label key={item.card.id} className="flex items-start gap-3 cursor-pointer panel hover:border-white/20 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={item.split}
+                  onChange={() => toggle(item.card.id)}
+                  className="accent-accent w-4 h-4 mt-1 shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-ink">{item.card.front}</p>
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {item.segments.map((seg, si) => {
+                      const isDupe = existingByFront.has(seg.trim().toLowerCase()) &&
+                        existingByFront.get(seg.trim().toLowerCase())!.id !== item.card.id
+                      return (
+                        <span key={si} className={`rounded px-2 py-0.5 text-xs font-mono ${isDupe ? 'bg-warning/15 text-warning' : 'bg-surface-raised text-ink'}`}>
+                          {seg}{isDupe ? ' (exists)' : ''}
+                        </span>
+                      )
+                    })}
+                  </div>
+                  {item.split && (
+                    <p className="text-xs text-ink-faint mt-1">
+                      → {item.segments.length} cards
+                      {dupeSegs.length > 0 && ` · ${dupeSegs.length} existing card${dupeSegs.length !== 1 ? 's' : ''} will be reused`}
+                      {item.segments.length - dupeSegs.length > 0 && ` · ${item.segments.length - dupeSegs.length} new`}
+                    </p>
+                  )}
                 </div>
-                {item.split && (
-                  <p className="text-xs text-ink-faint mt-1">
-                    → {item.segments.length} cards · learning progress will be copied to each
-                  </p>
-                )}
-              </div>
-            </label>
-          ))}
+              </label>
+            )
+          })}
           {error && <p className="text-sm text-danger">{error}</p>}
         </div>
 
@@ -1180,6 +1215,7 @@ export default function DeckDetailPage() {
           deckId={deckId}
           userId={userId}
           candidates={synonymCandidates}
+          deckCards={cards}
           sourceLanguage={deck.sourceLanguage}
           targetLanguage={deck.targetLanguage}
           onDone={(removedIds, addedCards) => {
