@@ -618,7 +618,7 @@ function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguag
             gloss:         item.card.back,
             glossLanguage: targetLanguage,
             itemLanguage:  sourceLanguage,
-          })
+          }, userId)
           for (const c of allGroupCards) {
             await synonymRepo.addMember(group.id, c.id)
           }

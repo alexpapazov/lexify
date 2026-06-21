@@ -253,7 +253,7 @@ export default function AddCardsPage() {
                 gloss:         it.back,
                 glossLanguage: deck.targetLanguage,
                 itemLanguage:  deck.sourceLanguage,
-              })
+              }, userId)
               for (const card of groupCards) {
                 await synonymRepo.addMember(group.id, card.id)
               }

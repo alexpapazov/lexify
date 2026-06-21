@@ -22,11 +22,12 @@ export class SupabaseSynonymGroupRepository {
     return rowToSynonymGroup(data)
   }
 
-  async create(group: Omit<SynonymGroup, 'id' | 'itemIds' | 'createdAt' | 'updatedAt'>): Promise<SynonymGroup> {
+  async create(group: Omit<SynonymGroup, 'id' | 'itemIds' | 'createdAt' | 'updatedAt'>, ownerId: string): Promise<SynonymGroup> {
     const { data, error } = await this.db.from('synonym_groups').insert({
-      gloss:         group.gloss,
+      gloss:          group.gloss,
       gloss_language: group.glossLanguage,
       item_language:  group.itemLanguage,
+      owner_id:       ownerId,
     }).select().single()
     if (error) throw new Error(error.message)
     return rowToSynonymGroup(data)
