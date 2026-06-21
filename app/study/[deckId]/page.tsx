@@ -528,8 +528,8 @@ function ConfirmDialog({ message, onConfirm, onCancel }: {
 
 // ─── Synonym scan ─────────────────────────────────────────────────────────────
 
-function detectCommaSplit(back: string): string[] | null {
-  const segments = back.split(',').map(s => s.trim()).filter(Boolean)
+function detectCommaSplit(text: string): string[] | null {
+  const segments = text.split(',').map(s => s.trim()).filter(Boolean)
   if (segments.length < 2) return null
   const allShort = segments.every(s => s.split(/\s+/).filter(Boolean).length <= 5)
   if (!allShort) return null
@@ -575,10 +575,10 @@ function SynonymScanModal({ deckId, userId, candidates, sourceLanguage, targetLa
       const addedCards: Card[]   = []
 
       for (const item of toSplit) {
-        // Create N replacement cards (one per segment), same front.
+        // Create N replacement cards (one per segment), each with a different front, same back.
         const created = await cardRepo.bulkCreate(
           deckId, userId, sourceLanguage, targetLanguage,
-          item.segments.map((seg, idx) => ({ front: item.card.front, back: seg, position: idx })),
+          item.segments.map((seg, idx) => ({ front: seg, back: item.card.back, position: idx })),
         )
 
         // Copy learning state from the original card to all split cards.
@@ -589,9 +589,9 @@ function SynonymScanModal({ deckId, userId, candidates, sourceLanguage, targetLa
         // Link all split cards to a new SynonymGroup.
         if (created.length >= 2) {
           const group = await synonymRepo.create({
-            gloss:         item.card.front,
-            glossLanguage: sourceLanguage,
-            itemLanguage:  targetLanguage,
+            gloss:         item.card.back,
+            glossLanguage: targetLanguage,
+            itemLanguage:  sourceLanguage,
           })
           for (const c of created) {
             await synonymRepo.addMember(group.id, c.id)
@@ -1129,7 +1129,7 @@ export default function DeckDetailPage() {
   const synonymCandidates: SynonymCandidate[] = cards
     .filter(c => !c.synonymGroupId)
     .flatMap(c => {
-      const segs = detectCommaSplit(c.back)
+      const segs = detectCommaSplit(c.front)
       return segs ? [{ card: c, segments: segs, split: true }] : []
     })
   const unlearned = cards.filter(c => !stateMap.has(c.id)).length

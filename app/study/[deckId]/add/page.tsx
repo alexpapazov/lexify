@@ -54,9 +54,9 @@ interface ReviewItem {
   splitIntoCards?: boolean
 }
 
-/** Returns comma-split segments if `back` looks like multiple short translations, null otherwise. */
-function detectCommaSplit(back: string): string[] | null {
-  const segments = back.split(',').map(s => s.trim()).filter(Boolean)
+/** Returns comma-split segments if the string looks like multiple short words/phrases, null otherwise. */
+function detectCommaSplit(text: string): string[] | null {
+  const segments = text.split(',').map(s => s.trim()).filter(Boolean)
   if (segments.length < 2) return null
   const allShort = segments.every(s => s.split(/\s+/).filter(Boolean).length <= 5)
   if (!allShort) return null
@@ -165,7 +165,7 @@ export default function AddCardsPage() {
       const splitEnabled = deck.gradingSettings?.commaAlternativesMode === 'split_into_cards'
       const reviewItems: ReviewItem[] = (data.cards as CandidateCard[]).map(c => {
         const duplicate = analyzeDuplicate({ front: c.front, back: c.back }, existingCards, deck.sourceLanguage, deck.targetLanguage)
-        const splitSegments = splitEnabled ? detectCommaSplit(c.back) ?? undefined : undefined
+        const splitSegments = splitEnabled ? detectCommaSplit(c.front) ?? undefined : undefined
         return {
           front:           c.front,
           back:            c.back,
@@ -212,7 +212,7 @@ export default function AddCardsPage() {
       for (const it of toCreate) {
         if (it.splitIntoCards && it.splitSegments && it.splitSegments.length >= 2) {
           for (const seg of it.splitSegments) {
-            specs.push({ front: it.front, back: seg, originalItem: it })
+            specs.push({ front: seg, back: it.back, originalItem: it })
           }
         } else {
           specs.push({ front: it.front, back: it.back, originalItem: it })
@@ -249,9 +249,9 @@ export default function AddCardsPage() {
             specIdx += it.splitSegments.length
             if (groupCards.length >= 2) {
               const group = await synonymRepo.create({
-                gloss: it.front,
-                glossLanguage: deck.sourceLanguage,
-                itemLanguage:  deck.targetLanguage,
+                gloss:         it.back,
+                glossLanguage: deck.targetLanguage,
+                itemLanguage:  deck.sourceLanguage,
               })
               for (const card of groupCards) {
                 await synonymRepo.addMember(group.id, card.id)
