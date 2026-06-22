@@ -3,8 +3,12 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
+import { SupabaseDeckPreferencesRepository }  from '@/lib/data/deckPreferences'
+import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
+import { SupabaseLanguagePairRepository }     from '@/lib/data/languagePairs'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
+import type { LanguagePair, LanguageSyncRule } from '@/domain'
+import { langName } from '@/lib/languages'
 
 const LANGUAGES = [
   { code: 'es', label: 'Spanish'    },
@@ -39,7 +43,223 @@ function detectBrowserTimezone(): string {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return 'UTC' }
 }
 
+const MODE_LABELS: Record<string, string> = {
+  review_first: 'Review first',
+  auto:         'Auto-approve',
+}
+const TRIGGER_LABELS: Record<string, string> = {
+  manual_only:        'Manual only',
+  on_card_created:    'When card is created',
+  on_card_graduated:  'When card graduates',
+}
+
+function pairLabel(p: LanguagePair): string {
+  return `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`
+}
+
+function LanguageSyncPanel({ userId }: { userId: string }) {
+  const [pairs,       setPairs]       = useState<LanguagePair[]>([])
+  const [rules,       setRules]       = useState<LanguageSyncRule[]>([])
+  const [loading,     setLoading]     = useState(true)
+  const [error,       setError]       = useState<string | null>(null)
+  const [showForm,    setShowForm]    = useState(false)
+  const [saving,      setSaving]      = useState(false)
+  const [formError,   setFormError]   = useState<string | null>(null)
+
+  // New-rule form state
+  const [srcPairId,  setSrcPairId]  = useState('')
+  const [dstPairId,  setDstPairId]  = useState('')
+  const [mode,       setMode]       = useState<'review_first' | 'auto'>('review_first')
+  const [trigger,    setTrigger]    = useState<'manual_only' | 'on_card_created' | 'on_card_graduated'>('manual_only')
+
+  useEffect(() => {
+    const ruleRepo = new SupabaseLanguageSyncRuleRepository()
+    const pairRepo = new SupabaseLanguagePairRepository()
+    Promise.all([pairRepo.list(userId), ruleRepo.listForUser(userId)])
+      .then(([p, r]) => { setPairs(p); setRules(r) })
+      .catch(e => setError(e instanceof Error ? e.message : 'Failed to load'))
+      .finally(() => setLoading(false))
+  }, [userId])
+
+  const availableDest = pairs.filter(p => p.id !== srcPairId)
+
+  async function handleAddRule() {
+    if (!srcPairId || !dstPairId) { setFormError('Select both pairs.'); return }
+    if (srcPairId === dstPairId)   { setFormError('Source and destination must differ.'); return }
+    if (rules.some(r => r.sourcePairId === srcPairId && r.destinationPairId === dstPairId)) {
+      setFormError('A rule for this direction already exists.'); return
+    }
+    setSaving(true)
+    setFormError(null)
+    try {
+      const ruleRepo = new SupabaseLanguageSyncRuleRepository()
+      const created  = await ruleRepo.upsert({
+        userId, sourcePairId: srcPairId, destinationPairId: dstPairId,
+        enabled: true, mode, trigger, allowSyncedCardsToTriggerSync: false,
+      })
+      setRules(prev => [...prev, created])
+      setSrcPairId(''); setDstPairId('')
+      setMode('review_first'); setTrigger('manual_only')
+      setShowForm(false)
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : 'Failed to create rule')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleToggle(rule: LanguageSyncRule) {
+    try {
+      const ruleRepo = new SupabaseLanguageSyncRuleRepository()
+      const updated  = await ruleRepo.upsert({ ...rule, enabled: !rule.enabled })
+      setRules(prev => prev.map(r => r.id === rule.id ? updated : r))
+    } catch { /* swallow — UI stays consistent */ }
+  }
+
+  async function handleDelete(ruleId: string) {
+    try {
+      const ruleRepo = new SupabaseLanguageSyncRuleRepository()
+      await ruleRepo.delete(ruleId)
+      setRules(prev => prev.filter(r => r.id !== ruleId))
+    } catch { /* swallow */ }
+  }
+
+  if (loading) return <p className="text-ink-faint text-sm">Loading…</p>
+  if (error)   return <p className="text-danger text-sm">{error}</p>
+  if (pairs.length < 2) return (
+    <p className="text-ink-faint text-sm">
+      You need at least two language pairs to create sync rules.
+      Add them on the{' '}
+      <a href="/library" className="text-accent underline">Library</a> page.
+    </p>
+  )
+
+  return (
+    <div className="space-y-4">
+      {/* Existing rules */}
+      {rules.length === 0 && !showForm && (
+        <p className="text-ink-faint text-sm">No sync rules yet. Add one below.</p>
+      )}
+
+      {rules.map(rule => {
+        const src = pairs.find(p => p.id === rule.sourcePairId)
+        const dst = pairs.find(p => p.id === rule.destinationPairId)
+        if (!src || !dst) return null
+        return (
+          <div key={rule.id} className={`rounded-card border p-3 space-y-2 ${rule.enabled ? 'border-white/10' : 'border-white/5 opacity-60'}`}>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-ink truncate">
+                  {pairLabel(src)}
+                  <span className="mx-2 text-accent">⟹</span>
+                  {pairLabel(dst)}
+                </p>
+                <p className="text-xs text-ink-faint mt-0.5">
+                  {MODE_LABELS[rule.mode]} · {TRIGGER_LABELS[rule.trigger]}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleToggle(rule)}
+                  title={rule.enabled ? 'Disable rule' : 'Enable rule'}
+                  className={`w-8 h-4 rounded-full transition-colors relative ${rule.enabled ? 'bg-accent' : 'bg-white/20'}`}
+                >
+                  <span className={`absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${rule.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                </button>
+                <button
+                  onClick={() => handleDelete(rule.id)}
+                  title="Delete rule"
+                  className="text-danger/60 hover:text-danger transition-colors text-sm leading-none"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+
+      {/* Add-rule form */}
+      {showForm ? (
+        <div className="rounded-card border border-white/10 p-4 space-y-3">
+          <h3 className="text-xs font-medium text-ink-muted uppercase tracking-wider">New sync rule</h3>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs text-ink-faint">Source pair (vocab you&apos;re studying)</label>
+              <select
+                className="input text-sm"
+                value={srcPairId}
+                onChange={e => { setSrcPairId(e.target.value); setDstPairId('') }}
+              >
+                <option value="">Select…</option>
+                {pairs.map(p => <option key={p.id} value={p.id}>{pairLabel(p)}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-ink-faint">Destination pair (where cards get synced)</label>
+              <select
+                className="input text-sm"
+                value={dstPairId}
+                onChange={e => setDstPairId(e.target.value)}
+                disabled={!srcPairId}
+              >
+                <option value="">Select…</option>
+                {availableDest.map(p => <option key={p.id} value={p.id}>{pairLabel(p)}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs text-ink-faint">Review mode</label>
+              <select className="input text-sm" value={mode} onChange={e => setMode(e.target.value as typeof mode)}>
+                <option value="review_first">Review first — you approve before the card is created</option>
+                <option value="auto">Auto-approve — cards created immediately</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-ink-faint">When to trigger</label>
+              <select className="input text-sm" value={trigger} onChange={e => setTrigger(e.target.value as typeof trigger)}>
+                <option value="manual_only">Manual only — use the Sync button on each card</option>
+                <option value="on_card_created">When a card is created in the source pair</option>
+                <option value="on_card_graduated">When a card graduates in the source pair</option>
+              </select>
+            </div>
+          </div>
+
+          {formError && <p className="text-danger text-xs">{formError}</p>}
+
+          <div className="flex gap-2">
+            <button
+              className="btn-primary text-sm py-1.5 px-4"
+              onClick={handleAddRule}
+              disabled={saving || !srcPairId || !dstPairId}
+            >
+              {saving ? 'Adding…' : 'Add rule'}
+            </button>
+            <button
+              className="btn-ghost text-sm py-1.5 px-3"
+              onClick={() => { setShowForm(false); setFormError(null) }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          className="text-sm text-accent hover:text-accent/80 transition-colors"
+          onClick={() => setShowForm(true)}
+        >
+          + Add sync rule
+        </button>
+      )}
+    </div>
+  )
+}
+
 export default function SettingsPage() {
+  const [userId,        setUserId]        = useState('')
   const [displayName,   setDisplayName]   = useState('')
   const [selectedLangs, setSelectedLangs] = useState<string[]>([])
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
@@ -65,6 +285,7 @@ export default function SettingsPage() {
     supabase.auth.getSession().then(async ({ data }) => {
       const uid = data.session?.user.id
       if (!uid) { router.push('/auth'); return }
+      setUserId(uid)
 
       const { data: profile } = await supabase
         .from('profiles')
@@ -239,6 +460,20 @@ export default function SettingsPage() {
           {saved ? 'Saved ✓' : 'Save settings'}
         </button>
       </div>
+
+      {/* Language Sync */}
+      {userId && (
+        <div className="panel space-y-4">
+          <div>
+            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Language Sync</h2>
+            <p className="text-xs text-ink-faint mt-1">
+              Sync rules generate linked vocabulary in another language pair when you study.
+              E.g. a French card you study can auto-generate the Korean equivalent.
+            </p>
+          </div>
+          <LanguageSyncPanel userId={userId} />
+        </div>
+      )}
 
       {/* Global reset */}
       <div className="panel border-danger/20 space-y-2">
