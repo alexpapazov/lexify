@@ -25,6 +25,7 @@ import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { langName } from '@/lib/languages'
+import { autoSyncNewCards } from '@/lib/autoSync'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
   estimateCardCount, analyzeDuplicate, type DuplicateAnalysis,
@@ -231,6 +232,9 @@ export default function AddCardsPage() {
           deckId, userId, deck.sourceLanguage, deck.targetLanguage,
           specs.map(s => ({ front: s.front, back: s.back, position: position++ })),
         )
+
+        // Trigger language sync in the background (fire-and-forget)
+        void autoSyncNewCards(userId, deck.sourceLanguage, deck.targetLanguage, created)
 
         // Persist dismissed-pair choices.
         for (let i = 0; i < specs.length; i++) {

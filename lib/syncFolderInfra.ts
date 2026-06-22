@@ -4,9 +4,8 @@
  * Ensures the stable folder / deck infrastructure for a language sync direction.
  * Folder structure (in the destination language pair's section):
  *
- *   synced/                         ← root, shared across all source pairs going into this dest pair
- *     [Source language name]/       ← sub-folder, one per source language
- *       (synced deck lives here)
+ *   Synced/                 ← root folder, shared across all source pairs → this dest pair
+ *     Spanish               ← deck named after the source language, lives directly in root
  *
  * The IDs are stored in `language_sync_state` so the same folders/deck are
  * reused on every subsequent sync — no duplicates from re-running.
@@ -20,7 +19,7 @@ import { langName } from '@/lib/languages'
 
 export interface SyncInfra {
   rootFolderId: string
-  subFolderId:  string
+  subFolderId:  string  // same as rootFolderId (no sub-folder)
   deckId:       string
 }
 
@@ -53,7 +52,7 @@ export async function ensureSyncInfra(
   const folderRepo = new SupabaseFolderRepository()
   const deckRepo   = new SupabaseDeckRepository()
 
-  // 2. Find existing "synced" root folder for this dest pair from another direction
+  // 2. Find existing "Synced" root folder for this dest pair from another direction
   const { data: sibling } = await db
     .from('language_sync_state')
     .select('root_folder_id')
@@ -66,33 +65,29 @@ export async function ensureSyncInfra(
   if (sibling) {
     rootFolderId = sibling.root_folder_id as string
   } else {
-    const root = await folderRepo.create(userId, 'synced', null)
+    const root = await folderRepo.create(userId, 'Synced', null)
     rootFolderId = root.id
   }
 
-  // 3. Create the sub-folder named after the source language (English name)
-  const subFolderName = langName(sourcePair.sourceLanguage)
-  const sub = await folderRepo.create(userId, subFolderName, rootFolderId)
-
-  // 4. Create the synced deck (dest pair's source/target languages) in the sub-folder
-  const deckName = `Synced from ${langName(sourcePair.sourceLanguage)}`
+  // 3. Create the deck named after the source language directly inside root (no sub-folder)
+  const deckName = langName(sourcePair.sourceLanguage)
   const deck = await deckRepo.create(userId, {
     name:           deckName,
     sourceLanguage: destPair.sourceLanguage,
     targetLanguage: destPair.targetLanguage,
     pipelineId:     DEFAULT_PIPELINE_ID,
   })
-  await deckRepo.update(deck.id, { folderId: sub.id })
+  await deckRepo.update(deck.id, { folderId: rootFolderId })
 
-  // 5. Persist the infra so future syncs in this direction reuse it
+  // 4. Persist the infra so future syncs in this direction reuse it
   await db.from('language_sync_state').upsert({
     user_id:              userId,
     source_pair_id:       sourcePair.id,
     destination_pair_id:  destPair.id,
     root_folder_id:       rootFolderId,
-    sub_folder_id:        sub.id,
+    sub_folder_id:        rootFolderId,  // no sub-folder; store root in both columns
     deck_id:              deck.id,
   }, { onConflict: 'user_id,source_pair_id,destination_pair_id' })
 
-  return { rootFolderId, subFolderId: sub.id, deckId: deck.id }
+  return { rootFolderId, subFolderId: rootFolderId, deckId: deck.id }
 }
