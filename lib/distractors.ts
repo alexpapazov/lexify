@@ -68,12 +68,14 @@ function isPotentialSynonym(correct: string, candidate: string): boolean {
 }
 
 /** Random sibling-card fallback: pull `count` other values from `side` of other cards in the deck.
- *  Filters out values that look like synonyms of the correct answer. */
-function deckFallback(card: Card, side: CardSide, deckCards: Card[], correct: string, count: number): string[] {
+ *  Filters out values that look like synonyms of the correct answer.
+ *  `excludeNorms` is an optional set of already-normalised texts to skip (e.g. synonym-group members). */
+function deckFallback(card: Card, side: CardSide, deckCards: Card[], correct: string, count: number, excludeNorms?: Set<string>): string[] {
   const pool = deckCards
     .filter(c => c.id !== card.id)
     .map(c => (side === 'front' ? c.front : c.back))
     .filter(v => !isPotentialSynonym(correct, v))
+    .filter(v => !excludeNorms?.has(norm(v)))
   return shuffle(dedupeAgainst(correct, pool)).slice(0, count)
 }
 
@@ -111,21 +113,30 @@ async function fetchAiChoices(
  * `side` is the answer side of the current pipeline step — i.e. what the
  * learner needs to pick out from among the distractors.
  */
+/**
+ * Build multiple-choice options for `side` of `card` synchronously.
+ * `excludeTexts` — additional answer texts to exclude from the distractor pool,
+ * used for synonym-group cards whose other members are also correct answers.
+ */
 export function buildOptions(
   card: Card,
   side: CardSide,
   deckCards: Card[],
+  excludeTexts?: string[],
 ): string[] {
   const correct = side === 'front' ? card.front : card.back
   const synonyms = (side === 'front' ? card.choices?.frontSynonyms : card.choices?.backSynonyms) ?? []
   const distractorsNeeded = OPTIONS_NEEDED - 1
+  const excludeNorms = new Set((excludeTexts ?? []).map(norm))
 
-  // Filter out synonyms from cached AI distractors so they're never shown as wrong options
-  const cachedFiltered = (card.choices?.[side] ?? []).filter(d => !synonyms.some(s => norm(s) === norm(d)))
+  // Filter out synonyms AND explicitly excluded texts from cached AI distractors.
+  const cachedFiltered = (card.choices?.[side] ?? []).filter(d =>
+    !synonyms.some(s => norm(s) === norm(d)) && !excludeNorms.has(norm(d))
+  )
 
   let pool = dedupeAgainst(correct, cachedFiltered)
   if (pool.length < distractorsNeeded) {
-    const fallback = deckFallback(card, side, deckCards, correct, distractorsNeeded - pool.length)
+    const fallback = deckFallback(card, side, deckCards, correct, distractorsNeeded - pool.length, excludeNorms)
     pool = dedupeAgainst(correct, [...pool, ...fallback])
   }
 

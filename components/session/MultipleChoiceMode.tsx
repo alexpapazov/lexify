@@ -17,7 +17,7 @@ import { speak } from '@/lib/speak'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, onChoicesCached, onRate, onIDontKnow, onAdvance }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -25,6 +25,18 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   sourceLanguage: string
   targetLanguage: string
   deckName?:      string
+  /**
+   * For synonym-group cards at stage 1 (native→target): fronts of other
+   * group members that are ALSO correct — they must not appear as distractors.
+   */
+  excludeAnswerTexts?: string[]
+  /**
+   * For synonym-group cards at stages 0 & 4 (target→native): when true,
+   * the correct answer displayed in choices is one randomly chosen word from
+   * card.back split by comma (e.g. "still, yet" → "still" or "yet"),
+   * rather than the full gloss string.
+   */
+  splitGlossFromBack?: boolean
   /** Called when AI generation produced a new choices pool, so the caller can cache it locally too. */
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string) => void
@@ -33,13 +45,35 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   /** Called when Continue is pressed after "?" revealed the answer (penalty already applied via onIDontKnow). */
   onAdvance?: () => void
 }) {
-  const [choices,   setChoices]   = useState<string[]>(() => buildOptions(card, answerSide, deckCards))
+  const correct  = answerSide === 'front' ? card.front : card.back
+
+  // Pick one gloss word randomly on mount (stable for this card show via key remount).
+  const [glossWord] = useState<string | null>(() => {
+    if (!splitGlossFromBack) return null
+    const words = card.back.split(',').map(w => w.trim()).filter(Boolean)
+    if (words.length <= 1) return null
+    return words[Math.floor(Math.random() * words.length)] ?? null
+  })
+  const displayCorrect = glossWord ?? correct
+
+  const [choices,   setChoices]   = useState<string[]>(() => {
+    const opts = buildOptions(card, answerSide, deckCards, excludeAnswerTexts)
+    if (glossWord && norm(glossWord) !== norm(correct)) {
+      return opts.map(o => norm(o) === norm(correct) ? glossWord : o)
+    }
+    return opts
+  })
   const [selected,  setSelected]  = useState<string | null>(null)
   const [viaSynonym, setViaSynonym] = useState(false)
   const [revealed,  setRevealed]  = useState(false)
 
   useEffect(() => {
-    setChoices(buildOptions(card, answerSide, deckCards))
+    const opts = buildOptions(card, answerSide, deckCards, excludeAnswerTexts)
+    if (glossWord && norm(glossWord) !== norm(correct)) {
+      setChoices(opts.map(o => norm(o) === norm(correct) ? glossWord : o))
+    } else {
+      setChoices(opts)
+    }
     setSelected(null)
     setViaSynonym(false)
     setRevealed(false)
@@ -55,8 +89,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id])
 
-  const prompt   = promptSide  === 'front' ? card.front : card.back
-  const correct  = answerSide  === 'front' ? card.front : card.back
+  const prompt   = promptSide === 'front' ? card.front : card.back
   const synonyms = (answerSide === 'front' ? card.choices?.frontSynonyms : card.choices?.backSynonyms) ?? []
 
   function norm(s: string) { return s.trim().toLowerCase() }
@@ -68,13 +101,13 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   function choose(choice: string) {
     if (selected) return
     setSelected(choice)
-    const isExactMatch = norm(choice) === norm(correct)
+    const isExactMatch = norm(choice) === norm(displayCorrect)
     setViaSynonym(!isExactMatch && isSynonym(choice))
   }
 
   function continueNext() {
     if (!selected) return
-    const isExactMatch  = norm(selected) === norm(correct)
+    const isExactMatch  = norm(selected) === norm(displayCorrect)
     const isSyn         = !isExactMatch && isSynonym(selected)
     const wasCorrect    = isExactMatch || isSyn
     onRate(wasCorrect ? 'good' : 'again', wasCorrect, selected)
@@ -97,7 +130,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
         </button>
         {!selected && !revealed && onIDontKnow && (
           <button
-            onClick={() => { onIDontKnow(); setRevealed(true); setSelected(correct) }}
+            onClick={() => { onIDontKnow(); setRevealed(true); setSelected(displayCorrect) }}
             title="I don't know"
             className="absolute bottom-3 right-3 text-lg text-danger/70 hover:text-danger transition-colors leading-none"
           >
@@ -108,7 +141,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {choices.map(choice => {
-          const isCorrect  = norm(choice) === norm(correct)
+          const isCorrect  = norm(choice) === norm(displayCorrect)
           const isSelected = choice === selected
           const isSyn      = !isCorrect && isSynonym(choice)
           let style = 'border-white/10 hover:border-accent/40 hover:bg-surface-raised/50 text-ink'

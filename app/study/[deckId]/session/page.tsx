@@ -18,13 +18,17 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SynonymGroup, SynonymAnswerField, SynonymProductionPrompt, GradingIssueType } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
+import { SynonymTypingMode } from '@/components/session/SynonymTypingMode'
+import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, promoteConfusionDistractors, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday } from '@/lib/dates'
+import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
+import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
 
 /** How many slots ahead an "I don't know" card is re-queued to resurface in the same session. */
 const IDONTKNOW_REQUEUE_OFFSET = 4
@@ -116,6 +120,12 @@ export default function SessionPage() {
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
   /** Graduated cards in the 10-minute relearn loop — held out of the main queue until their dueAt passes (or the queue runs out). */
   const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
+  /** Synonym groups for all cards in this session (loaded at session start). */
+  const [synonymGroups,           setSynonymGroups]           = useState<Map<string, SynonymGroup>>(new Map())
+  /** The "today" date key used for synonym pre-fill localStorage (accounts for day turnover hour). */
+  const [studyDayKey,             setStudyDayKey]             = useState('')
+  /** IDs of synonym-group cards answered in this session via multi-field — auto-advance when encountered. */
+  const [sessionAnsweredSynonyms, setSessionAnsweredSynonyms] = useState<Set<string>>(new Set())
 const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
@@ -254,6 +264,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       setTargetLanguage(deck.targetLanguage)
       setAllCards(cards)
 
+      const today = getToday(tz, turnoverHour)
+      setStudyDayKey(today)
+      purgeStaleSynonymPrefill(session.user.id, today)
+      const groupsMap = await new SupabaseSynonymGroupRepository().listForCards(cards.map(c => c.id))
+      setSynonymGroups(groupsMap)
+
       const existingStates = await stateRepo.listByDeck(session.user.id, deckId)
       const stateMap = new Map(existingStates.map(s => [s.cardId, s]))
       setCardStates(stateMap)
@@ -275,7 +291,6 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       setElectiveBatchLimit(batchLimit)
 
       const now   = new Date()
-      const today = getToday(tz, turnoverHour)
 
       // ?category= elective study: build a queue from exactly that category
       // (matching the deck-detail page's stat counts) and skip the normal
@@ -416,6 +431,17 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, queue.length, done, loading])
 
+  // Auto-advance past any synonym-group card that was already answered in
+  // this session via a multi-field prompt (to avoid showing it again).
+  const currentCardId = !loading && !done ? queue[index]?.card.id : undefined
+  useEffect(() => {
+    if (!currentCardId) return
+    if (sessionAnsweredSynonyms.has(currentCardId)) {
+      setIndex(i => i + 1)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentCardId, sessionAnsweredSynonyms])
+
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
     const current = queue[index]
     if (!current) return
@@ -517,6 +543,114 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       setSubmitting(false)
     }
   }, [queue, index, userId, gradingSettings, submitting, relearnPool])
+
+  /**
+   * Called by SynonymTypingMode (pipeline multi-field prompt) with ALL field
+   * results at once.  Updates every group member's CardState, marks them
+   * answered in the pre-fill store, adds them to sessionAnsweredSynonyms so
+   * they auto-advance if they appear later in the queue, then advances.
+   */
+  const handleSynonymTypingAdvance = useCallback(async (
+    results: Array<{ lexicalItemId: string; rating: Rating; wasCorrect: boolean; issueType?: GradingIssueType }>,
+  ) => {
+    if (submitting) return
+    setSubmitting(true)
+    setAnswerError(null)
+    try {
+      const currentPipeline = queue[index]?.pipeline
+      if (!currentPipeline) { setIndex(i => i + 1); return }
+
+      const stateRepo  = new SupabaseCardStateRepository()
+      const eventRepo  = new SupabaseReviewEventRepository()
+      const nowDate    = new Date()
+      const newStates  = new Map<string, CardState>()
+
+      for (const { lexicalItemId, rating, wasCorrect } of results) {
+        const memberCard  = allCards.find(c => c.id === lexicalItemId)
+        const memberState = cardStates.get(lexicalItemId)
+        if (!memberCard || !memberState) continue
+
+        const sortedSteps = [...currentPipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+        const step = sortedSteps.find(s => s.stepOrder === memberState.currentStepOrder) ?? sortedSteps[0]!
+        const reviewMode  = classifyReviewMode(memberState, nowDate)
+
+        await eventRepo.create({
+          userId, cardId: memberCard.id, mode: step.stepType,
+          promptSide: step.promptSide, answerSide: step.answerSide,
+          promptShown: step.promptSide === 'front' ? memberCard.front : memberCard.back,
+          expected:    step.answerSide === 'front' ? memberCard.front : memberCard.back,
+          userAnswer:  wasCorrect ? (step.answerSide === 'front' ? memberCard.front : memberCard.back) : '',
+          wasCorrect, rating, responseMs: null, reviewMode, wasTyped: true,
+        })
+
+        const newState = progressAfterReview(
+          memberState, currentPipeline,
+          { wasCorrect, rating, wrongSeverity: undefined, wasTyped: true },
+          nowDate,
+        )
+        await stateRepo.upsert(newState)
+        newStates.set(lexicalItemId, newState)
+        markSynonymAnswered(userId, lexicalItemId, studyDayKey)
+      }
+
+      setCardStates(prev => {
+        const next = new Map(prev)
+        for (const [id, state] of newStates) next.set(id, state)
+        return next
+      })
+      setSessionAnsweredSynonyms(prev => {
+        const next = new Set(prev)
+        for (const { lexicalItemId } of results) next.add(lexicalItemId)
+        return next
+      })
+      setIndex(i => i + 1)
+    } catch (err: unknown) {
+      console.error('Failed to record synonym answer:', err)
+      setAnswerError(err instanceof Error ? err.message : 'Something went wrong saving your answer. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }, [queue, index, userId, allCards, cardStates, submitting, studyDayKey])
+
+  /**
+   * Called by SynonymDueNowMode when the learner types a synonym word during
+   * the Due Now sequential chain.  Credits the synonym's SRS state and marks
+   * it in the pre-fill store.
+   */
+  const handleSynonymDueNowTyped = useCallback(async (synonymCardId: string) => {
+    const memberCard  = allCards.find(c => c.id === synonymCardId)
+    const memberState = cardStates.get(synonymCardId)
+    const pipeline    = queue[index]?.pipeline
+    if (!memberCard || !memberState || !pipeline) return
+
+    try {
+      const stateRepo  = new SupabaseCardStateRepository()
+      const eventRepo  = new SupabaseReviewEventRepository()
+      const nowDate    = new Date()
+      const reviewMode = classifyReviewMode(memberState, nowDate)
+
+      await eventRepo.create({
+        userId, cardId: memberCard.id, mode: 'typing',
+        promptSide: 'back', answerSide: 'front',
+        promptShown: memberCard.back, expected: memberCard.front,
+        userAnswer: memberCard.front,
+        wasCorrect: true, rating: 'good', responseMs: null,
+        reviewMode, wasTyped: true,
+      })
+
+      const newState = progressAfterReview(
+        memberState, pipeline,
+        { wasCorrect: true, rating: 'good', wrongSeverity: undefined, wasTyped: true },
+        nowDate,
+      )
+      await stateRepo.upsert(newState)
+      setCardStates(prev => { const n = new Map(prev); n.set(synonymCardId, newState); return n })
+      markSynonymAnswered(userId, synonymCardId, studyDayKey)
+      setSessionAnsweredSynonyms(prev => new Set([...prev, synonymCardId]))
+    } catch (err) {
+      console.error('Failed to credit synonym state:', err)
+    }
+  }, [queue, index, userId, allCards, cardStates, studyDayKey])
 
   /**
    * "I don't know" — heavier penalty than a single wrong answer.
@@ -646,6 +780,34 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
   const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
 
+  // ── Synonym group info for the current card ─────────────────────────────────
+  const synGroup = card.synonymGroupId ? synonymGroups.get(card.synonymGroupId) : null
+  // Other members of the group (the current card is excluded).
+  const synMemberCards: Card[] = synGroup
+    ? synGroup.itemIds
+        .filter(id => id !== card.id)
+        .map(id => allCards.find(c => c.id === id))
+        .filter((c): c is Card => c !== undefined)
+    : []
+
+  // For pipeline typing: only use multi-field when answers are distinct across
+  // members (stage 2: different fronts).  Stage 3 with a shared back falls
+  // back to the regular TypingMode since all boxes would be identical.
+  const synTypingIsNativeToTarget = step.promptSide === 'back' // true for stage 2
+  const synTypingExpected = (m: Card) => synTypingIsNativeToTarget ? m.front : m.back
+  const synAllMembers = synMemberCards.length > 0 ? [card, ...synMemberCards] : []
+  const synAnswersDistinct =
+    synAllMembers.length > 1 &&
+    new Set(synAllMembers.map(m => synTypingExpected(m).trim().toLowerCase())).size > 1
+
+  // For Due Now chain: IDs already answered today (localStorage) or this session.
+  const synPreAnsweredIds = new Set<string>([
+    ...synMemberCards
+      .filter(m => wasSynonymAnswered(userId, m.id, studyDayKey))
+      .map(m => m.id),
+    ...sessionAnsweredSynonyms,
+  ])
+
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="flex items-center justify-between">
@@ -674,13 +836,50 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       )}
 
       {!state.graduated && step.stepType === 'recognition' ? (
+        // ── Pre-graduation MC ────────────────────────────────────────────────
+        // Stage 1 (native→target): exclude other group members' fronts from
+        //   distractors (they're also correct answers).
+        // Stages 0 & 4 (target→native): split the back gloss into individual
+        //   words and display one randomly as the correct answer.
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={allCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage}
+          excludeAnswerTexts={step.answerSide === 'front' && synMemberCards.length > 0
+            ? synMemberCards.map(m => m.front) : undefined}
+          splitGlossFromBack={step.answerSide === 'back' && synMemberCards.length > 0}
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+      ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
+        // ── Pipeline multi-field synonym typing ──────────────────────────────
+        // Stages 2 & 3 where group members have distinct expected answers.
+        <SynonymTypingMode
+          key={`${card.id}-${index}`}
+          prompt={(() => {
+            const gloss = synTypingIsNativeToTarget
+              ? card.back
+              : synAllMembers.map(m => m.front).join(', ')
+            const fields: SynonymAnswerField[] = synAllMembers.map(m => {
+              const expected   = synTypingExpected(m)
+              const isPrefilled = wasSynonymAnswered(userId, m.id, studyDayKey)
+              return {
+                lexicalItemId:  m.id,
+                expectedAnswer: expected,
+                status:  isPrefilled ? 'prefilled' : 'due_blank',
+                value:   isPrefilled ? expected : '',
+                dueState: isPrefilled ? 'not_due' : 'due',
+                register: m.register,
+                region:   m.region,
+              }
+            })
+            return { synonymGroupId: card.synonymGroupId!, gloss, fields } satisfies SynonymProductionPrompt
+          })()}
+          gradingSettings={gradingSettings!}
+          gradedReview={false}
+          onAdvance={handleSynonymTypingAdvance}
+        />
       ) : !state.graduated ? (
+        // ── Pipeline single-field typing (or stage 3 with shared back) ───────
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings!} gradedReview={false}
@@ -689,9 +888,23 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : current.productionMode === 'self-graded' ? (
+        // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           onRate={rating => handleAnswer(rating, rating !== 'again')} />
+      ) : synMemberCards.length > 0 ? (
+        // ── Post-graduation typed recall with synonym chain ──────────────────
+        <SynonymDueNowMode
+          key={`${card.id}-${index}`}
+          card={card}
+          synonymMembers={synMemberCards}
+          preAnsweredIds={synPreAnsweredIds}
+          gradingSettings={gradingSettings!}
+          overrideAnswers={Array.from(overrides.get(`${card.id}:front`) ?? [])}
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onSynonymTyped={handleSynonymDueNowTyped}
+        />
       ) : (
+        // ── Post-graduation typed recall (no synonym group) ───────────────────
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings!} gradedReview={true}

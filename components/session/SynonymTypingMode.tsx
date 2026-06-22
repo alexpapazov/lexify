@@ -21,16 +21,13 @@ export function SynonymTypingMode({
   prompt: synonymPrompt,
   gradingSettings,
   gradedReview,
-  onRate,
+  onAdvance,
 }: {
   prompt:          SynonymProductionPrompt
   gradingSettings: GradingSettings
   gradedReview:    boolean
-  /**
-   * Called once for each due field after the user submits.
-   * Session page should update each lexical item's CardState separately.
-   */
-  onRate: (lexicalItemId: string, rating: Rating, wasCorrect: boolean, issueType?: GradingIssueType) => void
+  /** Called once with ALL field results when the user presses Continue. */
+  onAdvance: (results: Array<{lexicalItemId: string; rating: Rating; wasCorrect: boolean; issueType?: GradingIssueType}>) => void
 }) {
   // Local values for each blank field (indexed by lexicalItemId)
   const [values, setValues]   = useState<Record<string, string>>(() => {
@@ -70,10 +67,12 @@ export function SynonymTypingMode({
 
   function handleAdvance() {
     if (!gradingResult) return
-    for (const fr of gradingResult.fieldResults) {
-      const rating = ratings[fr.lexicalItemId] ?? 'again'
-      onRate(fr.lexicalItemId, rating, fr.status === 'correct', fr.issueType)
-    }
+    onAdvance(gradingResult.fieldResults.map(fr => ({
+      lexicalItemId: fr.lexicalItemId,
+      rating:        (ratings[fr.lexicalItemId] ?? 'again') as Rating,
+      wasCorrect:    fr.status === 'correct',
+      issueType:     fr.issueType,
+    })))
   }
 
   return (

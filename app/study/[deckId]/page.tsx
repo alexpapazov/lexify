@@ -12,7 +12,11 @@ import { SupabaseFolderRepository }          from '@/lib/data/folders'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseSynonymGroupRepository }    from '@/lib/data/synonymGroups'
-import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder } from '@/domain'
+import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
+import { SupabaseSyncedCardLinkRepository }  from '@/lib/data/syncedCardLinks'
+import { SupabaseLanguagePairRepository }    from '@/lib/data/languagePairs'
+import { ensureSyncInfra }                   from '@/lib/syncFolderInfra'
+import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName } from '@/lib/languages'
@@ -60,10 +64,11 @@ function StatGroup({ title, rows }: { title: string; rows: [string, string][] })
   )
 }
 
-function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard }: {
+function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard, onSyncCard }: {
   card:           Card
   state:          CardState | undefined
   userId:         string
+  deckId:         string
   deckCards:      Card[]
   sourceLanguage: string
   targetLanguage: string
@@ -73,6 +78,8 @@ function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetL
   onClose: () => void
   /** Jump the editor to another card in this deck (used by the "Often confused with" list). */
   onJumpToCard?: (cardId: string) => void
+  /** Open the sync-review modal for this card. */
+  onSyncCard?: () => void
 }) {
   const [front,   setFront]   = useState(card.front)
   const [back,    setBack]    = useState(card.back)
@@ -421,7 +428,7 @@ function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetL
 
         {validErr && <p className="text-danger text-xs">{validErr}</p>}
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
           <button
             className="btn-primary flex-1"
             onClick={handleSave}
@@ -429,6 +436,15 @@ function CardEditModal({ card, state, userId, deckCards, sourceLanguage, targetL
           >
             {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
           </button>
+          {onSyncCard && (
+            <button
+              className="btn-ghost text-accent border border-accent/30 hover:border-accent/60"
+              onClick={onSyncCard}
+              title="Sync to other language pairs"
+            >
+              ⟳ Sync
+            </button>
+          )}
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
         </div>
       </div>
@@ -520,6 +536,441 @@ function ConfirmDialog({ message, onConfirm, onCancel }: {
         <div className="flex gap-3">
           <button onClick={onConfirm} className="btn-primary flex-1 bg-danger hover:bg-danger/80">Yes, reset</button>
           <button onClick={onCancel}  className="btn-ghost flex-1">Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Sync review modal ────────────────────────────────────────────────────────
+
+interface SyncReviewRow {
+  rule:           LanguageSyncRule
+  destPair:       LanguagePair
+  generatedFront: string
+  generatedBack:  string
+  confidence:     number | null
+  warning:        string | null
+  existingCard:   Card | null
+  existingLink:   SyncedCardLink | null
+  uiStatus:       'pending' | 'approving' | 'approved' | 'dismissing' | 'dismissed' | 'already_active' | 'error'
+  uiError:        string | null
+  editMode:       boolean
+  editFront:      string
+  editBack:       string
+  confirmExisting: boolean  // user must confirm before editing an existing card
+  deckId:         string    // synced deck for this direction (from infra)
+}
+
+function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose }: {
+  card:           Card
+  userId:         string
+  sourceLanguage: string
+  targetLanguage: string
+  onClose:        () => void
+}) {
+  const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [rows, setRows] = useState<SyncReviewRow[]>([])
+
+  useEffect(() => { void load() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function load() {
+    try {
+      const pairRepo      = new SupabaseLanguagePairRepository()
+      const ruleRepo      = new SupabaseLanguageSyncRuleRepository()
+      const linkRepo      = new SupabaseSyncedCardLinkRepository()
+      const cardRepo      = new SupabaseCardRepository()
+
+      // Find the source pair for this deck's language direction
+      const allPairs  = await pairRepo.list(userId)
+      const sourcePair = allPairs.find(
+        p => p.sourceLanguage === sourceLanguage && p.targetLanguage === targetLanguage
+      )
+      if (!sourcePair) { setLoadError('No language pair found for this deck.'); setLoadStatus('error'); return }
+
+      // Load all sync rules where this pair is the source
+      const allRules = await ruleRepo.listForUser(userId)
+      const rules    = allRules.filter(r => r.sourcePairId === sourcePair.id && r.enabled)
+      if (rules.length === 0) { setLoadStatus('ready'); return }
+
+      // Load existing links for this card
+      const existingLinks = await linkRepo.listForCard(card.id)
+
+      // Build rows in parallel
+      const built = await Promise.all(rules.map(async (rule): Promise<SyncReviewRow | null> => {
+        const destPair = allPairs.find(p => p.id === rule.destinationPairId)
+        if (!destPair) return null
+
+        const existingLink = existingLinks.find(l => l.destinationPairId === rule.destinationPairId) ?? null
+
+        // Already active — show summary row, no action needed
+        if (existingLink?.status === 'active') {
+          return {
+            rule, destPair,
+            generatedFront: existingLink.generatedFront,
+            generatedBack:  existingLink.generatedBack,
+            confidence: existingLink.confidence,
+            warning:    existingLink.warning,
+            existingCard: null, existingLink,
+            uiStatus: 'already_active' as const,
+            uiError: null, editMode: false,
+            editFront: existingLink.generatedFront,
+            editBack:  existingLink.generatedBack,
+            confirmExisting: false, deckId: '',
+          }
+        }
+
+        // Dismissed — skip
+        if (existingLink?.status === 'dismissed') return null
+
+        // Translate
+        let generatedFront = existingLink?.generatedFront ?? ''
+        let generatedBack  = existingLink?.generatedBack  ?? ''
+        let confidence: number | null = existingLink?.confidence ?? null
+        let warning:    string | null = existingLink?.warning    ?? null
+
+        if (!generatedFront) {
+          const res = await fetch('/api/sync-translate', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              sourceFront:       card.front,
+              sourceBack:        card.back,
+              fromLanguage:      sourceLanguage,
+              toLearnedLanguage: destPair.sourceLanguage,
+              toBasisLanguage:   destPair.targetLanguage,
+            }),
+          })
+          const data = await res.json()
+          if (!data.ok) {
+            return {
+              rule, destPair,
+              generatedFront: '', generatedBack: '', confidence: null, warning: null,
+              existingCard: null, existingLink,
+              uiStatus: 'error' as const,
+              uiError: `Translation failed: ${data.reason ?? 'unknown error'}`,
+              editMode: false, editFront: '', editBack: '',
+              confirmExisting: false, deckId: '',
+            }
+          }
+          generatedFront = data.front
+          generatedBack  = data.back
+          confidence     = data.confidence
+          warning        = data.warning
+        }
+
+        // Duplicate detection — find existing card in dest pair with matching front
+        const destCards    = await cardRepo.listOwned(userId, destPair.sourceLanguage, destPair.targetLanguage)
+        const norm         = (s: string) => s.trim().toLowerCase()
+        const existingCard = destCards.find(c => norm(c.front) === norm(generatedFront)) ?? null
+
+        return {
+          rule, destPair,
+          generatedFront, generatedBack, confidence, warning,
+          existingCard, existingLink,
+          uiStatus: 'pending' as const, uiError: null,
+          editMode: false, editFront: generatedFront, editBack: generatedBack,
+          confirmExisting: false, deckId: '',
+        }
+      }))
+
+      setRows(built.filter((r): r is SyncReviewRow => r !== null))
+      setLoadStatus('ready')
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to load sync data')
+      setLoadStatus('error')
+    }
+  }
+
+  function updateRow(idx: number, patch: Partial<SyncReviewRow>) {
+    setRows(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r))
+  }
+
+  async function handleApprove(idx: number) {
+    const row = rows[idx]
+    if (!row) return
+    updateRow(idx, { uiStatus: 'approving', uiError: null })
+    try {
+      const cardRepo   = new SupabaseCardRepository()
+      const pairRepo   = new SupabaseLanguagePairRepository()
+      const linkRepo   = new SupabaseSyncedCardLinkRepository()
+
+      const allPairs  = await pairRepo.list(userId)
+      const sourcePair = allPairs.find(p => p.sourceLanguage === sourceLanguage && p.targetLanguage === targetLanguage)!
+      const infra = await ensureSyncInfra(userId, sourcePair, row.destPair)
+
+      const front = row.editMode ? row.editFront : row.generatedFront
+      const back  = row.editMode ? row.editBack  : row.generatedBack
+
+      let syncedCardId: string
+      if (row.existingCard && !row.editMode) {
+        // Link to existing card; add it to synced deck
+        syncedCardId = row.existingCard.id
+        await cardRepo.addToDeck(infra.deckId, row.existingCard.id, 0)
+      } else if (row.existingCard && row.editMode && row.confirmExisting) {
+        // Update existing card
+        await cardRepo.update(row.existingCard.id, { front, back })
+        syncedCardId = row.existingCard.id
+        await cardRepo.addToDeck(infra.deckId, row.existingCard.id, 0)
+      } else {
+        // Create new card
+        const [created] = await cardRepo.bulkCreate(
+          infra.deckId, userId,
+          row.destPair.sourceLanguage, row.destPair.targetLanguage,
+          [{ front, back, position: 0 }],
+        )
+        syncedCardId = created!.id
+      }
+
+      await linkRepo.upsert({
+        userId,
+        sourceCardId:      card.id,
+        syncedCardId,
+        sourcePairId:      row.rule.sourcePairId,
+        destinationPairId: row.rule.destinationPairId,
+        syncRuleId:        row.rule.id,
+        sourceFrontAtSync: card.front,
+        sourceBackAtSync:  card.back,
+        generatedFront:    front,
+        generatedBack:     back,
+        confidence:        row.confidence,
+        warning:           row.warning,
+        status:            row.editMode ? 'manually_edited' : 'active',
+      })
+
+      updateRow(idx, { uiStatus: 'approved', deckId: infra.deckId })
+    } catch (err) {
+      updateRow(idx, { uiStatus: 'error', uiError: err instanceof Error ? err.message : 'Approval failed' })
+    }
+  }
+
+  async function handleDismiss(idx: number) {
+    const row = rows[idx]
+    if (!row) return
+    updateRow(idx, { uiStatus: 'dismissing' })
+    try {
+      const linkRepo = new SupabaseSyncedCardLinkRepository()
+      // If pending link already exists, update it; otherwise create a dismissed record
+      if (row.existingLink) {
+        await linkRepo.dismiss(card.id, row.rule.destinationPairId)
+      } else {
+        const pairRepo   = new SupabaseLanguagePairRepository()
+        const allPairs  = await pairRepo.list(userId)
+        const sourcePair = allPairs.find(p => p.sourceLanguage === sourceLanguage && p.targetLanguage === targetLanguage)!
+        await linkRepo.upsert({
+          userId,
+          sourceCardId:      card.id,
+          syncedCardId:      null,
+          sourcePairId:      sourcePair.id,
+          destinationPairId: row.rule.destinationPairId,
+          syncRuleId:        row.rule.id,
+          sourceFrontAtSync: card.front,
+          sourceBackAtSync:  card.back,
+          generatedFront:    row.generatedFront,
+          generatedBack:     row.generatedBack,
+          confidence:        row.confidence,
+          warning:           row.warning,
+          status:            'dismissed',
+        })
+      }
+      updateRow(idx, { uiStatus: 'dismissed' })
+    } catch (err) {
+      updateRow(idx, { uiStatus: 'error', uiError: err instanceof Error ? err.message : 'Dismiss failed' })
+    }
+  }
+
+  const pendingRows = rows.filter(r => r.uiStatus === 'pending' || r.uiStatus === 'already_active')
+  const allDone     = rows.length > 0 && rows.every(r => ['approved', 'dismissed', 'already_active', 'error'].includes(r.uiStatus))
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="panel w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto space-y-4">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Sync to other languages</h2>
+            <p className="text-xs text-ink-faint mt-0.5">
+              Source: <span className="font-mono text-ink-muted">{card.front}</span>
+              <span className="mx-1 text-ink-faint/50">=</span>
+              <span className="font-mono text-ink-muted">{card.back}</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="text-ink-faint hover:text-ink transition-colors text-xl leading-none">✕</button>
+        </div>
+
+        {/* Loading */}
+        {loadStatus === 'loading' && (
+          <p className="text-ink-faint text-sm text-center py-6">Translating…</p>
+        )}
+
+        {/* Error */}
+        {loadStatus === 'error' && (
+          <p className="text-danger text-sm text-center py-6">{loadError}</p>
+        )}
+
+        {/* No rules */}
+        {loadStatus === 'ready' && rows.length === 0 && (
+          <div className="text-center py-8 space-y-2">
+            <p className="text-ink-muted text-sm">No sync rules configured for this language pair.</p>
+            <p className="text-ink-faint text-xs">
+              Set up a sync rule in Settings → Language Sync to link pairs together.
+            </p>
+          </div>
+        )}
+
+        {/* Review rows */}
+        {loadStatus === 'ready' && rows.map((row, idx) => (
+          <div key={row.rule.id} className={`rounded-card border p-4 space-y-3 ${
+            row.uiStatus === 'approved'      ? 'border-success/30 bg-success/5' :
+            row.uiStatus === 'dismissed'     ? 'border-white/5 opacity-50' :
+            row.uiStatus === 'already_active' ? 'border-accent/20 bg-accent/5' :
+            row.uiStatus === 'error'         ? 'border-danger/30 bg-danger/5' :
+            'border-white/10'
+          }`}>
+            {/* Row header — dest pair + status badge */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-ink-muted uppercase tracking-wider">
+                {langName(row.destPair.sourceLanguage)} → {langName(row.destPair.targetLanguage)}
+              </span>
+              {row.uiStatus === 'already_active' && (
+                <span className="text-xs text-accent bg-accent/10 px-2 py-0.5 rounded-full">Already synced</span>
+              )}
+              {row.uiStatus === 'approved' && (
+                <span className="text-xs text-success bg-success/10 px-2 py-0.5 rounded-full">✓ Approved</span>
+              )}
+              {row.uiStatus === 'dismissed' && (
+                <span className="text-xs text-ink-faint px-2 py-0.5">Dismissed</span>
+              )}
+            </div>
+
+            {/* Generated card preview */}
+            {row.uiStatus !== 'dismissed' && (
+              <div className="grid grid-cols-2 gap-3">
+                {row.editMode ? (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs text-ink-faint">{langName(row.destPair.sourceLanguage)}</label>
+                      <input
+                        className="input text-sm"
+                        value={row.editFront}
+                        onChange={e => updateRow(idx, { editFront: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs text-ink-faint">{langName(row.destPair.targetLanguage)}</label>
+                      <input
+                        className="input text-sm"
+                        value={row.editBack}
+                        onChange={e => updateRow(idx, { editBack: e.target.value })}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="space-y-0.5">
+                      <p className="text-xs text-ink-faint">{langName(row.destPair.sourceLanguage)}</p>
+                      <p className="font-medium text-ink">{row.generatedFront}</p>
+                    </div>
+                    <div className="space-y-0.5">
+                      <p className="text-xs text-ink-faint">{langName(row.destPair.targetLanguage)}</p>
+                      <p className="text-ink-muted">{row.generatedBack}</p>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Confidence / warning */}
+            {row.warning && row.uiStatus !== 'dismissed' && (
+              <p className="text-xs text-warning/80">⚠ {row.warning}</p>
+            )}
+
+            {/* Existing card notice */}
+            {row.existingCard && row.uiStatus === 'pending' && !row.editMode && (
+              <p className="text-xs text-accent/80 bg-accent/5 border border-accent/20 rounded px-2 py-1.5">
+                Existing card found: <span className="font-mono">{row.existingCard.front}</span>
+                {' = '}<span className="font-mono">{row.existingCard.back}</span>
+                {' — approving will link to this card.'}
+              </p>
+            )}
+
+            {/* Confirm edit-existing dialog */}
+            {row.existingCard && row.editMode && !row.confirmExisting && (
+              <div className="rounded border border-warning/30 bg-warning/5 p-3 space-y-2">
+                <p className="text-xs text-warning">
+                  An existing card matches this word. Do you want to update it, or create a new card?
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    className="btn-ghost text-xs py-1 px-3 text-warning border-warning/30"
+                    onClick={() => updateRow(idx, { confirmExisting: true })}
+                  >
+                    Update existing card
+                  </button>
+                  <button
+                    className="btn-ghost text-xs py-1 px-3"
+                    onClick={() => updateRow(idx, { existingCard: null })}
+                  >
+                    Create new card
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Error */}
+            {row.uiStatus === 'error' && row.uiError && (
+              <p className="text-xs text-danger">{row.uiError}</p>
+            )}
+
+            {/* Action buttons */}
+            {(row.uiStatus === 'pending' || row.uiStatus === 'approving') && (
+              <div className="flex gap-2">
+                <button
+                  className="btn-primary text-sm py-1.5 px-4"
+                  disabled={row.uiStatus === 'approving' || (row.editMode && row.existingCard !== null && !row.confirmExisting)}
+                  onClick={() => handleApprove(idx)}
+                >
+                  {row.uiStatus === 'approving' ? 'Saving…' : row.existingCard && !row.editMode ? 'Approve (link existing)' : 'Approve'}
+                </button>
+                {!row.editMode && (
+                  <button
+                    className="btn-ghost text-sm py-1.5 px-3"
+                    disabled={row.uiStatus === 'approving'}
+                    onClick={() => updateRow(idx, { editMode: true })}
+                  >
+                    Edit
+                  </button>
+                )}
+                {row.editMode && (
+                  <button
+                    className="btn-ghost text-sm py-1.5 px-3"
+                    disabled={row.uiStatus === 'approving'}
+                    onClick={() => updateRow(idx, { editMode: false, editFront: row.generatedFront, editBack: row.generatedBack, confirmExisting: false })}
+                  >
+                    Cancel edit
+                  </button>
+                )}
+                <button
+                  className="btn-ghost text-sm py-1.5 px-3 text-ink-faint"
+                  disabled={row.uiStatus === 'approving'}
+                  onClick={() => handleDismiss(idx)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* Footer */}
+        <div className="flex justify-end pt-1">
+          <button className="btn-ghost" onClick={onClose}>
+            {allDone ? 'Close' : 'Cancel'}
+          </button>
         </div>
       </div>
     </div>
@@ -1084,6 +1535,7 @@ export default function DeckDetailPage() {
   const [loading,          setLoading]          = useState(true)
   const [showGear,         setShowGear]         = useState(false)
   const [editingCard,      setEditingCard]      = useState<Card | null>(null)
+  const [syncingCard,      setSyncingCard]      = useState<Card | null>(null)
   const [addingCard,       setAddingCard]       = useState(false)
   const [showSynonymScan,  setShowSynonymScan]  = useState(false)
   const [synonymScanIgnored, setSynonymScanIgnored] = useState(() =>
@@ -1204,6 +1656,7 @@ export default function DeckDetailPage() {
           card={editingCard}
           state={stateMap.get(editingCard.id)}
           userId={userId}
+          deckId={deckId}
           deckCards={cards}
           sourceLanguage={deck.sourceLanguage}
           targetLanguage={deck.targetLanguage}
@@ -1215,6 +1668,17 @@ export default function DeckDetailPage() {
             const target = cards.find(c => c.id === cardId)
             if (target) setEditingCard(target)
           }}
+          onSyncCard={() => setSyncingCard(editingCard)}
+        />
+      )}
+
+      {syncingCard && deck && (
+        <SyncReviewModal
+          card={syncingCard}
+          userId={userId}
+          sourceLanguage={deck.sourceLanguage}
+          targetLanguage={deck.targetLanguage}
+          onClose={() => setSyncingCard(null)}
         />
       )}
 

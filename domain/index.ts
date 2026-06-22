@@ -547,3 +547,58 @@ export interface ReviewInput {
    */
   wasTyped?: boolean
 }
+
+// ─── Language Syncing ─────────────────────────────────────────────────────────
+
+export type SyncMode    = 'review_first' | 'auto'
+export type SyncTrigger = 'on_card_created' | 'on_card_graduated' | 'manual_only'
+export type SyncedCardStatus = 'pending' | 'active' | 'dismissed' | 'manually_edited'
+
+/** A rule that syncs vocab from one language pair into another. */
+export interface LanguageSyncRule {
+  id:                            string
+  userId:                        UserId
+  sourcePairId:                  string
+  destinationPairId:             string
+  enabled:                       boolean
+  mode:                          SyncMode
+  trigger:                       SyncTrigger
+  allowSyncedCardsToTriggerSync: boolean
+  createdAt:                     string
+  updatedAt:                     string
+}
+
+/**
+ * Tracks a single synced card: the generated pair for one source card in one
+ * destination language pair. `syncedCardId = null` when dismissed.
+ */
+export interface SyncedCardLink {
+  id:                string
+  userId:            UserId
+  sourceCardId:      CardId
+  syncedCardId:      CardId | null
+  sourcePairId:      string
+  destinationPairId: string
+  syncRuleId:        string
+  sourceFrontAtSync: string
+  sourceBackAtSync:  string
+  generatedFront:    string
+  generatedBack:     string
+  confidence:        number | null
+  warning:           string | null
+  status:            SyncedCardStatus
+  createdAt:         string
+  updatedAt:         string
+}
+
+/** Stable folder/deck infrastructure for a (user, source pair, dest pair) combination. */
+export interface LanguageSyncState {
+  userId:            UserId
+  sourcePairId:      string
+  destinationPairId: string
+  rootFolderId:      string
+  subFolderId:       string
+  deckId:            string
+  createdAt:         string
+  updatedAt:         string
+}
