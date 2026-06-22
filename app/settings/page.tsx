@@ -58,13 +58,16 @@ function pairLabel(p: LanguagePair): string {
 }
 
 function LanguageSyncPanel({ userId }: { userId: string }) {
-  const [pairs,       setPairs]       = useState<LanguagePair[]>([])
-  const [rules,       setRules]       = useState<LanguageSyncRule[]>([])
-  const [loading,     setLoading]     = useState(true)
-  const [error,       setError]       = useState<string | null>(null)
-  const [showForm,    setShowForm]    = useState(false)
-  const [saving,      setSaving]      = useState(false)
-  const [formError,   setFormError]   = useState<string | null>(null)
+  const [pairs,          setPairs]          = useState<LanguagePair[]>([])
+  const [rules,          setRules]          = useState<LanguageSyncRule[]>([])
+  const [loading,        setLoading]        = useState(true)
+  const [error,          setError]          = useState<string | null>(null)
+  const [showForm,       setShowForm]       = useState(false)
+  const [saving,         setSaving]         = useState(false)
+  const [formError,      setFormError]      = useState<string | null>(null)
+  const [deleteError,    setDeleteError]    = useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [deleting,       setDeleting]       = useState(false)
 
   // New-rule form state
   const [srcPairId,  setSrcPairId]  = useState('')
@@ -113,15 +116,28 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
       const ruleRepo = new SupabaseLanguageSyncRuleRepository()
       const updated  = await ruleRepo.upsert({ ...rule, enabled: !rule.enabled })
       setRules(prev => prev.map(r => r.id === rule.id ? updated : r))
-    } catch { /* swallow — UI stays consistent */ }
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Toggle failed')
+    }
   }
 
-  async function handleDelete(ruleId: string) {
+  async function handleDeleteConfirmed() {
+    if (!confirmDeleteId) return
+    setDeleting(true)
+    setDeleteError(null)
     try {
+      const supabase = createClient()
+      // Clear any synced_card_links referencing this rule first (FK constraint)
+      await supabase.from('synced_card_links').delete().eq('sync_rule_id', confirmDeleteId)
       const ruleRepo = new SupabaseLanguageSyncRuleRepository()
-      await ruleRepo.delete(ruleId)
-      setRules(prev => prev.filter(r => r.id !== ruleId))
-    } catch { /* swallow */ }
+      await ruleRepo.delete(confirmDeleteId)
+      setRules(prev => prev.filter(r => r.id !== confirmDeleteId))
+      setConfirmDeleteId(null)
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Delete failed')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   if (loading) return <p className="text-ink-faint text-sm">Loading…</p>
@@ -141,15 +157,20 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
         <p className="text-ink-faint text-sm">No sync rules yet. Add one below.</p>
       )}
 
+      {deleteError && (
+        <p className="text-danger text-xs">{deleteError}</p>
+      )}
+
       {rules.map(rule => {
         const src = pairs.find(p => p.id === rule.sourcePairId)
         const dst = pairs.find(p => p.id === rule.destinationPairId)
         if (!src || !dst) return null
+        const confirmingDelete = confirmDeleteId === rule.id
         return (
-          <div key={rule.id} className={`rounded-card border p-3 space-y-2 ${rule.enabled ? 'border-white/10' : 'border-white/5 opacity-60'}`}>
-            <div className="flex items-center justify-between gap-3">
+          <div key={rule.id} className={`rounded-card border p-3 space-y-2 ${rule.enabled && !confirmingDelete ? 'border-white/10' : confirmingDelete ? 'border-danger/30 bg-danger/5' : 'border-white/5 opacity-60'}`}>
+            <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-ink truncate">
+                <p className="text-sm font-medium text-ink">
                   {pairLabel(src)}
                   <span className="mx-2 text-accent">⟹</span>
                   {pairLabel(dst)}
@@ -158,21 +179,44 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
                   {MODE_LABELS[rule.mode]} · {TRIGGER_LABELS[rule.trigger]}
                 </p>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => handleToggle(rule)}
-                  title={rule.enabled ? 'Disable rule' : 'Enable rule'}
-                  className={`w-8 h-4 rounded-full transition-colors relative ${rule.enabled ? 'bg-accent' : 'bg-white/20'}`}
-                >
-                  <span className={`absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${rule.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                </button>
-                <button
-                  onClick={() => handleDelete(rule.id)}
-                  title="Delete rule"
-                  className="text-danger/60 hover:text-danger transition-colors text-sm leading-none"
-                >
-                  ✕
-                </button>
+              <div className="flex items-center gap-3 shrink-0 pt-0.5">
+                {!confirmingDelete && (
+                  <>
+                    <button
+                      onClick={() => handleToggle(rule)}
+                      title={rule.enabled ? 'Disable rule' : 'Enable rule'}
+                      className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${rule.enabled ? 'bg-accent' : 'bg-white/20'}`}
+                    >
+                      <span className={`absolute top-1 w-3 h-3 bg-white rounded-full shadow transition-transform ${rule.enabled ? 'translate-x-5' : 'translate-x-1'}`} />
+                    </button>
+                    <button
+                      onClick={() => { setConfirmDeleteId(rule.id); setDeleteError(null) }}
+                      title="Delete rule"
+                      className="text-xs text-danger/60 hover:text-danger border border-danger/20 hover:border-danger/50 px-2 py-1 rounded transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
+                {confirmingDelete && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-danger">Delete this rule?</span>
+                    <button
+                      onClick={handleDeleteConfirmed}
+                      disabled={deleting}
+                      className="text-xs bg-danger/80 hover:bg-danger text-white px-3 py-1 rounded transition-colors disabled:opacity-50"
+                    >
+                      {deleting ? 'Deleting…' : 'Yes, delete'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmDeleteId(null)}
+                      disabled={deleting}
+                      className="text-xs text-ink-faint hover:text-ink px-2 py-1 rounded border border-white/10 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
