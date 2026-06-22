@@ -25,8 +25,7 @@ export function RatingButtons({
         <button
           key={rating}
           onClick={() => onRate(rating)}
-          className={`border rounded-lg px-5 py-2 text-sm font-medium transition-colors ${color}
-            ${rating === suggestedRating ? 'ring-2 ring-white/30 ring-offset-1 ring-offset-surface' : ''}`}
+          className={`border rounded-lg px-5 py-2 text-sm font-medium transition-colors ${color}`}
         >
           {label}
         </button>
