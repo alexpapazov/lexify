@@ -253,7 +253,7 @@ export function TypingMode({
                 />
                 {retypeCorrect && (
                   <div className="flex justify-center">
-                    <button onClick={advanceRetype} autoFocus className="btn-primary px-10">Continue</button>
+                    <button onClick={advanceRetype} className="btn-primary px-10">Continue</button>
                   </div>
                 )}
               </div>
