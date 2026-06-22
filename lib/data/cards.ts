@@ -146,7 +146,7 @@ export class SupabaseCardRepository implements CardRepository {
   }
 
   async softDelete(cardId: CardId): Promise<void> {
-    const { error } = await this.db.from('cards').update({ deleted_at: new Date().toISOString() }).eq('id', cardId)
+    const { error } = await this.db.rpc('soft_delete_card', { p_card_id: cardId })
     if (error) throw new Error(error.message)
   }
 
