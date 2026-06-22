@@ -611,25 +611,30 @@ function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguag
           await stateRepo.copy(userId, item.card.id, c.id)
         }
 
-        // Link all cards (reused + new) to a SynonymGroup.
-        const allGroupCards = [...reusedCards, ...created]
-        if (allGroupCards.length >= 2) {
-          const group = await synonymRepo.create({
-            gloss:         item.card.back,
-            glossLanguage: targetLanguage,
-            itemLanguage:  sourceLanguage,
-          }, userId)
-          for (const c of allGroupCards) {
-            await synonymRepo.addMember(group.id, c.id)
-          }
-        }
-
-        // Remove the original comma-grouped card and soft-delete it.
+        // Remove the original comma-grouped card and soft-delete it FIRST so
+        // the split always completes even if synonym group linking fails below.
         await cardRepo.removeFromDeck(deckId, item.card.id)
         await cardRepo.softDelete(item.card.id)
-
         removedIds.push(item.card.id)
         addedCards.push(...created)
+
+        // Link all cards (reused + new) to a SynonymGroup — best-effort only,
+        // failure here must not roll back or block the split.
+        const allGroupCards = [...reusedCards, ...created]
+        if (allGroupCards.length >= 2) {
+          try {
+            const group = await synonymRepo.create({
+              gloss:         item.card.back,
+              glossLanguage: targetLanguage,
+              itemLanguage:  sourceLanguage,
+            }, userId)
+            for (const c of allGroupCards) {
+              await synonymRepo.addMember(group.id, c.id)
+            }
+          } catch (groupErr) {
+            console.error('Synonym group linking failed (non-fatal):', groupErr)
+          }
+        }
       }
 
       onDone(removedIds, addedCards)
