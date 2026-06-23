@@ -93,6 +93,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [resetting,   setResetting]   = useState(false)
   const [resetError,  setResetError]  = useState<string | null>(null)
   const [resetDone,   setResetDone]   = useState<string | null>(null)
+  const [graduating,  setGraduating]  = useState(false)
   const [confusions,  setConfusions]  = useState<CardConfusion[]>([])
   const frontRef = useRef<HTMLTextAreaElement>(null)
 
@@ -168,6 +169,51 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     } finally {
       setResetting(false)
       setResetAction(null)
+    }
+  }
+
+  /** Skip the learning pipeline and graduate the card immediately with a 3-day first interval. */
+  async function handleGraduateNow() {
+    setGraduating(true)
+    setResetError(null)
+    try {
+      const stateRepo = new SupabaseCardStateRepository()
+      let pipelineId = state?.pipelineId
+      if (!pipelineId) {
+        const pipelineRepo = new SupabasePipelineRepository()
+        pipelineId = (await pipelineRepo.getDefault()).id
+      }
+      const now     = new Date()
+      const nowIso  = now.toISOString()
+      const dueAt   = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString()
+      const base    = state ?? initialCardState(userId, card.id, pipelineId)
+      const graduated: CardState = {
+        ...base,
+        graduated:             true,
+        currentStepOrder:      0,
+        correctInStep:         0,
+        dueAt,
+        intervalDays:          3,
+        scheduledIntervalDays: 3,
+        ease:                  base.graduated ? base.ease : 2.5,
+        reps:                  Math.max(base.reps, 1),
+        lapses:                base.lapses,
+        lastRating:            'good',
+        lastReviewedAt:        nowIso,
+        graduatedAt:           base.graduatedAt ?? nowIso,
+        relearningStep:        0,
+        pendingIntervalDays:   null,
+        lapseClusterCount:     0,
+        lastLapseAt:           null,
+      }
+      const updated = await stateRepo.upsert(graduated)
+      onStateChange(updated)
+      setResetDone('Card graduated.')
+      setTimeout(() => setResetDone(null), 2500)
+    } catch (err: unknown) {
+      setResetError(err instanceof Error ? err.message : 'Graduate failed')
+    } finally {
+      setGraduating(false)
     }
   }
 
@@ -250,6 +296,18 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
 
         {showStats && (
           <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm max-h-80 overflow-y-auto">
+            {!state?.graduated && (
+              <div className="border-b border-white/5 pb-3">
+                <button
+                  onClick={handleGraduateNow}
+                  disabled={graduating || resetting}
+                  className="w-full text-left px-3 py-2 rounded-lg border border-accent/20 bg-accent/5 hover:bg-accent/10 text-accent text-xs font-medium transition-colors disabled:opacity-40"
+                >
+                  {graduating ? 'Graduating…' : 'Graduate now'}
+                  <span className="block text-ink-faint font-normal mt-0.5">Skip the learning pipeline — card goes straight to graduated review (3-day first interval).</span>
+                </button>
+              </div>
+            )}
             {!state ? (
               <p className="text-ink-faint text-xs">New — not yet studied. No stats yet.</p>
             ) : (() => {
