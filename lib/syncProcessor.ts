@@ -362,25 +362,50 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
     const infra = await ensureInfra(db, userId, src, destPair)
 
     // Find which source cards have already been synced to this destination.
-    // We check both card IDs (same card re-uploaded) and the original source
-    // word text (same word given a new card ID) to avoid creating duplicates.
-    const { data: existingLinks } = await db
+    // We also fetch the synced_card_id so we can detect dead links — links whose
+    // synced card was later deleted. Dead links must not block re-syncing, and
+    // must be removed before upserting new links (they share the same unique key).
+    const { data: existingLinksRaw } = await db
       .from('synced_card_links')
-      .select('source_card_id, source_front_at_sync')
+      .select('source_card_id, source_front_at_sync, synced_card_id')
       .eq('user_id', userId)
       .eq('destination_pair_id', destPair.id)
 
-    type ExistingLink = { source_card_id: string; source_front_at_sync: string }
-    const alreadySyncedIds    = new Set((existingLinks ?? []).map((l: ExistingLink) => l.source_card_id))
+    type RawLink = { source_card_id: string; source_front_at_sync: string; synced_card_id: string }
+    const rawLinks = (existingLinksRaw ?? []) as RawLink[]
+
+    // Which of those synced cards have been soft-deleted?
+    const syncedCardIds = rawLinks.map(l => l.synced_card_id).filter(Boolean)
+    const deadCardIds   = new Set<string>()
+    if (syncedCardIds.length > 0) {
+      const { data: deadCards } = await db.from('cards')
+        .select('id').in('id', syncedCardIds).not('deleted_at', 'is', null)
+      for (const c of (deadCards ?? []) as Array<{ id: string }>) deadCardIds.add(c.id)
+    }
+
+    const aliveLinks = rawLinks.filter(l => !deadCardIds.has(l.synced_card_id))
+    const deadLinks  = rawLinks.filter(l =>  deadCardIds.has(l.synced_card_id))
+
+    const alreadySyncedIds    = new Set(aliveLinks.map(l => l.source_card_id))
     const alreadySyncedFronts = new Set(
-      ((existingLinks ?? []) as ExistingLink[])
-        .map(l => l.source_front_at_sync?.toLowerCase())
-        .filter(Boolean),
+      aliveLinks.map(l => l.source_front_at_sync?.toLowerCase()).filter(Boolean),
     )
     const toSync = sourceCards.filter(c =>
       !alreadySyncedIds.has(c.id) && !alreadySyncedFronts.has(c.front.toLowerCase()),
     )
     if (toSync.length === 0) continue
+
+    // Remove dead links for source cards we're about to re-sync.
+    // Without this, the upsert below would hit the (source_card_id, destination_pair_id)
+    // unique conflict and silently skip inserting the fresh link.
+    const deadLinkSourceIds = new Set(deadLinks.map(l => l.source_card_id))
+    const toResyncIds = toSync.map(c => c.id).filter(id => deadLinkSourceIds.has(id))
+    if (toResyncIds.length > 0) {
+      await db.from('synced_card_links').delete()
+        .in('source_card_id', toResyncIds)
+        .eq('destination_pair_id', destPair.id)
+        .eq('user_id', userId)
+    }
 
     // Get existing card count for position offset
     const { count: existingCount } = await db
