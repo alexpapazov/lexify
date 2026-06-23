@@ -95,7 +95,25 @@ async function ensureInfra(
     .eq('source_pair_id', srcPair.id)
     .eq('destination_pair_id', destPair.id)
     .maybeSingle()
-  if (existing) return { deckId: existing.deck_id as string }
+
+  if (existing) {
+    // Verify the deck still exists and hasn't been soft-deleted by the user
+    const { data: deck } = await db
+      .from('decks')
+      .select('id')
+      .eq('id', existing.deck_id)
+      .is('deleted_at', null)
+      .maybeSingle()
+    if (deck) return { deckId: existing.deck_id as string }
+    // Deck was deleted — clear stale state and recreate infrastructure below
+    console.log('[sync] ensureInfra: cached deck was deleted, recreating infra')
+    await db
+      .from('language_sync_state')
+      .delete()
+      .eq('user_id', userId)
+      .eq('source_pair_id', srcPair.id)
+      .eq('destination_pair_id', destPair.id)
+  }
 
   // Find the single shared "SYNCED VOCABULARY" folder, or create it
   const { data: existingFolder } = await db

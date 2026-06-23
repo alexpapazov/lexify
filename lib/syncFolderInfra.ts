@@ -2,9 +2,9 @@
  * lib/syncFolderInfra.ts
  *
  * Ensures the stable folder / deck infrastructure for a language sync direction.
- * Folder structure (in the destination language pair's section):
+ * Folder structure:
  *
- *   Synced/                 ← root folder, shared across all source pairs → this dest pair
+ *   SYNCED VOCABULARY/      ← one shared root folder per user (all directions share it)
  *     Spanish               ← deck named after the source language, lives directly in root
  *
  * The IDs are stored in `language_sync_state` so the same folders/deck are
@@ -24,6 +24,7 @@ export interface SyncInfra {
 }
 
 const DEFAULT_PIPELINE_ID = '00000000-0000-0000-0000-000000000001'
+const SYNC_FOLDER_NAME    = 'SYNCED VOCABULARY'
 
 export async function ensureSyncInfra(
   userId: string,
@@ -52,24 +53,24 @@ export async function ensureSyncInfra(
   const folderRepo = new SupabaseFolderRepository()
   const deckRepo   = new SupabaseDeckRepository()
 
-  // 2. Find existing "Synced" root folder for this dest pair from another direction
-  const { data: sibling } = await db
-    .from('language_sync_state')
-    .select('root_folder_id')
-    .eq('user_id', userId)
-    .eq('destination_pair_id', destPair.id)
-    .limit(1)
+  // 2. Find the single shared "SYNCED VOCABULARY" folder, or create it
+  const { data: existingFolder } = await db
+    .from('folders')
+    .select('id')
+    .eq('owner_id', userId)
+    .eq('name', SYNC_FOLDER_NAME)
+    .is('deleted_at', null)
     .maybeSingle()
 
   let rootFolderId: string
-  if (sibling) {
-    rootFolderId = sibling.root_folder_id as string
+  if (existingFolder) {
+    rootFolderId = existingFolder.id as string
   } else {
-    const root = await folderRepo.create(userId, 'Synced', null)
+    const root = await folderRepo.create(userId, SYNC_FOLDER_NAME, null)
     rootFolderId = root.id
   }
 
-  // 3. Create the deck named after the source language directly inside root (no sub-folder)
+  // 3. Create the deck named after the source language directly inside "SYNCED VOCABULARY"
   const deckName = langName(sourcePair.sourceLanguage)
   const deck = await deckRepo.create(userId, {
     name:           deckName,

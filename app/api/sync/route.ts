@@ -78,7 +78,10 @@ export async function POST(req: Request) {
     }
     const token = authHeader.slice(7)
     const { data: { user } } = await createAdminClient().auth.getUser(token)
-    if (!user) return Response.json({ ok: false }, { status: 401 })
+    if (!user) {
+      console.error('[sync] auth failed — invalid or expired JWT')
+      return Response.json({ ok: false }, { status: 401 })
+    }
     userId  = user.id
     const body = await req.json()
     payload = { ...body, userId, visited: [], failCounts: {}, isChainHop: false } as SyncPayload
@@ -91,6 +94,12 @@ export async function POST(req: Request) {
   const origin = getOrigin(req)
 
   after(async () => {
+    console.log('[sync] after() invoked', {
+      userId:      payload.userId.slice(0, 8),
+      cards:       payload.cards.length,
+      src:         `${payload.sourceLanguage}:${payload.targetLanguage}`,
+      isChainHop:  !!payload.isChainHop,
+    })
     try {
       // If this is a cascading hop to a new language, wait before hitting Anthropic
       if (payload.isChainHop) {
@@ -98,6 +107,7 @@ export async function POST(req: Request) {
       }
 
       const { failedCards, nextHops } = await processSyncBatch(payload)
+      console.log('[sync] batch done', { failed: failedCards.length, nextHops: nextHops.length })
 
       // Update fail counts; drop cards that have failed too many times
       const failCounts: Record<string, number> = { ...(payload.failCounts ?? {}) }
