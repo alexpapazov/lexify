@@ -287,7 +287,17 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     const rootDecks   = allDecks.filter(d => !d.folderId)
     if (!inPair) return { rootFolders, rootDecks }
     return {
-      rootFolders: rootFolders.filter(f => folderMatchesPair(f.id, allFolders, allDecks, pairSource!, pairTarget!)),
+      rootFolders: rootFolders.filter(f => {
+        if (f.isSynced) {
+          // Synced folders must only appear in the language pair they contain.
+          // Skip the normal "empty = show everywhere" shortcut — an empty
+          // synced root from another language would otherwise bleed into
+          // every pair's library view.
+          const dIds = descendantDeckIds(f.id, allFolders, allDecks)
+          return allDecks.some(d => dIds.includes(d.id) && d.sourceLanguage === pairSource && d.targetLanguage === pairTarget)
+        }
+        return folderMatchesPair(f.id, allFolders, allDecks, pairSource!, pairTarget!)
+      }),
       rootDecks:   rootDecks.filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget),
     }
   }
