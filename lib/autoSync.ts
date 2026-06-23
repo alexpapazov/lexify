@@ -4,28 +4,82 @@
  * lib/autoSync.ts
  *
  * Fires language syncing when the user checks "Sync to other languages" at upload time.
- * Called fire-and-forget from handleCommit() in app/study/[deckId]/add/page.tsx.
+ * Called fire-and-forget from handleCommit() / doSave() in the add/upload pages.
  *
- * Supports transitive (cascading) sync:
+ * Rate-limit safety:
+ *   Cards are translated 5 at a time. After each batch, we wait BATCH_DELAY_MS
+ *   before the next. Any card whose translation fails (null) is collected and
+ *   retried up to MAX_RETRIES more times, with increasing delay between retries
+ *   (RETRY_DELAY_MS × attempt number). This survives transient rate-limit spikes
+ *   without losing cards.
+ *
+ * Cascading sync:
  *   French upload → French→Spanish rule → Spanish cards created
- *                → Spanish→Russian rule → Russian cards created
- *
- * The _visited set (pairKey = `${sourceLanguage}:${targetLanguage}`) prevents
- * infinite loops (e.g. Spanish→French→Spanish→…).
+ *               → Spanish→Russian rule → Russian cards created
+ *   _visited (pairKey = `${sourceLanguage}:${targetLanguage}`) prevents A→B→A loops.
  *
  * Cascade only happens for 'auto' mode rules — 'review_first' records a
  * pending link but creates no card, so there is nothing to cascade from.
  */
 
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
-import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
-import { SupabaseSyncedCardLinkRepository } from '@/lib/data/syncedCardLinks'
-import { SupabaseCardRepository } from '@/lib/data/cards'
-import { ensureSyncInfra } from '@/lib/syncFolderInfra'
+import { SupabaseLanguagePairRepository }      from '@/lib/data/languagePairs'
+import { SupabaseSyncedCardLinkRepository }    from '@/lib/data/syncedCardLinks'
+import { SupabaseCardRepository }              from '@/lib/data/cards'
+import { ensureSyncInfra }                     from '@/lib/syncFolderInfra'
 import type { Card } from '@/domain'
+
+const BATCH_SIZE     = 5
+const BATCH_DELAY_MS = 600   // pause between each batch of 5
+const RETRY_DELAY_MS = 3000  // base delay before a retry pass (multiplied by attempt#)
+const MAX_RETRIES    = 2     // retry failed cards up to 2 more times
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms))
+}
 
 function normFront(s: string): string {
   return s.trim().toLowerCase()
+}
+
+/**
+ * Process `cards` through `processOne` in batches of BATCH_SIZE.
+ * Any card that returns null is retried up to MAX_RETRIES times with
+ * increasing delay. Returns all successfully created/reused Cards.
+ */
+async function runInBatchesWithRetry(
+  cards: Card[],
+  processOne: (card: Card) => Promise<Card | null>,
+): Promise<Card[]> {
+  const results: Card[] = []
+  let pending = [...cards]
+
+  for (let attempt = 0; attempt <= MAX_RETRIES && pending.length > 0; attempt++) {
+    if (attempt > 0) await sleep(RETRY_DELAY_MS * attempt)
+    const failed: Card[] = []
+
+    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+      const batch = pending.slice(i, i + BATCH_SIZE)
+      const batchResults = await Promise.all(batch.map(processOne))
+
+      for (let j = 0; j < batch.length; j++) {
+        const r = batchResults[j] ?? null
+        if (r !== null) results.push(r)
+        else failed.push(batch[j]!)
+      }
+
+      // Wait between batches (but not after the very last one)
+      if (i + BATCH_SIZE < pending.length) await sleep(BATCH_DELAY_MS)
+    }
+
+    pending = failed
+  }
+
+  if (pending.length > 0) {
+    console.warn(`autoSync: ${pending.length} card(s) could not be synced after ${MAX_RETRIES} retries`)
+  }
+
+  return results
 }
 
 export async function autoSyncNewCards(
@@ -75,11 +129,9 @@ export async function autoSyncNewCards(
     const destFronts = new Set(destCards.map(c => normFront(c.front)))
     let nextPosition = destCards.length
 
-    // Translate and create/link all source cards in parallel.
-    // Returns the Card that ended up in the dest deck (new or reused), or null on failure.
-    const destCardsCreated = (await Promise.all(cards.map(async (card): Promise<Card | null> => {
+    // Per-card processor (closed over mutable destCards/destFronts/nextPosition)
+    async function processOneCard(card: Card): Promise<Card | null> {
       try {
-        // Translate
         const res = await fetch('/api/sync-translate', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -97,26 +149,24 @@ export async function autoSyncNewCards(
           return null
         }
 
-        const generatedFront: string      = data.front
-        const generatedBack:  string      = data.back
-        const confidence: number | null   = data.confidence ?? null
-        const warning:    string | null   = data.warning    ?? null
+        const generatedFront: string    = data.front
+        const generatedBack:  string    = data.back
+        const confidence: number | null = data.confidence ?? null
+        const warning:    string | null = data.warning    ?? null
 
         let syncedCardId: string | null = null
-        let resultCard:   Card  | null = null
+        let resultCard:   Card  | null  = null
 
         if (rule.mode === 'auto') {
           const nf = normFront(generatedFront)
           const duplicate = destCards.find(c => normFront(c.front) === nf)
 
           if (duplicate) {
-            // Reuse existing card — add to dest deck, no new row
             syncedCardId = duplicate.id
             resultCard   = duplicate
             await cardRepo.addToDeck(infra.deckId, duplicate.id, nextPosition++)
           } else if (!destFronts.has(nf)) {
-            // No duplicate — create new card
-            destFronts.add(nf) // guard against concurrent dupes within this batch
+            destFronts.add(nf) // guard against concurrent dupes within a batch
             const pos = nextPosition++
             const [created] = await cardRepo.bulkCreate(
               infra.deckId, userId,
@@ -131,7 +181,6 @@ export async function autoSyncNewCards(
           }
         }
 
-        // Record the link (upsert is safe to re-run)
         await linkRepo.upsert({
           userId,
           sourceCardId:      card.id,
@@ -153,11 +202,12 @@ export async function autoSyncNewCards(
         console.error('autoSync: failed for card', card.front, err)
         return null
       }
-    }))).filter((c): c is Card => c !== null)
+    }
 
-    // Cascade: sync the newly created dest cards into further language pairs.
-    // Only 'auto' mode produces real cards to cascade from.
-    // _visited is passed by reference so loops are prevented across all branches.
+    // Run batched + retried translation/creation
+    const destCardsCreated = await runInBatchesWithRetry(cards, processOneCard)
+
+    // Cascade: sync newly created dest cards into further language pairs
     if (rule.mode === 'auto' && destCardsCreated.length > 0) {
       await autoSyncNewCards(
         userId,
