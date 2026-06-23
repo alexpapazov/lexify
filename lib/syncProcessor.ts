@@ -106,6 +106,9 @@ async function ensureInfra(
   destPair: PairRow,
 ): Promise<{ deckId: string }> {
   // ── 1. Get or create the stable folder pair ───────────────────────────────
+  // The root "SYNCED VOCABULARY" folder is SHARED across all destination pairs
+  // (find-or-create in createSyncFolders). We only check the sub-folder for
+  // staleness — if it's gone the root is still fine and will be reused.
   const { data: existing } = await db
     .from('language_sync_state')
     .select('root_folder_id, sub_folder_id')
@@ -118,16 +121,18 @@ async function ensureInfra(
   let subFolderId:  string
 
   if (existing) {
-    const [{ data: root }, { data: sub }] = await Promise.all([
-      db.from('folders').select('id').eq('id', existing.root_folder_id).is('deleted_at', null).maybeSingle(),
-      db.from('folders').select('id').eq('id', existing.sub_folder_id).is('deleted_at', null).maybeSingle(),
-    ])
-    if (root && sub) {
+    const { data: sub } = await db
+      .from('folders').select('id')
+      .eq('id', existing.sub_folder_id).is('deleted_at', null).maybeSingle()
+
+    if (sub) {
       rootFolderId = existing.root_folder_id as string
       subFolderId  = existing.sub_folder_id  as string
     } else {
-      // Stale — clear and fall through to recreation
-      console.log('[sync] stale folders for', destPair.source_language, '— recreating')
+      // Sub-folder is stale — delete this state row and recreate it.
+      // createSyncFolders will find-or-create the shared root rather than
+      // inserting a duplicate "SYNCED VOCABULARY" folder.
+      console.log('[sync] stale sub-folder for', destPair.source_language, '— recreating')
       await db.from('language_sync_state').delete()
         .eq('user_id', userId)
         .eq('source_pair_id', srcPair.id)
@@ -185,28 +190,46 @@ async function createSyncFolders(
   srcPair:  PairRow,
   destPair: PairRow,
 ): Promise<{ rootFolderId: string; subFolderId: string }> {
-  // Root: "SYNCED VOCABULARY" (is_synced=true, no parent)
-  const { data: root, error: rootErr } = await db.from('folders').insert({
-    owner_id:  userId,
-    name:      SYNC_FOLDER_NAME,
-    parent_id: null,
-    is_synced: true,
-  }).select().single()
-  if (rootErr) throw new Error(rootErr.message)
+  // Root: "SYNCED VOCABULARY" — one shared folder per user (find-or-create).
+  // Never insert a second root; reuse the existing one so deleting one
+  // language's subfolder can never accidentally create a duplicate root.
+  const { data: existingRoot } = await db
+    .from('folders').select('id')
+    .eq('owner_id', userId)
+    .eq('name', SYNC_FOLDER_NAME)
+    .is('parent_id', null)
+    .is('deleted_at', null)
+    .maybeSingle()
 
-  // Subfolder: "Spanish / English" (full source-pair name, is_synced=true)
+  let rootFolderId: string
+  if (existingRoot) {
+    rootFolderId = (existingRoot as { id: string }).id
+  } else {
+    const { data: root, error: rootErr } = await db.from('folders').insert({
+      owner_id:  userId,
+      name:      SYNC_FOLDER_NAME,
+      parent_id: null,
+      is_synced: true,
+    }).select().single()
+    if (rootErr) throw new Error(rootErr.message)
+    rootFolderId = (root as { id: string }).id
+  }
+
+  // Subfolder: "Spanish / English" (source-pair name, is_synced=true).
+  // Named after the source pair so multiple source languages (Spanish, French…)
+  // can each have their own subfolder under the shared root.
   const subName = `${langName(srcPair.source_language)} / ${langName(srcPair.target_language)}`
   const { data: sub, error: subErr } = await db.from('folders').insert({
     owner_id:  userId,
     name:      subName,
-    parent_id: (root as { id: string }).id,
+    parent_id: rootFolderId,
     is_synced: true,
   }).select().single()
   if (subErr) throw new Error(subErr.message)
 
   return {
-    rootFolderId: (root as { id: string }).id,
-    subFolderId:  (sub  as { id: string }).id,
+    rootFolderId,
+    subFolderId: (sub as { id: string }).id,
   }
 }
 
