@@ -72,3 +72,53 @@ export async function smoothDueDate(
 
   return best.toISOString()
 }
+
+/**
+ * Computes `dueAt` ISO strings for a batch of fast-tracked import-known cards,
+ * distributing them across the smallest window that keeps density reasonable:
+ *   windowDays = min(30, ceil(count / 3))
+ * Example: 30 cards → 10 days, 300 cards → 30 days.
+ *
+ * Respects already-scheduled reviews when picking days — each card is
+ * greedily assigned to the least-loaded day in the window.
+ */
+export async function batchFastTrackDueDates(
+  userId:    UserId,
+  count:     number,
+  startDate: Date,
+  repo:      CardStateRepository,
+): Promise<string[]> {
+  if (count === 0) return []
+
+  const windowDays = Math.min(30, Math.ceil(count / 3))
+  const windowEnd  = new Date(startDate.getTime() + (windowDays + 1) * DAY_MS)
+
+  const existing = await repo.countDueByDateRange(
+    userId,
+    new Date(startDate.getTime() + DAY_MS).toISOString(),
+    windowEnd.toISOString(),
+  )
+
+  // Build a mutable load map for days 1 through windowDays from startDate
+  const days: string[] = []
+  for (let d = 1; d <= windowDays; d++) {
+    const date = new Date(startDate.getTime() + d * DAY_MS)
+    days.push(date.toISOString().slice(0, 10))
+  }
+  const load = new Map<string, number>()
+  for (const day of days) load.set(day, existing.get(day) ?? 0)
+
+  // Greedily assign each card to the least-loaded day
+  const result: string[] = []
+  for (let i = 0; i < count; i++) {
+    let bestDay  = days[0]!
+    let bestLoad = load.get(bestDay)!
+    for (const day of days) {
+      const l = load.get(day)!
+      if (l < bestLoad) { bestLoad = l; bestDay = day }
+    }
+    result.push(bestDay + 'T12:00:00.000Z')
+    load.set(bestDay, bestLoad + 1)
+  }
+  return result
+}

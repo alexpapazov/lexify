@@ -5,11 +5,14 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }              from '@/lib/data/decks'
 import { SupabaseCardRepository }              from '@/lib/data/cards'
+import { SupabaseCardStateRepository }         from '@/lib/data/cardStates'
 import { SupabasePipelineRepository }          from '@/lib/data/pipelines'
 import { SupabaseDismissedPairRepository }     from '@/lib/data/dismissedPairs'
 import { SupabaseFolderRepository }            from '@/lib/data/folders'
 import { SupabaseLanguageSyncRuleRepository }  from '@/lib/data/languageSyncRules'
 import { SupabaseLanguagePairRepository }      from '@/lib/data/languagePairs'
+import { fastTrackCardState }                  from '@/engine/pipeline'
+import { batchFastTrackDueDates }              from '@/engine/density'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { folderMatchesPair } from '@/lib/folderStats'
@@ -240,6 +243,11 @@ export default function UploadPage() {
   const [hasSyncRules, setHasSyncRules] = useState(false)
   const [syncEnabled,  setSyncEnabled]  = useState(true)
 
+  // Fast-track graduated review
+  const [fastTrackEnabled,  setFastTrackEnabled]  = useState(false)
+  const [fastTrackCardIds,  setFastTrackCardIds]  = useState<Set<number>>(new Set())
+  const [syncFastTrackMode, setSyncFastTrackMode] = useState<'none' | 'new_only'>('new_only')
+
   const router   = useRouter()
   const supabase = createClient()
 
@@ -357,6 +365,8 @@ export default function UploadPage() {
     setSelectedFolderId(null)
     setCreatingFolder(false)
     setNewFolderName('')
+    setFastTrackEnabled(false)
+    setFastTrackCardIds(new Set())
     setStage('preview')
     void loadFolderOptions()
   }
@@ -381,6 +391,24 @@ export default function UploadPage() {
     const hasRules = sourcePair ? allRules.some(r => r.enabled && r.sourcePairId === sourcePair.id) : false
     setHasSyncRules(hasRules)
     setSyncEnabled(hasRules)
+  }
+
+  function handleFastTrackToggle(enabled: boolean) {
+    setFastTrackEnabled(enabled)
+    if (enabled) {
+      setFastTrackCardIds(new Set(previewItems.map((_, i) => i)))
+    } else {
+      setFastTrackCardIds(new Set())
+    }
+  }
+
+  function toggleFastTrackCard(i: number) {
+    setFastTrackCardIds(prev => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
   }
 
   function updatePreviewItem(i: number, patch: Partial<PreviewItem>) {
@@ -459,6 +487,35 @@ export default function UploadPage() {
         }
       }
 
+      // Create fast-track CardStates for selected import-known cards.
+      if (fastTrackEnabled && fastTrackCardIds.size > 0) {
+        const stateRepo = new SupabaseCardStateRepository()
+        // Map each previewItems index to its resulting Card
+        const itemToCard = new Map<number, Card>()
+        let createIdx = 0
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i]!
+          if (it.action === 'merge' && it.duplicate?.existingCard) {
+            itemToCard.set(i, it.duplicate.existingCard)
+          } else {
+            const card = created[createIdx]
+            if (card) itemToCard.set(i, card)
+            createIdx++
+          }
+        }
+        const fastTrackedCards = Array.from(fastTrackCardIds)
+          .map(idx => itemToCard.get(idx))
+          .filter((c): c is Card => c != null)
+        if (fastTrackedCards.length > 0) {
+          const now      = new Date()
+          const dueDates = await batchFastTrackDueDates(session.user.id, fastTrackedCards.length, now, stateRepo)
+          const states   = fastTrackedCards.map((c, i) =>
+            fastTrackCardState(session.user.id, c.id, pipeline.id, dueDates[i]!, 30, now)
+          )
+          await stateRepo.upsertBatch(states)
+        }
+      }
+
       // Trigger language sync server-side (survives tab switching / browser close).
       // Include both newly created cards AND merged (existing) cards — a word that
       // already existed in this language still needs to reach the synced libraries.
@@ -480,6 +537,7 @@ export default function UploadPage() {
             sourceLanguage: targetLang,
             targetLanguage: basisLang,
             cards: cardsToSync,
+            fastTrackSyncMode: fastTrackEnabled ? syncFastTrackMode : 'none',
           }),
         })
       }
@@ -572,6 +630,8 @@ export default function UploadPage() {
     setStage('edit')
     setPreviewItems([])
     setDupChecked(false)
+    setFastTrackEnabled(false)
+    setFastTrackCardIds(new Set())
   }
 
   // ── Preview stage ─────────────────────────────────────────────────────────
@@ -607,6 +667,15 @@ export default function UploadPage() {
           {previewItems.map((item, i) => (
             <div key={i} className="panel space-y-3">
               <div className="flex items-start gap-3">
+                {fastTrackEnabled && (
+                  <input
+                    type="checkbox"
+                    checked={fastTrackCardIds.has(i)}
+                    onChange={() => toggleFastTrackCard(i)}
+                    className="accent-accent w-4 h-4 mt-3 shrink-0"
+                    title="Include in fast-track"
+                  />
+                )}
                 <div className="flex-1 grid grid-cols-2 gap-3">
                   <textarea
                     className="input resize-none min-h-[52px] text-sm font-medium"
@@ -734,6 +803,37 @@ export default function UploadPage() {
               Sync to other languages
             </label>
           )}
+
+          <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-ink-muted">
+            <input
+              type="checkbox"
+              checked={fastTrackEnabled}
+              onChange={e => handleFastTrackToggle(e.target.checked)}
+              className="accent-accent w-4 h-4"
+            />
+            I already know some of these words (fast-track graduated review)
+          </label>
+          {fastTrackEnabled && (
+            <p className="text-xs text-ink-faint pl-6">
+              {fastTrackCardIds.size} card{fastTrackCardIds.size !== 1 ? 's' : ''} selected — use the checkboxes above to deselect any you still want to learn normally
+            </p>
+          )}
+          {fastTrackEnabled && hasSyncRules && syncEnabled && (
+            <div className="pl-6 space-y-1.5">
+              <p className="text-xs text-ink-muted">Apply fast-track to synced cards too?</p>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+                  <input type="radio" name="syncFastTrack" checked={syncFastTrackMode === 'none'} onChange={() => setSyncFastTrackMode('none')} className="accent-accent" />
+                  No
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer text-ink">
+                  <input type="radio" name="syncFastTrack" checked={syncFastTrackMode === 'new_only'} onChange={() => setSyncFastTrackMode('new_only')} className="accent-accent" />
+                  Yes, for new synced cards
+                </label>
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-3">
             <button className="btn-primary" disabled={previewItems.length === 0 || saving} onClick={handleSaveDeck}>
               {saving ? 'Saving…' : saveLabel}

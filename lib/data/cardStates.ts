@@ -39,6 +39,10 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     typoMistakeCount:     Number(row.typo_mistake_count     ?? 0),
     semanticMistakeCount: Number(row.semantic_mistake_count ?? 0),
     wrongSynonymCount:    Number(row.wrong_synonym_count    ?? 0),
+    acceleratedMode:        (row.accelerated_mode as string) === 'import_known' ? 'import_known' : 'none',
+    acceleratedLocked:      Boolean(row.accelerated_locked ?? false),
+    acceleratedWrongStreak: Number(row.accelerated_wrong_streak ?? 0),
+    acceleratedPenalty:     Number(row.accelerated_penalty      ?? 0),
   }
 }
 
@@ -87,15 +91,48 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       typing_mistake_streak: state.typingMistakeStreak, typing_fail_cycles: state.typingFailCycles,
       stage3_entered_date: state.stage3EnteredDate,
       i_dont_know_count: state.iDontKnowCount,
-      accent_mistake_count:   state.accentMistakeCount,
-      article_mistake_count:  state.articleMistakeCount,
-      gender_mistake_count:   state.genderMistakeCount,
-      typo_mistake_count:     state.typoMistakeCount,
-      semantic_mistake_count: state.semanticMistakeCount,
-      wrong_synonym_count:    state.wrongSynonymCount,
+      accent_mistake_count:     state.accentMistakeCount,
+      article_mistake_count:    state.articleMistakeCount,
+      gender_mistake_count:     state.genderMistakeCount,
+      typo_mistake_count:       state.typoMistakeCount,
+      semantic_mistake_count:   state.semanticMistakeCount,
+      wrong_synonym_count:      state.wrongSynonymCount,
+      accelerated_mode:         state.acceleratedMode,
+      accelerated_locked:       state.acceleratedLocked,
+      accelerated_wrong_streak: state.acceleratedWrongStreak,
+      accelerated_penalty:      state.acceleratedPenalty,
     }, { onConflict: 'user_id,card_id' }).select().single()
     if (error) throw new Error(error.message)
     return rowToCardState(data)
+  }
+
+  async upsertBatch(states: CardState[]): Promise<void> {
+    if (states.length === 0) return
+    const rows = states.map(s => ({
+      user_id: s.userId, card_id: s.cardId, pipeline_id: s.pipelineId,
+      current_step_order: s.currentStepOrder, correct_in_step: s.correctInStep,
+      graduated: s.graduated, due_at: s.dueAt, interval_days: s.intervalDays,
+      scheduled_interval_days: s.scheduledIntervalDays,
+      ease: s.ease, reps: s.reps, lapses: s.lapses,
+      last_rating: s.lastRating, last_reviewed_at: s.lastReviewedAt,
+      introduced_date: s.introducedDate,
+      lapse_cluster_count: s.lapseClusterCount, last_lapse_at: s.lastLapseAt,
+      graduated_at: s.graduatedAt,
+      relearning_step: s.relearningStep, pending_interval_days: s.pendingIntervalDays,
+      typed_accuracy_window: s.typedAccuracyWindow, typed_review_count: s.typedReviewCount,
+      last_typed_review_at: s.lastTypedReviewAt, forced_typed_remaining: s.forcedTypedRemaining,
+      interval_history: s.intervalHistory,
+      typing_mistake_streak: s.typingMistakeStreak, typing_fail_cycles: s.typingFailCycles,
+      stage3_entered_date: s.stage3EnteredDate,
+      i_dont_know_count: s.iDontKnowCount,
+      accent_mistake_count: s.accentMistakeCount, article_mistake_count: s.articleMistakeCount,
+      gender_mistake_count: s.genderMistakeCount, typo_mistake_count: s.typoMistakeCount,
+      semantic_mistake_count: s.semanticMistakeCount, wrong_synonym_count: s.wrongSynonymCount,
+      accelerated_mode: s.acceleratedMode, accelerated_locked: s.acceleratedLocked,
+      accelerated_wrong_streak: s.acceleratedWrongStreak, accelerated_penalty: s.acceleratedPenalty,
+    }))
+    const { error } = await this.db.from('card_states').upsert(rows, { onConflict: 'user_id,card_id' })
+    if (error) throw new Error(error.message)
   }
 
   async copy(userId: UserId, fromCardId: CardId, toCardId: CardId): Promise<CardState | null> {

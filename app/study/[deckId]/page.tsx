@@ -345,6 +345,33 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
               </div>
             )}
 
+            {/* Fast-track — only shown for import-known cards */}
+            {state && (state.acceleratedMode === 'import_known' || state.acceleratedLocked) && (
+              <div className="space-y-2">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                  Fast-track
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-ink-faint">Status</span>
+                    <span className="text-xs text-ink font-medium">
+                      {state.acceleratedMode === 'none'
+                        ? 'Turned off (2 wrong in a row)'
+                        : state.acceleratedPenalty > 0
+                          ? `Active (${state.acceleratedPenalty} penalt${state.acceleratedPenalty !== 1 ? 'ies' : 'y'})`
+                          : 'Active'}
+                    </span>
+                  </div>
+                  {state.acceleratedLocked && (
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-xs text-ink-faint">Locked</span>
+                      <span className="text-xs text-ink-muted text-right">Accelerated multipliers are permanent for this card</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Distractors */}
             <div className="space-y-2">
               <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">

@@ -436,6 +436,15 @@ export interface CardState {
   typoMistakeCount:     number
   semanticMistakeCount: number
   wrongSynonymCount:    number
+  // ── Fast-track (import-known) acceleration ────────────────────────────────
+  /** 'import_known' = boosted multipliers active; 'none' = normal schedule. */
+  acceleratedMode:        'none' | 'import_known'
+  /** Locks the fast-track toggle in the UI after the first actual review. */
+  acceleratedLocked:      boolean
+  /** Consecutive 'again' ratings since last correct. Resets on correct; ≥2 → mode = 'none'. */
+  acceleratedWrongStreak: number
+  /** Permanent wrong-answer count. Each wrong linearly reduces the acceleration boost. */
+  acceleratedPenalty:     number
 }
 
 // ─── Ratings ──────────────────────────────────────────────────────────────────

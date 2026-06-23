@@ -23,6 +23,7 @@
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { langName }          from '@/lib/languages'
+import { fastTrackCardState } from '@/engine/pipeline'
 
 export const FILL_BATCH      = 5
 export const SYNC_FOLDER_NAME = 'SYNCED VOCABULARY'
@@ -39,11 +40,12 @@ export interface SimpleCard {
 }
 
 export interface SyncPayload {
-  userId:          string
-  sourceLanguage?: string
-  targetLanguage?: string
-  cards:           SimpleCard[]
-  fillPending?:    boolean   // true = skip stub creation, go straight to fill phase
+  userId:             string
+  sourceLanguage?:    string
+  targetLanguage?:    string
+  cards:              SimpleCard[]
+  fillPending?:       boolean   // true = skip stub creation, go straight to fill phase
+  fastTrackSyncMode?: 'none' | 'new_only'  // create fast-track CardStates for new synced stubs
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -327,6 +329,53 @@ function findAllDestinations(
  * see the card right away. A pending `synced_card_links` row is stored for
  * each stub — Phase 2 will replace the placeholder with the real translation.
  */
+/** Compute spread due dates for fast-track stubs using the admin client. */
+async function batchFastTrackDueDatesServer(
+  db:        ReturnType<typeof createAdminClient>,
+  userId:    string,
+  count:     number,
+  startDate: Date,
+): Promise<string[]> {
+  if (count === 0) return []
+  const DAY_MS    = 24 * 60 * 60 * 1000
+  const windowDays = Math.min(30, Math.ceil(count / 3))
+  const windowEnd  = new Date(startDate.getTime() + (windowDays + 1) * DAY_MS)
+
+  const { data } = await db.from('card_states')
+    .select('due_at')
+    .eq('user_id', userId)
+    .eq('graduated', true)
+    .gte('due_at', new Date(startDate.getTime() + DAY_MS).toISOString())
+    .lt('due_at', windowEnd.toISOString())
+
+  const existing = new Map<string, number>()
+  for (const row of (data ?? []) as Array<{ due_at: string | null }>) {
+    if (!row.due_at) continue
+    const day = row.due_at.slice(0, 10)
+    existing.set(day, (existing.get(day) ?? 0) + 1)
+  }
+
+  const days: string[] = []
+  for (let d = 1; d <= windowDays; d++) {
+    days.push(new Date(startDate.getTime() + d * DAY_MS).toISOString().slice(0, 10))
+  }
+  const load = new Map<string, number>()
+  for (const day of days) load.set(day, existing.get(day) ?? 0)
+
+  const result: string[] = []
+  for (let i = 0; i < count; i++) {
+    let bestDay  = days[0]!
+    let bestLoad = load.get(bestDay)!
+    for (const day of days) {
+      const l = load.get(day)!
+      if (l < bestLoad) { bestLoad = l; bestDay = day }
+    }
+    result.push(bestDay + 'T12:00:00.000Z')
+    load.set(bestDay, bestLoad + 1)
+  }
+  return result
+}
+
 export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCount: number }> {
   const { userId, sourceLanguage, targetLanguage, cards: sourceCards } = payload
   if (sourceCards.length === 0) return { pendingCount: 0 }
@@ -475,6 +524,44 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
       linkRows,
       { onConflict: 'source_card_id,destination_pair_id', ignoreDuplicates: true },
     )
+
+    // Create fast-track CardStates for the new synced stubs if requested.
+    if (payload.fastTrackSyncMode === 'new_only' && createdCards.length > 0) {
+      try {
+        const now      = new Date()
+        const dueDates = await batchFastTrackDueDatesServer(db, userId, createdCards.length, now)
+        const states   = createdCards.map((c, i) =>
+          fastTrackCardState(userId, c.id, DEFAULT_PIPELINE_ID, dueDates[i]!, 30, now)
+        )
+        const rows = states.map(s => ({
+          user_id: s.userId, card_id: s.cardId, pipeline_id: s.pipelineId,
+          current_step_order: s.currentStepOrder, correct_in_step: s.correctInStep,
+          graduated: s.graduated, due_at: s.dueAt, interval_days: s.intervalDays,
+          scheduled_interval_days: s.scheduledIntervalDays,
+          ease: s.ease, reps: s.reps, lapses: s.lapses,
+          last_rating: s.lastRating, last_reviewed_at: s.lastReviewedAt,
+          introduced_date: s.introducedDate,
+          lapse_cluster_count: s.lapseClusterCount, last_lapse_at: s.lastLapseAt,
+          graduated_at: s.graduatedAt,
+          relearning_step: s.relearningStep, pending_interval_days: s.pendingIntervalDays,
+          typed_accuracy_window: s.typedAccuracyWindow, typed_review_count: s.typedReviewCount,
+          last_typed_review_at: s.lastTypedReviewAt, forced_typed_remaining: s.forcedTypedRemaining,
+          interval_history: s.intervalHistory,
+          typing_mistake_streak: s.typingMistakeStreak, typing_fail_cycles: s.typingFailCycles,
+          stage3_entered_date: s.stage3EnteredDate,
+          i_dont_know_count: s.iDontKnowCount,
+          accent_mistake_count: s.accentMistakeCount, article_mistake_count: s.articleMistakeCount,
+          gender_mistake_count: s.genderMistakeCount, typo_mistake_count: s.typoMistakeCount,
+          semantic_mistake_count: s.semanticMistakeCount, wrong_synonym_count: s.wrongSynonymCount,
+          accelerated_mode: s.acceleratedMode, accelerated_locked: s.acceleratedLocked,
+          accelerated_wrong_streak: s.acceleratedWrongStreak, accelerated_penalty: s.acceleratedPenalty,
+        }))
+        const { error: stateErr } = await db.from('card_states').upsert(rows, { onConflict: 'user_id,card_id' })
+        if (stateErr) console.error('[sync] fast-track state insert error', stateErr.message)
+      } catch (err) {
+        console.error('[sync] fast-track state creation failed', err)
+      }
+    }
 
     totalPending += createdCards.length
   }

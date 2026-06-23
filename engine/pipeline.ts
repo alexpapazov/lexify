@@ -68,6 +68,45 @@ export function initialCardState(
     typoMistakeCount:     0,
     semanticMistakeCount: 0,
     wrongSynonymCount:    0,
+    acceleratedMode:        'none',
+    acceleratedLocked:      false,
+    acceleratedWrongStreak: 0,
+    acceleratedPenalty:     0,
+  }
+}
+
+/**
+ * Creates a CardState for an import-known fast-tracked card.
+ * The card is already graduated; its first review lands at `dueAt` (spread
+ * across the fast-track window by the caller). `intervalDays` is always 30 —
+ * a stable baseline the accelerated multipliers apply to at the first review,
+ * regardless of which day in the spread window the card lands on. Setting
+ * `lastReviewedAt` to now ensures the scheduler treats this as a normal
+ * graduated review (not a first-ever graduation) at review time.
+ */
+export function fastTrackCardState(
+  userId:                string,
+  cardId:                string,
+  pipelineId:            string,
+  dueAt:                 string,
+  scheduledIntervalDays: number,
+  now:                   Date = new Date(),
+): CardState {
+  const nowIso = now.toISOString()
+  return {
+    ...initialCardState(userId, cardId, pipelineId),
+    graduated:             true,
+    intervalDays:          30,
+    scheduledIntervalDays,
+    dueAt,
+    lastReviewedAt:        nowIso,
+    graduatedAt:           nowIso,
+    introducedDate:        nowIso.slice(0, 10),
+    acceleratedMode:       'import_known',
+    acceleratedLocked:     false,
+    acceleratedWrongStreak: 0,
+    acceleratedPenalty:    0,
+    forcedTypedRemaining:  3,   // start with typed production
   }
 }
 
@@ -105,6 +144,26 @@ export function progressAfterReview(
 
     const typedFields = { typedAccuracyWindow, typedReviewCount, lastTypedReviewAt, forcedTypedRemaining }
 
+    // ── Accelerated fast-track bookkeeping ───────────────────────────────────
+    let acceleratedMode        = state.acceleratedMode
+    let acceleratedLocked      = state.acceleratedLocked
+    let acceleratedWrongStreak = state.acceleratedWrongStreak
+    let acceleratedPenalty     = state.acceleratedPenalty
+
+    if (state.acceleratedMode === 'import_known' || state.acceleratedLocked) {
+      acceleratedLocked = true   // lock after first actual review
+    }
+    if (state.acceleratedMode === 'import_known') {
+      if (rating === 'again') {
+        acceleratedWrongStreak++
+        acceleratedPenalty++
+        if (acceleratedWrongStreak >= 2) acceleratedMode = 'none'
+      } else {
+        acceleratedWrongStreak = 0   // reset on correct; penalty is permanent
+      }
+    }
+    const accelFields = { acceleratedMode, acceleratedLocked, acceleratedWrongStreak, acceleratedPenalty }
+
     if (rating === 'again') {
       const scheduled = scheduleNext(state, 'again', { now: nowDate, wrongSeverity })
 
@@ -114,6 +173,7 @@ export function progressAfterReview(
         return {
           ...state,
           ...typedFields,
+          ...accelFields,
           graduated:         false,
           currentStepOrder:  0,
           correctInStep:     0,
@@ -138,6 +198,7 @@ export function progressAfterReview(
       return {
         ...state,
         ...typedFields,
+        ...accelFields,
         lapses:            state.lapses + 1,
         lastRating:        rating,
         lastReviewedAt:    now,
@@ -162,6 +223,7 @@ export function progressAfterReview(
       return {
         ...state,
         ...typedFields,
+        ...accelFields,
         lastRating: rating,
       }
     }
@@ -169,6 +231,7 @@ export function progressAfterReview(
     return {
       ...state,
       ...typedFields,
+      ...accelFields,
       reps:              rating !== 'hard' ? state.reps + 1 : state.reps,
       lastRating:        rating,
       lastReviewedAt:    now,

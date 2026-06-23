@@ -1,4 +1,4 @@
-import { scheduleNext, classifyReviewMode, applyMultiplierDecay, BASE_MULTIPLIER, MIN_EFFECTIVE_MULTIPLIER } from '../scheduler'
+import { scheduleNext, classifyReviewMode, applyMultiplierDecay, BASE_MULTIPLIER, MIN_EFFECTIVE_MULTIPLIER, acceleratedEffectiveMultiplierRange, ACCEL_MULTIPLIER_RANGE, MULTIPLIER_RANGE } from '../scheduler'
 import type { CardState } from '@/domain'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -44,6 +44,18 @@ function baseState(overrides: Partial<CardState> = {}): CardState {
     intervalHistory: [],
     typingMistakeStreak: 0,
     typingFailCycles: 0,
+    stage3EnteredDate: null,
+    iDontKnowCount: 0,
+    accentMistakeCount: 0,
+    articleMistakeCount: 0,
+    genderMistakeCount: 0,
+    typoMistakeCount: 0,
+    semanticMistakeCount: 0,
+    wrongSynonymCount: 0,
+    acceleratedMode: 'none' as const,
+    acceleratedLocked: false,
+    acceleratedWrongStreak: 0,
+    acceleratedPenalty: 0,
     ...overrides,
   }
 }
@@ -369,6 +381,106 @@ describe('correct answer resets lapse clustering', () => {
 describe('MAX_INTERVAL_DAYS cap', () => {
   it('never schedules an interval beyond the cap, even for a huge "easy" jump', () => {
     const state = baseState({ intervalDays: 2000, scheduledIntervalDays: 2000, lastReviewedAt: daysAgo(2000) })
+    const result = scheduleNext(state, 'easy', { now: NOW })
+    expect(result.intervalDays).toBeLessThanOrEqual(1825)
+  })
+})
+
+describe('accelerated fast-track multipliers', () => {
+  const accelState30 = () => baseState({
+    intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30),
+    acceleratedMode: 'import_known', acceleratedWrongStreak: 0, acceleratedPenalty: 0,
+  })
+
+  it('Good at 30 days with full acceleration gives ~90 days', () => {
+    const result = scheduleNext(accelState30(), 'good', { now: NOW })
+    // baseInterval = max(30, 30) = 30; ideal = 30 × 3.0 = 90 (before decay)
+    // decay at 30 days: effective ideal = 1 + (3.0-1) / (1 + 30/90) = 1 + 2/1.333 ≈ 2.5 → 30 × 2.5 = 75
+    expect(result.intervalDays).toBeGreaterThan(60)
+    expect(result.intervalDays).toBeLessThanOrEqual(95)
+  })
+
+  it('Easy at 30 days with full acceleration gives > normal easy', () => {
+    const normalState = baseState({ intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30) })
+    const accel = scheduleNext(accelState30(), 'easy', { now: NOW })
+    const normal = scheduleNext(normalState, 'easy', { now: NOW })
+    expect(accel.intervalDays).toBeGreaterThan(normal.intervalDays)
+  })
+
+  it('Hard at 30 days with full acceleration gives > normal hard', () => {
+    const normalState = baseState({ intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30) })
+    const accel = scheduleNext(accelState30(), 'hard', { now: NOW })
+    const normal = scheduleNext(normalState, 'hard', { now: NOW })
+    expect(accel.intervalDays).toBeGreaterThan(normal.intervalDays)
+  })
+
+  it('penalty=3 produces same interval as normal (blend = full normal)', () => {
+    const normalState = baseState({ intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30) })
+    const penaltyState = baseState({
+      intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30),
+      acceleratedMode: 'import_known', acceleratedWrongStreak: 0, acceleratedPenalty: 3,
+    })
+    const normal  = scheduleNext(normalState, 'good', { now: NOW })
+    const penalty = scheduleNext(penaltyState, 'good', { now: NOW })
+    expect(penalty.intervalDays).toBeCloseTo(normal.intervalDays, 2)
+  })
+
+  it('acceleratedWrongStreak=2 falls back to normal multipliers', () => {
+    const normalState = baseState({ intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30) })
+    const streakState = baseState({
+      intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30),
+      acceleratedMode: 'import_known', acceleratedWrongStreak: 2, acceleratedPenalty: 0,
+    })
+    const normal = scheduleNext(normalState, 'good', { now: NOW })
+    const streak = scheduleNext(streakState, 'good', { now: NOW })
+    expect(streak.intervalDays).toBeCloseTo(normal.intervalDays, 2)
+  })
+
+  it('mode=none (after deactivation) uses normal multipliers', () => {
+    const normalState = baseState({ intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30) })
+    const offState = baseState({
+      intervalDays: 30, scheduledIntervalDays: 30, lastReviewedAt: daysAgo(30),
+      acceleratedMode: 'none', acceleratedWrongStreak: 0, acceleratedPenalty: 1,
+    })
+    const normal = scheduleNext(normalState, 'good', { now: NOW })
+    const off    = scheduleNext(offState, 'good', { now: NOW })
+    expect(off.intervalDays).toBeCloseTo(normal.intervalDays, 2)
+  })
+
+  it('acceleratedEffectiveMultiplierRange blends linearly with penalty', () => {
+    const r0 = acceleratedEffectiveMultiplierRange('good', 0, 0)
+    const r3 = acceleratedEffectiveMultiplierRange('good', 0, 3)
+    const rN = { min: MULTIPLIER_RANGE.good.min, ideal: MULTIPLIER_RANGE.good.ideal, max: MULTIPLIER_RANGE.good.max }
+    // penalty=0: full accel (3.0 ideal)
+    expect(r0.ideal).toBeCloseTo(ACCEL_MULTIPLIER_RANGE.good.ideal, 5)
+    // penalty=3: same as normal
+    expect(r3.ideal).toBeCloseTo(rN.ideal, 5)
+  })
+
+  it('long interval decays accelerated multipliers toward the floor', () => {
+    const shortState = baseState({
+      intervalDays: 10, scheduledIntervalDays: 10, lastReviewedAt: daysAgo(10),
+      acceleratedMode: 'import_known', acceleratedWrongStreak: 0, acceleratedPenalty: 0,
+    })
+    const longState = baseState({
+      intervalDays: 500, scheduledIntervalDays: 500, lastReviewedAt: daysAgo(500),
+      acceleratedMode: 'import_known', acceleratedWrongStreak: 0, acceleratedPenalty: 0,
+    })
+    const shortResult = scheduleNext(shortState, 'good', { now: NOW })
+    const longResult  = scheduleNext(longState, 'good', { now: NOW })
+    // The ratio new/old should be smaller for the long interval
+    const shortRatio = shortResult.intervalDays / 10
+    const longRatio  = longResult.intervalDays  / 500
+    expect(longRatio).toBeLessThan(shortRatio)
+    // And the long-interval accelerated multiplier should be close to normal (decayed)
+    expect(longRatio).toBeCloseTo(MULTIPLIER_RANGE.good.ideal * (1 / (1 + 500 / 90)) + 1 - (1 / (1 + 500 / 90)), 0)
+  })
+
+  it('MAX_INTERVAL_DAYS cap still applies to accelerated cards', () => {
+    const state = baseState({
+      intervalDays: 1000, scheduledIntervalDays: 1000, lastReviewedAt: daysAgo(1000),
+      acceleratedMode: 'import_known', acceleratedWrongStreak: 0, acceleratedPenalty: 0,
+    })
     const result = scheduleNext(state, 'easy', { now: NOW })
     expect(result.intervalDays).toBeLessThanOrEqual(1825)
   })

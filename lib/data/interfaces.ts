@@ -62,6 +62,8 @@ export interface CardStateRepository {
   get(userId: UserId, cardId: CardId): Promise<CardState | null>
   listByDeck(userId: UserId, deckId: DeckId): Promise<CardState[]>
   upsert(state: CardState): Promise<CardState>
+  /** Bulk-upserts multiple states in one round-trip (used for fast-track import). */
+  upsertBatch(states: CardState[]): Promise<void>
   /** Copies a user's study progress from one card to another (used when forking a shared card). */
   copy(userId: UserId, fromCardId: CardId, toCardId: CardId): Promise<CardState | null>
   /**

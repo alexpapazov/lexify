@@ -110,6 +110,13 @@ export const MIN_EFFECTIVE_MULTIPLIER: Record<'hard' | 'good' | 'easy', number> 
   easy: 1.25,
 }
 
+/** Boosted [min, ideal, max] multipliers for fast-tracked import-known cards. */
+export const ACCEL_MULTIPLIER_RANGE: Record<'hard' | 'good' | 'easy', { min: number; ideal: number; max: number }> = {
+  hard: { min: 1.3, ideal: 1.5, max: 1.7 },
+  good: { min: 2.5, ideal: 3.0, max: 3.5 },
+  easy: { min: 4.0, ideal: 5.0, max: 6.0 },
+}
+
 /** First interval (days) assigned the moment a card graduates. */
 const INITIAL_INTERVAL: Record<Rating, number> = { again: 1, hard: 1, good: 3, easy: 7 }
 
@@ -187,6 +194,34 @@ export function effectiveMultiplierRange(
     min:   Math.max(applyMultiplierDecay(range.min,   currentIntervalDays), floor),
     ideal: Math.max(applyMultiplierDecay(range.ideal, currentIntervalDays), floor),
     max:   Math.max(applyMultiplierDecay(range.max,   currentIntervalDays), floor),
+  }
+}
+
+/**
+ * Like effectiveMultiplierRange but for fast-tracked cards. `penalty` linearly
+ * blends the boost from accelerated toward normal (0 = full acceleration,
+ * 3+ = normal multipliers). Same decay formula and floors as the normal path.
+ */
+export function acceleratedEffectiveMultiplierRange(
+  rating:              'hard' | 'good' | 'easy',
+  currentIntervalDays: number,
+  penalty:             number,
+): EffectiveMultiplierRange {
+  const accel  = ACCEL_MULTIPLIER_RANGE[rating]
+  const normal = MULTIPLIER_RANGE[rating]
+  const blend  = Math.min(penalty / 3, 1)   // 0 = full accel, 1 = full normal
+
+  const blended = {
+    min:   normal.min   + (accel.min   - normal.min)   * (1 - blend),
+    ideal: normal.ideal + (accel.ideal - normal.ideal) * (1 - blend),
+    max:   normal.max   + (accel.max   - normal.max)   * (1 - blend),
+  }
+
+  const floor = MIN_EFFECTIVE_MULTIPLIER[rating]
+  return {
+    min:   Math.max(applyMultiplierDecay(blended.min,   currentIntervalDays), floor),
+    ideal: Math.max(applyMultiplierDecay(blended.ideal, currentIntervalDays), floor),
+    max:   Math.max(applyMultiplierDecay(blended.max,   currentIntervalDays), floor),
   }
 }
 
@@ -361,7 +396,11 @@ class AdaptiveScheduler implements Scheduler {
     }
 
     // ── Correct answer (hard / good / easy) ─────────────────────────────────
-    const range = effectiveMultiplierRange(rating, currentInterval)
+    const isAccelerated = state.acceleratedMode === 'import_known'
+                       && state.acceleratedWrongStreak < 2
+    const range = isAccelerated
+      ? acceleratedEffectiveMultiplierRange(rating, currentInterval, state.acceleratedPenalty)
+      : effectiveMultiplierRange(rating, currentInterval)
     let newInterval: number
     let smoothMinDays: number
     let smoothMaxDays: number
