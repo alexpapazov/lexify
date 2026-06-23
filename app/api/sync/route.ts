@@ -1,37 +1,36 @@
 /**
  * POST /api/sync
  *
- * Processes ONE batch of BATCH_SIZE cards per invocation, then self-chains
- * for the remaining cards. Each call completes in ~3-4 s (parallel Anthropic
- * calls for all destination languages) — safely under Vercel Hobby's 10 s limit.
+ * Two-phase language sync (see lib/syncProcessor.ts for full explanation).
  *
- * Flow:
- *   1. Respond immediately (< 1 ms).
- *   2. In after():
- *      a. Process cards[0..BATCH_SIZE] via processSyncBatch.
- *         → Translates to ALL destination languages at once (BFS through rules).
- *      b. If remaining + failed cards exist → trigger continuation (same payload).
+ * PHASE 1 — Stub creation (no AI, ~1–2 s):
+ *   Called once by the upload page. Creates placeholder cards for every
+ *   destination language immediately (front = original word, e.g. "el perro").
+ *   Cards appear in the user's library right away. Each stub has a pending
+ *   `synced_card_links` row. Then triggers Phase 2.
  *
- * No cascade hops. All language levels are translated directly from the source
- * cards in each batch, keeping max concurrent invocations = 1 at a time.
+ * PHASE 2 — Translation fill (AI, self-chaining):
+ *   Called with { fillPending: true }. Each invocation translates FILL_BATCH
+ *   (5) pending links via Anthropic and updates the cards' front/back. Then
+ *   re-fires itself for the next batch. Sequential chain → max 1 concurrent
+ *   invocation at a time, safely under Vercel Hobby's 6-function limit.
  *
  * Auth:
- *   - Client calls:         Authorization: Bearer <supabase-jwt>
- *   - Server-to-server:     x-sync-secret: <SYNC_INTERNAL_SECRET env var>
+ *   Initial client call:     Authorization: Bearer <supabase-jwt>
+ *   Server-to-server calls:  x-sync-secret: <SYNC_INTERNAL_SECRET env var>
  */
 
 import { after }             from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import {
-  processSyncBatch,
-  BATCH_SIZE,
+  createAllStubs,
+  fillPendingBatch,
   type SyncPayload,
 } from '@/lib/syncProcessor'
 
 export const runtime     = 'nodejs'
 export const maxDuration = 10
 
-const MAX_CARD_FAILS  = 10      // drop a card after this many total failures
 const INTERNAL_SECRET = process.env.SYNC_INTERNAL_SECRET ?? 'dev-sync-secret'
 
 function getOrigin(req: Request): string {
@@ -40,15 +39,15 @@ function getOrigin(req: Request): string {
   return `${proto}://${host}`
 }
 
-async function triggerContinuation(origin: string, payload: SyncPayload): Promise<void> {
+async function triggerFill(origin: string, userId: string): Promise<void> {
   await fetch(`${origin}/api/sync`, {
     method:  'POST',
     headers: {
       'content-type':  'application/json',
       'x-sync-secret': INTERNAL_SECRET,
     },
-    body: JSON.stringify(payload),
-  }).catch(err => console.error('[sync] failed to trigger continuation', err))
+    body: JSON.stringify({ userId, fillPending: true, cards: [] } as SyncPayload),
+  }).catch(err => console.error('[sync] failed to trigger fill', err))
 }
 
 export async function POST(req: Request) {
@@ -58,7 +57,7 @@ export async function POST(req: Request) {
   const internalSecret = req.headers.get('x-sync-secret')
 
   if (internalSecret) {
-    // ── Server-to-server continuation ────────────────────────────────────────
+    // ── Server-to-server (self-chain) ─────────────────────────────────────────
     if (internalSecret !== INTERNAL_SECRET) {
       return Response.json({ ok: false }, { status: 401 })
     }
@@ -66,7 +65,7 @@ export async function POST(req: Request) {
     userId  = body.userId as string
     payload = body as SyncPayload
   } else {
-    // ── Initial client call ───────────────────────────────────────────────────
+    // ── Initial upload-page call ──────────────────────────────────────────────
     const authHeader = req.headers.get('authorization') ?? ''
     if (!authHeader.startsWith('Bearer ')) {
       return Response.json({ ok: false }, { status: 401 })
@@ -79,46 +78,54 @@ export async function POST(req: Request) {
     }
     userId  = user.id
     const body = await req.json()
-    payload = { ...body, userId, failCounts: {} } as SyncPayload
+    payload = { ...body, userId } as SyncPayload
   }
 
-  if (!payload.cards || payload.cards.length === 0) {
-    return Response.json({ ok: true })
+  if (!payload.userId) {
+    return Response.json({ ok: false, error: 'missing userId' }, { status: 400 })
   }
 
   const origin = getOrigin(req)
 
+  // ── Phase 2: Translation fill ─────────────────────────────────────────────
+  if (payload.fillPending) {
+    after(async () => {
+      console.log('[sync] fill batch start', { userId: payload.userId.slice(0, 8) })
+      try {
+        const { filled, remaining } = await fillPendingBatch(payload.userId)
+        console.log('[sync] fill batch done', { filled, remaining })
+        if (remaining > 0) {
+          await triggerFill(origin, payload.userId)
+        } else {
+          console.log('[sync] all translations complete for', payload.userId.slice(0, 8))
+        }
+      } catch (err) {
+        console.error('[sync] fill batch error:', err)
+      }
+    })
+    return Response.json({ ok: true })
+  }
+
+  // ── Phase 1: Stub creation ────────────────────────────────────────────────
+  if (!payload.cards || payload.cards.length === 0) {
+    return Response.json({ ok: true })
+  }
+
   after(async () => {
-    console.log('[sync] after() invoked', {
-      userId:  payload.userId.slice(0, 8),
-      cards:   payload.cards.length,
-      src:     `${payload.sourceLanguage}:${payload.targetLanguage}`,
+    console.log('[sync] stub creation start', {
+      userId: payload.userId.slice(0, 8),
+      cards:  payload.cards.length,
+      src:    `${payload.sourceLanguage}:${payload.targetLanguage}`,
     })
     try {
-      const { failedCards } = await processSyncBatch(payload)
-      console.log('[sync] batch done', { failed: failedCards.length })
-
-      // Update fail counts; drop cards that have failed too many times
-      const failCounts: Record<string, number> = { ...(payload.failCounts ?? {}) }
-      const retryable = failedCards.filter(c => {
-        const count = (failCounts[c.id] ?? 0) + 1
-        failCounts[c.id] = count
-        return count < MAX_CARD_FAILS
-      })
-
-      const remaining = payload.cards.slice(BATCH_SIZE)
-      const nextCards = [...remaining, ...retryable]
-      if (nextCards.length > 0) {
-        await triggerContinuation(origin, {
-          userId:         payload.userId,
-          sourceLanguage: payload.sourceLanguage,
-          targetLanguage: payload.targetLanguage,
-          cards:          nextCards,
-          failCounts,
-        })
+      const { pendingCount } = await createAllStubs(payload)
+      console.log('[sync] stubs created', { pendingCount })
+      if (pendingCount > 0) {
+        // Start the fill chain — translations happen FILL_BATCH at a time
+        await triggerFill(origin, payload.userId)
       }
     } catch (err) {
-      console.error('[sync] after() error:', err)
+      console.error('[sync] stub creation error:', err)
     }
   })
 

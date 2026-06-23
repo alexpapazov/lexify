@@ -1,22 +1,30 @@
 /**
  * lib/syncProcessor.ts
  *
- * Server-side language sync — single-batch processor.
- * Processes exactly one batch of cards (BATCH_SIZE) per call.
+ * Two-phase server-side language sync.
  *
- * For each batch, ALL destination languages reachable from the source pair
- * (via BFS through the sync rules) receive translations DIRECTLY from the
- * source cards. No cascade hops — each language level is translated fresh
- * from the original source, not from an intermediate translated language.
+ * PHASE 1 — Stub creation (no AI, instant):
+ *   createAllStubs() is called once per upload. It BFS-walks the sync rules,
+ *   finds every reachable destination language, and immediately creates
+ *   placeholder cards (front = original word, e.g. "el perro"; back = basis
+ *   gloss, e.g. "dog"). All cards appear in their decks right away. Each stub
+ *   has a matching `synced_card_links` row with status = 'pending'.
  *
- * Retries and continuation are handled by the API route, which re-invokes
- * itself with the remaining cards.
+ * PHASE 2 — Translation fill (AI, one card at a time):
+ *   fillPendingBatch() is called by the self-chaining /api/sync route. It
+ *   fetches FILL_BATCH pending links, calls Anthropic once per link to
+ *   translate the stored original word into the destination language, and
+ *   updates the card's front/back in-place. Each fill invocation makes
+ *   FILL_BATCH parallel Anthropic calls (≈2 s). The chain continues until
+ *   all pending links are active.
+ *
+ * Max concurrent Vercel invocations = 1 (sequential self-chain). No cascade.
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { langName }          from '@/lib/languages'
 
-export const BATCH_SIZE = 5
+export const FILL_BATCH      = 5
 export const SYNC_FOLDER_NAME = 'SYNCED VOCABULARY'
 
 const DEFAULT_PIPELINE_ID = '00000000-0000-0000-0000-000000000001'
@@ -31,23 +39,16 @@ export interface SimpleCard {
 }
 
 export interface SyncPayload {
-  userId:         string
-  sourceLanguage: string
-  targetLanguage: string
-  cards:          SimpleCard[]            // remaining cards (first BATCH_SIZE are processed)
-  failCounts?:    Record<string, number>  // cardId → cumulative failure count
-}
-
-export interface BatchResult {
-  successCards: SimpleCard[]
-  failedCards:  SimpleCard[]
+  userId:          string
+  sourceLanguage?: string
+  targetLanguage?: string
+  cards:           SimpleCard[]
+  fillPending?:    boolean   // true = skip stub creation, go straight to fill phase
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function normFront(s: string): string { return s.trim().toLowerCase() }
-
-function buildPrompt(
+function buildTranslationPrompt(
   sourceFront: string, sourceBack: string,
   fromLang: string,
   toLearnedLang: string, toBasisLang: string,
@@ -96,14 +97,13 @@ async function ensureInfra(
     .maybeSingle()
 
   if (existing) {
-    // Verify both the deck and its folder still exist
     const [{ data: deck }, { data: folder }] = await Promise.all([
       db.from('decks').select('id').eq('id', existing.deck_id).is('deleted_at', null).maybeSingle(),
       db.from('folders').select('id').eq('id', existing.root_folder_id).is('deleted_at', null).maybeSingle(),
     ])
     if (deck && folder) return { deckId: existing.deck_id as string }
     // Stale — clear and recreate
-    console.log('[sync] ensureInfra: stale infra for', destPair.source_language, '— recreating')
+    console.log('[sync] stale infra for', destPair.source_language, '— recreating')
     await db
       .from('language_sync_state')
       .delete()
@@ -112,8 +112,8 @@ async function ensureInfra(
       .eq('destination_pair_id', destPair.id)
   }
 
-  // Each destination pair gets its OWN "SYNCED VOCABULARY" folder so it only
-  // appears in that language's library view, not across all languages.
+  // Each destination pair gets its own "SYNCED VOCABULARY" folder so it only
+  // appears in that language's library view.
   const { data: folder, error: folderErr } = await db
     .from('folders')
     .insert({ owner_id: userId, name: SYNC_FOLDER_NAME, parent_id: null })
@@ -147,7 +147,7 @@ async function ensureInfra(
   return { deckId: deck.id as string }
 }
 
-// ── BFS helper: find all destination pairs reachable from srcPairId ───────────
+// ── BFS: find all destinations reachable from srcPairId ───────────────────────
 
 function findAllDestinations(
   srcPairId: string,
@@ -167,183 +167,244 @@ function findAllDestinations(
       if (!destPair) continue
       visited.add(rule.destination_pair_id)
       result.push({ pair: destPair, rule })
-      queue.push(rule.destination_pair_id)  // follow the chain
+      queue.push(rule.destination_pair_id)
     }
   }
 
   return result
 }
 
-// ── Main export ───────────────────────────────────────────────────────────────
+// ── Phase 1: Create stub cards (no AI) ───────────────────────────────────────
 
 /**
- * Process one batch of cards (payload.cards.slice(0, BATCH_SIZE)).
- * Translates to ALL destination languages simultaneously (BFS through rules).
- * Does NOT loop or retry — the API route handles continuation and retries.
+ * Creates placeholder cards for all destination languages immediately.
+ * Each stub has the original source word as its front/back so the user can
+ * see the card right away. A pending `synced_card_links` row is stored for
+ * each stub — Phase 2 will replace the placeholder with the real translation.
  */
-export async function processSyncBatch(payload: SyncPayload): Promise<BatchResult> {
-  const { userId, sourceLanguage, targetLanguage } = payload
-  const batch = payload.cards.slice(0, BATCH_SIZE)
+export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCount: number }> {
+  const { userId, sourceLanguage, targetLanguage, cards: sourceCards } = payload
+  if (sourceCards.length === 0) return { pendingCount: 0 }
 
-  if (batch.length === 0) return { successCards: [], failedCards: [] }
-
-  const db     = createAdminClient()
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    console.error('syncProcessor: ANTHROPIC_API_KEY not set')
-    return { successCards: [], failedCards: batch }
-  }
+  const db = createAdminClient()
 
   const { data: pairsData } = await db
     .from('language_pairs')
     .select('id, source_language, target_language')
     .eq('owner_id', userId)
-
   const pairs = (pairsData ?? []) as PairRow[]
-  const src   = pairs.find(p => p.source_language === sourceLanguage && p.target_language === targetLanguage)
-  if (!src) return { successCards: [], failedCards: batch }
+
+  const src = pairs.find(p => p.source_language === sourceLanguage! && p.target_language === targetLanguage!)
+  if (!src) return { pendingCount: 0 }
 
   const { data: rulesData } = await db
     .from('language_sync_rules')
     .select('id, source_pair_id, destination_pair_id, mode, enabled')
     .eq('user_id', userId)
     .eq('enabled', true)
-
   const allRules = (rulesData ?? []) as RuleRow[]
-  // BFS from src: find every language reachable through the rule chain
+
   const destinations = findAllDestinations(src.id, allRules, pairs)
+    .filter(d => d.rule.mode === 'auto')
+  if (destinations.length === 0) return { pendingCount: 0 }
 
-  if (destinations.length === 0) return { successCards: [], failedCards: [] }
+  let totalPending = 0
 
-  const allSuccessIds = new Set<string>()
-  const failedIds     = new Set<string>()
-
-  // Process ALL destination languages for this batch simultaneously
+  // Process all destination languages in parallel
   await Promise.all(destinations.map(async ({ pair: destPair, rule }) => {
-    if (rule.mode !== 'auto') return
-
     const infra = await ensureInfra(db, userId, src, destPair)
 
-    const { data: existingData } = await db
+    // Find which source cards have already been synced to this destination
+    const { data: existingLinks } = await db
+      .from('synced_card_links')
+      .select('source_card_id')
+      .eq('user_id', userId)
+      .eq('destination_pair_id', destPair.id)
+
+    const alreadySynced = new Set((existingLinks ?? []).map((l: { source_card_id: string }) => l.source_card_id))
+    const toSync = sourceCards.filter(c => !alreadySynced.has(c.id))
+    if (toSync.length === 0) return
+
+    // Get existing card count for position offset
+    const { count: existingCount } = await db
       .from('cards')
-      .select('id, front, back')
+      .select('*', { count: 'exact', head: true })
       .eq('owner_id', userId)
       .eq('source_language', destPair.source_language)
       .eq('target_language', destPair.target_language)
       .is('deleted_at', null)
+    const basePosition = existingCount ?? 0
 
-    const destCards  = (existingData ?? []) as SimpleCard[]
-    const destFronts = new Set(destCards.map(c => normFront(c.front)))
-    let   nextPos    = destCards.length
+    // Bulk-insert stub cards (source word as placeholder front/back)
+    const { data: created, error: insertErr } = await db
+      .from('cards')
+      .insert(toSync.map((c, i) => ({
+        owner_id:        userId,
+        source_language: destPair.source_language,
+        target_language: destPair.target_language,
+        front:           c.front,   // placeholder: original source word
+        back:            c.back,    // placeholder: original basis-language meaning
+        hints:           [],
+        position:        basePosition + i,
+      })))
+      .select('id')
+    if (insertErr) {
+      console.error('[sync] stub insert error', insertErr.message)
+      return
+    }
 
-    const batchResults = await Promise.all(batch.map(async (card): Promise<boolean> => {
-      try {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-          method:  'POST',
-          headers: {
-            'content-type':      'application/json',
-            'x-api-key':         apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model:      ANTHROPIC_MODEL,
-            max_tokens: 300,
-            messages:   [{ role: 'user', content: buildPrompt(
-              card.front, card.back,
-              src.source_language,
-              destPair.source_language,
-              destPair.target_language,
-            )}],
-          }),
+    const createdCards = (created ?? []) as Array<{ id: string }>
+
+    // Link stubs to the synced deck
+    await db.from('deck_cards').upsert(
+      createdCards.map((c, i) => ({
+        deck_id:  infra.deckId,
+        card_id:  c.id,
+        position: basePosition + i,
+      })),
+      { onConflict: 'deck_id,card_id', ignoreDuplicates: true },
+    )
+
+    // Create pending sync links (source word stored for Phase 2 to use)
+    const linkRows = createdCards.flatMap((stubCard, i) => {
+      const srcCard = toSync[i]
+      if (!srcCard) return []
+      return [{
+        user_id:              userId,
+        source_card_id:       srcCard.id,
+        synced_card_id:       stubCard.id,
+        source_pair_id:       src.id,
+        destination_pair_id:  destPair.id,
+        sync_rule_id:         rule.id,
+        source_front_at_sync: srcCard.front,   // "el perro" — used by Phase 2
+        source_back_at_sync:  srcCard.back,    // "dog"
+        generated_front:      '',  // NOT NULL in schema; filled by Phase 2
+        generated_back:       '',  // NOT NULL in schema; filled by Phase 2
+        confidence:           null,
+        warning:              null,
+        status:               'pending',
+      }]
+    })
+    await db.from('synced_card_links').upsert(
+      linkRows,
+      { onConflict: 'source_card_id,destination_pair_id', ignoreDuplicates: true },
+    )
+
+    totalPending += createdCards.length
+  }))
+
+  return { pendingCount: totalPending }
+}
+
+// ── Phase 2: Fill translations (one batch of Anthropic calls) ─────────────────
+
+/**
+ * Translates up to FILL_BATCH pending stub cards. Reads the stored original
+ * word from `synced_card_links.source_front_at_sync`, calls Anthropic, and
+ * updates the card's front/back in-place. Returns remaining pending count.
+ */
+export async function fillPendingBatch(userId: string): Promise<{ filled: number; remaining: number }> {
+  const db     = createAdminClient()
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return { filled: 0, remaining: 0 }
+
+  // Fetch next batch of pending links
+  const { data: pending } = await db
+    .from('synced_card_links')
+    .select('id, synced_card_id, source_pair_id, destination_pair_id, source_front_at_sync, source_back_at_sync')
+    .eq('user_id', userId)
+    .eq('status', 'pending')
+    .not('synced_card_id', 'is', null)
+    .limit(FILL_BATCH)
+
+  if (!pending || pending.length === 0) return { filled: 0, remaining: 0 }
+
+  const { data: pairsData } = await db
+    .from('language_pairs')
+    .select('id, source_language, target_language')
+    .eq('owner_id', userId)
+  const pairs = (pairsData ?? []) as PairRow[]
+
+  // Translate all FILL_BATCH links in parallel
+  const results = await Promise.all(pending.map(async (link: {
+    id: string
+    synced_card_id: string
+    source_pair_id: string
+    destination_pair_id: string
+    source_front_at_sync: string
+    source_back_at_sync: string
+  }) => {
+    const srcPair  = pairs.find(p => p.id === link.source_pair_id)
+    const destPair = pairs.find(p => p.id === link.destination_pair_id)
+    if (!srcPair || !destPair) return false
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method:  'POST',
+        headers: {
+          'content-type':      'application/json',
+          'x-api-key':         apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model:      ANTHROPIC_MODEL,
+          max_tokens: 300,
+          messages:   [{ role: 'user', content: buildTranslationPrompt(
+            link.source_front_at_sync,
+            link.source_back_at_sync,
+            srcPair.source_language,
+            destPair.source_language,
+            destPair.target_language,
+          )}],
+        }),
+      })
+
+      if (!res.ok) return false
+
+      const data  = await res.json()
+      const text: string = data?.content?.[0]?.text ?? ''
+      const match = /\{[\s\S]*\}/.exec(text)
+      if (!match) return false
+      let parsed: Record<string, unknown>
+      try { parsed = JSON.parse(match[0]) } catch { return false }
+      if (typeof parsed.front !== 'string' || typeof parsed.back !== 'string') return false
+
+      const newFront = (parsed.front as string).trim()
+      const newBack  = (parsed.back  as string).trim()
+      if (!newFront || !newBack) return false
+
+      // Update the stub card with the real translation
+      await db.from('cards')
+        .update({ front: newFront, back: newBack })
+        .eq('id', link.synced_card_id)
+
+      // Mark the link as active
+      await db.from('synced_card_links')
+        .update({
+          generated_front: newFront,
+          generated_back:  newBack,
+          confidence:      typeof parsed.confidence === 'number' ? parsed.confidence : null,
+          warning:         typeof parsed.warning    === 'string' && parsed.warning   ? parsed.warning : null,
+          status:          'active',
         })
-        if (!res.ok) return false
+        .eq('id', link.id)
 
-        const data  = await res.json()
-        const text: string = data?.content?.[0]?.text ?? ''
-        const match = /\{[\s\S]*\}/.exec(text)
-        if (!match) return false
-        let parsed: Record<string, unknown>
-        try { parsed = JSON.parse(match[0]) } catch { return false }
-        if (typeof parsed.front !== 'string' || typeof parsed.back !== 'string') return false
-
-        const generatedFront = (parsed.front as string).trim()
-        const generatedBack  = (parsed.back  as string).trim()
-        const confidence     = typeof parsed.confidence === 'number' ? parsed.confidence : null
-        const warning        = typeof parsed.warning    === 'string' && parsed.warning ? parsed.warning : null
-
-        const nf        = normFront(generatedFront)
-        const duplicate = destCards.find(c => normFront(c.front) === nf)
-        let syncedCardId: string | null = null
-
-        if (duplicate) {
-          syncedCardId = duplicate.id
-          await db.from('deck_cards').upsert(
-            { deck_id: infra.deckId, card_id: duplicate.id, position: nextPos++ },
-            { onConflict: 'deck_id,card_id', ignoreDuplicates: true },
-          )
-        } else if (!destFronts.has(nf)) {
-          destFronts.add(nf)
-          const pos = nextPos++
-          const { data: created, error: createErr } = await db
-            .from('cards')
-            .insert({
-              owner_id:        userId,
-              source_language: destPair.source_language,
-              target_language: destPair.target_language,
-              front:           generatedFront,
-              back:            generatedBack,
-              hints:           [],
-              position:        pos,
-            })
-            .select('id, front, back').single()
-          if (!createErr && created) {
-            syncedCardId = created.id as string
-            destCards.push({ id: created.id as string, front: generatedFront, back: generatedBack })
-            await db.from('deck_cards').upsert(
-              { deck_id: infra.deckId, card_id: created.id, position: pos },
-              { onConflict: 'deck_id,card_id', ignoreDuplicates: true },
-            )
-          }
-        } else {
-          // Duplicate detected in-flight — treat as success (card already exists)
-          syncedCardId = destCards.find(c => normFront(c.front) === nf)?.id ?? null
-        }
-
-        await db.from('synced_card_links').upsert({
-          user_id:              userId,
-          source_card_id:       card.id,
-          synced_card_id:       syncedCardId,
-          source_pair_id:       src.id,
-          destination_pair_id:  rule.destination_pair_id,
-          sync_rule_id:         rule.id,
-          source_front_at_sync: card.front,
-          source_back_at_sync:  card.back,
-          generated_front:      generatedFront,
-          generated_back:       generatedBack,
-          confidence,
-          warning,
-          status: 'active',
-        }, { onConflict: 'source_card_id,destination_pair_id' })
-
-        return true
-      } catch (err) {
-        console.error('syncProcessor: failed for card', card.front, 'to', destPair.source_language, err)
-        return false
-      }
-    }))
-
-    // Track which cards succeeded/failed for this destination
-    for (let i = 0; i < batch.length; i++) {
-      if (batchResults[i]) {
-        allSuccessIds.add(batch[i]!.id)
-      } else {
-        failedIds.add(batch[i]!.id)
-      }
+      return true
+    } catch (err) {
+      console.error('[sync] fill failed for card', link.source_front_at_sync, err)
+      return false
     }
   }))
 
-  // A card is "failed" only if it failed in ALL destination languages
-  const successCards = batch.filter(c => allSuccessIds.has(c.id))
-  const failedCards  = batch.filter(c => !allSuccessIds.has(c.id))
-  return { successCards, failedCards }
+  const filled = results.filter(Boolean).length
+
+  // Count remaining pending links for this user
+  const { count } = await db
+    .from('synced_card_links')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('status', 'pending')
+    .not('synced_card_id', 'is', null)
+
+  return { filled, remaining: count ?? 0 }
 }
