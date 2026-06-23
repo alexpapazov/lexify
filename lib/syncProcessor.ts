@@ -12,6 +12,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { langName }          from '@/lib/languages'
 
 export const BATCH_SIZE = 5
+export const SYNC_FOLDER_NAME = 'SYNCED VOCABULARY'
 
 const DEFAULT_PIPELINE_ID = '00000000-0000-0000-0000-000000000001'
 const ANTHROPIC_MODEL     = 'claude-haiku-4-5-20251001'
@@ -96,20 +97,22 @@ async function ensureInfra(
     .maybeSingle()
   if (existing) return { deckId: existing.deck_id as string }
 
-  const { data: sibling } = await db
-    .from('language_sync_state')
-    .select('root_folder_id')
-    .eq('user_id', userId)
-    .eq('destination_pair_id', destPair.id)
-    .limit(1).maybeSingle()
+  // Find the single shared "SYNCED VOCABULARY" folder, or create it
+  const { data: existingFolder } = await db
+    .from('folders')
+    .select('id')
+    .eq('owner_id', userId)
+    .eq('name', SYNC_FOLDER_NAME)
+    .is('deleted_at', null)
+    .maybeSingle()
 
   let rootFolderId: string
-  if (sibling) {
-    rootFolderId = sibling.root_folder_id as string
+  if (existingFolder) {
+    rootFolderId = existingFolder.id as string
   } else {
     const { data: folder, error: folderErr } = await db
       .from('folders')
-      .insert({ owner_id: userId, name: 'Synced', parent_id: null })
+      .insert({ owner_id: userId, name: SYNC_FOLDER_NAME, parent_id: null })
       .select().single()
     if (folderErr) throw new Error(folderErr.message)
     rootFolderId = folder.id as string

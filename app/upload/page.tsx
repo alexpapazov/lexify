@@ -417,6 +417,11 @@ export default function UploadPage() {
       if (creatingFolder) {
         const name = newFolderName.trim()
         if (name) {
+          if (name.toUpperCase() === 'SYNCED VOCABULARY') {
+            setError('"SYNCED VOCABULARY" is reserved for automatically synced cards.')
+            setSaving(false)
+            return
+          }
           const folderRepo = new SupabaseFolderRepository()
           const newFolder  = await folderRepo.create(session.user.id, name, null)
           folderId = newFolder.id

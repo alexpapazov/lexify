@@ -388,6 +388,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   async function handleAddFolder() {
     const name = newName.trim()
     if (!name || !userId) return
+    if (name.toUpperCase() === 'SYNCED VOCABULARY') {
+      alert('"SYNCED VOCABULARY" is reserved for automatically synced cards.')
+      return
+    }
     const folderRepo = new SupabaseFolderRepository()
     await folderRepo.create(userId, name, null)
     setNewName('')
