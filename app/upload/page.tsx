@@ -3,11 +3,14 @@
 import { useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { SupabaseDeckRepository }          from '@/lib/data/decks'
-import { SupabaseCardRepository }          from '@/lib/data/cards'
-import { SupabasePipelineRepository }      from '@/lib/data/pipelines'
-import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
-import { SupabaseFolderRepository }        from '@/lib/data/folders'
+import { SupabaseDeckRepository }              from '@/lib/data/decks'
+import { SupabaseCardRepository }              from '@/lib/data/cards'
+import { SupabasePipelineRepository }          from '@/lib/data/pipelines'
+import { SupabaseDismissedPairRepository }     from '@/lib/data/dismissedPairs'
+import { SupabaseFolderRepository }            from '@/lib/data/folders'
+import { SupabaseLanguageSyncRuleRepository }  from '@/lib/data/languageSyncRules'
+import { SupabaseLanguagePairRepository }      from '@/lib/data/languagePairs'
+import { autoSyncNewCards }                    from '@/lib/autoSync'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { folderMatchesPair } from '@/lib/folderStats'
@@ -234,6 +237,10 @@ export default function UploadPage() {
   const [creatingFolder,   setCreatingFolder]   = useState(false)
   const [newFolderName,    setNewFolderName]    = useState('')
 
+  // Sync checkbox (shown on the preview stage when rules exist)
+  const [hasSyncRules, setHasSyncRules] = useState(false)
+  const [syncEnabled,  setSyncEnabled]  = useState(true)
+
   const router   = useRouter()
   const supabase = createClient()
 
@@ -355,18 +362,26 @@ export default function UploadPage() {
     void loadFolderOptions()
   }
 
-  /** Load this user's folders/decks so the preview stage can offer a folder picker scoped to the current language pairing. */
+  /** Load this user's folders/decks and sync rules for the preview stage. */
   async function loadFolderOptions() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     const folderRepo = new SupabaseFolderRepository()
     const deckRepo   = new SupabaseDeckRepository()
-    const [allFolders, allDecks] = await Promise.all([
+    const pairRepo   = new SupabaseLanguagePairRepository()
+    const ruleRepo   = new SupabaseLanguageSyncRuleRepository()
+    const [allFolders, allDecks, allPairs, allRules] = await Promise.all([
       folderRepo.list(session.user.id),
       deckRepo.list(session.user.id),
+      pairRepo.list(session.user.id),
+      ruleRepo.listForUser(session.user.id),
     ])
     setFolders(allFolders)
     setDecksForFolders(allDecks)
+    const sourcePair = allPairs.find(p => p.sourceLanguage === targetLang && p.targetLanguage === basisLang)
+    const hasRules = sourcePair ? allRules.some(r => r.enabled && r.sourcePairId === sourcePair.id) : false
+    setHasSyncRules(hasRules)
+    setSyncEnabled(hasRules)
   }
 
   function updatePreviewItem(i: number, patch: Partial<PreviewItem>) {
@@ -438,6 +453,10 @@ export default function UploadPage() {
             await cardRepo.softDelete(it.duplicate.existingCard.id)
           }
         }
+      }
+
+      if (syncEnabled && created.length > 0) {
+        void autoSyncNewCards(session.user.id, targetLang, basisLang, created)
       }
 
       // Kick off background generation of AI answer choices for newly created cards.
@@ -678,11 +697,24 @@ export default function UploadPage() {
           )
         })()}
 
-        <div className="flex gap-3">
-          <button className="btn-primary" disabled={previewItems.length === 0 || saving} onClick={handleSaveDeck}>
-            {saving ? 'Saving…' : saveLabel}
-          </button>
-          <button className="btn-ghost" disabled={saving} onClick={() => setStage('edit')}>Back</button>
+        <div className="flex flex-col gap-3">
+          {hasSyncRules && (
+            <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-ink-muted">
+              <input
+                type="checkbox"
+                checked={syncEnabled}
+                onChange={e => setSyncEnabled(e.target.checked)}
+                className="accent-accent w-4 h-4"
+              />
+              Sync to other languages
+            </label>
+          )}
+          <div className="flex gap-3">
+            <button className="btn-primary" disabled={previewItems.length === 0 || saving} onClick={handleSaveDeck}>
+              {saving ? 'Saving…' : saveLabel}
+            </button>
+            <button className="btn-ghost" disabled={saving} onClick={() => setStage('edit')}>Back</button>
+          </div>
         </div>
       </div>
     )
