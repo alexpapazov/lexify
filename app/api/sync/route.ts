@@ -1,19 +1,19 @@
 /**
  * POST /api/sync
  *
- * Processes ONE batch of BATCH_SIZE cards per invocation, then self-chains.
- * Each call completes in ~3-4 s — safely under Vercel Hobby's 10-second limit.
+ * Processes ONE batch of BATCH_SIZE cards per invocation, then self-chains
+ * for the remaining cards. Each call completes in ~3-4 s (parallel Anthropic
+ * calls for all destination languages) — safely under Vercel Hobby's 10 s limit.
  *
  * Flow:
  *   1. Respond immediately (< 1 ms).
  *   2. In after():
  *      a. Process cards[0..BATCH_SIZE] via processSyncBatch.
- *      b. If remaining + failed cards exist → trigger same-language continuation.
- *      c. For each cascade hop → trigger new language hop immediately.
+ *         → Translates to ALL destination languages at once (BFS through rules).
+ *      b. If remaining + failed cards exist → trigger continuation (same payload).
  *
- * No artificial delays between hops — Vercel Hobby's 6-concurrent-function limit
- * is the binding constraint; keeping invocations short (<4 s each) lets up to
- * 5 language levels run in parallel without exceeding that limit.
+ * No cascade hops. All language levels are translated directly from the source
+ * cards in each batch, keeping max concurrent invocations = 1 at a time.
  *
  * Auth:
  *   - Client calls:         Authorization: Bearer <supabase-jwt>
@@ -26,7 +26,6 @@ import {
   processSyncBatch,
   BATCH_SIZE,
   type SyncPayload,
-  type NextHop,
 } from '@/lib/syncProcessor'
 
 export const runtime     = 'nodejs'
@@ -41,15 +40,15 @@ function getOrigin(req: Request): string {
   return `${proto}://${host}`
 }
 
-async function triggerHop(origin: string, hop: SyncPayload): Promise<void> {
+async function triggerContinuation(origin: string, payload: SyncPayload): Promise<void> {
   await fetch(`${origin}/api/sync`, {
     method:  'POST',
     headers: {
       'content-type':  'application/json',
       'x-sync-secret': INTERNAL_SECRET,
     },
-    body: JSON.stringify(hop),
-  }).catch(err => console.error('sync: failed to trigger hop', err))
+    body: JSON.stringify(payload),
+  }).catch(err => console.error('[sync] failed to trigger continuation', err))
 }
 
 export async function POST(req: Request) {
@@ -59,7 +58,7 @@ export async function POST(req: Request) {
   const internalSecret = req.headers.get('x-sync-secret')
 
   if (internalSecret) {
-    // ── Server-to-server hop ──────────────────────────────────────────────────
+    // ── Server-to-server continuation ────────────────────────────────────────
     if (internalSecret !== INTERNAL_SECRET) {
       return Response.json({ ok: false }, { status: 401 })
     }
@@ -80,7 +79,7 @@ export async function POST(req: Request) {
     }
     userId  = user.id
     const body = await req.json()
-    payload = { ...body, userId, visited: [], failCounts: {}, isChainHop: false } as SyncPayload
+    payload = { ...body, userId, failCounts: {} } as SyncPayload
   }
 
   if (!payload.cards || payload.cards.length === 0) {
@@ -91,14 +90,13 @@ export async function POST(req: Request) {
 
   after(async () => {
     console.log('[sync] after() invoked', {
-      userId:      payload.userId.slice(0, 8),
-      cards:       payload.cards.length,
-      src:         `${payload.sourceLanguage}:${payload.targetLanguage}`,
-      isChainHop:  !!payload.isChainHop,
+      userId:  payload.userId.slice(0, 8),
+      cards:   payload.cards.length,
+      src:     `${payload.sourceLanguage}:${payload.targetLanguage}`,
     })
     try {
-      const { failedCards, nextHops } = await processSyncBatch(payload)
-      console.log('[sync] batch done', { failed: failedCards.length, nextHops: nextHops.length })
+      const { failedCards } = await processSyncBatch(payload)
+      console.log('[sync] batch done', { failed: failedCards.length })
 
       // Update fail counts; drop cards that have failed too many times
       const failCounts: Record<string, number> = { ...(payload.failCounts ?? {}) }
@@ -108,27 +106,19 @@ export async function POST(req: Request) {
         return count < MAX_CARD_FAILS
       })
 
-      // Continue this language with the remaining + failed cards
-      const remaining  = payload.cards.slice(BATCH_SIZE)
-      const nextCards  = [...remaining, ...retryable]
+      const remaining = payload.cards.slice(BATCH_SIZE)
+      const nextCards = [...remaining, ...retryable]
       if (nextCards.length > 0) {
-        await triggerHop(origin, {
+        await triggerContinuation(origin, {
           userId:         payload.userId,
           sourceLanguage: payload.sourceLanguage,
           targetLanguage: payload.targetLanguage,
           cards:          nextCards,
-          visited:        payload.visited,
           failCounts,
-          isChainHop:     false,
         })
       }
-
-      // Cascade to new languages
-      for (const hop of nextHops) {
-        await triggerHop(origin, hop as NextHop)
-      }
     } catch (err) {
-      console.error('sync after() error:', err)
+      console.error('[sync] after() error:', err)
     }
   })
 
