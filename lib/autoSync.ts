@@ -3,15 +3,18 @@
 /**
  * lib/autoSync.ts
  *
- * Triggers language syncing automatically when cards are created.
- * Called fire-and-forget from the add-cards page after bulkCreate.
+ * Fires language syncing when the user checks "Sync to other languages" at upload time.
+ * Called fire-and-forget from handleCommit() in app/study/[deckId]/add/page.tsx.
  *
- * For each enabled sync rule where:
- *   - source_pair matches the deck's language direction
- *   - trigger = 'on_card_created'
+ * Supports transitive (cascading) sync:
+ *   French upload → French→Spanish rule → Spanish cards created
+ *                → Spanish→Russian rule → Russian cards created
  *
- * In 'auto' mode: translate + deduplicate + create card in dest deck.
- * In 'review_first' mode: translate + record pending link (no card created yet).
+ * The _visited set (pairKey = `${sourceLanguage}:${targetLanguage}`) prevents
+ * infinite loops (e.g. Spanish→French→Spanish→…).
+ *
+ * Cascade only happens for 'auto' mode rules — 'review_first' records a
+ * pending link but creates no card, so there is nothing to cascade from.
  */
 
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
@@ -30,8 +33,14 @@ export async function autoSyncNewCards(
   deckSourceLanguage: string,
   deckTargetLanguage: string,
   cards: Card[],
+  _visited: Set<string> = new Set(),
 ): Promise<void> {
   if (cards.length === 0) return
+
+  // Prevent re-entering the same source language pair (loop guard)
+  const pairKey = `${deckSourceLanguage}:${deckTargetLanguage}`
+  if (_visited.has(pairKey)) return
+  _visited.add(pairKey)
 
   const pairRepo = new SupabaseLanguagePairRepository()
   const ruleRepo = new SupabaseLanguageSyncRuleRepository()
@@ -54,17 +63,21 @@ export async function autoSyncNewCards(
     const destPair = allPairs.find(p => p.id === rule.destinationPairId)
     if (!destPair) continue
 
+    // Skip if we've already visited this destination as a source (loop guard)
+    const destKey = `${destPair.sourceLanguage}:${destPair.targetLanguage}`
+    if (_visited.has(destKey)) continue
+
     // Ensure folder + deck infrastructure exists
     const infra = await ensureSyncInfra(userId, sourcePair, destPair)
 
     // Load all cards the user already owns in the dest language direction
-    // (used for duplicate detection and positioning)
     const destCards = await cardRepo.listOwned(userId, destPair.sourceLanguage, destPair.targetLanguage)
     const destFronts = new Set(destCards.map(c => normFront(c.front)))
     let nextPosition = destCards.length
 
-    // Process all cards for this rule in parallel
-    await Promise.all(cards.map(async (card) => {
+    // Translate and create/link all source cards in parallel.
+    // Returns the Card that ended up in the dest deck (new or reused), or null on failure.
+    const destCardsCreated = (await Promise.all(cards.map(async (card): Promise<Card | null> => {
       try {
         // Translate
         const res = await fetch('/api/sync-translate', {
@@ -81,23 +94,25 @@ export async function autoSyncNewCards(
         const data = await res.json()
         if (!data.ok) {
           console.error('autoSync: translation failed for', card.front, data.reason)
-          return
+          return null
         }
 
-        const generatedFront: string = data.front
-        const generatedBack:  string = data.back
-        const confidence: number | null = data.confidence ?? null
-        const warning:    string | null = data.warning    ?? null
+        const generatedFront: string      = data.front
+        const generatedBack:  string      = data.back
+        const confidence: number | null   = data.confidence ?? null
+        const warning:    string | null   = data.warning    ?? null
 
         let syncedCardId: string | null = null
+        let resultCard:   Card  | null = null
 
         if (rule.mode === 'auto') {
           const nf = normFront(generatedFront)
           const duplicate = destCards.find(c => normFront(c.front) === nf)
 
           if (duplicate) {
-            // Reuse existing card — add it to the dest deck without creating a duplicate
+            // Reuse existing card — add to dest deck, no new row
             syncedCardId = duplicate.id
+            resultCard   = duplicate
             await cardRepo.addToDeck(infra.deckId, duplicate.id, nextPosition++)
           } else if (!destFronts.has(nf)) {
             // No duplicate — create new card
@@ -110,6 +125,7 @@ export async function autoSyncNewCards(
             )
             if (created) {
               syncedCardId = created.id
+              resultCard   = created
               destCards.push(created)
             }
           }
@@ -131,10 +147,25 @@ export async function autoSyncNewCards(
           warning,
           status: rule.mode === 'auto' ? 'active' : 'pending',
         })
+
+        return resultCard
       } catch (err) {
         console.error('autoSync: failed for card', card.front, err)
+        return null
       }
-    }))
-  }
+    }))).filter((c): c is Card => c !== null)
 
+    // Cascade: sync the newly created dest cards into further language pairs.
+    // Only 'auto' mode produces real cards to cascade from.
+    // _visited is passed by reference so loops are prevented across all branches.
+    if (rule.mode === 'auto' && destCardsCreated.length > 0) {
+      await autoSyncNewCards(
+        userId,
+        destPair.sourceLanguage,
+        destPair.targetLanguage,
+        destCardsCreated,
+        _visited,
+      )
+    }
+  }
 }

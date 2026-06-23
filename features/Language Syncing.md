@@ -130,13 +130,26 @@ The checkbox is only rendered when the deck's source language pair has at least 
 When the user clicks "Add N cards" with the checkbox checked, `handleCommit()` calls `autoSyncNewCards()` fire-and-forget after `cardRepo.bulkCreate()`. The page redirects immediately; syncing runs in the background.
 
 `autoSyncNewCards()` in `lib/autoSync.ts`:
-1. Finds the language pair matching the deck's source/target language codes
-2. Filters all **enabled** rules for that source pair (trigger field is ignored here — all enabled rules apply)
-3. For each matching rule:
+1. Checks the `_visited` set (keyed by `${sourceLanguage}:${targetLanguage}`). If this pair has already been processed in this call chain, returns immediately to prevent loops.
+2. Adds the current pair to `_visited`, then finds the language pair matching the deck's source/target language codes.
+3. Filters all **enabled** rules for that source pair (trigger field is ignored — all enabled rules apply).
+4. For each matching rule, skips if the destination pair key is already in `_visited`, then:
    - Calls `ensureSyncInfra()` to get/create the dest folder and deck
    - Loads all existing dest cards for duplicate detection
    - Translates all new cards **in parallel** via `Promise.all`
    - For each translation: check for duplicate → create or reuse card (if mode = `auto`) → upsert link
+   - Collects the list of dest cards that were created or reused
+5. **Cascades**: if the rule's mode is `auto` and dest cards were created, immediately calls `autoSyncNewCards()` recursively with those dest cards and the destination pair's languages. Passes the same `_visited` set so the loop guard remains effective across the full chain.
+
+**Cascading example:**
+```
+User uploads French cards (French→English pair)
+  French→Spanish rule fires → creates Spanish cards
+    Spanish→Russian rule fires → creates Russian cards
+      (no further rules for Russian → done)
+```
+
+**Loop prevention:** `_visited` is passed by reference through the recursion. The first time a source pair is processed, its key is added. Any later rule that would cascade back to an already-processed pair is skipped. This prevents A→B→A infinite loops regardless of how many rules the user has configured.
 
 ### Manual — per card
 
@@ -193,3 +206,4 @@ One rule per direction is enforced by the database UNIQUE constraint. The UI pre
 | 2026-06-22 | Folder structure created an unnecessary sub-folder (`synced / Spanish / Synced from Spanish deck`) | Removed sub-folder layer; deck named after source language now lives directly inside "Synced"; `sub_folder_id = root_folder_id` in `language_sync_state` |
 | 2026-06-22 | Auto-sync on card creation never fired — `on_card_created` trigger had no implementation | Created `lib/autoSync.ts` and wired `autoSyncNewCards()` fire-and-forget into `handleCommit()` in the add-cards page |
 | 2026-06-22 | Sync fired automatically on every upload with no user control | Replaced automatic trigger with an explicit "Sync to other languages" checkbox (checked by default) at the bottom of the add-cards review stage; checkbox only shown when the deck's source pair has enabled rules |
+| 2026-06-22 | Sync did not cascade — French→Spanish synced but Spanish→Russian rule was never invoked for the synced Spanish cards | Rewrote `autoSyncNewCards()` to collect dest cards per rule and recursively call itself with those cards; added `_visited: Set<string>` loop guard (keyed by `${sourceLanguage}:${targetLanguage}`) to prevent infinite recursion |
