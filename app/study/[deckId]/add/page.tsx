@@ -27,7 +27,6 @@ import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langName } from '@/lib/languages'
-import { autoSyncNewCards } from '@/lib/autoSync'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
   estimateCardCount, analyzeDuplicate, type DuplicateAnalysis,
@@ -250,9 +249,23 @@ export default function AddCardsPage() {
           specs.map(s => ({ front: s.front, back: s.back, position: position++ })),
         )
 
-        // Trigger language sync in the background (fire-and-forget) if enabled
+        // Trigger language sync server-side (survives tab switching / browser close)
         if (syncEnabled) {
-          void autoSyncNewCards(userId, deck.sourceLanguage, deck.targetLanguage, created)
+          const { data: { session: syncSession } } = await supabase.auth.getSession()
+          if (syncSession) {
+            void fetch('/api/sync', {
+              method:  'POST',
+              headers: {
+                'content-type':  'application/json',
+                'authorization': `Bearer ${syncSession.access_token}`,
+              },
+              body: JSON.stringify({
+                sourceLanguage: deck.sourceLanguage,
+                targetLanguage: deck.targetLanguage,
+                cards: created.map(c => ({ id: c.id, front: c.front, back: c.back })),
+              }),
+            })
+          }
         }
 
         // Persist dismissed-pair choices.

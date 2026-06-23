@@ -10,7 +10,6 @@ import { SupabaseDismissedPairRepository }     from '@/lib/data/dismissedPairs'
 import { SupabaseFolderRepository }            from '@/lib/data/folders'
 import { SupabaseLanguageSyncRuleRepository }  from '@/lib/data/languageSyncRules'
 import { SupabaseLanguagePairRepository }      from '@/lib/data/languagePairs'
-import { autoSyncNewCards }                    from '@/lib/autoSync'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { folderMatchesPair } from '@/lib/folderStats'
@@ -455,8 +454,20 @@ export default function UploadPage() {
         }
       }
 
+      // Trigger language sync server-side (survives tab switching / browser close)
       if (syncEnabled && created.length > 0) {
-        void autoSyncNewCards(session.user.id, targetLang, basisLang, created)
+        void fetch('/api/sync', {
+          method:  'POST',
+          headers: {
+            'content-type':  'application/json',
+            'authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            sourceLanguage: targetLang,
+            targetLanguage: basisLang,
+            cards: created.map(c => ({ id: c.id, front: c.front, back: c.back })),
+          }),
+        })
       }
 
       // Kick off background generation of AI answer choices for newly created cards.
