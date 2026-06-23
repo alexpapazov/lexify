@@ -77,6 +77,17 @@ Return ONLY a JSON object, no other text:
 }`
 }
 
+const SYNC_HINT_PREFIX = '__sync_source:'
+
+function makeSyncHint(fromLang: string, front: string, back: string): string {
+  return `${SYNC_HINT_PREFIX}${JSON.stringify({ fromLang, front, back })}`
+}
+
+function parseSyncHint(hint: string): { fromLang: string; front: string; back: string } | null {
+  if (!hint.startsWith(SYNC_HINT_PREFIX)) return null
+  try { return JSON.parse(hint.slice(SYNC_HINT_PREFIX.length)) } catch { return null }
+}
+
 // ── Infra (per-destination-pair folder + deck) ────────────────────────────────
 
 interface PairRow { id: string; source_language: string; target_language: string }
@@ -235,16 +246,17 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
       .is('deleted_at', null)
     const basePosition = existingCount ?? 0
 
-    // Bulk-insert stub cards (source word as placeholder front/back)
+    // Bulk-insert blank stub cards. The original source word is stored as a
+    // hidden hint entry so Phase 2 can translate it — front/back start empty.
     const { data: created, error: insertErr } = await db
       .from('cards')
       .insert(toSync.map((c, i) => ({
         owner_id:        userId,
         source_language: destPair.source_language,
         target_language: destPair.target_language,
-        front:           c.front,   // placeholder: original source word
-        back:            c.back,    // placeholder: original basis-language meaning
-        hints:           [],
+        front:           '',   // blank until Phase 2 fills in the real translation
+        back:            '',
+        hints:           [makeSyncHint(src.source_language, c.front, c.back)],
         position:        basePosition + i,
       })))
       .select('id')
@@ -296,26 +308,27 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
   return { pendingCount: totalPending }
 }
 
-// ── Phase 2: Fill translations (one batch of Anthropic calls) ─────────────────
+// ── Phase 2: Fill translations (all pending at once) ─────────────────────────
 
 /**
- * Translates up to FILL_BATCH pending stub cards. Reads the stored original
- * word from `synced_card_links.source_front_at_sync`, calls Anthropic, and
- * updates the card's front/back in-place. Returns remaining pending count.
+ * Translates ALL pending stub cards for this user simultaneously.
+ * Each card independently calls Anthropic using the source word stored in
+ * its hidden `__sync_source:` hint. On success: fills in the real front/back,
+ * removes the hidden hint, and marks the link active. Returns remaining count
+ * (non-zero only if some calls failed and need a retry pass).
  */
-export async function fillPendingBatch(userId: string): Promise<{ filled: number; remaining: number }> {
+export async function fillAllPending(userId: string): Promise<{ filled: number; remaining: number }> {
   const db     = createAdminClient()
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return { filled: 0, remaining: 0 }
 
-  // Fetch next batch of pending links
+  // Fetch ALL pending links for this user (no limit — all run in parallel)
   const { data: pending } = await db
     .from('synced_card_links')
     .select('id, synced_card_id, source_pair_id, destination_pair_id, source_front_at_sync, source_back_at_sync')
     .eq('user_id', userId)
     .eq('status', 'pending')
     .not('synced_card_id', 'is', null)
-    .limit(FILL_BATCH)
 
   if (!pending || pending.length === 0) return { filled: 0, remaining: 0 }
 
@@ -325,7 +338,7 @@ export async function fillPendingBatch(userId: string): Promise<{ filled: number
     .eq('owner_id', userId)
   const pairs = (pairsData ?? []) as PairRow[]
 
-  // Translate all FILL_BATCH links in parallel
+  // Every pending card calls the AI independently and simultaneously
   const results = await Promise.all(pending.map(async (link: {
     id: string
     synced_card_id: string
@@ -373,12 +386,21 @@ export async function fillPendingBatch(userId: string): Promise<{ filled: number
       const newBack  = (parsed.back  as string).trim()
       if (!newFront || !newBack) return false
 
-      // Update the stub card with the real translation
+      // Read current hints so we can strip the hidden source hint
+      const { data: cardRow } = await db
+        .from('cards')
+        .select('hints')
+        .eq('id', link.synced_card_id)
+        .single()
+      const hints: string[] = ((cardRow?.hints as string[] | null) ?? [])
+        .filter((h: string) => !h.startsWith(SYNC_HINT_PREFIX))
+
+      // Fill in the real front/back and remove the hidden hint
       await db.from('cards')
-        .update({ front: newFront, back: newBack })
+        .update({ front: newFront, back: newBack, hints })
         .eq('id', link.synced_card_id)
 
-      // Mark the link as active
+      // Mark the link active
       await db.from('synced_card_links')
         .update({
           generated_front: newFront,
@@ -391,14 +413,13 @@ export async function fillPendingBatch(userId: string): Promise<{ filled: number
 
       return true
     } catch (err) {
-      console.error('[sync] fill failed for card', link.source_front_at_sync, err)
+      console.error('[sync] fill failed for', link.source_front_at_sync, err)
       return false
     }
   }))
 
   const filled = results.filter(Boolean).length
 
-  // Count remaining pending links for this user
   const { count } = await db
     .from('synced_card_links')
     .select('*', { count: 'exact', head: true })
