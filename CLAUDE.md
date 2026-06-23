@@ -5,6 +5,24 @@ chat sessions. Read it at the start of any session touching this codebase.
 Update it (briefly) whenever you ship a feature or learn something a future
 session would need.
 
+## Feature documentation
+
+Detailed explanations of how each major feature works live in `features/`.
+**Before changing any feature that has a file there, read it in full.**
+**After making changes, update the file to reflect what changed.**
+Each file also contains an error log — add any bugs found and fixed to it.
+Current feature files:
+
+- `features/Learning Pipeline.md` — how a card moves from unlearned to
+  graduated: the 5-step pipeline, same-day window, typing mistake streak,
+  I-don't-know penalty, session queue building
+- `features/Due Now.md` — post-graduation spaced repetition: interval
+  multipliers, multiplier decay, timing classification (elective/due/very-early),
+  10-minute relearn loop, lapse clustering, production mode (typed vs. self-graded)
+- `features/Language Syncing.md` — auto-generating cards in a second language
+  pair: sync rules, triggers, modes, translation API, duplicate detection,
+  folder/deck infrastructure, manual review flow, settings UI
+
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
 These sessions implemented and **committed/pushed**: TypingMode

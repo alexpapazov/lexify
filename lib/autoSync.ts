@@ -45,13 +45,9 @@ export async function autoSyncNewCards(
   )
   if (!sourcePair) return
 
-  // Find enabled on_card_created rules for this source pair
+  // Find all enabled rules for this source pair
   const allRules = await ruleRepo.listForUser(userId)
-  const rules = allRules.filter(r =>
-    r.enabled &&
-    r.sourcePairId === sourcePair.id &&
-    r.trigger === 'on_card_created'
-  )
+  const rules = allRules.filter(r => r.enabled && r.sourcePairId === sourcePair.id)
   if (rules.length === 0) return
 
   for (const rule of rules) {

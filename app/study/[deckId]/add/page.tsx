@@ -24,6 +24,8 @@ import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
+import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
+import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langName } from '@/lib/languages'
 import { autoSyncNewCards } from '@/lib/autoSync'
 import {
@@ -106,6 +108,9 @@ export default function AddCardsPage() {
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<ReviewItem[]>([])
 
+  const [hasSyncRules, setHasSyncRules] = useState(false)
+  const [syncEnabled,  setSyncEnabled]  = useState(true)
+
   useEffect(() => {
     async function load() {
       const { data: { session } } = await supabase.auth.getSession()
@@ -118,12 +123,24 @@ export default function AddCardsPage() {
       if (!d) { router.push('/study'); return }
       setDeck(d)
 
-      const [deckCards, owned] = await Promise.all([
+      const pairRepo = new SupabaseLanguagePairRepository()
+      const ruleRepo = new SupabaseLanguageSyncRuleRepository()
+
+      const [deckCards, owned, allPairs, allRules] = await Promise.all([
         cardRepo.listByDeck(deckId),
         cardRepo.listOwned(session.user.id, d.sourceLanguage, d.targetLanguage),
+        pairRepo.list(session.user.id),
+        ruleRepo.listForUser(session.user.id),
       ])
       setExistingCount(deckCards.length)
       setExistingCards(owned)
+
+      const sourcePair = allPairs.find(
+        p => p.sourceLanguage === d.sourceLanguage && p.targetLanguage === d.targetLanguage
+      )
+      const hasRules = !!sourcePair && allRules.some(r => r.enabled && r.sourcePairId === sourcePair.id)
+      setHasSyncRules(hasRules)
+
       setLoading(false)
     }
     load()
@@ -233,8 +250,10 @@ export default function AddCardsPage() {
           specs.map(s => ({ front: s.front, back: s.back, position: position++ })),
         )
 
-        // Trigger language sync in the background (fire-and-forget)
-        void autoSyncNewCards(userId, deck.sourceLanguage, deck.targetLanguage, created)
+        // Trigger language sync in the background (fire-and-forget) if enabled
+        if (syncEnabled) {
+          void autoSyncNewCards(userId, deck.sourceLanguage, deck.targetLanguage, created)
+        }
 
         // Persist dismissed-pair choices.
         for (let i = 0; i < specs.length; i++) {
@@ -523,13 +542,26 @@ export default function AddCardsPage() {
           </div>
 
           {items.length > 0 && (
-            <div className="flex gap-3">
-              <button className="btn-primary" disabled={includedCount === 0 || stage === 'saving'} onClick={handleCommit}>
-                {stage === 'saving' ? 'Saving…' : `Add ${includedCount} card${includedCount !== 1 ? 's' : ''}`}
-              </button>
-              <button className="btn-ghost" disabled={stage === 'saving'} onClick={() => { setItems([]); setStage('input') }}>
-                Start over
-              </button>
+            <div className="flex items-center gap-4 flex-wrap">
+              <div className="flex gap-3">
+                <button className="btn-primary" disabled={includedCount === 0 || stage === 'saving'} onClick={handleCommit}>
+                  {stage === 'saving' ? 'Saving…' : `Add ${includedCount} card${includedCount !== 1 ? 's' : ''}`}
+                </button>
+                <button className="btn-ghost" disabled={stage === 'saving'} onClick={() => { setItems([]); setStage('input') }}>
+                  Start over
+                </button>
+              </div>
+              {hasSyncRules && (
+                <label className="flex items-center gap-2 cursor-pointer select-none text-sm text-ink-muted">
+                  <input
+                    type="checkbox"
+                    checked={syncEnabled}
+                    onChange={e => setSyncEnabled(e.target.checked)}
+                    className="accent-accent w-4 h-4"
+                  />
+                  Sync to other languages
+                </label>
+              )}
             </div>
           )}
         </div>
