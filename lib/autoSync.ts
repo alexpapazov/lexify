@@ -29,10 +29,11 @@ import { SupabaseCardRepository }              from '@/lib/data/cards'
 import { ensureSyncInfra }                     from '@/lib/syncFolderInfra'
 import type { Card } from '@/domain'
 
-const BATCH_SIZE     = 5
-const BATCH_DELAY_MS = 600   // pause between each batch of 5
-const RETRY_DELAY_MS = 3000  // base delay before a retry pass (multiplied by attempt#)
-const MAX_RETRIES    = 2     // retry failed cards up to 2 more times
+const BATCH_SIZE      = 5
+const BATCH_DELAY_MS  = 1200  // pause between each batch of 5 (~250 RPM)
+const RETRY_BASE_MS   = 10000 // exponential backoff base: 10s, 20s, 40s, 80s, 160s
+const MAX_RETRIES     = 25    // retry failed cards up to 25 more times
+const CHAIN_DELAY_MS  = 8000  // pause before cascading to next language (lets rate limits settle)
 
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms))
@@ -55,7 +56,7 @@ async function runInBatchesWithRetry(
   let pending = [...cards]
 
   for (let attempt = 0; attempt <= MAX_RETRIES && pending.length > 0; attempt++) {
-    if (attempt > 0) await sleep(RETRY_DELAY_MS * attempt)
+    if (attempt > 0) await sleep(Math.min(RETRY_BASE_MS * Math.pow(2, attempt - 1), 300_000))
     const failed: Card[] = []
 
     for (let i = 0; i < pending.length; i += BATCH_SIZE) {
@@ -76,7 +77,7 @@ async function runInBatchesWithRetry(
   }
 
   if (pending.length > 0) {
-    console.warn(`autoSync: ${pending.length} card(s) could not be synced after ${MAX_RETRIES} retries`)
+    console.warn(`autoSync: ${pending.length} card(s) permanently failed after ${MAX_RETRIES} retries`)
   }
 
   return results
@@ -209,8 +210,10 @@ export async function autoSyncNewCards(
     // Run batched + retried translation/creation
     const destCardsCreated = await runInBatchesWithRetry(cards, processOneCard)
 
-    // Cascade: sync newly created dest cards into further language pairs
+    // Cascade: sync newly created dest cards into further language pairs.
+    // Wait before cascading so the rate limit window has a chance to reset.
     if (rule.mode === 'auto' && destCardsCreated.length > 0) {
+      await sleep(CHAIN_DELAY_MS)
       await autoSyncNewCards(
         userId,
         dest.sourceLanguage,
