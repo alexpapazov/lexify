@@ -122,8 +122,8 @@ async function ensureInfra(
     .eq('destination_pair_id', destPair.id)
     .maybeSingle()
 
-  let rootFolderId: string
-  let subFolderId:  string
+  let rootFolderId = ''
+  let subFolderId  = ''
 
   if (existing) {
     const [{ data: root }, { data: sub }] = await Promise.all([
@@ -164,7 +164,57 @@ async function ensureInfra(
       ;({ rootFolderId, subFolderId } = await createSyncFolders(db, userId, srcPair, destPair))
     }
   } else {
-    ;({ rootFolderId, subFolderId } = await createSyncFolders(db, userId, srcPair, destPair))
+    // No state row — look for orphaned infra before creating new folders.
+    //
+    // A previous Phase 1 run may have created folders but failed to save state
+    // (e.g. Vercel timeout, Supabase transient error). Rather than stacking up
+    // duplicate SYNCED VOCABULARY roots, adopt any orphaned root that isn't
+    // already claimed by another dest language's state row.
+    //
+    // NOTE: ensureInfra must be called sequentially (not via Promise.all) so
+    // each dest language claims its own orphan before the next one runs.
+    const subName = `${langName(srcPair.source_language)} / ${langName(srcPair.target_language)}`
+
+    // Which roots are already claimed by state rows for this user?
+    const { data: claimedRows } = await db
+      .from('language_sync_state')
+      .select('root_folder_id')
+      .eq('user_id', userId)
+    const claimedRootIds = new Set(
+      ((claimedRows ?? []) as Array<{ root_folder_id: string }>).map(r => r.root_folder_id)
+    )
+
+    // Unclaimed SYNCED VOCABULARY roots owned by this user
+    const { data: allRootsData } = await db.from('folders')
+      .select('id')
+      .eq('owner_id', userId)
+      .eq('name', SYNC_FOLDER_NAME)
+      .is('deleted_at', null)
+    const unclaimedRootIds = ((allRootsData ?? []) as Array<{ id: string }>)
+      .filter(r => !claimedRootIds.has(r.id))
+      .map(r => r.id)
+
+    let adopted = false
+    for (const rootId of unclaimedRootIds) {
+      const { data: sub } = await db.from('folders')
+        .select('id')
+        .eq('owner_id', userId)
+        .eq('parent_id', rootId)
+        .eq('name', subName)
+        .is('deleted_at', null)
+        .maybeSingle()
+      if (sub) {
+        console.log('[sync] adopting orphaned infra for', destPair.source_language)
+        rootFolderId = rootId
+        subFolderId  = (sub as { id: string }).id
+        adopted = true
+        break
+      }
+    }
+
+    if (!adopted) {
+      ;({ rootFolderId, subFolderId } = await createSyncFolders(db, userId, srcPair, destPair))
+    }
   }
 
   // ── 2. Find or create today's date deck inside the source subfolder ───────
@@ -196,7 +246,7 @@ async function ensureInfra(
   }
 
   // ── 3. Persist folder IDs + latest deck in sync state ────────────────────
-  await db.from('language_sync_state').upsert({
+  const { error: stateErr } = await db.from('language_sync_state').upsert({
     user_id:             userId,
     source_pair_id:      srcPair.id,
     destination_pair_id: destPair.id,
@@ -204,6 +254,7 @@ async function ensureInfra(
     sub_folder_id:       subFolderId,
     deck_id:             deckId,
   }, { onConflict: 'user_id,source_pair_id,destination_pair_id' })
+  if (stateErr) throw new Error(`Failed to save sync state for ${destPair.source_language}: ${stateErr.message}`)
 
   return { deckId }
 }
@@ -304,8 +355,10 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
 
   let totalPending = 0
 
-  // Process all destination languages in parallel
-  await Promise.all(destinations.map(async ({ pair: destPair, rule }) => {
+  // Process destination languages sequentially — ensures orphan-infra adoption
+  // (no-state-row recovery) claims each root before the next language runs,
+  // preventing two languages from competing for the same unclaimed root.
+  for (const { pair: destPair, rule } of destinations) {
     const infra = await ensureInfra(db, userId, src, destPair)
 
     // Find which source cards have already been synced to this destination
@@ -317,7 +370,7 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
 
     const alreadySynced = new Set((existingLinks ?? []).map((l: { source_card_id: string }) => l.source_card_id))
     const toSync = sourceCards.filter(c => !alreadySynced.has(c.id))
-    if (toSync.length === 0) return
+    if (toSync.length === 0) continue
 
     // Get existing card count for position offset
     const { count: existingCount } = await db
@@ -348,7 +401,7 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
       .select('id')
     if (insertErr) {
       console.error('[sync] stub insert error', insertErr.message)
-      return
+      continue
     }
 
     const createdCards = (created ?? []) as Array<{ id: string }>
@@ -389,7 +442,7 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
     )
 
     totalPending += createdCards.length
-  }))
+  }
 
   return { pendingCount: totalPending }
 }
