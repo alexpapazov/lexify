@@ -29,6 +29,7 @@ import { prefetchChoices, promoteConfusionDistractors, type PrefetchItem, type C
 import { getToday } from '@/lib/dates'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
+import { triggerSyncFill } from '@/lib/triggerSyncFill'
 
 /** How many slots ahead an "I don't know" card is re-queued to resurface in the same session. */
 const IDONTKNOW_REQUEUE_OFFSET = 4
@@ -258,6 +259,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
 
       if (!deck || cards.length === 0) { router.push(`/study/${deckId}`); return }
+      if (!deck.syncingComplete) triggerSyncFill()
       setDeckName(deck.name)
       setGradingSettings(deck.gradingSettings)
       setSourceLanguage(deck.sourceLanguage)

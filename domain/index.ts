@@ -146,6 +146,7 @@ export interface Deck {
   isPinned:        boolean
   folderId:        FolderId | null
   position:        number
+  syncingComplete: boolean          // false = synced deck with pending AI translations
   createdAt:       string
   updatedAt:       string
   deletedAt:       string | null

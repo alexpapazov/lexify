@@ -16,6 +16,7 @@ function rowToDeck(row: Record<string, unknown>): Deck {
     isPinned:        (row.is_pinned as boolean) ?? false,
     folderId:        (row.folder_id as string | null) ?? null,
     position:        (row.position as number) ?? 0,
+    syncingComplete: (row.syncing_complete as boolean) ?? true,
     createdAt:       row.created_at as string,
     updatedAt:       row.updated_at as string,
     deletedAt:       row.deleted_at as string | null,

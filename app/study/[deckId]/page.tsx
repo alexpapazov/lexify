@@ -16,6 +16,7 @@ import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules
 import { SupabaseSyncedCardLinkRepository }  from '@/lib/data/syncedCardLinks'
 import { SupabaseLanguagePairRepository }    from '@/lib/data/languagePairs'
 import { ensureSyncInfra }                   from '@/lib/syncFolderInfra'
+import { triggerSyncFill }                   from '@/lib/triggerSyncFill'
 import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
@@ -1587,6 +1588,7 @@ export default function DeckDetailPage() {
 
     if (!d) { router.push('/study'); return }
     setDeck(d); setCards(c); setStates(s); setPrefs(p)
+    if (!d.syncingComplete) triggerSyncFill()
 
     if (d.folderId) {
       const folderRepo = new SupabaseFolderRepository()
@@ -1620,6 +1622,7 @@ export default function DeckDetailPage() {
       })
     }
     setCards(prev => prev.map(c => c.id === cardId ? updated : c))
+    if (deck && !deck.syncingComplete) triggerSyncFill()
   }
 
   function handleCardUpdate(updated: Card) {

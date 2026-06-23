@@ -154,12 +154,13 @@ async function ensureInfra(
     deckId = existingDeck.id as string
   } else {
     const { data: newDeck, error: deckErr } = await db.from('decks').insert({
-      owner_id:        userId,
-      name:            todayLabel,
-      source_language: destPair.source_language,
-      target_language: destPair.target_language,
-      pipeline_id:     DEFAULT_PIPELINE_ID,
-      folder_id:       subFolderId,
+      owner_id:         userId,
+      name:             todayLabel,
+      source_language:  destPair.source_language,
+      target_language:  destPair.target_language,
+      pipeline_id:      DEFAULT_PIPELINE_ID,
+      folder_id:        subFolderId,
+      syncing_complete: false,   // Phase 2 will set true when all cards are filled
     }).select().single()
     if (deckErr) throw new Error(deckErr.message)
     deckId = (newDeck as { id: string }).id
@@ -472,5 +473,15 @@ export async function fillAllPending(userId: string): Promise<{ filled: number; 
     .eq('status', 'pending')
     .not('synced_card_id', 'is', null)
 
-  return { filled, remaining: count ?? 0 }
+  const remaining = count ?? 0
+
+  // All pending cards filled — mark every incomplete synced deck as done
+  if (remaining === 0) {
+    await db.from('decks')
+      .update({ syncing_complete: true })
+      .eq('owner_id', userId)
+      .eq('syncing_complete', false)
+  }
+
+  return { filled, remaining }
 }
