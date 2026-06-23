@@ -452,6 +452,12 @@ built/pushed/deployed.
 
 - **Commit/push commands must always be given directly in the chat as a code
   block — never written to a file.** The user runs them locally.
+- **Always use this exact commit pattern** — stage everything, one commit, push immediately:
+  ```
+  git add .
+  git commit -m "Your message here"
+  git push
+  ```
 - **All bracket-containing route paths** (e.g. `[deckId]`, `[folderId]`)
   **must be quoted** in every git command, due to zsh glob expansion.
 - The `mcp__workspace__bash` sandbox has a persistent mount error for this
