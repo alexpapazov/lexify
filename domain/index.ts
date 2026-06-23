@@ -190,6 +190,11 @@ export interface Card {
   acceptedFrontAlternatives?: string[]
   /** Other valid typed answers for the back side. */
   acceptedBackAlternatives?:  string[]
+  // ── Sync origin (only set on AI-synced cards) ─────────────────────────────
+  /** Language code of the source deck this card was synced from (e.g. 'es'). */
+  syncedFromLanguage?: string | null
+  /** The learned-language word from the source card that was translated to produce this card. */
+  originWord?:         string | null
 }
 
 // ─── Synonym groups ───────────────────────────────────────────────────────────

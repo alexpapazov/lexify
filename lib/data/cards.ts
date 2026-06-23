@@ -24,6 +24,8 @@ function rowToCard(row: Record<string, unknown>): Card {
       ? (row.accepted_front_alternatives as string[]) : undefined,
     acceptedBackAlternatives:  Array.isArray(row.accepted_back_alternatives)
       ? (row.accepted_back_alternatives as string[]) : undefined,
+    syncedFromLanguage: (row.synced_from_language as string | null) ?? null,
+    originWord:         (row.origin_word         as string | null) ?? null,
   }
 }
 

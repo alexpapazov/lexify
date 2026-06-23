@@ -77,17 +77,6 @@ Return ONLY a JSON object, no other text:
 }`
 }
 
-const SYNC_HINT_PREFIX = '__sync_source:'
-
-function makeSyncHint(fromLang: string, front: string, back: string): string {
-  return `${SYNC_HINT_PREFIX}${JSON.stringify({ fromLang, front, back })}`
-}
-
-function parseSyncHint(hint: string): { fromLang: string; front: string; back: string } | null {
-  if (!hint.startsWith(SYNC_HINT_PREFIX)) return null
-  try { return JSON.parse(hint.slice(SYNC_HINT_PREFIX.length)) } catch { return null }
-}
-
 // ── Infra (per-destination-pair folder + deck) ────────────────────────────────
 
 interface PairRow { id: string; source_language: string; target_language: string }
@@ -246,18 +235,21 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
       .is('deleted_at', null)
     const basePosition = existingCount ?? 0
 
-    // Bulk-insert blank stub cards. The original source word is stored as a
-    // hidden hint entry so Phase 2 can translate it — front/back start empty.
+    // Bulk-insert blank stub cards.
+    // front/back start empty — Phase 2 fills them via AI translation.
+    // synced_from_language and origin_word record the source permanently.
     const { data: created, error: insertErr } = await db
       .from('cards')
       .insert(toSync.map((c, i) => ({
-        owner_id:        userId,
-        source_language: destPair.source_language,
-        target_language: destPair.target_language,
-        front:           '',   // blank until Phase 2 fills in the real translation
-        back:            '',
-        hints:           [makeSyncHint(src.source_language, c.front, c.back)],
-        position:        basePosition + i,
+        owner_id:              userId,
+        source_language:       destPair.source_language,
+        target_language:       destPair.target_language,
+        front:                 '',
+        back:                  '',
+        hints:                 [],
+        synced_from_language:  src.source_language,   // e.g. 'es'
+        origin_word:           c.front,               // e.g. 'el perro'
+        position:              basePosition + i,
       })))
       .select('id')
     if (insertErr) {
@@ -386,18 +378,9 @@ export async function fillAllPending(userId: string): Promise<{ filled: number; 
       const newBack  = (parsed.back  as string).trim()
       if (!newFront || !newBack) return false
 
-      // Read current hints so we can strip the hidden source hint
-      const { data: cardRow } = await db
-        .from('cards')
-        .select('hints')
-        .eq('id', link.synced_card_id)
-        .single()
-      const hints: string[] = ((cardRow?.hints as string[] | null) ?? [])
-        .filter((h: string) => !h.startsWith(SYNC_HINT_PREFIX))
-
-      // Fill in the real front/back and remove the hidden hint
+      // Fill in the real front/back (synced_from_language/origin_word stay intact)
       await db.from('cards')
-        .update({ front: newFront, back: newBack, hints })
+        .update({ front: newFront, back: newBack })
         .eq('id', link.synced_card_id)
 
       // Mark the link active

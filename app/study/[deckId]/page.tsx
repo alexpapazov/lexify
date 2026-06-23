@@ -323,6 +323,27 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
               )
             })()}
 
+            {/* Sync origin — only shown for AI-synced cards */}
+            {card.syncedFromLanguage && (
+              <div className="space-y-2">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                  Sync origin
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-ink-faint">Synced from</span>
+                    <span className="text-xs text-ink font-medium">{langName(card.syncedFromLanguage)}</span>
+                  </div>
+                  {card.originWord && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-ink-faint">Origin word</span>
+                      <span className="text-xs text-ink font-medium">{card.originWord}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Distractors */}
             <div className="space-y-2">
               <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
