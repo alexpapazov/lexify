@@ -110,6 +110,8 @@ export interface Folder {
   createdAt: string
   updatedAt: string
   deletedAt: string | null
+  /** Auto-managed by sync system — cannot be renamed or deleted by the user. */
+  isSynced:  boolean
 }
 
 // ─── LanguagePair ─────────────────────────────────────────────────────────────

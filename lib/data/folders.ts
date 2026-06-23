@@ -11,6 +11,7 @@ function rowToFolder(row: Record<string, unknown>): Folder {
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     deletedAt: row.deleted_at as string | null,
+    isSynced:  (row.is_synced as boolean) ?? false,
   }
 }
 

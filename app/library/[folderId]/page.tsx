@@ -131,6 +131,8 @@ function FolderPageInner() {
   const [userId,       setUserId]       = useState('')
   const [addingFolder, setAddingFolder] = useState(false)
   const [newName,      setNewName]      = useState('')
+  const [renaming,     setRenaming]     = useState(false)
+  const [renameValue,  setRenameValue]  = useState('')
   const [counts,       setCounts]       = useState<FolderCounts | null>(null)
   const [deckStats,    setDeckStats]    = useState<DeckWithCards[]>([])
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
@@ -366,10 +368,28 @@ function FolderPageInner() {
   async function handleAddFolder() {
     const name = newName.trim()
     if (!name || !userId) return
+    if (name.toUpperCase() === 'SYNCED VOCABULARY') {
+      alert('"SYNCED VOCABULARY" is a reserved name used by the sync system.')
+      return
+    }
     const folderRepo = new SupabaseFolderRepository()
     await folderRepo.create(userId, name, folderId)
     setNewName('')
     setAddingFolder(false)
+    load()
+  }
+
+  async function handleRenameFolder() {
+    const name = renameValue.trim()
+    if (!name || !folder || folder.isSynced) return
+    if (name.toUpperCase() === 'SYNCED VOCABULARY') {
+      alert('"SYNCED VOCABULARY" is a reserved name.')
+      setRenaming(false)
+      return
+    }
+    const folderRepo = new SupabaseFolderRepository()
+    await folderRepo.rename(folderId, name)
+    setRenaming(false)
     load()
   }
 
@@ -470,21 +490,49 @@ function FolderPageInner() {
       </nav>
 
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-ink">{folder.name}</h1>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => { setAddingFolder(true); setNewName('') }}
-            className="text-sm text-accent hover:text-accent-soft transition-colors"
+      <div className="flex items-center justify-between gap-4">
+        {renaming ? (
+          <input
+            autoFocus
+            className="text-2xl font-semibold bg-transparent outline-none border-b border-accent text-ink w-full max-w-sm"
+            value={renameValue}
+            onChange={e => setRenameValue(e.target.value)}
+            onBlur={handleRenameFolder}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleRenameFolder()
+              if (e.key === 'Escape') setRenaming(false)
+            }}
+          />
+        ) : (
+          <h1
+            className={`text-2xl font-semibold text-ink ${!folder.isSynced ? 'cursor-text select-none' : ''}`}
+            title={!folder.isSynced ? 'Double-click to rename' : undefined}
+            onDoubleClick={() => {
+              if (folder.isSynced) return
+              setRenameValue(folder.name)
+              setRenaming(true)
+            }}
           >
-            + New folder
-          </button>
-          <button
-            onClick={handleDeleteCurrentFolder}
-            className="text-sm text-ink-faint hover:text-danger transition-colors"
-          >
-            Delete folder
-          </button>
+            {folder.name}
+          </h1>
+        )}
+        <div className="flex items-center gap-4 shrink-0">
+          {!folder.isSynced && (
+            <button
+              onClick={() => { setAddingFolder(true); setNewName('') }}
+              className="text-sm text-accent hover:text-accent-soft transition-colors"
+            >
+              + New folder
+            </button>
+          )}
+          {!folder.isSynced && (
+            <button
+              onClick={handleDeleteCurrentFolder}
+              className="text-sm text-ink-faint hover:text-danger transition-colors"
+            >
+              Delete folder
+            </button>
+          )}
         </div>
       </div>
 

@@ -77,10 +77,27 @@ Return ONLY a JSON object, no other text:
 }`
 }
 
-// ── Infra (per-destination-pair folder + deck) ────────────────────────────────
+// ── Infra (per-destination-pair folder hierarchy + per-day deck) ──────────────
+//
+// Folder structure created for each sync direction:
+//
+//   SYNCED VOCABULARY/           ← root, is_synced=true, per dest-pair
+//     Spanish / English/         ← source-pair subfolder, is_synced=true
+//       June 23 2026             ← deck; one per calendar day (reused same-day)
+//       June 24 2026             ← new deck next day
+//
+// Both folders are protected from rename/delete in the UI.
+// Deck name is today's date; multiple uploads on the same day merge into one deck.
 
 interface PairRow { id: string; source_language: string; target_language: string }
 interface RuleRow { id: string; source_pair_id: string; destination_pair_id: string; mode: string }
+
+function formatSyncDate(date: Date): string {
+  const month = date.toLocaleDateString('en-US', { month: 'long' })
+  const day   = date.getDate()
+  const year  = date.getFullYear()
+  return `${month} ${day} ${year}`   // "June 23 2026"
+}
 
 async function ensureInfra(
   db:       ReturnType<typeof createAdminClient>,
@@ -88,63 +105,108 @@ async function ensureInfra(
   srcPair:  PairRow,
   destPair: PairRow,
 ): Promise<{ deckId: string }> {
+  // ── 1. Get or create the stable folder pair ───────────────────────────────
   const { data: existing } = await db
     .from('language_sync_state')
-    .select('deck_id, root_folder_id')
+    .select('root_folder_id, sub_folder_id')
     .eq('user_id', userId)
     .eq('source_pair_id', srcPair.id)
     .eq('destination_pair_id', destPair.id)
     .maybeSingle()
 
+  let rootFolderId: string
+  let subFolderId:  string
+
   if (existing) {
-    const [{ data: deck }, { data: folder }] = await Promise.all([
-      db.from('decks').select('id').eq('id', existing.deck_id).is('deleted_at', null).maybeSingle(),
+    const [{ data: root }, { data: sub }] = await Promise.all([
       db.from('folders').select('id').eq('id', existing.root_folder_id).is('deleted_at', null).maybeSingle(),
+      db.from('folders').select('id').eq('id', existing.sub_folder_id).is('deleted_at', null).maybeSingle(),
     ])
-    if (deck && folder) return { deckId: existing.deck_id as string }
-    // Stale — clear and recreate
-    console.log('[sync] stale infra for', destPair.source_language, '— recreating')
-    await db
-      .from('language_sync_state')
-      .delete()
-      .eq('user_id', userId)
-      .eq('source_pair_id', srcPair.id)
-      .eq('destination_pair_id', destPair.id)
+    if (root && sub) {
+      rootFolderId = existing.root_folder_id as string
+      subFolderId  = existing.sub_folder_id  as string
+    } else {
+      // Stale — clear and fall through to recreation
+      console.log('[sync] stale folders for', destPair.source_language, '— recreating')
+      await db.from('language_sync_state').delete()
+        .eq('user_id', userId)
+        .eq('source_pair_id', srcPair.id)
+        .eq('destination_pair_id', destPair.id)
+      ;({ rootFolderId, subFolderId } = await createSyncFolders(db, userId, srcPair, destPair))
+    }
+  } else {
+    ;({ rootFolderId, subFolderId } = await createSyncFolders(db, userId, srcPair, destPair))
   }
 
-  // Each destination pair gets its own "SYNCED VOCABULARY" folder so it only
-  // appears in that language's library view.
-  const { data: folder, error: folderErr } = await db
-    .from('folders')
-    .insert({ owner_id: userId, name: SYNC_FOLDER_NAME, parent_id: null })
-    .select().single()
-  if (folderErr) throw new Error(folderErr.message)
-  const rootFolderId = folder.id as string
-
-  const { data: deck, error: deckErr } = await db
+  // ── 2. Find or create today's date deck inside the source subfolder ───────
+  const todayLabel = formatSyncDate(new Date())
+  const { data: existingDeck } = await db
     .from('decks')
-    .insert({
+    .select('id')
+    .eq('owner_id', userId)
+    .eq('folder_id', subFolderId)
+    .eq('name', todayLabel)
+    .is('deleted_at', null)
+    .maybeSingle()
+
+  let deckId: string
+  if (existingDeck) {
+    deckId = existingDeck.id as string
+  } else {
+    const { data: newDeck, error: deckErr } = await db.from('decks').insert({
       owner_id:        userId,
-      name:            langName(srcPair.source_language),
+      name:            todayLabel,
       source_language: destPair.source_language,
       target_language: destPair.target_language,
       pipeline_id:     DEFAULT_PIPELINE_ID,
-    })
-    .select().single()
-  if (deckErr) throw new Error(deckErr.message)
+      folder_id:       subFolderId,
+    }).select().single()
+    if (deckErr) throw new Error(deckErr.message)
+    deckId = (newDeck as { id: string }).id
+  }
 
-  await db.from('decks').update({ folder_id: rootFolderId }).eq('id', deck.id)
-
+  // ── 3. Persist folder IDs + latest deck in sync state ────────────────────
   await db.from('language_sync_state').upsert({
     user_id:             userId,
     source_pair_id:      srcPair.id,
     destination_pair_id: destPair.id,
     root_folder_id:      rootFolderId,
-    sub_folder_id:       rootFolderId,
-    deck_id:             deck.id,
+    sub_folder_id:       subFolderId,
+    deck_id:             deckId,
   }, { onConflict: 'user_id,source_pair_id,destination_pair_id' })
 
-  return { deckId: deck.id as string }
+  return { deckId }
+}
+
+async function createSyncFolders(
+  db:       ReturnType<typeof createAdminClient>,
+  userId:   string,
+  srcPair:  PairRow,
+  destPair: PairRow,
+): Promise<{ rootFolderId: string; subFolderId: string }> {
+  // Root: "SYNCED VOCABULARY" (is_synced=true, no parent)
+  const { data: root, error: rootErr } = await db.from('folders').insert({
+    owner_id:  userId,
+    name:      SYNC_FOLDER_NAME,
+    parent_id: null,
+    is_synced: true,
+  }).select().single()
+  if (rootErr) throw new Error(rootErr.message)
+
+  // Subfolder: "Spanish / English" (full source-pair name, is_synced=true)
+  const subName = `${langName(srcPair.source_language)} / ${langName(srcPair.target_language)}`
+  const { data: sub, error: subErr } = await db.from('folders').insert({
+    owner_id:  userId,
+    name:      subName,
+    parent_id: (root as { id: string }).id,
+    is_synced: true,
+  }).select().single()
+  if (subErr) throw new Error(subErr.message)
+
+  return {
+    rootFolderId: (root as { id: string }).id,
+    subFolderId:  (sub  as { id: string }).id,
+  }
 }
 
 // ── BFS: find all destinations reachable from srcPairId ───────────────────────
