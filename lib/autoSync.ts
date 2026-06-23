@@ -107,10 +107,11 @@ export async function autoSyncNewCards(
     p => p.sourceLanguage === deckSourceLanguage && p.targetLanguage === deckTargetLanguage
   )
   if (!sourcePair) return
+  const pair = sourcePair // narrowed const — closures can't see the `if` above
 
   // Find all enabled rules for this source pair
   const allRules = await ruleRepo.listForUser(userId)
-  const rules = allRules.filter(r => r.enabled && r.sourcePairId === sourcePair.id)
+  const rules = allRules.filter(r => r.enabled && r.sourcePairId === pair.id)
   if (rules.length === 0) return
 
   for (const rule of rules) {
@@ -122,7 +123,7 @@ export async function autoSyncNewCards(
     if (_visited.has(destKey)) continue
 
     // Ensure folder + deck infrastructure exists
-    const infra = await ensureSyncInfra(userId, sourcePair, destPair)
+    const infra = await ensureSyncInfra(userId, pair, destPair)
 
     // Load all cards the user already owns in the dest language direction
     const destCards = await cardRepo.listOwned(userId, destPair.sourceLanguage, destPair.targetLanguage)
@@ -138,7 +139,7 @@ export async function autoSyncNewCards(
           body: JSON.stringify({
             sourceFront:       card.front,
             sourceBack:        card.back,
-            fromLanguage:      sourcePair.sourceLanguage,
+            fromLanguage:      pair.sourceLanguage,
             toLearnedLanguage: destPair.sourceLanguage,
             toBasisLanguage:   destPair.targetLanguage,
           }),
@@ -185,7 +186,7 @@ export async function autoSyncNewCards(
           userId,
           sourceCardId:      card.id,
           syncedCardId,
-          sourcePairId:      sourcePair.id,
+          sourcePairId:      pair.id,
           destinationPairId: rule.destinationPairId,
           syncRuleId:        rule.id,
           sourceFrontAtSync: card.front,
