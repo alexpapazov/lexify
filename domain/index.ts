@@ -194,10 +194,10 @@ export interface Card {
   /** Other valid typed answers for the back side. */
   acceptedBackAlternatives?:  string[]
   // ── Sync origin (only set on AI-synced cards) ─────────────────────────────
-  /** Language code of the source deck this card was synced from (e.g. 'es'). */
-  syncedFromLanguage?: string | null
-  /** The learned-language word from the source card that was translated to produce this card. */
-  originWord?:         string | null
+  /** Language codes of every source deck this card was synced from (e.g. ['es', 'it']). */
+  syncedFromLanguages?: string[]
+  /** Learned-language words from every source card that produced this card (e.g. ['rojo', 'rosso']). */
+  originWords?:         string[]
 }
 
 // ─── Synonym groups ───────────────────────────────────────────────────────────

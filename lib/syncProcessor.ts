@@ -361,15 +361,25 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
   for (const { pair: destPair, rule } of destinations) {
     const infra = await ensureInfra(db, userId, src, destPair)
 
-    // Find which source cards have already been synced to this destination
+    // Find which source cards have already been synced to this destination.
+    // We check both card IDs (same card re-uploaded) and the original source
+    // word text (same word given a new card ID) to avoid creating duplicates.
     const { data: existingLinks } = await db
       .from('synced_card_links')
-      .select('source_card_id')
+      .select('source_card_id, source_front_at_sync')
       .eq('user_id', userId)
       .eq('destination_pair_id', destPair.id)
 
-    const alreadySynced = new Set((existingLinks ?? []).map((l: { source_card_id: string }) => l.source_card_id))
-    const toSync = sourceCards.filter(c => !alreadySynced.has(c.id))
+    type ExistingLink = { source_card_id: string; source_front_at_sync: string }
+    const alreadySyncedIds    = new Set((existingLinks ?? []).map((l: ExistingLink) => l.source_card_id))
+    const alreadySyncedFronts = new Set(
+      ((existingLinks ?? []) as ExistingLink[])
+        .map(l => l.source_front_at_sync?.toLowerCase())
+        .filter(Boolean),
+    )
+    const toSync = sourceCards.filter(c =>
+      !alreadySyncedIds.has(c.id) && !alreadySyncedFronts.has(c.front.toLowerCase()),
+    )
     if (toSync.length === 0) continue
 
     // Get existing card count for position offset
@@ -394,8 +404,8 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
         front:                 '',
         back:                  '',
         hints:                 [],
-        synced_from_language:  src.source_language,   // e.g. 'es'
-        origin_word:           c.front,               // e.g. 'el perro'
+        synced_from_languages: [src.source_language],  // e.g. ['es']
+        origin_words:          [c.front],              // e.g. ['el perro']
         position:              basePosition + i,
       })))
       .select('id')
@@ -525,7 +535,73 @@ export async function fillAllPending(userId: string): Promise<{ filled: number; 
       const newBack  = (parsed.back  as string).trim()
       if (!newFront || !newBack) return false
 
-      // Fill in the real front/back (synced_from_language/origin_word stay intact)
+      // ── Case 2: detect if a different synced card already has this front ────
+      // Different source languages can produce the same dest word (e.g. Spanish
+      // "rojo" and Italian "rosso" both translate to French "rouge"). When that
+      // happens: reuse the existing card, add it to the current stub's deck,
+      // append source info to the existing card's arrays, and soft-delete the stub.
+      const { data: matchRows } = await db.from('cards')
+        .select('id, origin_words, synced_from_languages')
+        .eq('owner_id', userId)
+        .eq('source_language', destPair.source_language)
+        .eq('target_language', destPair.target_language)
+        .ilike('front', newFront)
+        .is('deleted_at', null)
+        .neq('id', link.synced_card_id)
+
+      type SyncedCardRow = { id: string; origin_words: string[]; synced_from_languages: string[] }
+      const existingMatch = ((matchRows ?? []) as SyncedCardRow[])
+        .find(r => (r.origin_words?.length ?? 0) > 0)  // only consider synced cards
+
+      if (existingMatch) {
+        // Move stub's deck membership to the existing card
+        const { data: dcRow } = await db.from('deck_cards')
+          .select('deck_id, position')
+          .eq('card_id', link.synced_card_id)
+          .maybeSingle()
+
+        if (dcRow) {
+          const dc = dcRow as { deck_id: string; position: number }
+          await db.from('deck_cards').upsert(
+            { deck_id: dc.deck_id, card_id: existingMatch.id, position: dc.position },
+            { onConflict: 'deck_id,card_id', ignoreDuplicates: true },
+          )
+          await db.from('deck_cards').delete()
+            .eq('deck_id', dc.deck_id)
+            .eq('card_id', link.synced_card_id)
+        }
+
+        // Append this source language + word to the existing card (no duplicates)
+        const currentOrigins = existingMatch.origin_words ?? []
+        const currentLangs   = existingMatch.synced_from_languages ?? []
+        if (!currentOrigins.includes(link.source_front_at_sync)) {
+          await db.from('cards').update({
+            origin_words:          [...currentOrigins, link.source_front_at_sync],
+            synced_from_languages: [...currentLangs,   srcPair.source_language],
+          }).eq('id', existingMatch.id)
+        }
+
+        // Soft-delete the now-redundant stub
+        await db.from('cards')
+          .update({ deleted_at: new Date().toISOString() })
+          .eq('id', link.synced_card_id)
+
+        // Point the link to the existing card and mark it active
+        await db.from('synced_card_links')
+          .update({
+            synced_card_id:  existingMatch.id,
+            generated_front: newFront,
+            generated_back:  newBack,
+            confidence:      typeof parsed.confidence === 'number' ? parsed.confidence : null,
+            warning:         typeof parsed.warning    === 'string' && parsed.warning   ? parsed.warning : null,
+            status:          'active',
+          })
+          .eq('id', link.id)
+
+        return true
+      }
+
+      // Normal path: fill the stub in place
       await db.from('cards')
         .update({ front: newFront, back: newBack })
         .eq('id', link.synced_card_id)

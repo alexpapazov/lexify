@@ -24,8 +24,14 @@ function rowToCard(row: Record<string, unknown>): Card {
       ? (row.accepted_front_alternatives as string[]) : undefined,
     acceptedBackAlternatives:  Array.isArray(row.accepted_back_alternatives)
       ? (row.accepted_back_alternatives as string[]) : undefined,
-    syncedFromLanguage: (row.synced_from_language as string | null) ?? null,
-    originWord:         (row.origin_word         as string | null) ?? null,
+    // Prefer the new array columns; fall back to the old single-value columns for
+    // rows that pre-date migration 044 (e.g. during a rolling deploy).
+    syncedFromLanguages: Array.isArray(row.synced_from_languages) && (row.synced_from_languages as string[]).length > 0
+      ? (row.synced_from_languages as string[])
+      : row.synced_from_language ? [(row.synced_from_language as string)] : [],
+    originWords: Array.isArray(row.origin_words) && (row.origin_words as string[]).length > 0
+      ? (row.origin_words as string[])
+      : row.origin_word ? [(row.origin_word as string)] : [],
   }
 }
 

@@ -325,7 +325,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
             })()}
 
             {/* Sync origin — only shown for AI-synced cards */}
-            {card.syncedFromLanguage && (
+            {(card.syncedFromLanguages?.length ?? 0) > 0 && (
               <div className="space-y-2">
                 <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
                   Sync origin
@@ -333,12 +333,12 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 <div className="space-y-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-ink-faint">Synced from</span>
-                    <span className="text-xs text-ink font-medium">{langName(card.syncedFromLanguage)}</span>
+                    <span className="text-xs text-ink font-medium">{card.syncedFromLanguages!.map(langName).join(', ')}</span>
                   </div>
-                  {card.originWord && (
+                  {(card.originWords?.length ?? 0) > 0 && (
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs text-ink-faint">Origin word</span>
-                      <span className="text-xs text-ink font-medium">{card.originWord}</span>
+                      <span className="text-xs text-ink font-medium">{card.originWords!.join(', ')}</span>
                     </div>
                   )}
                 </div>
