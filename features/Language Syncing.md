@@ -1,6 +1,6 @@
 # Language Syncing
 
-Language Syncing automatically generates vocabulary cards in a second language pair when you upload cards. For example: uploading a Spanish → English set can also produce a French → English set with no extra work. Sync rules define which language pairs to link; a checkbox on the upload page controls whether sync fires for that batch.
+Language Syncing automatically generates vocabulary cards in a second language pair when you add or upload cards. For example: uploading a Spanish → English set can also produce a French → English set with no extra work. Sync rules define which language pairs to link; a checkbox on the upload/add-cards pages controls whether sync fires for that batch.
 
 ---
 
@@ -10,9 +10,9 @@ Language Syncing automatically generates vocabulary cards in a second language p
 
 - **Mode**: how the generated card is handled
   - `auto` — card is created in the dest deck immediately, no review needed
-  - `review_first` — a pending link is recorded, user reviews and approves it manually before any card is created
+  - `review_first` — a pending link is recorded; user reviews and approves it manually before any card is created
 
-- **Trigger**: stored on the rule but not used to filter the upload-checkbox path — all enabled rules for the source pair fire when the user checks "Sync to other languages" at upload time. The `trigger` field (`on_card_created`, `on_card_graduated`, `manual_only`) is reserved for future differentiation (e.g. a separate graduation-triggered path). The only active trigger path today is the upload checkbox.
+- **Trigger**: stored on the rule but not used to filter the upload-checkbox path — all enabled rules for the source pair fire when the user checks "Sync to other languages." The `trigger` field (`on_card_created`, `on_card_graduated`, `manual_only`) is reserved for future differentiation. The only active trigger paths today are the upload checkbox and the manual per-card review.
 
 **Synced card link** — a record connecting a source card to its generated counterpart in the destination pair. One row per `(source_card_id, destination_pair_id)`. Tracks the translation result, confidence, status, and which card was actually created.
 
@@ -56,116 +56,159 @@ Primary key: `(user_id, source_pair_id, destination_pair_id)`.
 
 | Column | Notes |
 |--------|-------|
-| `root_folder_id` | The "Synced" folder in the dest pair's library |
-| `sub_folder_id` | Currently always equal to `root_folder_id` — no sub-folder exists |
-| `deck_id` | The synced deck inside the "Synced" folder |
+| `root_folder_id` | The "SYNCED VOCABULARY" folder in the library |
+| `sub_folder_id` | Currently always equal to `root_folder_id` |
+| `deck_id` | The synced deck inside "SYNCED VOCABULARY" |
 
 ---
 
 ## Folder and deck structure
 
-For each sync direction, `ensureSyncInfra()` in `lib/syncFolderInfra.ts` creates and persists this structure once:
+For each sync direction, `ensureInfra()` inside `lib/syncProcessor.ts` (auto path) or `ensureSyncInfra()` in `lib/syncFolderInfra.ts` (manual path) creates and persists this structure once:
 
 ```
 Library
-└── Synced/                  ← root folder, one per destination language pair
-    └── Spanish              ← deck named after the source language (e.g. langName(sourcePair.sourceLanguage))
+└── SYNCED VOCABULARY/          ← one shared root folder per user (all directions share it)
+    ├── Spanish                 ← deck named after the source language (Spanish→Korean rule)
+    ├── French                  ← deck named after the source language (French→Korean rule)
+    └── …
 ```
 
-The "Synced" root folder is shared across all source pairs that sync into the same destination pair. If a Spanish→French and a German→French rule both exist, they share one "Synced" folder and have two decks inside: "Spanish" and "German".
+**One folder for all directions.** `SYNCED VOCABULARY` is looked up by name — if it already exists for the user it is reused; otherwise it is created. This means no matter how many sync rules a user has, or what order they first run, there is always exactly one `SYNCED VOCABULARY` folder.
 
-`ensureSyncInfra()` checks `language_sync_state` first and returns immediately if infrastructure already exists. This prevents duplicate folders across multiple syncs.
+If the user deletes the `SYNCED VOCABULARY` folder, the next auto-sync recreates it automatically.
+
+**Reserved name.** Users cannot manually create a folder named `SYNCED VOCABULARY` (case-insensitive). The library page and upload page both block this with an inline error.
+
+`language_sync_state` caches the folder/deck IDs so `ensureInfra` only creates infrastructure once per direction. Subsequent syncs return immediately from the cache.
 
 ---
 
-## Translation API
+## Translation model
 
-`POST /api/sync-translate` (file: `app/api/sync-translate/route.ts`)
+All translations use **Claude Haiku** (`claude-haiku-4-5-20251001`, max_tokens 300). The semantic anchor is always `sourceFront` (the word being learned in the source pair) — the back/gloss is provided as context but the translation is derived from the front.
 
-Uses **Claude Haiku** (`claude-haiku-4-5-20251001`, max_tokens 300). The semantic anchor is always `sourceFront` (the word being learned in the source pair) — the back/gloss is provided as context but the translation is derived from the front.
-
-**Request:**
+The prompt asks for a JSON response:
 ```json
-{
-  "sourceFront":       "la casa",
-  "sourceBack":        "house",
-  "fromLanguage":      "es",
-  "toLearnedLanguage": "fr",
-  "toBasisLanguage":   "en"
-}
-```
-
-**Response (success):**
-```json
-{ "ok": true, "front": "la maison", "back": "house", "confidence": 0.95, "warning": null }
-```
-
-**Response (failure):**
-```json
-{ "ok": false, "reason": "api-error" }
+{ "front": "...", "back": "...", "confidence": 0.95, "warning": null }
 ```
 
 ---
 
 ## Duplicate detection
 
-Before creating a synced card, all existing cards owned by the user in the destination language direction are checked. If any card has a `front` that matches `generatedFront` (case-insensitive trim), the existing card is reused — it is added to the synced deck without creating a new row. This prevents "horloge" from being created twice if it already exists.
+Before creating a synced card, all existing cards owned by the user in the destination language direction are checked. If any card has a `front` that matches `generatedFront` (case-insensitive trim), the existing card is reused — added to the synced deck without creating a new row.
 
-Duplicate check (used in both `autoSync.ts` and `SyncReviewModal`):
 ```ts
 const norm = (s: string) => s.trim().toLowerCase()
 const duplicate = destCards.find(c => norm(c.front) === norm(generatedFront))
 ```
 
+This prevents creating a duplicate card if e.g. "horloge" already exists in the French deck from a prior sync or manual entry.
+
 ---
 
 ## Trigger paths
 
-### Upload checkbox
+### Auto path — upload checkbox (server-side, self-chaining)
 
-**Entry point:** "Sync to other languages" checkbox on the add-cards review stage (`app/study/[deckId]/add/page.tsx`)
+**Entry points:**
+- "Sync to other languages" checkbox on the upload page (`app/upload/page.tsx`)
+- "Sync to other languages" checkbox on the add-cards review stage (`app/study/[deckId]/add/page.tsx`)
 
-The checkbox is only rendered when the deck's source language pair has at least one enabled sync rule (checked at page load). It is **checked by default**. If the user unchecks it before saving, no sync fires.
+The checkbox is only shown when the deck's source language pair has at least one enabled sync rule. It is **checked by default**. If unchecked before saving, no sync fires.
 
-When the user clicks "Add N cards" with the checkbox checked, `handleCommit()` calls `autoSyncNewCards()` fire-and-forget after `cardRepo.bulkCreate()`. The page redirects immediately; syncing runs in the background.
+When the user saves with the checkbox checked, the page calls `POST /api/sync` fire-and-forget with:
+```json
+{
+  "sourceLanguage": "es",
+  "targetLanguage": "en",
+  "cards": [{ "id": "...", "front": "...", "back": "..." }, …]
+}
+```
 
-`autoSyncNewCards()` in `lib/autoSync.ts`:
-1. Checks the `_visited` set (keyed by `${sourceLanguage}:${targetLanguage}`). If this pair has already been processed in this call chain, returns immediately to prevent loops.
-2. Adds the current pair to `_visited`, then finds the language pair matching the deck's source/target language codes.
-3. Filters all **enabled** rules for that source pair (trigger field is ignored — all enabled rules apply).
-4. For each matching rule, skips if the destination pair key is already in `_visited`, then:
-   - Calls `ensureSyncInfra()` to get/create the dest folder and deck
-   - Loads all existing dest cards for duplicate detection
-   - Translates all new cards **in parallel** via `Promise.all`
-   - For each translation: check for duplicate → create or reuse card (if mode = `auto`) → upsert link
-   - Collects the list of dest cards that were created or reused
-5. **Cascades**: if the rule's mode is `auto` and dest cards were created, immediately calls `autoSyncNewCards()` recursively with those dest cards and the destination pair's languages. Passes the same `_visited` set so the loop guard remains effective across the full chain.
+Auth uses `Authorization: Bearer <supabase-jwt>`.
 
-**Cascading example:**
+#### `/api/sync` route (`app/api/sync/route.ts`)
+
+Responds immediately with `{ ok: true }` and runs all work inside `after()` (Next.js 15+ — code that continues on the server after the HTTP response is sent, so the browser tab does not need to stay open).
+
+**Single-batch-per-invocation design (Vercel Hobby 10-second limit):**
+
+Each invocation processes exactly `BATCH_SIZE = 5` cards (`cards[0..4]`), then self-triggers for the remainder. This keeps every function call under ~4 seconds, well within the 10-second Hobby limit.
+
+`after()` logic per invocation:
+1. If `isChainHop = true` (this is a cascade to a new language), sleep `CHAIN_DELAY_MS = 5000 ms` first — this is the only sleep in the entire system, and it keeps total invocation time under 10 s.
+2. Call `processSyncBatch(payload)` with the full payload (it internally slices `cards[0..BATCH_SIZE]`).
+3. Update `failCounts` for any failed cards; drop cards that have failed `MAX_CARD_FAILS = 10` times total.
+4. **Continuation**: if `remaining + retryable cards > 0`, immediately trigger the same-language continuation (no delay).
+5. **Cascade**: for each `NextHop` returned by `processSyncBatch`, trigger a new hop with `isChainHop = true` (the hop will sleep 5 s internally before processing).
+
+Server-to-server calls authenticate via `x-sync-secret: <SYNC_INTERNAL_SECRET>` header.
+
+#### `lib/syncProcessor.ts`
+
+`processSyncBatch(payload)` runs one batch:
+1. Adds `sourceLanguage:targetLanguage` to `visitedSet`; skips if already visited (loop prevention).
+2. Uses the admin Supabase client (`lib/supabase/admin.ts`) to bypass RLS. All queries are explicitly scoped to `userId`.
+3. Looks up the source language pair and all enabled rules for it.
+4. For each rule:
+   - Calls `ensureInfra()` to get/create the `SYNCED VOCABULARY` folder and dest deck.
+   - Loads existing dest cards for duplicate detection.
+   - Fires `BATCH_SIZE` Anthropic API calls in parallel (`Promise.all`).
+   - For each result: checks for duplicate → creates or reuses card (mode=`auto`) → upserts `synced_card_links`.
+   - If `mode = auto` and dest cards were created, adds a `NextHop` for that dest language (cascade).
+5. Returns `{ successCards, failedCards, nextHops }`.
+
+#### Cascading
+
 ```
 User uploads French cards (French→English pair)
-  French→Spanish rule fires → creates Spanish cards
-    Spanish→Russian rule fires → creates Russian cards
-      (no further rules for Russian → done)
+  Invocation 1: translates French[1..5] → creates Korean[1..5] (if French→Korean rule exists)
+    → triggers: French continuation (remaining French cards)
+    → triggers: Korean cascade hop (with Korean[1..5]) — sleeps 5s before processing
+  Invocation 2 (Korean cascade): translates Korean[1..5] → creates Italian[1..5]
+    → triggers: Italian cascade hop — sleeps 5s
+  Invocation 3 (French continuation): translates French[6..10] → creates Korean[6..10]
+    → triggers: French continuation (French[11..])
+    → triggers: another Korean cascade hop with Korean[6..10]
+  …
 ```
 
-**Loop prevention:** `_visited` is passed by reference through the recursion. The first time a source pair is processed, its key is added. Any later rule that would cascade back to an already-processed pair is skipped. This prevents A→B→A infinite loops regardless of how many rules the user has configured.
+Multiple cascade hops for the same language run independently and in parallel on Vercel's infrastructure — each is a separate function invocation.
 
-### Manual — per card
+**Loop prevention:** the `visited` array is passed through the entire payload chain. A pair key (`${sourceLanguage}:${targetLanguage}`) is added to `visitedSet` when first processed; any later hop that would re-enter an already-visited pair is skipped immediately.
+
+**Retry:** failed cards are passed to the continuation hop via the `failCounts: Record<cardId, number>` payload field. A card is retried up to `MAX_CARD_FAILS = 10` times across invocations; after that it is silently dropped.
+
+#### Required environment variables
+
+These must be set in Vercel dashboard (Settings → Environment Variables):
+
+| Variable | Where to get it |
+|----------|----------------|
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase dashboard → Settings → API → service_role key |
+| `SYNC_INTERNAL_SECRET` | Any random string — used to authenticate server-to-server hops |
+
+---
+
+### Manual path — per card
 
 **Entry point:** "⟳ Sync" button in `CardEditModal` (deck detail page) → opens `SyncReviewModal`
 
 `SyncReviewModal` (in `app/study/[deckId]/page.tsx`):
-1. Finds the source language pair for the current deck
-2. Loads all enabled sync rules for that pair
+1. Finds the source language pair for the current deck.
+2. Loads all enabled sync rules for that pair.
 3. For each rule, checks for an existing link:
    - `status = 'active'` → shows a summary row (already synced, no action needed)
    - `status = 'dismissed'` → skipped entirely
-   - No link or `status = 'pending'` → calls translation API, checks for duplicates, builds a review row
-4. User can **Approve**, **Edit then Approve**, or **Dismiss** each row
+   - No link or `status = 'pending'` → calls `POST /api/sync-translate`, checks for duplicates, builds a review row
+4. User can **Approve**, **Edit then Approve**, or **Dismiss** each row:
    - Approve: creates/reuses card, upserts link with `status = 'active'`
    - Edit: user edits front/back manually, link gets `status = 'manually_edited'`
    - Dismiss: sets `synced_card_id = null`, `status = 'dismissed'`; card is never proposed again for this source card
+
+The manual path uses `lib/syncFolderInfra.ts` (`ensureSyncInfra`) and `POST /api/sync-translate` — separate from the auto path's server-side stack.
 
 ---
 
@@ -175,7 +218,7 @@ User uploads French cards (French→English pair)
 
 - **Create**: select source and destination language pairs, choose mode and trigger, save
 - **Toggle**: enable/disable a rule without deleting it
-- **Delete**: two-step confirmation (inline confirm button); deletes all `synced_card_links` for the rule first, then deletes the rule itself (required — no FK cascade)
+- **Delete**: two-step confirmation (inline confirm button); deletes all `synced_card_links` for the rule first, then the rule itself (required — no FK cascade)
 
 One rule per direction is enforced by the database UNIQUE constraint. The UI prevents creating a duplicate direction and shows an error if attempted.
 
@@ -186,11 +229,14 @@ One rule per direction is enforced by the database UNIQUE constraint. The UI pre
 | File | Role |
 |------|------|
 | `supabase/migrations/039_language_sync.sql` | Creates the three tables and RLS policies |
-| `lib/syncFolderInfra.ts` | `ensureSyncInfra()` — creates/looks up "Synced" folder and dest deck |
-| `lib/autoSync.ts` | `autoSyncNewCards()` — fires sync on card creation |
+| `lib/syncProcessor.ts` | `processSyncBatch()` — single-batch server-side processor for the auto path |
+| `lib/supabase/admin.ts` | Service-role Supabase client (bypasses RLS — always scope queries to userId) |
+| `app/api/sync/route.ts` | Self-chaining API route; responds immediately, runs in `after()` |
+| `lib/syncFolderInfra.ts` | `ensureSyncInfra()` — used by the manual review path only |
+| `lib/autoSync.ts` | Old client-side sync logic — no longer imported by any page; kept for reference |
+| `app/api/sync-translate/route.ts` | Claude Haiku translation endpoint — used by the manual review path only |
 | `lib/data/languageSyncRules.ts` | `listForUser()`, `upsert()`, `delete()` for sync rules |
 | `lib/data/syncedCardLinks.ts` | `listForCard()`, `upsert()`, `dismiss()` for links |
-| `app/api/sync-translate/route.ts` | Claude Haiku translation endpoint |
 | `app/study/[deckId]/page.tsx` | `SyncReviewModal` and the "⟳ Sync" button in `CardEditModal` |
 | `app/settings/page.tsx` | `LanguageSyncPanel` — create/toggle/delete rules |
 
@@ -205,5 +251,10 @@ One rule per direction is enforced by the database UNIQUE constraint. The UI pre
 | 2026-06-22 | "Synced" root folder was created with lowercase "synced" | Fixed the string literal in `syncFolderInfra.ts` |
 | 2026-06-22 | Folder structure created an unnecessary sub-folder (`synced / Spanish / Synced from Spanish deck`) | Removed sub-folder layer; deck named after source language now lives directly inside "Synced"; `sub_folder_id = root_folder_id` in `language_sync_state` |
 | 2026-06-22 | Auto-sync on card creation never fired — `on_card_created` trigger had no implementation | Created `lib/autoSync.ts` and wired `autoSyncNewCards()` fire-and-forget into `handleCommit()` in the add-cards page |
-| 2026-06-22 | Sync fired automatically on every upload with no user control | Replaced automatic trigger with an explicit "Sync to other languages" checkbox (checked by default) at the bottom of the add-cards review stage; checkbox only shown when the deck's source pair has enabled rules |
-| 2026-06-22 | Sync did not cascade — French→Spanish synced but Spanish→Russian rule was never invoked for the synced Spanish cards | Rewrote `autoSyncNewCards()` to collect dest cards per rule and recursively call itself with those cards; added `_visited: Set<string>` loop guard (keyed by `${sourceLanguage}:${targetLanguage}`) to prevent infinite recursion |
+| 2026-06-22 | Sync fired automatically on every upload with no user control | Replaced automatic trigger with an explicit "Sync to other languages" checkbox (checked by default); checkbox only shown when the deck's source pair has enabled rules |
+| 2026-06-22 | Sync did not cascade — French→Spanish synced but Spanish→Russian rule was never invoked | Rewrote sync to collect dest cards per rule and recursively cascade; added `visited` loop guard |
+| 2026-06-22 | Only 9 of 72 cards synced | Root cause: all 72 translation requests fired simultaneously, hitting Anthropic rate limits. Fixed by processing in batches of 5 |
+| 2026-06-22 | Sync stopped mid-set when user switched browser tabs | Root cause: browser throttles background JS in inactive tabs. Fixed by moving sync entirely to the server via Next.js `after()` and a self-chaining API route |
+| 2026-06-22 | Sync timed out on Vercel Hobby plan (10-second function limit) | Root cause: previous design processed all cards in one invocation (~17 s). Fixed by processing one batch of 5 cards per invocation and self-triggering for the remainder; each call completes in ~3-4 s |
+| 2026-06-22 | Multiple "Synced" folders created when user had rules for different dest languages | Root cause: infra lookup used `language_sync_state` sibling query per dest pair, so each new dest pair created its own folder. Fixed by looking up the folder by name (`SYNCED VOCABULARY`) directly — all directions share one folder |
+| 2026-06-22 | Renamed sync folder from "Synced" to "SYNCED VOCABULARY"; blocked reserved name in folder creation UI | `SYNC_FOLDER_NAME` constant in `syncProcessor.ts`; library page and upload page check `name.toUpperCase() === 'SYNCED VOCABULARY'` before creating folders |

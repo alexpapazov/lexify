@@ -69,8 +69,11 @@ export function Navbar() {
           <div className="hidden md:flex items-center gap-1 flex-1">
             {NAV_LINKS.map(({ href, label }) => {
               const isActive = pathname === href
+              const onClick = href === '/library' && pathname === '/library'
+                ? () => window.dispatchEvent(new CustomEvent('lexify:library-reset'))
+                : undefined
               return (
-                <Link key={href} href={href} className={[
+                <Link key={href} href={href} onClick={onClick} className={[
                   'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150',
                   isActive ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
                 ].join(' ')}>
@@ -137,10 +140,14 @@ export function Navbar() {
           >
             {NAV_LINKS.map(({ href, label }) => {
               const isActive = pathname === href
+              const onClick = href === '/library' && pathname === '/library'
+                ? () => window.dispatchEvent(new CustomEvent('lexify:library-reset'))
+                : undefined
               return (
                 <Link
                   key={href}
                   href={href}
+                  onClick={onClick}
                   className={[
                     'block px-3 py-2.5 rounded-md text-sm font-medium transition-colors',
                     isActive ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',

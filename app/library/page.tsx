@@ -142,6 +142,15 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     setPairTarget(initPairTarget)
   }, [initPairSource, initPairTarget])
 
+  // Reset pair selection when the Navbar Library link is clicked while already
+  // on the library page (same-pathname navigation doesn't reliably update
+  // useSearchParams in Next.js 16, so the key-remount trick can't fire).
+  useEffect(() => {
+    const reset = () => { setPairSource(null); setPairTarget(null) }
+    window.addEventListener('lexify:library-reset', reset)
+    return () => window.removeEventListener('lexify:library-reset', reset)
+  }, [])
+
   const [allFolders,   setAllFolders]   = useState<Folder[]>([])
   const [allDecks,     setAllDecks]     = useState<Deck[]>([])
   const [pairs,        setPairs]        = useState<LanguagePair[]>([])
@@ -760,11 +769,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <Link
-            href="/library"
-            onClick={() => { setPairSource(null); setPairTarget(null) }}
-            className="text-xs text-ink-muted hover:text-ink transition-colors"
-          >← Library</Link>
+          <button
+            onClick={() => { setPairSource(null); setPairTarget(null); router.push('/library') }}
+            className="text-xs text-ink-muted hover:text-ink transition-colors cursor-pointer"
+          >← Library</button>
           <h1 className="text-2xl font-semibold text-ink">
             {langName(pairSource!)} <span className="text-ink-faint text-base font-normal">/ {langName(pairTarget!)}</span>
           </h1>
