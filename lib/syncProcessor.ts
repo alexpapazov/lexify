@@ -216,21 +216,32 @@ async function createSyncFolders(
   }
 
   // Subfolder: "Spanish / English" (source-pair name, is_synced=true).
-  // Named after the source pair so multiple source languages (Spanish, French…)
-  // can each have their own subfolder under the shared root.
+  // Also find-or-create so that clearing language_sync_state and re-syncing
+  // doesn't produce duplicate subfolders.
   const subName = `${langName(srcPair.source_language)} / ${langName(srcPair.target_language)}`
-  const { data: sub, error: subErr } = await db.from('folders').insert({
-    owner_id:  userId,
-    name:      subName,
-    parent_id: rootFolderId,
-    is_synced: true,
-  }).select().single()
-  if (subErr) throw new Error(subErr.message)
+  const { data: existingSub } = await db
+    .from('folders').select('id')
+    .eq('owner_id', userId)
+    .eq('name', subName)
+    .eq('parent_id', rootFolderId)
+    .is('deleted_at', null)
+    .maybeSingle()
 
-  return {
-    rootFolderId,
-    subFolderId: (sub as { id: string }).id,
+  let subFolderId: string
+  if (existingSub) {
+    subFolderId = (existingSub as { id: string }).id
+  } else {
+    const { data: sub, error: subErr } = await db.from('folders').insert({
+      owner_id:  userId,
+      name:      subName,
+      parent_id: rootFolderId,
+      is_synced: true,
+    }).select().single()
+    if (subErr) throw new Error(subErr.message)
+    subFolderId = (sub as { id: string }).id
   }
+
+  return { rootFolderId, subFolderId }
 }
 
 // ── BFS: find all destinations reachable from srcPairId ───────────────────────
