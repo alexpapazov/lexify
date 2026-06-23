@@ -117,16 +117,17 @@ export async function autoSyncNewCards(
   for (const rule of rules) {
     const destPair = allPairs.find(p => p.id === rule.destinationPairId)
     if (!destPair) continue
+    const dest = destPair // narrowed const — closures can't see the `continue` above
 
     // Skip if we've already visited this destination as a source (loop guard)
-    const destKey = `${destPair.sourceLanguage}:${destPair.targetLanguage}`
+    const destKey = `${dest.sourceLanguage}:${dest.targetLanguage}`
     if (_visited.has(destKey)) continue
 
     // Ensure folder + deck infrastructure exists
-    const infra = await ensureSyncInfra(userId, pair, destPair)
+    const infra = await ensureSyncInfra(userId, pair, dest)
 
     // Load all cards the user already owns in the dest language direction
-    const destCards = await cardRepo.listOwned(userId, destPair.sourceLanguage, destPair.targetLanguage)
+    const destCards = await cardRepo.listOwned(userId, dest.sourceLanguage, dest.targetLanguage)
     const destFronts = new Set(destCards.map(c => normFront(c.front)))
     let nextPosition = destCards.length
 
@@ -140,8 +141,8 @@ export async function autoSyncNewCards(
             sourceFront:       card.front,
             sourceBack:        card.back,
             fromLanguage:      pair.sourceLanguage,
-            toLearnedLanguage: destPair.sourceLanguage,
-            toBasisLanguage:   destPair.targetLanguage,
+            toLearnedLanguage: dest.sourceLanguage,
+            toBasisLanguage:   dest.targetLanguage,
           }),
         })
         const data = await res.json()
@@ -171,7 +172,7 @@ export async function autoSyncNewCards(
             const pos = nextPosition++
             const [created] = await cardRepo.bulkCreate(
               infra.deckId, userId,
-              destPair.sourceLanguage, destPair.targetLanguage,
+              dest.sourceLanguage, dest.targetLanguage,
               [{ front: generatedFront, back: generatedBack, position: pos }],
             )
             if (created) {
@@ -212,8 +213,8 @@ export async function autoSyncNewCards(
     if (rule.mode === 'auto' && destCardsCreated.length > 0) {
       await autoSyncNewCards(
         userId,
-        destPair.sourceLanguage,
-        destPair.targetLanguage,
+        dest.sourceLanguage,
+        dest.targetLanguage,
         destCardsCreated,
         _visited,
       )
