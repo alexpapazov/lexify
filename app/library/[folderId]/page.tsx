@@ -9,6 +9,7 @@ import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { descendantDeckIds, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { langName } from '@/lib/languages'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
@@ -462,8 +463,18 @@ function FolderPageInner() {
               : 'text-ink-muted hover:text-ink'
           }`}
         >
-          <Link href={`/library${qs}`}>Library</Link>
+          <Link href="/library">Library</Link>
         </span>
+
+        {/* Language pair segment — shown when accessed from a language library */}
+        {inPair && pairSource && pairTarget && (
+          <>
+            <span className="text-ink-faint">/</span>
+            <span className="text-ink-muted hover:text-ink">
+              <Link href={`/library${qs}`}>{langName(pairSource)}</Link>
+            </span>
+          </>
+        )}
 
         {/* Ancestor folders */}
         {ancestors.map(ancestor => (
