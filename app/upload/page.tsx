@@ -459,8 +459,17 @@ export default function UploadPage() {
         }
       }
 
-      // Trigger language sync server-side (survives tab switching / browser close)
-      if (syncEnabled && created.length > 0) {
+      // Trigger language sync server-side (survives tab switching / browser close).
+      // Include both newly created cards AND merged (existing) cards — a word that
+      // already existed in this language still needs to reach the synced libraries.
+      const mergedCards = toMerge
+        .map(it => it.duplicate?.existingCard)
+        .filter((c): c is Card => c != null)
+      const cardsToSync = [
+        ...created.map(c => ({ id: c.id, front: c.front, back: c.back })),
+        ...mergedCards.map(c => ({ id: c.id, front: c.front, back: c.back })),
+      ]
+      if (syncEnabled && cardsToSync.length > 0) {
         void fetch('/api/sync', {
           method:  'POST',
           headers: {
@@ -470,7 +479,7 @@ export default function UploadPage() {
           body: JSON.stringify({
             sourceLanguage: targetLang,
             targetLanguage: basisLang,
-            cards: created.map(c => ({ id: c.id, front: c.front, back: c.back })),
+            cards: cardsToSync,
           }),
         })
       }
