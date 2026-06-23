@@ -8,11 +8,12 @@
  *   1. Respond immediately (< 1 ms).
  *   2. In after():
  *      a. Process cards[0..BATCH_SIZE] via processSyncBatch.
- *      b. If remaining + failed cards exist → trigger same-language continuation (no delay).
- *      c. For each cascade hop → trigger new language hop (CHAIN_DELAY_MS delay beforehand).
+ *      b. If remaining + failed cards exist → trigger same-language continuation.
+ *      c. For each cascade hop → trigger new language hop immediately.
  *
- * A cascade hop receives isChainHop=true and sleeps CHAIN_DELAY_MS at the
- * start of its after() block, keeping total per-invocation time under 10 s.
+ * No artificial delays between hops — Vercel Hobby's 6-concurrent-function limit
+ * is the binding constraint; keeping invocations short (<4 s each) lets up to
+ * 5 language levels run in parallel without exceeding that limit.
  *
  * Auth:
  *   - Client calls:         Authorization: Bearer <supabase-jwt>
@@ -31,13 +32,8 @@ import {
 export const runtime     = 'nodejs'
 export const maxDuration = 10
 
-const CHAIN_DELAY_MS  = 5_000   // pause before cascading to a new language
 const MAX_CARD_FAILS  = 10      // drop a card after this many total failures
 const INTERNAL_SECRET = process.env.SYNC_INTERNAL_SECRET ?? 'dev-sync-secret'
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms))
-}
 
 function getOrigin(req: Request): string {
   const host  = req.headers.get('host') ?? 'localhost:3000'
@@ -101,11 +97,6 @@ export async function POST(req: Request) {
       isChainHop:  !!payload.isChainHop,
     })
     try {
-      // If this is a cascading hop to a new language, wait before hitting Anthropic
-      if (payload.isChainHop) {
-        await sleep(CHAIN_DELAY_MS)
-      }
-
       const { failedCards, nextHops } = await processSyncBatch(payload)
       console.log('[sync] batch done', { failed: failedCards.length, nextHops: nextHops.length })
 
@@ -132,7 +123,7 @@ export async function POST(req: Request) {
         })
       }
 
-      // Cascade to new languages (each hop sleeps CHAIN_DELAY_MS internally)
+      // Cascade to new languages
       for (const hop of nextHops) {
         await triggerHop(origin, hop as NextHop)
       }

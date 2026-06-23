@@ -177,11 +177,16 @@ function FolderPageInner() {
     setAllDecks(decksData)
     setLoading(false)
 
-    // Aggregate stats for every card in this folder (including subfolders)
+    // Aggregate stats for every card in this folder (including subfolders).
+    // When viewing in a language-pair context, only count decks for that pair.
     const deckIds = descendantDeckIds(folderId, folders, decksData)
     const cardRepo  = new SupabaseCardRepository()
     const stateRepo = new SupabaseCardStateRepository()
-    const relevantDecks = decksData.filter(d => deckIds.includes(d.id))
+    const relevantDecks = decksData.filter(d => {
+      if (!deckIds.includes(d.id)) return false
+      if (pairSource && pairTarget) return d.sourceLanguage === pairSource && d.targetLanguage === pairTarget
+      return true
+    })
 
     const stats = await Promise.all(relevantDecks.map(async deck => {
       const [cards, states] = await Promise.all([
