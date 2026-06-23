@@ -1,29 +1,17 @@
 /**
  * lib/syncProcessor.ts
  *
- * Server-side language sync processor.
- * Called from app/api/sync/route.ts — NOT from client components.
- *
- * Processes one "hop" of the sync chain (e.g. Spanish→Korean).
- * Returns NextHop descriptors for every cascade language that should follow.
- * The API route triggers those hops as independent server invocations,
- * so the chain survives browser-tab switching, sleeping devices, etc.
- *
- * Rate-limit safety: cards are translated BATCH_SIZE at a time with a pause
- * between batches. Failed cards are retried up to MAX_RETRIES times using
- * exponential back-off, capped at RETRY_CAP_MS.
+ * Server-side language sync — single-batch processor.
+ * Processes exactly one batch of cards (BATCH_SIZE) per call.
+ * Retries and continuation are handled by the API route, which re-invokes
+ * itself with the remaining cards. This keeps each invocation under the
+ * Vercel Hobby 10-second function limit.
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { langName }          from '@/lib/languages'
 
-// ── Tuning constants ──────────────────────────────────────────────────────────
-
-const BATCH_SIZE     = 5
-const BATCH_DELAY_MS = 1200
-const RETRY_BASE_MS  = 10_000
-const RETRY_CAP_MS   = 300_000  // 5-minute cap per retry sleep
-const MAX_RETRIES    = 25
+export const BATCH_SIZE = 5
 
 const DEFAULT_PIPELINE_ID = '00000000-0000-0000-0000-000000000001'
 const ANTHROPIC_MODEL     = 'claude-haiku-4-5-20251001'
@@ -36,21 +24,29 @@ export interface SimpleCard {
   back:  string
 }
 
-export interface NextHop {
+export interface SyncPayload {
   userId:         string
   sourceLanguage: string
   targetLanguage: string
-  cards:          SimpleCard[]
+  cards:          SimpleCard[]            // remaining cards (first BATCH_SIZE are processed)
   visited:        string[]
+  failCounts?:    Record<string, number>  // cardId → cumulative failure count
+  isChainHop?:    boolean                 // true = cascade to a new language (triggers delay)
+}
+
+export interface NextHop extends SyncPayload {
+  isChainHop: true
+}
+
+export interface BatchResult {
+  successCards: SimpleCard[]
+  failedCards:  SimpleCard[]
+  nextHops:     NextHop[]    // cascade destinations with this batch's successCards
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function normFront(s: string): string { return s.trim().toLowerCase() }
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms))
-}
 
 function buildPrompt(
   sourceFront: string, sourceBack: string,
@@ -81,46 +77,9 @@ Return ONLY a JSON object, no other text:
 }`
 }
 
-async function runInBatchesWithRetry(
-  cards: SimpleCard[],
-  processOne: (card: SimpleCard) => Promise<SimpleCard | null>,
-): Promise<SimpleCard[]> {
-  const results: SimpleCard[] = []
-  let pending = [...cards]
-
-  for (let attempt = 0; attempt <= MAX_RETRIES && pending.length > 0; attempt++) {
-    if (attempt > 0) {
-      await sleep(Math.min(RETRY_BASE_MS * Math.pow(2, attempt - 1), RETRY_CAP_MS))
-    }
-    const failed: SimpleCard[] = []
-
-    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
-      const batch = pending.slice(i, i + BATCH_SIZE)
-      const batchResults = await Promise.all(batch.map(processOne))
-      for (let j = 0; j < batch.length; j++) {
-        const r = batchResults[j] ?? null
-        if (r !== null) results.push(r)
-        else failed.push(batch[j]!)
-      }
-      if (i + BATCH_SIZE < pending.length) await sleep(BATCH_DELAY_MS)
-    }
-
-    pending = failed
-  }
-
-  if (pending.length > 0) {
-    console.warn(`syncProcessor: ${pending.length} card(s) permanently failed after ${MAX_RETRIES} retries`)
-  }
-  return results
-}
-
 // ── Infra (folder + deck) ─────────────────────────────────────────────────────
 
-interface PairRow {
-  id:              string
-  source_language: string
-  target_language: string
-}
+interface PairRow { id: string; source_language: string; target_language: string }
 
 async function ensureInfra(
   db:       ReturnType<typeof createAdminClient>,
@@ -137,14 +96,12 @@ async function ensureInfra(
     .maybeSingle()
   if (existing) return { deckId: existing.deck_id as string }
 
-  // Reuse "Synced" root folder if another direction already created it for this dest pair
   const { data: sibling } = await db
     .from('language_sync_state')
     .select('root_folder_id')
     .eq('user_id', userId)
     .eq('destination_pair_id', destPair.id)
-    .limit(1)
-    .maybeSingle()
+    .limit(1).maybeSingle()
 
   let rootFolderId: string
   if (sibling) {
@@ -153,8 +110,7 @@ async function ensureInfra(
     const { data: folder, error: folderErr } = await db
       .from('folders')
       .insert({ owner_id: userId, name: 'Synced', parent_id: null })
-      .select()
-      .single()
+      .select().single()
     if (folderErr) throw new Error(folderErr.message)
     rootFolderId = folder.id as string
   }
@@ -168,8 +124,7 @@ async function ensureInfra(
       target_language: destPair.target_language,
       pipeline_id:     DEFAULT_PIPELINE_ID,
     })
-    .select()
-    .single()
+    .select().single()
   if (deckErr) throw new Error(deckErr.message)
 
   await db.from('decks').update({ folder_id: rootFolderId }).eq('id', deck.id)
@@ -188,28 +143,28 @@ async function ensureInfra(
 
 // ── Main export ───────────────────────────────────────────────────────────────
 
-export async function processSyncHop(
-  userId:         string,
-  sourceLanguage: string,
-  targetLanguage: string,
-  cards:          SimpleCard[],
-  visited:        string[],
-): Promise<{ nextHops: NextHop[] }> {
-  if (cards.length === 0) return { nextHops: [] }
+/**
+ * Process a single batch of cards (payload.cards.slice(0, BATCH_SIZE)).
+ * Does NOT loop or retry internally — the API route handles that.
+ */
+export async function processSyncBatch(payload: SyncPayload): Promise<BatchResult> {
+  const { userId, sourceLanguage, targetLanguage, visited } = payload
+  const batch = payload.cards.slice(0, BATCH_SIZE)
+
+  if (batch.length === 0) return { successCards: [], failedCards: [], nextHops: [] }
 
   const pairKey    = `${sourceLanguage}:${targetLanguage}`
   const visitedSet = new Set(visited)
-  if (visitedSet.has(pairKey)) return { nextHops: [] }
+  if (visitedSet.has(pairKey)) return { successCards: [], failedCards: [], nextHops: [] }
   visitedSet.add(pairKey)
 
   const db     = createAdminClient()
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
     console.error('syncProcessor: ANTHROPIC_API_KEY not set')
-    return { nextHops: [] }
+    return { successCards: [], failedCards: batch, nextHops: [] }
   }
 
-  // Load pairs + rules
   const { data: pairsData } = await db
     .from('language_pairs')
     .select('id, source_language, target_language')
@@ -217,7 +172,7 @@ export async function processSyncHop(
 
   const pairs = (pairsData ?? []) as PairRow[]
   const src   = pairs.find(p => p.source_language === sourceLanguage && p.target_language === targetLanguage)
-  if (!src) return { nextHops: [] }
+  if (!src) return { successCards: [], failedCards: batch, nextHops: [] }
 
   const { data: rulesData } = await db
     .from('language_sync_rules')
@@ -226,10 +181,14 @@ export async function processSyncHop(
     .eq('source_pair_id', src.id)
     .eq('enabled', true)
 
-  const rules = (rulesData ?? []) as Array<{ id: string; destination_pair_id: string; mode: string; enabled: boolean }>
-  if (rules.length === 0) return { nextHops: [] }
+  const rules = (rulesData ?? []) as Array<{ id: string; destination_pair_id: string; mode: string }>
+  if (rules.length === 0) return { successCards: [], failedCards: [], nextHops: [] }
 
-  const nextHops: NextHop[] = []
+  // We collect per-rule success cards for cascade — use first rule's result as the
+  // primary success list (cards successfully translated into at least one dest lang).
+  const allSuccessIds = new Set<string>()
+  const failedCards:   SimpleCard[] = []
+  const nextHops:      NextHop[]    = []
 
   for (const rule of rules) {
     const dest = pairs.find(p => p.id === rule.destination_pair_id)
@@ -238,67 +197,61 @@ export async function processSyncHop(
     const destKey = `${dest.source_language}:${dest.target_language}`
     if (visitedSet.has(destKey)) continue
 
-    const infra = await ensureInfra(db, userId, src, dest)
+    const capturedSrc  = src
+    const capturedDest = dest
+    const capturedRule = rule
 
-    // Load all dest cards for dedup
+    const infra = await ensureInfra(db, userId, capturedSrc, capturedDest)
+
     const { data: existingData } = await db
       .from('cards')
       .select('id, front, back')
       .eq('owner_id', userId)
-      .eq('source_language', dest.source_language)
-      .eq('target_language', dest.target_language)
+      .eq('source_language', capturedDest.source_language)
+      .eq('target_language', capturedDest.target_language)
       .is('deleted_at', null)
 
-    const destCards = (existingData ?? []) as SimpleCard[]
+    const destCards  = (existingData ?? []) as SimpleCard[]
     const destFronts = new Set(destCards.map(c => normFront(c.front)))
-    let nextPosition = destCards.length
+    let   nextPos    = destCards.length
 
-    // Capture loop variables for closure
-    const capturedSrc  = src
-    const capturedDest = dest
-    const capturedRule = rule
-    const capturedInfra = infra
+    const ruleSuccessCards: SimpleCard[] = []
+    const ruleFailed:       SimpleCard[] = []
 
-    async function processOneCard(card: SimpleCard): Promise<SimpleCard | null> {
+    const batchResults = await Promise.all(batch.map(async (card): Promise<SimpleCard | null> => {
       try {
         const res = await fetch('https://api.anthropic.com/v1/messages', {
           method:  'POST',
           headers: {
-            'content-type':    'application/json',
-            'x-api-key':       apiKey,
+            'content-type':      'application/json',
+            'x-api-key':         apiKey,
             'anthropic-version': '2023-06-01',
           },
           body: JSON.stringify({
             model:      ANTHROPIC_MODEL,
             max_tokens: 300,
-            messages:   [{
-              role:    'user',
-              content: buildPrompt(
-                card.front, card.back,
-                capturedSrc.source_language,
-                capturedDest.source_language,
-                capturedDest.target_language,
-              ),
-            }],
+            messages:   [{ role: 'user', content: buildPrompt(
+              card.front, card.back,
+              capturedSrc.source_language,
+              capturedDest.source_language,
+              capturedDest.target_language,
+            )}],
           }),
         })
-
         if (!res.ok) return null
 
         const data  = await res.json()
         const text: string = data?.content?.[0]?.text ?? ''
         const match = /\{[\s\S]*\}/.exec(text)
         if (!match) return null
-
         let parsed: Record<string, unknown>
         try { parsed = JSON.parse(match[0]) } catch { return null }
-
         if (typeof parsed.front !== 'string' || typeof parsed.back !== 'string') return null
 
         const generatedFront = (parsed.front as string).trim()
         const generatedBack  = (parsed.back  as string).trim()
         const confidence     = typeof parsed.confidence === 'number' ? parsed.confidence : null
-        const warning        = typeof parsed.warning === 'string' && parsed.warning ? parsed.warning : null
+        const warning        = typeof parsed.warning    === 'string' && parsed.warning ? parsed.warning : null
 
         let syncedCardId: string | null = null
         let resultCard:   SimpleCard | null = null
@@ -311,12 +264,12 @@ export async function processSyncHop(
             syncedCardId = duplicate.id
             resultCard   = duplicate
             await db.from('deck_cards').upsert(
-              { deck_id: capturedInfra.deckId, card_id: duplicate.id, position: nextPosition++ },
+              { deck_id: infra.deckId, card_id: duplicate.id, position: nextPos++ },
               { onConflict: 'deck_id,card_id', ignoreDuplicates: true },
             )
           } else if (!destFronts.has(nf)) {
             destFronts.add(nf)
-            const pos = nextPosition++
+            const pos = nextPos++
             const { data: created, error: createErr } = await db
               .from('cards')
               .insert({
@@ -328,15 +281,13 @@ export async function processSyncHop(
                 hints:           [],
                 position:        pos,
               })
-              .select('id, front, back')
-              .single()
-
+              .select('id, front, back').single()
             if (!createErr && created) {
               syncedCardId = created.id as string
               resultCard   = { id: created.id as string, front: generatedFront, back: generatedBack }
               destCards.push(resultCard)
               await db.from('deck_cards').upsert(
-                { deck_id: capturedInfra.deckId, card_id: created.id, position: pos },
+                { deck_id: infra.deckId, card_id: created.id, position: pos },
                 { onConflict: 'deck_id,card_id', ignoreDuplicates: true },
               )
             }
@@ -364,20 +315,40 @@ export async function processSyncHop(
         console.error('syncProcessor: failed for card', card.front, err)
         return null
       }
+    }))
+
+    for (let i = 0; i < batch.length; i++) {
+      const r = batchResults[i] ?? null
+      if (r !== null) {
+        ruleSuccessCards.push(batch[i]!)
+        allSuccessIds.add(batch[i]!.id)
+      } else {
+        ruleFailed.push(batch[i]!)
+      }
     }
 
-    const created = await runInBatchesWithRetry(cards, processOneCard)
+    if (capturedRule.mode === 'auto' && ruleSuccessCards.length > 0) {
+      // The cascade cards are the DEST cards created (not the source cards)
+      const createdDestCards = batchResults
+        .filter((r): r is SimpleCard => r !== null)
+      if (createdDestCards.length > 0) {
+        nextHops.push({
+          userId,
+          sourceLanguage: capturedDest.source_language,
+          targetLanguage: capturedDest.target_language,
+          cards:          createdDestCards,
+          visited:        [...visitedSet],
+          isChainHop:     true,
+        })
+      }
+    }
 
-    if (capturedRule.mode === 'auto' && created.length > 0) {
-      nextHops.push({
-        userId,
-        sourceLanguage: capturedDest.source_language,
-        targetLanguage: capturedDest.target_language,
-        cards:   created,
-        visited: [...visitedSet],
-      })
+    // Track failures (union across rules — a card failed if it failed in ANY rule)
+    for (const c of ruleFailed) {
+      if (!allSuccessIds.has(c.id)) failedCards.push(c)
     }
   }
 
-  return { nextHops }
+  const successCards = batch.filter(c => allSuccessIds.has(c.id))
+  return { successCards, failedCards, nextHops }
 }
