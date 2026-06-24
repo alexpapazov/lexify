@@ -57,12 +57,14 @@ export function TypingMode({
     normalizedUser: string
   }
 
-  const [input,    setInput]    = useState('')
-  const [result,   setResult]   = useState<LocalResult | null>(null)
-  const [override, setOverride] = useState<boolean | null>(null)
-  const [retype,   setRetype]   = useState('')
-  const [revealed, setRevealed] = useState(false)
+  const [input,      setInput]      = useState('')
+  const [result,     setResult]     = useState<LocalResult | null>(null)
+  const [override,   setOverride]   = useState<boolean | null>(null)
+  const [retype,     setRetype]     = useState('')
+  const [revealed,   setRevealed]   = useState(false)
+  const [composing,  setComposing]  = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
+  const retypeRef   = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setInput('')
@@ -70,6 +72,7 @@ export function TypingMode({
     setOverride(null)
     setRetype('')
     setRevealed(false)
+    setComposing(false)
   }, [card.id])
 
   const prompt   = promptSide === 'front' ? card.front : card.back
@@ -95,6 +98,15 @@ export function TypingMode({
     return () => clearTimeout(t)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!result, needsRetype])
+
+  // Delay focus on the retype input so IME composition has fully settled before
+  // the new input receives focus. Without the delay, the composing syllable that
+  // was pending when the user pressed Enter gets inserted into the retype box.
+  useEffect(() => {
+    if (!needsRetype) return
+    const t = setTimeout(() => retypeRef.current?.focus(), 80)
+    return () => clearTimeout(t)
+  }, [needsRetype])
 
   function check() {
     const base = gradeTyping(input, expected, gradingSettings)
@@ -207,7 +219,13 @@ export function TypingMode({
           placeholder="Type your answer…"
           value={input}
           onChange={e => { if (!result) setInput(e.target.value) }}
-          onKeyDown={e => { if (e.key === 'Enter' && !result) check() }}
+          onCompositionStart={() => setComposing(true)}
+          onCompositionEnd={() => setComposing(false)}
+          onKeyDown={e => {
+            // Ignore Enter while IME is composing — the composing syllable would
+            // otherwise leak into the retype input that appears next.
+            if (e.key === 'Enter' && !result && !composing) check()
+          }}
           disabled={!!result}
           autoFocus={!revealed}
         />
@@ -279,12 +297,14 @@ export function TypingMode({
               <div className="space-y-2">
                 <p className="text-xs text-ink-muted text-center">Type the correct answer to continue:</p>
                 <input
+                  ref={retypeRef}
                   className={`input text-center text-lg font-mono ${retypeCorrect ? 'border-success/60 bg-success/5' : ''}`}
                   placeholder="Retype the answer…"
                   value={retype}
                   onChange={e => setRetype(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') advanceRetype() }}
-                  autoFocus
+                  onCompositionStart={() => setComposing(true)}
+                  onCompositionEnd={() => setComposing(false)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !composing) advanceRetype() }}
                 />
                 {retypeCorrect && (
                   <div className="flex justify-center">
