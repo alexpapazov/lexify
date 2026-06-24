@@ -17,7 +17,7 @@ import { speak } from '@/lib/speak'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -44,6 +44,8 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   onIDontKnow?: () => void
   /** Called when Continue is pressed after "?" revealed the answer (penalty already applied via onIDontKnow). */
   onAdvance?: () => void
+  /** When provided, a Repeat button appears after a correct answer so the learner can practice the step once more. */
+  onRepeat?: () => void
 }) {
   const correct  = answerSide === 'front' ? card.front : card.back
 
@@ -165,13 +167,24 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
         <p className="text-xs text-center text-warning/80">Also accepted — this is a synonym of the correct answer.</p>
       )}
 
-      {selected && (
-        <div className="flex justify-center">
-          <button onClick={revealed ? onAdvance : continueNext} autoFocus className="btn-primary px-10">
-            Continue
-          </button>
-        </div>
-      )}
+      {selected && (() => {
+        const isCorrect = norm(selected) === norm(displayCorrect) || isSynonym(selected)
+        return (
+          <div className="flex justify-center gap-3">
+            {!revealed && onRepeat && isCorrect && (
+              <button
+                onClick={() => { setSelected(null); setViaSynonym(false); onRepeat() }}
+                className="btn-ghost px-6"
+              >
+                Repeat
+              </button>
+            )}
+            <button onClick={revealed ? onAdvance : continueNext} autoFocus className="btn-primary px-10">
+              Continue
+            </button>
+          </div>
+        )
+      })()}
     </div>
   )
 }

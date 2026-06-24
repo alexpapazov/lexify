@@ -781,6 +781,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
   const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
   const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
+  // Repeat is offered when a correct answer would complete the current pipeline step.
+  const stepWillComplete = !state.graduated && state.correctInStep + 1 >= step.requiredCorrect
 
   // ── Synonym group info for the current card ─────────────────────────────────
   const synGroup = card.synonymGroupId ? synonymGroups.get(card.synonymGroupId) : null
@@ -851,6 +853,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
+          onRepeat={stepWillComplete ? () => {} : undefined}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
@@ -888,6 +891,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
+          onRepeat={stepWillComplete ? () => {} : undefined}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────

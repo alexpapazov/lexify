@@ -20,7 +20,7 @@ import { RatingButtons } from './RatingButtons'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate,
+  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -36,6 +36,8 @@ export function TypingMode({
    * issueType is provided so the session can track per-card error counts.
    */
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string, issueType?: GradingIssueType) => void
+  /** When provided, a Repeat button appears after a pre-graduation correct answer. */
+  onRepeat?: () => void
 }) {
   type LocalResult = {
     status:        GradingStatus
@@ -264,7 +266,15 @@ export function TypingMode({
               gradedReview ? (
                 <RatingButtons onRate={tryAdvance} suggestedRating={suggestedRating} />
               ) : (
-                <div className="flex justify-center">
+                <div className="flex justify-center gap-3">
+                  {onRepeat && finalCorrect && (
+                    <button
+                      onClick={() => { setResult(null); setInput(''); onRepeat() }}
+                      className="btn-ghost px-6"
+                    >
+                      Repeat
+                    </button>
+                  )}
                   <button
                     ref={continueRef}
                     onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')}

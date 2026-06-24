@@ -505,6 +505,7 @@ function FolderSessionInner() {
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
   const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
   const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
+  const stepWillComplete = !state.graduated && state.correctInStep + 1 >= step.requiredCorrect
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
@@ -536,6 +537,7 @@ function FolderSessionInner() {
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
+          onRepeat={stepWillComplete ? () => {} : undefined}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
@@ -544,6 +546,7 @@ function FolderSessionInner() {
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
+          onRepeat={stepWillComplete ? () => {} : undefined}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
