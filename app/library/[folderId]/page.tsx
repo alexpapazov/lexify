@@ -400,6 +400,12 @@ function FolderPageInner() {
     load()
   }
 
+  async function handleMoveDeckToRoot(deckId: string) {
+    const deckRepo = new SupabaseDeckRepository()
+    await deckRepo.update(deckId, { folderId: null })
+    load()
+  }
+
   async function handleDeleteCurrentFolder() {
     if (!folder) return
     const destination = folder.parentId ? 'its parent folder' : 'the library root'
@@ -740,6 +746,15 @@ function FolderPageInner() {
                       className="text-ink-faint hover:text-warning transition-colors text-sm">
                       {deck.isPinned ? '★' : '☆'}
                     </button>
+                    {folder?.isSynced && (
+                      <button
+                        onClick={() => handleMoveDeckToRoot(deck.id)}
+                        title="Move to library root"
+                        className="text-xs text-ink-faint hover:text-ink transition-colors px-2 py-1 rounded border border-white/10 hover:border-white/20"
+                      >
+                        Move to library
+                      </button>
+                    )}
                     <Link href={`/study/${deck.id}/session`} className="btn-primary text-xs py-1 px-3">Study</Link>
                   </div>
                 </div>
