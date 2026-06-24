@@ -343,7 +343,7 @@ async function batchFastTrackDueDatesServer(
 ): Promise<string[]> {
   if (count === 0) return []
   const DAY_MS    = 24 * 60 * 60 * 1000
-  const windowDays = Math.min(30, Math.ceil(count / 3))
+  const windowDays = Math.min(14, count)
   const windowEnd  = new Date(startDate.getTime() + (windowDays + 1) * DAY_MS)
 
   const { data } = await db.from('card_states')

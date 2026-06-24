@@ -90,7 +90,7 @@ export async function batchFastTrackDueDates(
 ): Promise<string[]> {
   if (count === 0) return []
 
-  const windowDays = Math.min(30, Math.ceil(count / 3))
+  const windowDays = Math.min(14, count)
   const windowEnd  = new Date(startDate.getTime() + (windowDays + 1) * DAY_MS)
 
   const existing = await repo.countDueByDateRange(
