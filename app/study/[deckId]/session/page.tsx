@@ -25,7 +25,7 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { SynonymTypingMode } from '@/components/session/SynonymTypingMode'
 import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
-import { prefetchChoices, promoteConfusionDistractors, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
+import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday } from '@/lib/dates'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
@@ -182,6 +182,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       })
       .filter((x): x is PrefetchItem => x !== null)
     void prefetchChoices(prefetchItems, handleChoicesCached, 2, handleAudioCached)
+
+    // Prefetch audio for ALL cards in the queue (typing steps, graduated cards,
+    // and index 0 are excluded from prefetchItems but still need audio).
+    const audioPrefetchItems = finalQueue.map(item => ({
+      card: item.card, sourceLanguage: ctx.sourceLanguage,
+    }))
+    void prefetchAudio(audioPrefetchItems, handleAudioCached)
 
     // Promote frequently-confused words into cached distractors for
     // upcoming recognition steps (all of them — this is cheap, no AI calls).

@@ -259,6 +259,35 @@ export async function promoteConfusionDistractors(
   }
 }
 
+export interface AudioPrefetchItem {
+  card:           Card
+  sourceLanguage: string
+}
+
+/**
+ * Background pre-generation of TTS audio for cards that don't have it yet.
+ * Separate from prefetchChoices so it covers typing steps and graduated cards
+ * that don't need distractor generation. Runs with limited concurrency and
+ * fails silently per-card.
+ */
+export async function prefetchAudio(
+  items: AudioPrefetchItem[],
+  onAudioCached: (cardId: string, audioData: string) => void,
+  concurrency = 2,
+): Promise<void> {
+  const toFetch = items.filter(it => !it.card.audioGenerated && TTS_SUPPORTED_LANGUAGES.has(it.sourceLanguage))
+  if (toFetch.length === 0) return
+  let next = 0
+  async function worker() {
+    while (next < toFetch.length) {
+      const item = toFetch[next++]
+      if (!item) continue
+      await fetchAndCacheAudio(item.card, item.sourceLanguage, onAudioCached)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, toFetch.length) }, worker))
+}
+
 export interface PrefetchItem {
   card:           Card
   side:           CardSide

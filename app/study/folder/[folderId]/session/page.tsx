@@ -31,7 +31,7 @@ import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
-import { prefetchChoices, promoteConfusionDistractors, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
+import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday } from '@/lib/dates'
 
 /** How many slots ahead an "I don't know" card is re-queued to resurface in the same session. */
@@ -193,6 +193,7 @@ function FolderSessionInner() {
           return { card: item.card, side: step.answerSide, deckCards: item.deckCards, sourceLanguage: item.sourceLanguage, targetLanguage: item.targetLanguage }
         }).filter((x): x is PrefetchItem => x !== null)
         void prefetchChoices(prefetchItems, handleChoicesCached, 2, handleAudioCached)
+        void prefetchAudio(finalQueue.map(item => ({ card: item.card, sourceLanguage: item.sourceLanguage })), handleAudioCached)
         return
       }
 
@@ -271,6 +272,7 @@ function FolderSessionInner() {
         })
         .filter((x): x is PrefetchItem => x !== null)
       void prefetchChoices(prefetchItems, handleChoicesCached, 2, handleAudioCached)
+      void prefetchAudio(finalQueue.map(item => ({ card: item.card, sourceLanguage: item.sourceLanguage })), handleAudioCached)
 
       // Promote frequently-confused words into cached distractors for
       // upcoming recognition steps (all of them — this is cheap, no AI

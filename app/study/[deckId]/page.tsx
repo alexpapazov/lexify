@@ -89,7 +89,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [validErr, setValidErr] = useState<string | null>(null)
   const [showStats, setShowStats] = useState(false)
   const [showResetMenu, setShowResetMenu] = useState(false)
-  const [resetAction, setResetAction] = useState<'distractors' | 'progress' | 'all' | null>(null)
+  const [resetAction, setResetAction] = useState<'distractors' | 'progress' | 'audio' | 'all' | null>(null)
   const [resetting,   setResetting]   = useState(false)
   const [resetError,  setResetError]  = useState<string | null>(null)
   const [resetDone,   setResetDone]   = useState<string | null>(null)
@@ -123,6 +123,13 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     } finally {
       setSaving(false)
     }
+  }
+
+  /** Clears audio so it will be regenerated on the next session. */
+  async function resetAudio() {
+    const cardRepo = new SupabaseCardRepository()
+    const updated  = await cardRepo.update(card.id, { audioGenerated: false, audioData: null })
+    onCardChange(updated)
   }
 
   /** Clears cached AI distractors and kicks off background regeneration. */
@@ -186,9 +193,11 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     try {
       if (resetAction === 'distractors' || resetAction === 'all') await resetDistractors()
       if (resetAction === 'progress'    || resetAction === 'all') await resetProgress()
+      if (resetAction === 'audio'       || resetAction === 'all') await resetAudio()
       setResetDone(
         resetAction === 'distractors' ? 'Distractors reset — new ones are being generated.'
         : resetAction === 'progress'  ? 'Progress reset.'
+        : resetAction === 'audio'     ? 'Audio cleared — will regenerate next session.'
         : 'Card fully reset.'
       )
       setTimeout(() => setResetDone(null), 2500)
@@ -278,12 +287,21 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                     Reset progress
                     <span className="block text-xs text-ink-faint">Erases reps, lapses, schedule, etc. Keeps distractors and when it was introduced.</span>
                   </button>
+                  {card.audioGenerated && TTS_SUPPORTED_LANGUAGES.has(sourceLanguage) && (
+                    <button
+                      onClick={() => { setShowResetMenu(false); setResetAction('audio') }}
+                      className="w-full text-left px-3 py-2 hover:bg-white/5 text-ink"
+                    >
+                      Reset audio
+                      <span className="block text-xs text-ink-faint">Clears cached audio so it will be regenerated.</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => { setShowResetMenu(false); setResetAction('all') }}
                     className="w-full text-left px-3 py-2 hover:bg-white/5 text-danger"
                   >
                     Reset entirely
-                    <span className="block text-xs text-ink-faint">Resets both progress and distractors.</span>
+                    <span className="block text-xs text-ink-faint">Resets progress, distractors, and audio.</span>
                   </button>
                 </div>
               )}
@@ -308,7 +326,9 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 ? 'Clear the cached multiple-choice distractors for this card? Fresh ones will be generated in the background.'
                 : resetAction === 'progress'
                   ? 'Erase this card\'s study progress (reps, lapses, ease, schedule, etc.)? It will go back to "never studied" but keep its cached distractors and introduction date.'
-                  : 'Reset this card entirely — clears study progress AND cached distractors? This can\'t be undone.'
+                  : resetAction === 'audio'
+                    ? 'Clear the cached audio for this card? It will be regenerated the next time the card appears in a session.'
+                    : 'Reset this card entirely — clears study progress, cached distractors, and audio? This can\'t be undone.'
             }
             onConfirm={handleConfirmReset}
             onCancel={() => setResetAction(null)}
