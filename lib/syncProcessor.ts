@@ -47,6 +47,7 @@ export interface SyncPayload {
   cards:              SimpleCard[]
   fillPending?:       boolean   // true = skip stub creation, go straight to fill phase
   fastTrackSyncMode?: 'none' | 'new_only'  // create fast-track CardStates for new synced stubs
+  fastTrackSourceCardIds?: string[]        // only fast-track synced cards whose source is in this set
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -537,11 +538,21 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
     )
 
     // Create fast-track CardStates for the new synced stubs if requested.
-    if (payload.fastTrackSyncMode === 'new_only' && createdCards.length > 0) {
+    // If fastTrackSourceCardIds is provided, only fast-track stubs whose source card was checked.
+    const fastTrackSourceSet = payload.fastTrackSourceCardIds
+      ? new Set(payload.fastTrackSourceCardIds)
+      : null
+    const cardsToFastTrack = fastTrackSourceSet
+      ? createdCards.filter((_, i) => {
+          const srcCard = toSync[i]
+          return srcCard ? fastTrackSourceSet.has(srcCard.id) : false
+        })
+      : createdCards
+    if (payload.fastTrackSyncMode === 'new_only' && cardsToFastTrack.length > 0) {
       try {
         const now      = new Date()
-        const dueDates = await batchFastTrackDueDatesServer(db, userId, createdCards.length, now)
-        const states   = createdCards.map((c, i) =>
+        const dueDates = await batchFastTrackDueDatesServer(db, userId, cardsToFastTrack.length, now)
+        const states   = cardsToFastTrack.map((c, i) =>
           fastTrackCardState(userId, c.id, DEFAULT_PIPELINE_ID, dueDates[i]!, 30, now)
         )
         const rows = states.map(s => ({

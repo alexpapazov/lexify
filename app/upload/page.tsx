@@ -488,32 +488,31 @@ export default function UploadPage() {
       }
 
       // Create fast-track CardStates for selected import-known cards.
-      if (fastTrackEnabled && fastTrackCardIds.size > 0) {
+      // Build the list of fast-tracked cards (needed both for state upsert and sync payload).
+      const itemToCard = new Map<number, Card>()
+      let createIdx = 0
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]!
+        if (it.action === 'merge' && it.duplicate?.existingCard) {
+          itemToCard.set(i, it.duplicate.existingCard)
+        } else {
+          const card = created[createIdx]
+          if (card) itemToCard.set(i, card)
+          createIdx++
+        }
+      }
+      const fastTrackedCards = fastTrackEnabled
+        ? Array.from(fastTrackCardIds).map(idx => itemToCard.get(idx)).filter((c): c is Card => c != null)
+        : []
+
+      if (fastTrackedCards.length > 0) {
         const stateRepo = new SupabaseCardStateRepository()
-        // Map each previewItems index to its resulting Card
-        const itemToCard = new Map<number, Card>()
-        let createIdx = 0
-        for (let i = 0; i < items.length; i++) {
-          const it = items[i]!
-          if (it.action === 'merge' && it.duplicate?.existingCard) {
-            itemToCard.set(i, it.duplicate.existingCard)
-          } else {
-            const card = created[createIdx]
-            if (card) itemToCard.set(i, card)
-            createIdx++
-          }
-        }
-        const fastTrackedCards = Array.from(fastTrackCardIds)
-          .map(idx => itemToCard.get(idx))
-          .filter((c): c is Card => c != null)
-        if (fastTrackedCards.length > 0) {
-          const now      = new Date()
-          const dueDates = await batchFastTrackDueDates(session.user.id, fastTrackedCards.length, now, stateRepo)
-          const states   = fastTrackedCards.map((c, i) =>
-            fastTrackCardState(session.user.id, c.id, pipeline.id, dueDates[i]!, 30, now)
-          )
-          await stateRepo.upsertBatch(states)
-        }
+        const now      = new Date()
+        const dueDates = await batchFastTrackDueDates(session.user.id, fastTrackedCards.length, now, stateRepo)
+        const states   = fastTrackedCards.map((c, i) =>
+          fastTrackCardState(session.user.id, c.id, pipeline.id, dueDates[i]!, 30, now)
+        )
+        await stateRepo.upsertBatch(states)
       }
 
       // Trigger language sync server-side (survives tab switching / browser close).
@@ -538,6 +537,9 @@ export default function UploadPage() {
             targetLanguage: basisLang,
             cards: cardsToSync,
             fastTrackSyncMode: fastTrackEnabled ? syncFastTrackMode : 'none',
+            fastTrackSourceCardIds: fastTrackEnabled && syncFastTrackMode === 'new_only'
+              ? fastTrackedCards.map(c => c.id)
+              : undefined,
           }),
         })
       }
