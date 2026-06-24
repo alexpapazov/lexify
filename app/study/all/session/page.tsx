@@ -32,6 +32,7 @@ import { prefetchChoices, promoteConfusionDistractors, type PrefetchItem, type C
 import { getToday } from '@/lib/dates'
 
 const IDONTKNOW_REQUEUE_OFFSET = 4
+const REPEAT_REQUEUE_OFFSET = 6
 
 interface SessionCard {
   card:            Card
@@ -442,6 +443,19 @@ function AllDueSessionInner() {
     }
   }, [queue, index, userId, submitting])
 
+  const handleRepeat = useCallback(() => {
+    const current = queue[index]
+    if (!current) return
+    const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
+    setQueue(prev => {
+      const next = [...prev]
+      next.splice(insertAt, 0, { ...current })
+      return next
+    })
+    handleAnswer('good', true, '')
+  }, [queue, index, handleAnswer])
+
+
 
   const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
     setQueue(prev => prev.map(item => {
@@ -514,7 +528,7 @@ function AllDueSessionInner() {
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
-          onRepeat={stepWillComplete ? () => {} : undefined}
+          onRepeat={stepWillComplete ? handleRepeat : undefined}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
@@ -523,7 +537,7 @@ function AllDueSessionInner() {
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
-          onRepeat={stepWillComplete ? () => {} : undefined}
+          onRepeat={stepWillComplete ? handleRepeat : undefined}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />

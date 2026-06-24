@@ -33,6 +33,8 @@ import { triggerSyncFill } from '@/lib/triggerSyncFill'
 
 /** How many slots ahead an "I don't know" card is re-queued to resurface in the same session. */
 const IDONTKNOW_REQUEUE_OFFSET = 4
+/** How many slots ahead a "Repeat" card is re-queued (further than IDontKnow so it feels like "later"). */
+const REPEAT_REQUEUE_OFFSET = 6
 
 interface SessionCard {
   card: Card
@@ -720,6 +722,23 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     }
   }, [queue, index, userId, submitting])
 
+  /**
+   * "Repeat" — credits the current correct answer, then re-queues the card
+   * REPEAT_REQUEUE_OFFSET slots ahead so the learner sees it again later in
+   * the session rather than immediately.
+   */
+  const handleRepeat = useCallback(() => {
+    const current = queue[index]
+    if (!current) return
+    const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
+    setQueue(prev => {
+      const next = [...prev]
+      next.splice(insertAt, 0, { ...current })
+      return next
+    })
+    handleAnswer('good', true, '')
+  }, [queue, index, handleAnswer])
+
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (showElectivePicker && electivePickerData) {
@@ -853,7 +872,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
-          onRepeat={stepWillComplete ? () => {} : undefined}
+          onRepeat={stepWillComplete ? handleRepeat : undefined}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
@@ -891,7 +910,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
-          onRepeat={stepWillComplete ? () => {} : undefined}
+          onRepeat={stepWillComplete ? handleRepeat : undefined}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
