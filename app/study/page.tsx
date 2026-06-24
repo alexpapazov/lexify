@@ -7,6 +7,7 @@ import { SupabaseDeckRepository }      from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { getToday } from '@/lib/dates'
+import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState } from '@/domain'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
@@ -30,11 +31,13 @@ interface GlobalCounts {
 
 // A flat card entry for the cross-deck filtered view
 interface FilteredCard {
-  card:     Card
-  state:    CardState | undefined
-  deckName: string
-  deckId:   string
-  status:   string
+  card:           Card
+  state:          CardState | undefined
+  deckName:       string
+  deckId:         string
+  status:         string
+  sourceLanguage: string
+  targetLanguage: string
 }
 
 // One day's worth of upcoming-review forecast data
@@ -146,7 +149,7 @@ export default function StudyPage() {
       .map(card => {
         const s = stateMap.get(card.id)
         const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
-        return { card, state: s, deckName: deck.name, deckId: deck.id, status }
+        return { card, state: s, deckName: deck.name, deckId: deck.id, status, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
       })
   }) : []
 
@@ -167,7 +170,7 @@ export default function StudyPage() {
       })
       .map(card => {
         const s = stateMap.get(card.id)
-        return { card, state: s, deckName: deck.name, deckId: deck.id, status: 'Graduated' }
+        return { card, state: s, deckName: deck.name, deckId: deck.id, status: 'Graduated', sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
       })
   }) : []
 
@@ -331,7 +334,7 @@ export default function StudyPage() {
                   <div className="panel text-ink-muted text-sm text-center py-6">No cards found.</div>
                 ) : (
                   <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
-                    {forecastCards.map(({ card, deckName, deckId }) => (
+                    {forecastCards.map(({ card, deckName, deckId, sourceLanguage, targetLanguage }) => (
                       <Link
                         key={card.id}
                         href={`/study/${deckId}`}
@@ -341,7 +344,9 @@ export default function StudyPage() {
                           <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
                           <span className="text-ink-muted truncate">{card.back}</span>
                         </div>
-                        <span className="text-xs text-ink-faint hidden sm:block shrink-0 ml-2">{deckName}</span>
+                        <span className="text-xs text-ink-faint hidden sm:block shrink-0 ml-2">
+                          {langName(sourceLanguage)} / {langName(targetLanguage)} · {deckName}
+                        </span>
                       </Link>
                     ))}
                   </div>
