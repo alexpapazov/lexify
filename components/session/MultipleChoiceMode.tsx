@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import type { Card, CardChoices, CardSide, Rating } from '@/domain'
 import { buildOptions, ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
 import { speak } from '@/lib/speak'
+import { EditablePromptPanel } from './EditablePromptPanel'
 
 /**
  * Multiple-choice recall, used for pre-graduation "recognition" steps.
@@ -17,7 +18,7 @@ import { speak } from '@/lib/speak'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -46,6 +47,8 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   onAdvance?: () => void
   /** When provided, a Repeat button appears after a correct answer so the learner can practice the step once more. */
   onRepeat?: () => void
+  /** Double-click-to-edit on the prompt panel. newText='' means delete the card. */
+  onPromptEdit?: (newText: string) => void
 }) {
   const correct  = answerSide === 'front' ? card.front : card.back
 
@@ -119,7 +122,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
-        <p className="text-2xl font-medium text-ink">{prompt}</p>
+        <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />
         {promptSide === 'front' && (
           <button
             onClick={() => speak(prompt, sourceLanguage, card.audioData)}

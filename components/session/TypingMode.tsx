@@ -5,6 +5,7 @@ import type { Card, GradingSettings, GradingIssueType, GradingStatus, Rating } f
 import { gradeTyping, normalizeAnswer } from '@/engine/grading'
 import { speak } from '@/lib/speak'
 import { RatingButtons } from './RatingButtons'
+import { EditablePromptPanel } from './EditablePromptPanel'
 
 /**
  * Type-the-answer recall component.
@@ -20,7 +21,7 @@ import { RatingButtons } from './RatingButtons'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance,
+  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -42,6 +43,8 @@ export function TypingMode({
   onIDontKnow?: () => void
   /** Called to advance without rating — used after onIDontKnow has already recorded the penalty. */
   onAdvance?: () => void
+  /** Double-click-to-edit on the prompt panel. newText='' means delete the card. */
+  onPromptEdit?: (newText: string) => void
 }) {
   type LocalResult = {
     status:        GradingStatus
@@ -152,7 +155,7 @@ export function TypingMode({
 
       {/* Prompt */}
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
-        <p className="text-2xl font-medium text-ink">{prompt}</p>
+        <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />
         {promptLanguage && (
           <button
             onClick={() => speak(prompt, promptLanguage, card.audioData)}

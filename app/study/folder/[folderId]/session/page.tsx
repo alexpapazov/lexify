@@ -492,6 +492,30 @@ function FolderSessionInner() {
     }))
   }, [])
 
+  const handlePromptEdit = useCallback(async (cardId: string, promptSide: 'front' | 'back', newText: string) => {
+    const cardRepo = new SupabaseCardRepository()
+    if (!newText) {
+      await cardRepo.softDelete(cardId)
+      setQueue(prev => prev.filter(it => it.card.id !== cardId))
+      return
+    }
+    const currentItem = queue.find(it => it.card.id === cardId)
+    if (!currentItem) return
+    if (newText === (promptSide === 'front' ? currentItem.card.front : currentItem.card.back)) return
+    const patch = promptSide === 'front'
+      ? { front: newText, audioGenerated: false as const, audioData: null }
+      : { back: newText }
+    const updated = await cardRepo.update(cardId, patch)
+    setQueue(prev => prev.map(it => ({
+      ...it,
+      card:      it.card.id === cardId ? updated : it.card,
+      deckCards: it.deckCards.map(c => c.id === cardId ? updated : c),
+    })))
+    if (promptSide === 'front') {
+      void prefetchAudio([{ card: updated, sourceLanguage: currentItem.sourceLanguage }], handleAudioCached)
+    }
+  }, [queue, handleAudioCached])
+
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   const backHref = folder ? `/library/${folder.id}` : '/library'
@@ -562,7 +586,8 @@ function FolderSessionInner() {
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRepeat={stepWillComplete ? handleRepeat : undefined}
-          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
@@ -573,7 +598,8 @@ function FolderSessionInner() {
           onRepeat={stepWillComplete ? handleRepeat : undefined}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
-          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
           onRate={rating => handleAnswer(rating, rating !== 'again')} />
@@ -584,7 +610,8 @@ function FolderSessionInner() {
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
-          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
       )}
     </div>
   )

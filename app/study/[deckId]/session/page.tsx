@@ -458,6 +458,28 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentCardId, sessionAnsweredSynonyms])
 
+  const handlePromptEdit = useCallback(async (cardId: string, promptSide: 'front' | 'back', newText: string) => {
+    const cardRepo = new SupabaseCardRepository()
+    if (!newText) {
+      await cardRepo.softDelete(cardId)
+      setQueue(prev => prev.filter(it => it.card.id !== cardId))
+      setAllCards(prev => prev.filter(c => c.id !== cardId))
+      return
+    }
+    const existing = allCards.find(c => c.id === cardId)
+    if (!existing) return
+    if (newText === (promptSide === 'front' ? existing.front : existing.back)) return
+    const patch = promptSide === 'front'
+      ? { front: newText, audioGenerated: false as const, audioData: null }
+      : { back: newText }
+    const updated = await cardRepo.update(cardId, patch)
+    setAllCards(prev => prev.map(c => c.id === cardId ? updated : c))
+    setQueue(prev => prev.map(it => it.card.id === cardId ? { ...it, card: updated } : it))
+    if (promptSide === 'front') {
+      void prefetchAudio([{ card: updated, sourceLanguage }], handleAudioCached)
+    }
+  }, [allCards, sourceLanguage, handleAudioCached])
+
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
     const current = queue[index]
     if (!current) return
@@ -885,7 +907,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRepeat={stepWillComplete ? handleRepeat : undefined}
-          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
         // Stages 2 & 3 where group members have distinct expected answers.
@@ -925,7 +948,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onRepeat={stepWillComplete ? handleRepeat : undefined}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
-          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)} />
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
@@ -950,7 +974,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
-          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
+          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
       )}
     </div>
   )
