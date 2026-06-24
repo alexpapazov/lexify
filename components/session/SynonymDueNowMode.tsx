@@ -49,7 +49,11 @@ export function SynonymDueNowMode({
     typed: string
   } | null>(null)
 
-  const preGrayed = synonymMembers.filter(m => preAnsweredIds.has(m.id))
+  // Exclude any member already shown in sessionCompleted to prevent duplicates
+  // (parent adds typed synonyms to preAnsweredIds after onSynonymTyped fires)
+  const preGrayed = synonymMembers.filter(
+    m => preAnsweredIds.has(m.id) && !sessionCompleted.some(c => c.card.id === m.id),
+  )
   const remaining = synonymMembers.filter(
     m => !preAnsweredIds.has(m.id) && !sessionCompleted.some(c => c.card.id === m.id),
   )
@@ -135,6 +139,22 @@ export function SynonymDueNowMode({
             </button>
           </div>
         </div>
+      )}
+
+      {/* Typed answer for the due card — stays visible after checking */}
+      {result && (
+        <input
+          className={`input text-center text-lg font-mono ${
+            result.correct
+              ? 'opacity-40 cursor-default'
+              : result.almost
+                ? 'border-warning/60 bg-warning/5'
+                : 'border-danger/60 bg-danger/5'
+          }`}
+          value={result.typed}
+          readOnly
+          disabled
+        />
       )}
 
       {/* Result + rating */}
