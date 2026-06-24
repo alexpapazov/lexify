@@ -76,19 +76,22 @@ The real flashcard pair is:
 Before generating distractors, identify ALL valid alternate translations/synonyms
 so you can guarantee NONE of them appear as distractors.
 
-3. "backSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${tgtLang}
+"backSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${tgtLang}
    that are genuine synonyms, near-synonyms, or equally valid translations of
    "${back}". These will be accepted as correct answers. If none exist, return [].
    Example: if "${back}" is "to do", return ["to make"] if "${front}" is a verb
    like "faire" that means both. Example: if "${back}" is "puppy", return ["pup"].
 
-4. "frontSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${srcLang}
-   that are genuine synonyms or equally valid forms of "${front}". If none
-   exist, return []. Example: if "${front}" is "el auto", return ["el coche", "el carro"].
+"frontSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${srcLang}
+   that are genuine synonyms, alternate spellings, or equally valid forms of "${front}".
+   INCLUDE alternate compound forms: e.g. if "${front}" is "춤추다", also include
+   "춤을 추다"; if "${front}" is "공부하다", also include "공부를 하다".
+   If none exist, return [].
+   Example: if "${front}" is "el auto", return ["el coche", "el carro"].
 
 ━━━ STEP 2: GENERATE DISTRACTORS (wrong-answer options only) ━━━
 
-CRITICAL RULE: A distractor must NEVER be a correct translation of "${front}".
+CRITICAL RULE: A distractor must NEVER be a correct or near-correct translation of "${front}".
 Before adding any word to backDistractors, ask yourself: "Could a native
 ${tgtLang} speaker reasonably use this word to translate '${front}'?" If YES,
 it must go in backSynonyms instead — never in backDistractors.
@@ -98,6 +101,11 @@ it must go in backSynonyms instead — never in backDistractors.
    words/phrases in ${tgtLang} that are from the SAME SEMANTIC CATEGORY as
    "${back}" and CANNOT be a correct translation of "${front}".
 
+   FORM RULE: Every distractor MUST be in the EXACT SAME grammatical form as
+   "${back}". If "${back}" is an infinitive ("to dance"), ALL distractors must
+   be infinitives ("to sing", not "singing" or "danced"). If "${back}" is a noun,
+   use nouns. Never change the grammatical form.
+
    FORMALITY RULE: Distractors must match the register and everyday naturalness
    of "${back}". Use common, natural words a native speaker would actually say.
    NEVER use archaic, clinical, or contrived phrasings. If "${back}" is "puppy",
@@ -106,15 +114,26 @@ it must go in backSynonyms instead — never in backDistractors.
    If "${back}" is "joy", valid distractors are "anger", "sadness", "fear" —
    NOT "happiness", "delight" (synonyms), and NOT "mirth" (archaic/unusual register).
 
-   Similar in part of speech and grammatical form to "${back}". Distinct from
-   each other, from backSynonyms, and from: ${avoidBack.join(', ') || '(none)'}.
+   Distinct from each other, from backSynonyms, and from: ${avoidBack.join(', ') || '(none)'}.
 
 2. "frontDistractors" — used when the learner sees "${back}" (in ${tgtLang})
    and must pick the matching word in ${srcLang}. Generate ${DISTRACTORS_PER_SIDE}
    words/phrases in ${srcLang} that LOOK / SOUND SIMILAR to "${front}" —
    similar spelling, letter patterns, length, or word root — so the learner
    has to recall the exact word rather than just recognizing the "shape" of it.
-   These do NOT need to be related in meaning to "${front}" at all.
+
+   CRITICAL FORM RULE: Every frontDistractor MUST use the EXACT SAME grammatical
+   form as "${front}". If "${front}" is a Korean verb in dictionary form (-다), ALL
+   distractors must also end in -다 — NEVER use conjugated forms like -면, -어서,
+   -었다, -고, etc. If "${front}" is a Spanish infinitive (-ar/-er/-ir), all
+   distractors must also be infinitives. Match the exact morphological form.
+
+   CRITICAL SYNONYM RULE: A frontDistractor must NEVER be an alternate way of
+   writing the SAME word as "${front}". If "${front}" is "춤추다", do NOT use
+   "춤을 추다" as a distractor — that is an alternate form of the same verb and
+   belongs in frontSynonyms instead.
+
+   These do NOT need to be related in meaning to "${front}".
    Example: if "${front}" is "llenar", valid distractors are "llamar", "llover", "llegar".
    Distinct from each other, from frontSynonyms, and from: ${avoidFront.join(', ') || '(none)'}.
 
@@ -183,11 +202,28 @@ Respond with ONLY a JSON object, no other text:
     const backSynonymNorms  = normSet([back,  ...backSynonyms])
     const frontSynonymNorms = normSet([front, ...frontSynonyms])
 
-    // Belt-and-suspenders: strip any distractor that is actually a correct answer
+    // Returns true if candidate is an alternate form / near-synonym of correct.
+    function isNearSynonym(correct: string, candidate: string): boolean {
+      const nc = correct.trim().toLowerCase().replace(/\s+/g, '')
+      const nd = candidate.trim().toLowerCase().replace(/\s+/g, '')
+      if (nc === nd) return true
+      // One contains the other after stripping whitespace (catches 춤추다 vs 춤을추다)
+      if (nc.includes(nd) || nd.includes(nc)) return true
+      // Shared prefix of length ≥ 3 (catches "pup" / "puppy")
+      const minLen = Math.min(nc.length, nd.length)
+      if (minLen >= 3 && nc.slice(0, minLen) === nd.slice(0, minLen)) return true
+      return false
+    }
+
+    // Belt-and-suspenders: strip any distractor that is a correct answer or near-synonym
+    const allFrontCorrect = [front, ...frontSynonyms]
+    const allBackCorrect  = [back,  ...backSynonyms]
     const frontDistractors = toStringList(parsed.frontDistractors)
       .filter(d => !frontSynonymNorms.has(d.trim().toLowerCase()))
+      .filter(d => !allFrontCorrect.some(c => isNearSynonym(c, d)))
     const backDistractors  = toStringList(parsed.backDistractors)
       .filter(d => !backSynonymNorms.has(d.trim().toLowerCase()))
+      .filter(d => !allBackCorrect.some(c => isNearSynonym(c, d)))
 
     if (frontDistractors.length === 0 && backDistractors.length === 0) {
       return NextResponse.json({ ok: false, reason: 'parse-error' })
