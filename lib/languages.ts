@@ -35,6 +35,17 @@ export const LANGUAGES: Language[] = [
   { code: 'bsl', name: 'BSL',         nativeName: 'BSL',              flag: '🇬🇧' },
 ]
 
+/**
+ * Language codes known to be well-supported by OpenAI TTS (tts-1 model).
+ * Sign languages (asl, bsl) and any language not in this set should not
+ * trigger audio generation — the model won't produce accurate output.
+ */
+export const TTS_SUPPORTED_LANGUAGES = new Set([
+  'en','es','fr','de','it','pt','nl','ru','zh','ja','ko',
+  'ar','hi','tr','pl','sv','no','da','fi','el','he','uk',
+  'bg','cs','hu','ro','vi','th','id','ms',
+])
+
 export function langName(code: string): string {
   return LANGUAGES.find(l => l.code === code)?.name ?? code.toUpperCase()
 }

@@ -6,12 +6,21 @@ const SPEECH_LANG: Record<string, string> = {
 }
 
 /**
- * Speaks `text` aloud using the browser's built-in Web Speech API.
- * Cancels any currently-playing speech first.
- * No-ops on environments that don't support speechSynthesis (SSR, old browsers).
+ * Plays audio for `text` in `langCode`.
+ * If `audioData` (base64 mp3 from OpenAI TTS) is provided, plays that
+ * directly — better quality, works on all platforms.
+ * Falls back to the browser Web Speech API when no cached audio exists.
  */
-export function speak(text: string, langCode: string): void {
-  if (typeof window === 'undefined' || !window.speechSynthesis) return
+export function speak(text: string, langCode: string, audioData?: string | null): void {
+  if (typeof window === 'undefined') return
+
+  if (audioData) {
+    const audio = new Audio(`data:audio/mp3;base64,${audioData}`)
+    audio.play().catch(() => {})
+    return
+  }
+
+  if (!window.speechSynthesis) return
   window.speechSynthesis.cancel()
   const utt = new SpeechSynthesisUtterance(text)
   utt.lang = SPEECH_LANG[langCode] ?? langCode

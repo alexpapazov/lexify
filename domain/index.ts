@@ -198,6 +198,11 @@ export interface Card {
   syncedFromLanguages?: string[]
   /** Learned-language words from every source card that produced this card (e.g. ['rojo', 'rosso']). */
   originWords?:         string[]
+  // ── AI-generated audio (source/target language only) ─────────────────────
+  /** True once OpenAI TTS audio has been fetched and stored for this card's front (source language). */
+  audioGenerated?: boolean
+  /** Base64-encoded mp3 for card.front, produced by OpenAI TTS. Null until generated. */
+  audioData?:      string | null
 }
 
 // ─── Synonym groups ───────────────────────────────────────────────────────────

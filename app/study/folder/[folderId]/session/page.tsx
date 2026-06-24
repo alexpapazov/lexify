@@ -192,7 +192,7 @@ function FolderSessionInner() {
           if (item.state.graduated || step.stepType !== 'recognition') return null
           return { card: item.card, side: step.answerSide, deckCards: item.deckCards, sourceLanguage: item.sourceLanguage, targetLanguage: item.targetLanguage }
         }).filter((x): x is PrefetchItem => x !== null)
-        void prefetchChoices(prefetchItems, handleChoicesCached)
+        void prefetchChoices(prefetchItems, handleChoicesCached, 2, handleAudioCached)
         return
       }
 
@@ -270,7 +270,7 @@ function FolderSessionInner() {
           return { card: item.card, side: step.answerSide, deckCards: item.deckCards, sourceLanguage: item.sourceLanguage, targetLanguage: item.targetLanguage }
         })
         .filter((x): x is PrefetchItem => x !== null)
-      void prefetchChoices(prefetchItems, handleChoicesCached)
+      void prefetchChoices(prefetchItems, handleChoicesCached, 2, handleAudioCached)
 
       // Promote frequently-confused words into cached distractors for
       // upcoming recognition steps (all of them — this is cheap, no AI
@@ -482,6 +482,14 @@ function FolderSessionInner() {
     }))
   }, [])
 
+  const handleAudioCached = useCallback((cardId: string, audioData: string) => {
+    setQueue(prev => prev.map(item => {
+      if (item.card.id !== cardId) return item
+      const card = { ...item.card, audioGenerated: true, audioData }
+      return { ...item, card, deckCards: item.deckCards.map(c => c.id === cardId ? card : c) }
+    }))
+  }, [])
+
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   const backHref = folder ? `/library/${folder.id}` : '/library'
@@ -554,7 +562,7 @@ function FolderSessionInner() {
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
-          promptLanguage={step.promptSide === 'front' ? sourceLanguage : targetLanguage}
+          promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
@@ -568,7 +576,7 @@ function FolderSessionInner() {
           onRate={rating => handleAnswer(rating, rating !== 'again')} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
-          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : targetLanguage}
+          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}

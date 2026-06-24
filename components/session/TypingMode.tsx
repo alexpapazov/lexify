@@ -155,7 +155,7 @@ export function TypingMode({
         <p className="text-2xl font-medium text-ink">{prompt}</p>
         {promptLanguage && (
           <button
-            onClick={() => speak(prompt, promptLanguage)}
+            onClick={() => speak(prompt, promptLanguage, card.audioData)}
             title="Listen"
             className="absolute bottom-3 left-1/2 -translate-x-1/2 text-ink-faint hover:text-ink-muted transition-colors"
           >

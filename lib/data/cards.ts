@@ -32,6 +32,8 @@ function rowToCard(row: Record<string, unknown>): Card {
     originWords: Array.isArray(row.origin_words) && (row.origin_words as string[]).length > 0
       ? (row.origin_words as string[])
       : row.origin_word ? [(row.origin_word as string)] : [],
+    audioGenerated: (row.audio_generated as boolean | null) ?? false,
+    audioData:      (row.audio_data as string | null) ?? null,
   }
 }
 
@@ -147,8 +149,15 @@ export class SupabaseCardRepository implements CardRepository {
     if (error) throw new Error(error.message)
   }
 
-  async update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints' | 'choices'>>): Promise<Card> {
-    const { data, error } = await this.db.from('cards').update(patch).eq('id', cardId).select().single()
+  async update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints' | 'choices' | 'audioGenerated' | 'audioData'>>): Promise<Card> {
+    const dbPatch: Record<string, unknown> = {}
+    if (patch.front          !== undefined) dbPatch.front           = patch.front
+    if (patch.back           !== undefined) dbPatch.back            = patch.back
+    if (patch.hints          !== undefined) dbPatch.hints           = patch.hints
+    if (patch.choices        !== undefined) dbPatch.choices         = patch.choices
+    if (patch.audioGenerated !== undefined) dbPatch.audio_generated = patch.audioGenerated
+    if (patch.audioData      !== undefined) dbPatch.audio_data      = patch.audioData
+    const { data, error } = await this.db.from('cards').update(dbPatch).eq('id', cardId).select().single()
     if (error) throw new Error(error.message)
     return rowToCard(data)
   }

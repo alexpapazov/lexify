@@ -149,6 +149,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setQueue(prev => prev.map(item => item.card.id === cardId ? { ...item, card: { ...item.card, choices } } : item))
   }, [])
 
+  const handleAudioCached = useCallback((cardId: string, audioData: string) => {
+    setAllCards(prev => prev.map(c => c.id === cardId ? { ...c, audioGenerated: true, audioData } : c))
+    setQueue(prev => prev.map(item => item.card.id === cardId ? { ...item, card: { ...item.card, audioGenerated: true, audioData } } : item))
+  }, [])
+
   /**
    * Commits a built queue (from the normal new/due flow, a ?category=
    * elective queue, or the elective picker) and kicks off the same
@@ -176,7 +181,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         return { card: item.card, side: step.answerSide, deckCards: ctx.deckCards, sourceLanguage: ctx.sourceLanguage, targetLanguage: ctx.targetLanguage }
       })
       .filter((x): x is PrefetchItem => x !== null)
-    void prefetchChoices(prefetchItems, handleChoicesCached)
+    void prefetchChoices(prefetchItems, handleChoicesCached, 2, handleAudioCached)
 
     // Promote frequently-confused words into cached distractors for
     // upcoming recognition steps (all of them — this is cheap, no AI calls).
@@ -905,7 +910,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       ) : !state.graduated ? (
         // ── Pipeline single-field typing (or stage 3 with shared back) ───────
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
-          promptLanguage={step.promptSide === 'front' ? sourceLanguage : targetLanguage}
+          promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings!} gradedReview={false}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
@@ -933,7 +938,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       ) : (
         // ── Post-graduation typed recall (no synonym group) ───────────────────
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
-          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : targetLanguage}
+          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings!} gradedReview={true}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}

@@ -21,7 +21,7 @@
 
 import type { Card, CardSide, CardChoices, CardConfusion } from '@/domain'
 import { SupabaseCardRepository } from '@/lib/data/cards'
-import { langName } from '@/lib/languages'
+import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 
 export const OPTIONS_NEEDED = 4
 
@@ -267,17 +267,40 @@ export interface PrefetchItem {
   targetLanguage: string
 }
 
+async function fetchAndCacheAudio(
+  card: Card,
+  sourceLanguage: string,
+  onAudioCached: (cardId: string, audioData: string) => void,
+): Promise<void> {
+  if (card.audioGenerated || !TTS_SUPPORTED_LANGUAGES.has(sourceLanguage)) return
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: card.front, language: sourceLanguage }),
+    })
+    const data = await res.json()
+    if (!data.ok || !data.audioData) return
+    const cardRepo = new SupabaseCardRepository()
+    await cardRepo.update(card.id, { audioGenerated: true, audioData: data.audioData })
+    onAudioCached(card.id, data.audioData)
+  } catch {
+    // Best-effort — card will still show without AI audio.
+  }
+}
+
 /**
  * Background pre-generation of multiple-choice distractors for upcoming
  * session cards, so `MultipleChoiceMode` rarely has to show "Loading
  * choices…" — by the time a card comes up, its options are usually already
- * cached. Runs with limited concurrency and fails silently per-card (the
- * card just falls back to lazy loading when it's actually shown).
+ * cached. Also co-triggers TTS audio generation for cards that don't have it yet.
+ * Runs with limited concurrency and fails silently per-card.
  */
 export async function prefetchChoices(
   items: PrefetchItem[],
   onCached: (cardId: string, choices: CardChoices) => void,
   concurrency = 2,
+  onAudioCached?: (cardId: string, audioData: string) => void,
 ): Promise<void> {
   let next = 0
   async function worker() {
@@ -285,9 +308,10 @@ export async function prefetchChoices(
       const item = items[next++]
       if (!item) continue
       try {
-        const aiChoices = await ensureChoicesGenerated(
-          item.card, item.side, item.deckCards, item.sourceLanguage, item.targetLanguage,
-        )
+        const [aiChoices] = await Promise.all([
+          ensureChoicesGenerated(item.card, item.side, item.deckCards, item.sourceLanguage, item.targetLanguage),
+          onAudioCached ? fetchAndCacheAudio(item.card, item.sourceLanguage, onAudioCached) : Promise.resolve(),
+        ])
         if (aiChoices) onCached(item.card.id, aiChoices)
       } catch {
         // Best-effort — the card will fall back to deck-based choices when shown.

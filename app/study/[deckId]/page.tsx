@@ -20,7 +20,7 @@ import { triggerSyncFill }                   from '@/lib/triggerSyncFill'
 import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
-import { langName } from '@/lib/languages'
+import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { classifyReviewMode } from '@/engine/scheduler'
 import { initialCardState } from '@/engine/pipeline'
 
@@ -93,8 +93,10 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [resetting,   setResetting]   = useState(false)
   const [resetError,  setResetError]  = useState<string | null>(null)
   const [resetDone,   setResetDone]   = useState<string | null>(null)
-  const [graduating,  setGraduating]  = useState(false)
-  const [confusions,  setConfusions]  = useState<CardConfusion[]>([])
+  const [graduating,       setGraduating]       = useState(false)
+  const [confusions,       setConfusions]       = useState<CardConfusion[]>([])
+  const [generatingAudio,  setGeneratingAudio]  = useState(false)
+  const [audioError,       setAudioError]       = useState<string | null>(null)
   const frontRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { frontRef.current?.focus() }, [])
@@ -135,6 +137,31 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
       [{ card: resetCard, side: 'front', deckCards: resetDeckCards, sourceLanguage, targetLanguage }],
       (_cardId, choices) => onCardChange({ ...resetCard, choices }),
     )
+  }
+
+  /** Fetches AI TTS audio for the card's front (source language) and saves it. */
+  async function generateAudio() {
+    setGeneratingAudio(true)
+    setAudioError(null)
+    try {
+      const res  = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: card.front, language: sourceLanguage }),
+      })
+      const data = await res.json()
+      if (!data.ok || !data.audioData) {
+        setAudioError('Audio generation failed. Try again.')
+        return
+      }
+      const cardRepo = new SupabaseCardRepository()
+      const updated  = await cardRepo.update(card.id, { audioGenerated: true, audioData: data.audioData })
+      onCardChange(updated)
+    } catch {
+      setAudioError('Audio generation failed. Try again.')
+    } finally {
+      setGeneratingAudio(false)
+    }
   }
 
   /** Wipes spaced-repetition progress back to "never studied", preserving when the card was first introduced. */
@@ -292,6 +319,29 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
         )}
         {resetDone && (
           <p className="text-success text-xs bg-success/10 border border-success/20 rounded-lg px-3 py-2">✓ {resetDone}</p>
+        )}
+
+        {/* Audio generation — only for supported source languages */}
+        {TTS_SUPPORTED_LANGUAGES.has(sourceLanguage) && (
+          <div className="space-y-1.5">
+            {!card.audioGenerated ? (
+              <button
+                onClick={generateAudio}
+                disabled={generatingAudio}
+                className="w-full text-left px-3 py-2 rounded-lg border border-white/10 hover:bg-surface-raised/50 text-ink-muted text-xs transition-colors disabled:opacity-40"
+              >
+                {generatingAudio ? 'Generating audio…' : '🔊 Generate Audio'}
+                <span className="block text-ink-faint font-normal mt-0.5">
+                  Fetch AI-generated pronunciation for &ldquo;{card.front}&rdquo;
+                </span>
+              </button>
+            ) : (
+              <p className="text-success text-xs px-1">✓ Audio ready</p>
+            )}
+            {audioError && (
+              <p className="text-danger text-xs">{audioError}</p>
+            )}
+          </div>
         )}
 
         {showStats && (
