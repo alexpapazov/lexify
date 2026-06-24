@@ -181,6 +181,14 @@ Once out of the mandatory window and no force condition applies:
 
 ---
 
+## Fast-tracked cards and the due-now queue
+
+Cards that bypassed the learning pipeline via fast-track enter the due-now queue directly. Their first `dueAt` is set 30 days out (initial `intervalDays = 30`), spread across the next 14 days using the load-balancing algorithm described in `features/Learning Pipeline.md`.
+
+From the scheduler's perspective, a fast-tracked card is identical to a normally-graduated card. The only difference is that `graduatedAt` and `introducedDate` are both set to the upload date, and `reps = 0` (no prior reviews), so the mandatory typed window applies immediately (≥ 14 days since graduation, ≥ 4 typed reviews, ≥ 85% accuracy before self-graded mode becomes available).
+
+---
+
 ## Error log
 
 | Date | Error | Fix |
