@@ -52,7 +52,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   // Pick one gloss word randomly on mount (stable for this card show via key remount).
   const [glossWord] = useState<string | null>(() => {
     if (!splitGlossFromBack) return null
-    const words = card.back.split(',').map(w => w.trim()).filter(Boolean)
+    const words = card.back.split(/[,/]/).map(w => w.trim()).filter(Boolean)
     if (words.length <= 1) return null
     return words[Math.floor(Math.random() * words.length)] ?? null
   })

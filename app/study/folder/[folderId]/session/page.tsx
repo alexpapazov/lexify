@@ -557,6 +557,7 @@ function FolderSessionInner() {
       {!state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
+          splitGlossFromBack={step.answerSide === 'back'}
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}

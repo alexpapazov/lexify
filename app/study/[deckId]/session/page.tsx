@@ -880,7 +880,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           deckCards={allCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage}
           excludeAnswerTexts={step.answerSide === 'front' && synMemberCards.length > 0
             ? synMemberCards.map(m => m.front) : undefined}
-          splitGlossFromBack={step.answerSide === 'back' && synMemberCards.length > 0}
+          splitGlossFromBack={step.answerSide === 'back'}
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
