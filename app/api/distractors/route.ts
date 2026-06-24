@@ -71,46 +71,52 @@ The real flashcard pair is:
 - ${srcLang}: "${front}"
 - ${tgtLang}: "${back}"
 
-You need to generate FOUR separate lists:
+━━━ STEP 1: IDENTIFY SYNONYMS FIRST ━━━
 
-━━━ DISTRACTORS (wrong-answer options) ━━━
+Before generating distractors, identify ALL valid alternate translations/synonyms
+so you can guarantee NONE of them appear as distractors.
+
+3. "backSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${tgtLang}
+   that are genuine synonyms, near-synonyms, or equally valid translations of
+   "${back}". These will be accepted as correct answers. If none exist, return [].
+   Example: if "${back}" is "to do", return ["to make"] if "${front}" is a verb
+   like "faire" that means both. Example: if "${back}" is "puppy", return ["pup"].
+
+4. "frontSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${srcLang}
+   that are genuine synonyms or equally valid forms of "${front}". If none
+   exist, return []. Example: if "${front}" is "el auto", return ["el coche", "el carro"].
+
+━━━ STEP 2: GENERATE DISTRACTORS (wrong-answer options only) ━━━
+
+CRITICAL RULE: A distractor must NEVER be a correct translation of "${front}".
+Before adding any word to backDistractors, ask yourself: "Could a native
+${tgtLang} speaker reasonably use this word to translate '${front}'?" If YES,
+it must go in backSynonyms instead — never in backDistractors.
 
 1. "backDistractors" — used when the learner sees "${front}" (in ${srcLang})
    and must pick its meaning in ${tgtLang}. Generate ${DISTRACTORS_PER_SIDE}
    words/phrases in ${tgtLang} that are from the SAME SEMANTIC CATEGORY as
-   "${back}" but have CLEARLY DIFFERENT DENOTATIONS — not synonyms, not
-   near-synonyms, not alternate translations. The learner must be genuinely
-   wrong to pick one.
-   CRITICAL: if "${back}" means "puppy", then "pup" and "puppy dog" are
-   INVALID (synonyms). Valid distractors are "kitten", "bunny", "duckling" —
-   different animals in the same category.
-   Example: if "${back}" is "joy", valid distractors are "anger", "sadness",
-   "fear" — NOT "happiness", "delight", or "elation" (all synonyms of joy).
+   "${back}" and CANNOT be a correct translation of "${front}".
+
+   FORMALITY RULE: Distractors must match the register and everyday naturalness
+   of "${back}". Use common, natural words a native speaker would actually say.
+   NEVER use archaic, clinical, or contrived phrasings. If "${back}" is "puppy",
+   valid distractors are "kitten", "bunny", "duckling" — NOT "canine infant",
+   "small hound", or "young dog" (these are either wrong register or near-synonyms).
+   If "${back}" is "joy", valid distractors are "anger", "sadness", "fear" —
+   NOT "happiness", "delight" (synonyms), and NOT "mirth" (archaic/unusual register).
+
    Similar in part of speech and grammatical form to "${back}". Distinct from
-   each other and from: ${avoidBack.join(', ') || '(none)'}.
+   each other, from backSynonyms, and from: ${avoidBack.join(', ') || '(none)'}.
 
 2. "frontDistractors" — used when the learner sees "${back}" (in ${tgtLang})
    and must pick the matching word in ${srcLang}. Generate ${DISTRACTORS_PER_SIDE}
    words/phrases in ${srcLang} that LOOK / SOUND SIMILAR to "${front}" —
    similar spelling, letter patterns, length, or word root — so the learner
-   has to recall the exact word rather than just recognizing the "shape" of
-   it. These do NOT need to be related in meaning to "${front}" at all.
-   Example: if "${front}" is "llenar", valid distractors are "llamar",
-   "llover", "llegar". Distinct from each other and from: ${avoidFront.join(', ') || '(none)'}.
-
-━━━ SYNONYMS (alternate correct answers to ACCEPT, NOT show as distractors) ━━━
-
-3. "backSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${tgtLang}
-   that are genuine synonyms, near-synonyms, or equally valid translations of
-   "${back}". These will be accepted as correct if the learner types or picks
-   them. If "${back}" has no common synonyms, return an empty list [].
-   Example: if "${back}" is "puppy", return ["pup", "puppy dog"].
-   Example: if "${back}" is "joy", return ["happiness", "delight"].
-
-4. "frontSynonyms" — up to ${SYNONYMS_PER_SIDE} words/phrases in ${srcLang}
-   that are genuine synonyms or equally valid forms of "${front}". If none
-   exist, return []. Example: if "${front}" is "el auto", return ["el coche",
-   "el carro"].
+   has to recall the exact word rather than just recognizing the "shape" of it.
+   These do NOT need to be related in meaning to "${front}" at all.
+   Example: if "${front}" is "llenar", valid distractors are "llamar", "llover", "llegar".
+   Distinct from each other, from frontSynonyms, and from: ${avoidFront.join(', ') || '(none)'}.
 
 ━━━ FORMATTING RULE ━━━
 
@@ -170,15 +176,22 @@ Respond with ONLY a JSON object, no other text:
         .filter(Boolean)
     }
 
+    const frontSynonyms = toStringList(parsed.frontSynonyms)
+    const backSynonyms  = toStringList(parsed.backSynonyms)
+
+    const normSet = (terms: string[]) => new Set(terms.map(s => s.trim().toLowerCase()))
+    const backSynonymNorms  = normSet([back,  ...backSynonyms])
+    const frontSynonymNorms = normSet([front, ...frontSynonyms])
+
+    // Belt-and-suspenders: strip any distractor that is actually a correct answer
     const frontDistractors = toStringList(parsed.frontDistractors)
+      .filter(d => !frontSynonymNorms.has(d.trim().toLowerCase()))
     const backDistractors  = toStringList(parsed.backDistractors)
+      .filter(d => !backSynonymNorms.has(d.trim().toLowerCase()))
 
     if (frontDistractors.length === 0 && backDistractors.length === 0) {
       return NextResponse.json({ ok: false, reason: 'parse-error' })
     }
-
-    const frontSynonyms = toStringList(parsed.frontSynonyms)
-    const backSynonyms  = toStringList(parsed.backSynonyms)
 
     return NextResponse.json({
       ok: true,
