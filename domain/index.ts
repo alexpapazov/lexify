@@ -72,6 +72,9 @@ export interface GradingSettings {
   // ── Smart AI mode ─────────────────────────────────────────────────────────
   /** Optional per-deck instructions for the AI grader (≤250 chars). */
   aiGradingInstructions?:      string
+  // ── Audio ─────────────────────────────────────────────────────────────────
+  /** When true (default), source-language audio plays automatically on card load and on correct answer. */
+  autoPlayAudio:               boolean
 }
 
 /** Default for new decks — strict mode, case-insensitive only. */
@@ -84,6 +87,7 @@ export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
   requireParentheticalContent: true,
   slashAlternativesMode:       'accept_any',
   commaAlternativesMode:       'split_into_cards',
+  autoPlayAudio:               true,
 }
 
 /** Defaults when converting an existing deck to flexible mode. */
@@ -95,6 +99,7 @@ export const DEFAULT_FLEXIBLE_SETTINGS: Omit<GradingSettings, 'gradingMode'> = {
   requireParentheticalContent: true,
   slashAlternativesMode:       'accept_any',
   commaAlternativesMode:       'split_into_cards',
+  autoPlayAudio:               true,
 }
 
 // ─── Folder ───────────────────────────────────────────────────────────────────

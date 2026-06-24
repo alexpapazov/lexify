@@ -18,7 +18,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, autoPlayAudio = true }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -49,6 +49,8 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   onRepeat?: () => void
   /** Double-click-to-edit on the prompt panel. newText='' means delete the card. */
   onPromptEdit?: (newText: string) => void
+  /** When false, suppresses automatic audio playback; the manual speaker button still works. */
+  autoPlayAudio?: boolean
 }) {
   const correct  = answerSide === 'front' ? card.front : card.back
 
@@ -84,7 +86,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     setRevealed(false)
 
     // Auto-play when source language is shown as the prompt (e.g. Korean on front).
-    if (promptSide === 'front') speak(card.front, sourceLanguage, card.audioData)
+    if (autoPlayAudio && promptSide === 'front') speak(card.front, sourceLanguage, card.audioData)
 
     if (!needsChoices(card, answerSide)) return
     let cancelled = false

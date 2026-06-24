@@ -21,7 +21,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, answerLanguage,
+  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, answerLanguage, autoPlayAudio = true,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -32,28 +32,14 @@ export function TypingMode({
   overrideAnswers?: string[]
   synonyms?:        string[]
   onOverrideAnswer?: (normalizedAnswer: string, accept: boolean) => void
-  /**
-   * Called when an answer is finalized.
-   * issueType is provided so the session can track per-card error counts.
-   */
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string, issueType?: GradingIssueType) => void
-  /** When provided, a Repeat button appears after a pre-graduation correct answer. */
   onRepeat?: () => void
-  /** Learn-mode only: called when "?" is pressed (heavy penalty + re-queue). */
   onIDontKnow?: () => void
-  /** Called to advance without rating — used after onIDontKnow has already recorded the penalty. */
   onAdvance?: () => void
-  /** Double-click-to-edit on the prompt panel. newText='' means delete the card. */
   onPromptEdit?: (newText: string) => void
-  /**
-   * When set to the source language code, enables two auto-play behaviours:
-   *   • prompt is source language → plays audio when card loads
-   *   • answer is source language → plays audio on a correct result
-   * Pass sourceLanguage when answerSide==='front' (typing the learned language)
-   * or when promptSide==='front' (source language shown as prompt).
-   * The component uses card.audioData for cached TTS, falling back to browser speech.
-   */
   answerLanguage?: string
+  /** When false, suppresses automatic audio playback; the manual speaker button still works. */
+  autoPlayAudio?: boolean
 }) {
   type LocalResult = {
     status:        GradingStatus
@@ -86,7 +72,7 @@ export function TypingMode({
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
   useEffect(() => {
-    if (promptLanguage) speak(card.front, promptLanguage, card.audioData)
+    if (autoPlayAudio && promptLanguage) speak(card.front, promptLanguage, card.audioData)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id])
 
@@ -144,7 +130,7 @@ export function TypingMode({
     setOverride(null)
     setRetype('')
     // Auto-play when typing the source language (e.g. typed Korean correctly).
-    if (effectivelyCorrect && answerLanguage) {
+    if (autoPlayAudio && effectivelyCorrect && answerLanguage) {
       speak(card.front, answerLanguage, card.audioData)
     }
   }

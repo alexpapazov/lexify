@@ -1376,6 +1376,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   const [ignoreDefiniteArticles, setIgnoreDefiniteArticles] = useState(gs.ignoreDefiniteArticles)
   const [requireParenContent,  setRequireParenContent]  = useState(gs.requireParentheticalContent)
   const [slashMode,            setSlashMode]            = useState(gs.slashAlternativesMode)
+  const [autoPlayAudio,        setAutoPlayAudio]        = useState(gs.autoPlayAudio ?? true)
   const [aiInstructions,       setAiInstructions]       = useState(gs.aiGradingInstructions ?? '')
 
   const [dailyLimit,        setDailyLimit]        = useState(Math.min(initialPrefs?.dailyNewCards ?? defaultLimit, maxCards))
@@ -1409,6 +1410,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
         ignoreDefiniteArticles,
         requireParentheticalContent: requireParenContent,
         slashAlternativesMode: slashMode,
+        autoPlayAudio,
         aiGradingInstructions: aiInstructions.trim() || undefined,
       }
       await Promise.all([
@@ -1674,6 +1676,15 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                   <p className="text-xs text-ink-faint">{aiInstructions.length}/250</p>
                 </div>
               )}
+            </div>
+
+            {/* ── Audio ── */}
+            <div className="space-y-3">
+              <p className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Audio</p>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={autoPlayAudio} onChange={e => setAutoPlayAudio(e.target.checked)} className="accent-accent w-4 h-4" />
+                <span className="text-sm text-ink">Auto-play target language audio</span>
+              </label>
             </div>
 
             {resetError && (

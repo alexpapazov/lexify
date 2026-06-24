@@ -581,6 +581,7 @@ function FolderSessionInner() {
       {!state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
+          autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
           splitGlossFromBack={step.answerSide === 'back'}
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
@@ -592,7 +593,7 @@ function FolderSessionInner() {
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={step.promptSide === 'back' ? sourceLanguage : undefined}
-          gradingSettings={gradingSettings} gradedReview={false} deckName={deckName}
+          gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={[...(step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])), ...deckSiblingAnswers(card, step.answerSide, deckCards)]}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
@@ -608,7 +609,7 @@ function FolderSessionInner() {
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : undefined}
-          gradingSettings={gradingSettings} gradedReview={true} deckName={deckName}
+          gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={[...(reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])), ...deckSiblingAnswers(card, reviewAnswerSide, deckCards)]}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
