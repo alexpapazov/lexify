@@ -1641,6 +1641,8 @@ export default function DeckDetailPage() {
   const [defaultSpillover, setDefaultSpillover] = useState(false)
   const [loading,          setLoading]          = useState(true)
   const [showGear,         setShowGear]         = useState(false)
+  const [renamingDeck,     setRenamingDeck]     = useState(false)
+  const [deckNameValue,    setDeckNameValue]    = useState('')
   const [editingCard,      setEditingCard]      = useState<Card | null>(null)
   const [syncingCard,      setSyncingCard]      = useState<Card | null>(null)
   const [addingCard,       setAddingCard]       = useState(false)
@@ -1727,6 +1729,15 @@ export default function DeckDetailPage() {
     const cardRepo = new SupabaseCardRepository()
     const created  = await cardRepo.bulkCreate(deckId, userId, deck.sourceLanguage, deck.targetLanguage, [{ front, back, position: cards.length }])
     if (created[0]) setCards(prev => [...prev, created[0]!])
+  }
+
+  async function handleRenameDeck() {
+    const name = deckNameValue.trim()
+    if (!name || !deck) return
+    const deckRepo = new SupabaseDeckRepository()
+    await deckRepo.update(deckId, { name })
+    setDeck(prev => prev ? { ...prev, name } : prev)
+    setRenamingDeck(false)
   }
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -1830,7 +1841,27 @@ export default function DeckDetailPage() {
           >
             ← {parentFolder ? parentFolder.name : 'Library'}
           </Link>
-          <h1 className="text-2xl font-semibold text-ink">{deck.name}</h1>
+          {renamingDeck ? (
+            <input
+              autoFocus
+              className="text-2xl font-semibold bg-transparent outline-none border-b border-accent text-ink w-full max-w-sm"
+              value={deckNameValue}
+              onChange={e => setDeckNameValue(e.target.value)}
+              onBlur={handleRenameDeck}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleRenameDeck()
+                if (e.key === 'Escape') setRenamingDeck(false)
+              }}
+            />
+          ) : (
+            <h1
+              className="text-2xl font-semibold text-ink cursor-text select-none"
+              title="Double-click to rename"
+              onDoubleClick={() => { setDeckNameValue(deck.name); setRenamingDeck(true) }}
+            >
+              {deck.name}
+            </h1>
+          )}
           <p className="text-ink-muted text-sm mt-1">
             {cards.length} cards · {deck.targetLanguage.toUpperCase()} · {activeLimit} new/day
             {(prefs?.spilloverDue ?? defaultSpillover) && <span className="text-warning ml-1">· spillover on</span>}

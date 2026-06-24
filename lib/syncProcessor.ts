@@ -24,6 +24,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { langName }          from '@/lib/languages'
 import { fastTrackCardState } from '@/engine/pipeline'
+import { getToday }           from '@/lib/dates'
 
 export const FILL_BATCH      = 5
 export const SYNC_FOLDER_NAME = 'SYNCED VOCABULARY'
@@ -94,11 +95,13 @@ Return ONLY a JSON object, no other text:
 interface PairRow { id: string; source_language: string; target_language: string }
 interface RuleRow { id: string; source_pair_id: string; destination_pair_id: string; mode: string }
 
-function formatSyncDate(date: Date): string {
-  const month = date.toLocaleDateString('en-US', { month: 'long' })
-  const day   = date.getDate()
-  const year  = date.getFullYear()
-  return `${month} ${day} ${year}`   // "June 23 2026"
+function formatSyncDate(tz: string): string {
+  const iso   = getToday(tz)           // "YYYY-MM-DD" in user's timezone
+  const date  = new Date(iso + 'T12:00:00Z')
+  const month = date.toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' })
+  const day   = date.getUTCDate()
+  const year  = date.getUTCFullYear()
+  return `${month} ${day} ${year}`     // "June 23 2026"
 }
 
 async function ensureInfra(
@@ -106,6 +109,7 @@ async function ensureInfra(
   userId:   string,
   srcPair:  PairRow,
   destPair: PairRow,
+  userTz:   string,
 ): Promise<{ deckId: string }> {
   // ── 1. Get or create the stable folder pair ───────────────────────────────
   //
@@ -220,7 +224,7 @@ async function ensureInfra(
   }
 
   // ── 2. Find or create today's date deck inside the source subfolder ───────
-  const todayLabel = formatSyncDate(new Date())
+  const todayLabel = formatSyncDate(userTz)
   const { data: existingDeck } = await db
     .from('decks')
     .select('id')
@@ -391,6 +395,13 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
   const src = pairs.find(p => p.source_language === sourceLanguage! && p.target_language === targetLanguage!)
   if (!src) return { pendingCount: 0 }
 
+  const { data: profileData } = await db
+    .from('profiles')
+    .select('timezone')
+    .eq('user_id', userId)
+    .maybeSingle()
+  const userTz = (profileData as { timezone?: string | null } | null)?.timezone ?? 'UTC'
+
   const { data: rulesData } = await db
     .from('language_sync_rules')
     .select('id, source_pair_id, destination_pair_id, mode, enabled')
@@ -408,7 +419,7 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
   // (no-state-row recovery) claims each root before the next language runs,
   // preventing two languages from competing for the same unclaimed root.
   for (const { pair: destPair, rule } of destinations) {
-    const infra = await ensureInfra(db, userId, src, destPair)
+    const infra = await ensureInfra(db, userId, src, destPair, userTz)
 
     // Find which source cards have already been synced to this destination.
     // We also fetch the synced_card_id so we can detect dead links — links whose
