@@ -20,7 +20,7 @@ import { RatingButtons } from './RatingButtons'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat,
+  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -38,6 +38,10 @@ export function TypingMode({
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string, issueType?: GradingIssueType) => void
   /** When provided, a Repeat button appears after a pre-graduation correct answer. */
   onRepeat?: () => void
+  /** Learn-mode only: called when "?" is pressed (heavy penalty + re-queue). */
+  onIDontKnow?: () => void
+  /** Called to advance without rating — used after onIDontKnow has already recorded the penalty. */
+  onAdvance?: () => void
 }) {
   type LocalResult = {
     status:        GradingStatus
@@ -54,6 +58,7 @@ export function TypingMode({
   const [result,   setResult]   = useState<LocalResult | null>(null)
   const [override, setOverride] = useState<boolean | null>(null)
   const [retype,   setRetype]   = useState('')
+  const [revealed, setRevealed] = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -61,6 +66,7 @@ export function TypingMode({
     setResult(null)
     setOverride(null)
     setRetype('')
+    setRevealed(false)
   }, [card.id])
 
   const prompt   = promptSide === 'front' ? card.front : card.back
@@ -159,10 +165,35 @@ export function TypingMode({
             </svg>
           </button>
         )}
+        {!result && !revealed && !gradedReview && onIDontKnow && (
+          <button
+            onClick={() => { onIDontKnow(); setRevealed(true) }}
+            title="I don't know"
+            className="absolute bottom-3 right-3 text-lg text-danger/70 hover:text-danger transition-colors leading-none"
+          >
+            ?
+          </button>
+        )}
       </div>
 
       {/* Input + feedback */}
       <div className="space-y-3">
+        {revealed ? (
+          <>
+            <input
+              className="input text-center text-lg font-mono border-danger/60 bg-danger/5"
+              value={expected}
+              readOnly
+              disabled
+            />
+            <div className="flex justify-center">
+              <button ref={continueRef} onClick={onAdvance} className="btn-primary px-10" autoFocus>
+                Continue
+              </button>
+            </div>
+          </>
+        ) : (
+        <>
         <input
           className={`input text-center text-lg font-mono ${
             !result ? '' :
@@ -175,7 +206,7 @@ export function TypingMode({
           onChange={e => { if (!result) setInput(e.target.value) }}
           onKeyDown={e => { if (e.key === 'Enter' && !result) check() }}
           disabled={!!result}
-          autoFocus
+          autoFocus={!revealed}
         />
 
         {!result ? (
@@ -297,6 +328,8 @@ export function TypingMode({
               )
             )}
           </div>
+        )}
+        </>
         )}
       </div>
     </div>
