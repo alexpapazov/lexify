@@ -83,6 +83,7 @@ function AllDueSessionInner() {
   const [userId,          setUserId]          = useState('')
   const [done,            setDone]            = useState(false)
   const [electiveSession, setElectiveSession] = useState(false)
+  const [studyModeAutoplay, setStudyModeAutoplay] = useState(true)
   const [answerError,     setAnswerError]     = useState<string | null>(null)
   const [submitting,      setSubmitting]      = useState(false)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
@@ -130,11 +131,12 @@ function AllDueSessionInner() {
       const [decks, pipeline, profileData] = await Promise.all([
         deckRepo.list(session.user.id),
         pipelineRepo.getDefault(),
-        supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay').eq('user_id', session.user.id).single(),
       ])
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
+      setStudyModeAutoplay((profileData.data?.study_mode_autoplay as boolean | null) ?? true)
       const now   = new Date()
       const today = getToday(tz, turnoverHour)
 
@@ -559,7 +561,7 @@ function AllDueSessionInner() {
       {!state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
-          autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
+          autoPlayAudio={studyModeAutoplay && (gradingSettings.autoPlayAudio ?? true)}
           splitGlossFromBack={step.answerSide === 'back'}
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
@@ -571,7 +573,7 @@ function AllDueSessionInner() {
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={step.promptSide === 'back' ? sourceLanguage : undefined}
-          gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={false} deckName={deckName}
+          gradingSettings={gradingSettings} autoPlayAudio={studyModeAutoplay && (gradingSettings.autoPlayAudio ?? true)} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={[...(step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])), ...deckSiblingAnswers(card, step.answerSide, deckCards)]}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
@@ -587,7 +589,7 @@ function AllDueSessionInner() {
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : undefined}
-          gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={true} deckName={deckName}
+          gradingSettings={gradingSettings} autoPlayAudio={studyModeAutoplay && (gradingSettings.autoPlayAudio ?? true)} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={[...(reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])), ...deckSiblingAnswers(card, reviewAnswerSide, deckCards)]}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}

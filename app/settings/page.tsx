@@ -307,9 +307,10 @@ export default function SettingsPage() {
   const [displayName,   setDisplayName]   = useState('')
   const [selectedLangs, setSelectedLangs] = useState<string[]>([])
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
-  const [spilloverDue,  setSpilloverDue]  = useState(false)
-  const [timezone,      setTimezone]      = useState('')
-  const [turnoverHour,  setTurnoverHour]  = useState(0)
+  const [spilloverDue,        setSpilloverDue]        = useState(false)
+  const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
+  const [timezone,            setTimezone]            = useState('')
+  const [turnoverHour,        setTurnoverHour]        = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [saved,         setSaved]         = useState(false)
   const [confirmReset,  setConfirmReset]  = useState(false)
@@ -333,7 +334,7 @@ export default function SettingsPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour')
+        .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay')
         .eq('user_id', uid)
         .single()
 
@@ -344,6 +345,7 @@ export default function SettingsPage() {
         setSelectedLangs((profile.learning_languages as string[]) ?? [])
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
+        setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
       } else {
         setTimezone(detectBrowserTimezone())
       }
@@ -361,6 +363,7 @@ export default function SettingsPage() {
       learning_languages:      selectedLangs,
       timezone:                timezone || null,
       day_turnover_hour:       turnoverHour,
+      study_mode_autoplay:     studyModeAutoplay,
     }).eq('user_id', session.user.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -478,6 +481,16 @@ export default function SettingsPage() {
             {spilloverDue
               ? 'Cards you miss accumulate — you may see more than your daily limit if you fall behind.'
               : 'Missed cards count toward tomorrow\'s limit — your daily total stays fixed at ' + dailyNewCards + '.'}
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={studyModeAutoplay} onChange={e => setStudyModeAutoplay(e.target.checked)} className="accent-accent w-4 h-4" />
+            <span className="text-sm text-ink">Auto-play audio in Study mode</span>
+          </label>
+          <p className="text-xs text-ink-faint pl-6">
+            When on, target language audio plays automatically during Study sessions (due now cards from the Study page).
           </p>
         </div>
       </div>
