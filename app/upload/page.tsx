@@ -834,6 +834,16 @@ export default function UploadPage() {
             </div>
           )}
 
+          {dupChecked && exactCount > 0 && (
+            <button
+              type="button"
+              className="btn-ghost text-sm text-danger/80 hover:text-danger self-start"
+              onClick={() => setPreviewItems(prev => prev.filter(it => it.duplicate?.tier !== 'exact'))}
+            >
+              Remove all exact duplicates ({exactCount})
+            </button>
+          )}
+
           <div className="flex gap-3">
             <button className="btn-primary" disabled={previewItems.length === 0 || saving} onClick={handleSaveDeck}>
               {saving ? 'Saving…' : saveLabel}
