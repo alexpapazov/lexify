@@ -815,7 +815,7 @@ export default function UploadPage() {
           </label>
           {fastTrackEnabled && (
             <p className="text-xs text-ink-faint pl-6">
-              {fastTrackCardIds.size} card{fastTrackCardIds.size !== 1 ? 's' : ''} selected — use the checkboxes above to deselect any you still want to learn normally
+              Checked cards ({fastTrackCardIds.size}) will be fast-tracked — uncheck any you still want to learn from scratch
             </p>
           )}
           {fastTrackEnabled && hasSyncRules && syncEnabled && (
