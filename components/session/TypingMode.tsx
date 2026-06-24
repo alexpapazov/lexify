@@ -68,10 +68,9 @@ export function TypingMode({
 
   const finalCorrect = override ?? result?.correct ?? false
 
-  // Post-grad: only retype for 'incorrect' (not 'almost').
+  // Post-grad: no retype — wrong answers auto-submit 'again' via a Continue button.
   // Pre-grad:  retype for both 'incorrect' and 'almost'.
-  const needsRetype = !!result && !finalCorrect &&
-    (result.status === 'incorrect' || !gradedReview)
+  const needsRetype = !!result && !finalCorrect && !gradedReview
 
   const retypeCorrect = needsRetype &&
     gradeTyping(retype, expected, gradingSettings).status === 'correct'
@@ -264,7 +263,19 @@ export function TypingMode({
             {/* Rating buttons / Continue (shown when no retype needed) */}
             {!needsRetype && (
               gradedReview ? (
-                <RatingButtons onRate={tryAdvance} suggestedRating={suggestedRating} />
+                finalCorrect ? (
+                  <RatingButtons onRate={tryAdvance} suggestedRating={suggestedRating} />
+                ) : (
+                  <div className="flex justify-center">
+                    <button
+                      ref={continueRef}
+                      onClick={() => tryAdvance('again')}
+                      className="btn-primary px-10"
+                    >
+                      Continue
+                    </button>
+                  </div>
+                )
               ) : (
                 <div className="flex justify-center gap-3">
                   {onRepeat && finalCorrect && (
