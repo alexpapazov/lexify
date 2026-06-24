@@ -57,7 +57,9 @@ export async function POST(req: NextRequest) {
     })
 
     if (!res.ok) {
-      return NextResponse.json({ ok: false, reason: 'api-error' })
+      const errText = await res.text().catch(() => '')
+      console.error('[TTS] OpenAI error', res.status, errText)
+      return NextResponse.json({ ok: false, reason: 'api-error', status: res.status })
     }
 
     const buffer   = await res.arrayBuffer()

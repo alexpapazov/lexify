@@ -151,6 +151,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
       })
       const data = await res.json()
       if (!data.ok || !data.audioData) {
+        console.error('[TTS] generation failed:', data.reason)
         setAudioError('Audio generation failed. Try again.')
         return
       }
