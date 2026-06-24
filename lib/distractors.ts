@@ -38,6 +38,34 @@ function norm(s: string): string {
   return s.trim().toLowerCase()
 }
 
+/**
+ * Returns the answer-side values of every other card in `deckCards` that has
+ * the same prompt-side value as `card`. Used to accept deck siblings as
+ * correct typed answers — e.g. if "el camarón" and "la gamba" both have
+ * back="shrimp", typing either should be accepted when reviewing the other.
+ */
+export function deckSiblingAnswers(
+  card:      Card,
+  answerSide: CardSide,
+  deckCards: Card[],
+): string[] {
+  if (answerSide === 'front') {
+    // The user is typing the source-language word.
+    // Accept any other card whose back (native meaning) matches this card's back.
+    const target = norm(card.back)
+    return deckCards
+      .filter(c => c.id !== card.id && norm(c.back) === target)
+      .map(c => c.front)
+  } else {
+    // The user is typing the native-language word.
+    // Accept any other card whose front (source word) matches this card's front.
+    const target = norm(card.front)
+    return deckCards
+      .filter(c => c.id !== card.id && norm(c.front) === target)
+      .map(c => c.back)
+  }
+}
+
 export function dedupeAgainst(correct: string, pool: string[]): string[] {
   const seen = new Set([norm(correct)])
   const out: string[] = []

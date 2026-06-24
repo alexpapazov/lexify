@@ -28,7 +28,7 @@ import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
-import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
+import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblingAnswers, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday } from '@/lib/dates'
 
 const IDONTKNOW_REQUEUE_OFFSET = 4
@@ -572,7 +572,7 @@ function AllDueSessionInner() {
           answerLanguage={step.promptSide === 'back' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
-          synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+          synonyms={[...(step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])), ...deckSiblingAnswers(card, step.answerSide, deckCards)]}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRepeat={stepWillComplete ? handleRepeat : undefined}
           onIDontKnow={handleIDontKnow}
@@ -588,7 +588,7 @@ function AllDueSessionInner() {
           answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
-          synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+          synonyms={[...(reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])), ...deckSiblingAnswers(card, reviewAnswerSide, deckCards)]}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
