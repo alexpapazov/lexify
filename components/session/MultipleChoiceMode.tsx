@@ -83,6 +83,9 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     setViaSynonym(false)
     setRevealed(false)
 
+    // Auto-play when source language is shown as the prompt (e.g. Korean on front).
+    if (promptSide === 'front') speak(card.front, sourceLanguage, card.audioData)
+
     if (!needsChoices(card, answerSide)) return
     let cancelled = false
     ensureChoicesGenerated(card, answerSide, deckCards, sourceLanguage, targetLanguage)

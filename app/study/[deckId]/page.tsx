@@ -1651,7 +1651,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                     <span className="text-sm text-ink">Require parenthetical content</span>
                   </label>
                   <div className="space-y-1">
-                    <p className="text-xs text-ink-faint">Slash alternatives (e.g. "a / b")</p>
+                    <p className="text-xs text-ink-faint">Alternatives (e.g. "a / b", "a, b", "a; b")</p>
                     <select value={slashMode} onChange={e => setSlashMode(e.target.value as 'accept_any' | 'require_all')} className="input text-sm">
                       <option value="accept_any">Accept any</option>
                       <option value="require_all">Require all</option>

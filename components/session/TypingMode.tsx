@@ -21,7 +21,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit,
+  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, answerLanguage,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -45,6 +45,15 @@ export function TypingMode({
   onAdvance?: () => void
   /** Double-click-to-edit on the prompt panel. newText='' means delete the card. */
   onPromptEdit?: (newText: string) => void
+  /**
+   * When set to the source language code, enables two auto-play behaviours:
+   *   • prompt is source language → plays audio when card loads
+   *   • answer is source language → plays audio on a correct result
+   * Pass sourceLanguage when answerSide==='front' (typing the learned language)
+   * or when promptSide==='front' (source language shown as prompt).
+   * The component uses card.audioData for cached TTS, falling back to browser speech.
+   */
+  answerLanguage?: string
 }) {
   type LocalResult = {
     status:        GradingStatus
@@ -73,6 +82,12 @@ export function TypingMode({
     setRetype('')
     setRevealed(false)
     setComposing(false)
+  }, [card.id])
+
+  // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
+  useEffect(() => {
+    if (promptLanguage) speak(card.front, promptLanguage, card.audioData)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id])
 
   const prompt   = promptSide === 'front' ? card.front : card.back
@@ -128,6 +143,10 @@ export function TypingMode({
     })
     setOverride(null)
     setRetype('')
+    // Auto-play when typing the source language (e.g. typed Korean correctly).
+    if (effectivelyCorrect && answerLanguage) {
+      speak(card.front, answerLanguage, card.audioData)
+    }
   }
 
   function advanceRetype() {

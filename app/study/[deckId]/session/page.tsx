@@ -941,6 +941,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         // ── Pipeline single-field typing (or stage 3 with shared back) ───────
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
+          answerLanguage={step.promptSide === 'back' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings!} gradedReview={false}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
@@ -970,6 +971,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         // ── Post-graduation typed recall (no synonym group) ───────────────────
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
+          answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings!} gradedReview={true}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}

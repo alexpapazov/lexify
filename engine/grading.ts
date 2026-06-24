@@ -129,7 +129,7 @@ function gradeStrict(userAnswer: string, expected: string): GradingResult {
   const userNorm = normalizeStrict(userAnswer)
 
   // Slash alternatives are accepted; parenthetical content is required (parens stripped).
-  const slashParts = expected.split(/\s*\/\s*/)
+  const slashParts = expected.split(/\s*[\/,;]\s*/)
   const candidates = [...new Set(slashParts.map(part =>
     normalizeStrict(part.replace(/\(([^)]+)\)/g, '$1').replace(/\s+/g, ' ').trim())
   ))]
@@ -149,7 +149,7 @@ function gradeStrict(userAnswer: string, expected: string): GradingResult {
 
 function buildFlexibleCandidates(expected: string, settings: GradingSettings): string[] {
   const slashParts = settings.slashAlternativesMode === 'accept_any'
-    ? expected.split(/\s*\/\s*/)
+    ? expected.split(/\s*[\/,;]\s*/)
     : [expected]
 
   const candidates: string[] = []
@@ -218,7 +218,7 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
   // Missing required parenthetical content (user typed the base without the clarification)
   if (settings.requireParentheticalContent && /\(/.test(expected)) {
     const slashParts = settings.slashAlternativesMode === 'accept_any'
-      ? expected.split(/\s*\/\s*/)
+      ? expected.split(/\s*[\/,;]\s*/)
       : [expected]
     for (const part of slashParts) {
       if (!/\(/.test(part)) continue
