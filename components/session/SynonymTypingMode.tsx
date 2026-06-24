@@ -1,21 +1,20 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type {
   GradingSettings, GradingIssueType, Rating, SynonymProductionPrompt, SynonymAnswerField,
 } from '@/domain'
-import { gradeMultiField, gradeTyping } from '@/engine/grading'
+import { gradeMultiField } from '@/engine/grading'
 import { RatingButtons } from './RatingButtons'
 
 /**
  * Multi-field synonym production prompt.
  *
- * Shows one input field per synonym-group member:
- *   • prefilled  — already reviewed or not due (shown greyed, not editable)
- *   • due_blank  — blank, must be typed
+ * Shows one input field per synonym-group member that is due. Values are
+ * position-indexed (not field-bound), so the learner can type any correct
+ * answer in any box — gradeMultiField does best-fit order-independent matching.
  *
- * Grades each due field independently; any order of answers is accepted.
- * Calls onRate once per due field with the field's lexicalItemId.
+ * Calls onAdvance once with all field results when the learner presses Continue.
  */
 export function SynonymTypingMode({
   prompt: synonymPrompt,
@@ -29,32 +28,28 @@ export function SynonymTypingMode({
   /** Called once with ALL field results when the user presses Continue. */
   onAdvance: (results: Array<{lexicalItemId: string; rating: Rating; wasCorrect: boolean; issueType?: GradingIssueType}>) => void
 }) {
-  // Local values for each blank field (indexed by lexicalItemId)
-  const [values, setValues]   = useState<Record<string, string>>(() => {
-    const init: Record<string, string> = {}
-    for (const f of synonymPrompt.fields) {
-      if (f.status === 'due_blank') init[f.lexicalItemId] = ''
-    }
-    return init
-  })
-  const [submitted, setSubmitted] = useState(false)
-  const [gradingResult, setGradingResult] = useState<ReturnType<typeof gradeMultiField> | null>(null)
-  const [ratings, setRatings] = useState<Record<string, Rating>>({})
+  const dueFields = synonymPrompt.fields.filter(f => f.dueState === 'due')
 
-  const dueFields  = synonymPrompt.fields.filter(f => f.dueState === 'due')
-  const allFilled  = dueFields.every(f => (values[f.lexicalItemId] ?? '').trim().length > 0)
+  // Positional values — not bound to a specific field, any answer goes in any box.
+  const [values,       setValues]       = useState<string[]>(() => dueFields.map(() => ''))
+  const [submitted,    setSubmitted]    = useState(false)
+  const [gradingResult, setGradingResult] = useState<ReturnType<typeof gradeMultiField> | null>(null)
+  const [ratings,      setRatings]      = useState<Record<string, Rating>>({})
+  const continueRef = useRef<HTMLButtonElement>(null)
+
+  const allFilled = values.every(v => v.trim().length > 0)
 
   function handleCheck() {
-    // Build fields with user values for grading
-    const fieldsWithValues: SynonymAnswerField[] = synonymPrompt.fields.map(f => ({
-      ...f,
-      value: f.status === 'due_blank' ? (values[f.lexicalItemId] ?? '') : f.value,
-    }))
+    // Build fields with positional values mapped in order (gradeMultiField does best-fit anyway).
+    const fieldsWithValues: SynonymAnswerField[] = synonymPrompt.fields.map(f => {
+      if (f.status !== 'due_blank') return f
+      const idx = dueFields.findIndex(d => d.lexicalItemId === f.lexicalItemId)
+      return { ...f, value: values[idx] ?? '' }
+    })
     const result = gradeMultiField(fieldsWithValues, gradingSettings)
     setGradingResult(result)
     setSubmitted(true)
 
-    // Default ratings based on per-field status
     const defaultRatings: Record<string, Rating> = {}
     for (const fr of result.fieldResults) {
       defaultRatings[fr.lexicalItemId] =
@@ -63,6 +58,8 @@ export function SynonymTypingMode({
         'again'
     }
     setRatings(defaultRatings)
+
+    setTimeout(() => continueRef.current?.focus(), 100)
   }
 
   function handleAdvance() {
@@ -75,107 +72,99 @@ export function SynonymTypingMode({
     })))
   }
 
+  // After grading: determine which typed value was matched to each field result.
+  // Used to color each input box based on its matched result.
+  function boxResult(idx: number): 'correct' | 'almost' | 'incorrect' | null {
+    if (!gradingResult || !submitted) return null
+    const typed = values[idx]?.trim()
+    if (!typed) return null
+    const matched = gradingResult.fieldResults.find(fr => fr.typedAnswer?.trim() === typed)
+    return matched?.status as 'correct' | 'almost' | 'incorrect' ?? 'incorrect'
+  }
+
+  const prefilledFields = synonymPrompt.fields.filter(f => f.status === 'prefilled' || f.dueState !== 'due')
+
   return (
-    <div className="space-y-6 w-full max-w-xl mx-auto">
+    <div className="space-y-4 w-full max-w-xl mx-auto">
       {/* Gloss / prompt */}
-      <div className="panel min-h-[80px] flex items-center justify-center text-center">
+      <div className="panel min-h-[100px] flex items-center justify-center text-center">
         <p className="text-2xl font-medium text-ink">{synonymPrompt.gloss}</p>
       </div>
 
-      {/* Fields */}
-      <div className="space-y-3">
-        {synonymPrompt.fields.map(field => {
-          const fieldResult = gradingResult?.fieldResults.find(r => r.lexicalItemId === field.lexicalItemId)
-          const isPrefilled  = field.status === 'prefilled' || field.dueState !== 'due'
-          const isBlank      = field.status === 'due_blank'
+      {/* Prefilled (pre-answered) fields */}
+      {prefilledFields.map(field => (
+        <input
+          key={field.lexicalItemId}
+          className="input text-center font-mono opacity-40 cursor-default"
+          value={field.expectedAnswer}
+          readOnly
+          disabled
+        />
+      ))}
 
-          let inputClass = 'input text-center font-mono'
-          let statusLabel: string | null = null
+      {/* Instruction label */}
+      {dueFields.length > 1 && (
+        <p className="text-xs text-ink-faint text-center">
+          Type all {dueFields.length} forms — any order is fine
+        </p>
+      )}
 
-          if (isPrefilled) {
-            inputClass += ' opacity-50 cursor-default bg-transparent'
-            statusLabel = field.dueState === 'already_completed_this_session'
-              ? 'already reviewed'
-              : 'not due'
-          } else if (submitted && fieldResult) {
-            statusLabel =
-              fieldResult.status === 'correct'  ? '✓ correct' :
-              fieldResult.status === 'almost'   ? '≈ almost'  :
-              fieldResult.status === 'missing'  ? 'not answered' :
-              fieldResult.issueType === 'wrong_synonym' ? 'wrong synonym' :
-              '✗ incorrect'
-            inputClass +=
-              fieldResult.status === 'correct' ? ' border-success/60 bg-success/5' :
-              fieldResult.status === 'almost'  ? ' border-warning/60 bg-warning/5' :
-              ' border-danger/60 bg-danger/5'
-          }
-
-          const registerLabel = field.register && field.register !== 'neutral'
-            ? field.register
-            : field.region ?? null
+      {/* Due fields — positional, not field-bound */}
+      <div className="space-y-2">
+        {values.map((val, idx) => {
+          const res = boxResult(idx)
+          const borderClass = !submitted ? '' :
+            res === 'correct' ? 'border-success/60 bg-success/5' :
+            res === 'almost'  ? 'border-warning/60 bg-warning/5' :
+            'border-danger/60 bg-danger/5'
 
           return (
-            <div key={field.lexicalItemId} className="flex items-center gap-3">
-              <div className="flex-1 relative">
-                <input
-                  className={inputClass}
-                  value={isPrefilled ? field.expectedAnswer : (values[field.lexicalItemId] ?? '')}
-                  onChange={e => {
-                    if (isPrefilled || submitted) return
-                    setValues(v => ({ ...v, [field.lexicalItemId]: e.target.value }))
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !submitted && allFilled) handleCheck()
-                  }}
-                  disabled={isPrefilled || submitted}
-                  readOnly={isPrefilled}
-                  placeholder={isBlank && !submitted ? 'Type your answer…' : undefined}
-                />
-              </div>
-              <div className="w-36 text-xs text-right shrink-0 space-y-0.5">
-                {statusLabel && (
-                  <span className={`${
-                    statusLabel.startsWith('✓') ? 'text-success' :
-                    statusLabel.startsWith('≈') ? 'text-warning' :
-                    statusLabel.startsWith('✗') || statusLabel === 'wrong synonym' ? 'text-danger' :
-                    'text-ink-faint'
-                  }`}>
-                    {statusLabel}
-                  </span>
-                )}
-                {registerLabel && (
-                  <span className="block text-ink-faint">{registerLabel}</span>
-                )}
-                {submitted && fieldResult?.reason && (
-                  <span className="block text-ink-faint">{fieldResult.reason}</span>
-                )}
-              </div>
-            </div>
+            <input
+              key={idx}
+              className={`input text-center text-lg font-mono ${borderClass}`}
+              placeholder="Type your answer…"
+              value={val}
+              onChange={e => {
+                if (submitted) return
+                setValues(prev => prev.map((v, i) => i === idx ? e.target.value : v))
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !submitted && allFilled) handleCheck()
+              }}
+              disabled={submitted}
+              autoFocus={idx === 0}
+            />
           )
         })}
       </div>
 
+      {/* Correct answers shown when wrong */}
+      {submitted && gradingResult && gradingResult.overallStatus !== 'correct' && (
+        <div className="text-sm text-ink-muted text-center space-y-0.5">
+          <p className="text-xs text-ink-faint uppercase tracking-wider">Correct forms</p>
+          {gradingResult.fieldResults
+            .filter(fr => fr.status !== 'correct')
+            .map(fr => (
+              <p key={fr.lexicalItemId} className="font-mono text-ink">{fr.expectedAnswer}</p>
+            ))}
+        </div>
+      )}
+
       {/* Actions */}
       {!submitted ? (
         <div className="flex justify-center">
-          <button
-            onClick={handleCheck}
-            disabled={!allFilled}
-            className="btn-primary"
-          >
+          <button onClick={handleCheck} disabled={!allFilled} className="btn-primary">
             Check
           </button>
         </div>
       ) : (
         <div className="space-y-4">
-          {/* Per-field rating overrides (post-grad) */}
+          {/* Per-field rating overrides (post-grad only) */}
           {gradedReview && gradingResult && (
             <div className="space-y-2">
               {gradingResult.fieldResults.map(fr => (
                 <div key={fr.lexicalItemId} className="flex items-center gap-3">
-                  <span className="text-xs text-ink-faint w-32 truncate">
-                    {fr.expectedAnswer}
-                  </span>
+                  <span className="text-xs text-ink-faint w-32 truncate">{fr.expectedAnswer}</span>
                   <RatingButtons
                     onRate={r => setRatings(prev => ({ ...prev, [fr.lexicalItemId]: r }))}
                     suggestedRating={ratings[fr.lexicalItemId]}
@@ -185,7 +174,9 @@ export function SynonymTypingMode({
             </div>
           )}
           <div className="flex justify-center">
-            <button onClick={handleAdvance} className="btn-primary px-10">Continue</button>
+            <button ref={continueRef} onClick={handleAdvance} className="btn-primary px-10">
+              Continue
+            </button>
           </div>
         </div>
       )}
