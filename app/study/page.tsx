@@ -54,6 +54,7 @@ export default function StudyPage() {
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
+  const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null)
   const supabase = createClient()
 
   async function load() {
@@ -91,27 +92,24 @@ export default function StudyPage() {
       }
     }))
 
-    setDeckStats(stats)
-    setGlobal(stats.reduce((acc, s) => ({
+    const globalCounts = stats.reduce((acc, s) => ({
       unlearned: acc.unlearned + s.unlearned,
       learning:  acc.learning  + s.learning,
       graduated: acc.graduated + s.graduated,
       dueNow:    acc.dueNow    + s.dueNow,
-    }), { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }))
+    }), { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 })
+    setDeckStats(stats)
+    setGlobal(globalCounts)
 
     // ── Upcoming review forecast ────────────────────────────────────────
-    // Start from the epoch (not "now") so that overdue/due-now cards — whose
-    // stored dueAt is in the past — get folded into "Today" instead of
-    // disappearing from the chart entirely.
-    const EPOCH = '1970-01-01T00:00:00.000Z'
+    // Today's count comes from globalCounts.dueNow (already computed from loaded
+    // states) — this is more reliable than a DB range query for past-due cards.
+    // Only query future dates (tomorrow onward) from the DB.
+    const tomorrowDate = new Date(todayDate)
+    tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1)
     const endDate = new Date(todayDate)
     endDate.setUTCDate(endDate.getUTCDate() + FORECAST_DAYS)
-    const counts = await stateRepo.countDueByDateRange(session.user.id, EPOCH, endDate.toISOString())
-
-    let overdueAndTodayCount = 0
-    for (const [date, c] of counts) {
-      if (date <= todayStr) overdueAndTodayCount += c
-    }
+    const counts = await stateRepo.countDueByDateRange(session.user.id, tomorrowDate.toISOString(), endDate.toISOString())
 
     const days: ForecastDay[] = []
     for (let i = 0; i < FORECAST_DAYS; i++) {
@@ -122,7 +120,7 @@ export default function StudyPage() {
         date:   dateStr,
         label:  i === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
         dayNum: d.getUTCDate(),
-        count:  i === 0 ? overdueAndTodayCount : (counts.get(dateStr) ?? 0),
+        count:  i === 0 ? globalCounts.dueNow : (counts.get(dateStr) ?? 0),
       })
     }
     setForecast(days)
@@ -155,6 +153,24 @@ export default function StudyPage() {
   const totalDue = global.dueNow
   const maxForecast = Math.max(1, ...forecast.map(d => d.count))
 
+  // Cards due on the selected forecast date (for the click-to-expand panel)
+  const forecastCards: FilteredCard[] = selectedForecastDate ? deckStats.flatMap(({ deck, cards, states }) => {
+    const stateMap = new Map(states.map(s => [s.cardId, s]))
+    return cards
+      .filter(card => {
+        const s = stateMap.get(card.id)
+        if (!s?.graduated || !s.dueAt) return false
+        // "Today" date means due now; future date means exact date match
+        const isToday = selectedForecastDate === forecast[0]?.date
+        if (isToday) return new Date(s.dueAt) <= now
+        return s.dueAt.slice(0, 10) === selectedForecastDate
+      })
+      .map(card => {
+        const s = stateMap.get(card.id)
+        return { card, state: s, deckName: deck.name, deckId: deck.id, status: 'Graduated' }
+      })
+  }) : []
+
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: global.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'     },
@@ -185,7 +201,7 @@ export default function StudyPage() {
               return (
                 <button
                   key={key}
-                  onClick={() => setActiveFilter(isActive ? null : key)}
+                  onClick={() => { setActiveFilter(isActive ? null : key); setSelectedForecastDate(null) }}
                   className={`panel border-t-2 ${border} space-y-1 text-center transition-colors w-full
                     ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
                 >
@@ -261,21 +277,75 @@ export default function StudyPage() {
             ) : (
               <div className="panel">
                 <div className="flex items-end gap-1 sm:gap-2 h-40">
-                  {forecast.map(day => (
-                    <div key={day.date} className="flex-1 flex flex-col items-center justify-end h-full gap-1 min-w-0">
-                      <div className="text-xs text-ink-muted h-4">{day.count > 0 ? day.count : ''}</div>
-                      <div
-                        className={`w-full rounded-t-sm transition-all ${day.count > 0 ? 'bg-accent' : 'bg-surface-raised'}`}
-                        style={{ height: `${day.count > 0 ? Math.max(6, Math.round((day.count / maxForecast) * 100)) : 2}%` }}
-                        title={`${day.label} ${day.dayNum}: ${day.count} card${day.count !== 1 ? 's' : ''} due`}
-                      />
-                      <div className="text-[10px] text-ink-faint text-center leading-tight">
-                        <div>{day.label}</div>
-                        <div>{day.dayNum}</div>
-                      </div>
-                    </div>
-                  ))}
+                  {forecast.map(day => {
+                    const isSelected = selectedForecastDate === day.date
+                    return (
+                      <button
+                        key={day.date}
+                        onClick={() => {
+                          if (day.count === 0) return
+                          setSelectedForecastDate(isSelected ? null : day.date)
+                          setActiveFilter(null)
+                        }}
+                        disabled={day.count === 0}
+                        className="flex-1 flex flex-col items-center justify-end h-full gap-1 min-w-0 group"
+                      >
+                        <div className="text-xs text-ink-muted h-4">{day.count > 0 ? day.count : ''}</div>
+                        <div
+                          className={`w-full rounded-t-sm transition-all ${
+                            day.count > 0
+                              ? isSelected
+                                ? 'bg-accent-soft ring-1 ring-accent'
+                                : 'bg-accent group-hover:bg-accent-soft'
+                              : 'bg-surface-raised'
+                          }`}
+                          style={{ height: `${day.count > 0 ? Math.max(6, Math.round((day.count / maxForecast) * 100)) : 2}%` }}
+                          title={`${day.label} ${day.dayNum}: ${day.count} card${day.count !== 1 ? 's' : ''} due`}
+                        />
+                        <div className={`text-[10px] text-center leading-tight ${isSelected ? 'text-accent' : 'text-ink-faint'}`}>
+                          <div>{day.label}</div>
+                          <div>{day.dayNum}</div>
+                        </div>
+                      </button>
+                    )
+                  })}
                 </div>
+              </div>
+            )}
+
+            {/* ── Forecast day card list ──────────────────────────────── */}
+            {selectedForecastDate && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
+                    {forecast.find(d => d.date === selectedForecastDate)?.label === 'Today'
+                      ? 'Due Today'
+                      : `Due ${forecast.find(d => d.date === selectedForecastDate)?.label} ${forecast.find(d => d.date === selectedForecastDate)?.dayNum}`
+                    } — {forecastCards.length} card{forecastCards.length !== 1 ? 's' : ''}
+                  </h2>
+                  <button onClick={() => setSelectedForecastDate(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                    Close ✕
+                  </button>
+                </div>
+                {forecastCards.length === 0 ? (
+                  <div className="panel text-ink-muted text-sm text-center py-6">No cards found.</div>
+                ) : (
+                  <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+                    {forecastCards.map(({ card, deckName, deckId }) => (
+                      <Link
+                        key={card.id}
+                        href={`/study/${deckId}`}
+                        className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+                      >
+                        <div className="flex gap-6 text-sm min-w-0">
+                          <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
+                          <span className="text-ink-muted truncate">{card.back}</span>
+                        </div>
+                        <span className="text-xs text-ink-faint hidden sm:block shrink-0 ml-2">{deckName}</span>
+                      </Link>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
