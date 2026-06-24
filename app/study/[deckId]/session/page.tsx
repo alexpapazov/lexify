@@ -181,7 +181,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         return { card: item.card, side: step.answerSide, deckCards: ctx.deckCards, sourceLanguage: ctx.sourceLanguage, targetLanguage: ctx.targetLanguage }
       })
       .filter((x): x is PrefetchItem => x !== null)
-    void prefetchChoices(prefetchItems, handleChoicesCached, 2, handleAudioCached)
+    void prefetchChoices(prefetchItems, handleChoicesCached, 2)
 
     // Prefetch audio for ALL cards in the queue (typing steps, graduated cards,
     // and index 0 are excluded from prefetchItems but still need audio).

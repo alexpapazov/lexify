@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model:           'tts-1',
+        model:           'tts-1-hd',
         input:           text.trim(),
         voice:           'nova',
         response_format: 'mp3',

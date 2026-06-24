@@ -21,6 +21,7 @@ import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder, Lan
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
+import { speak } from '@/lib/speak'
 import { classifyReviewMode } from '@/engine/scheduler'
 import { initialCardState } from '@/engine/pipeline'
 
@@ -357,7 +358,15 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 </span>
               </button>
             ) : (
-              <p className="text-success text-xs px-1">✓ Audio ready</p>
+              <button
+                onClick={() => speak(card.front, sourceLanguage, card.audioData)}
+                className="w-full text-left px-3 py-2 rounded-lg border border-white/10 hover:bg-surface-raised/50 text-ink-muted text-xs transition-colors"
+              >
+                🔊 Play audio
+                <span className="block text-ink-faint font-normal mt-0.5">
+                  &ldquo;{card.front}&rdquo;
+                </span>
+              </button>
             )}
             {audioError && (
               <p className="text-danger text-xs">{audioError}</p>
