@@ -350,7 +350,12 @@ class AdaptiveScheduler implements Scheduler {
     // ── Very-early correct guard ────────────────────────────────────────────
     // A correct answer well before the card is due records practice but does
     // not change the schedule at all.
-    if (rating !== 'again' && progress < VERY_EARLY_THRESHOLD) {
+    // Exception: if the card IS past its dueAt, never treat it as very-early.
+    // Fast-track cards can have scheduledIntervalDays (30) much larger than
+    // the actual spread gap (e.g. 1 day), causing progress << threshold even
+    // when the card is genuinely due.
+    const cardIsDue = state.dueAt ? new Date(state.dueAt) <= now : false
+    if (rating !== 'again' && progress < VERY_EARLY_THRESHOLD && !cardIsDue) {
       return {
         dueAt: state.dueAt ?? addDays(now, currentInterval),
         intervalDays: currentInterval, scheduledIntervalDays: scheduledInterval,
