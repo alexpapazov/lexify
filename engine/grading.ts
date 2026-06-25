@@ -274,10 +274,14 @@ export function gradeTyping(
   expected:   string,
   settings:   GradingSettings,
 ): GradingResult {
+  // Strip surrounding quotes — quoted backs are literal phrases (no comma/slash splitting).
+  const eff = expected.length >= 2 && expected.startsWith('"') && expected.endsWith('"')
+    ? expected.slice(1, -1)
+    : expected
   const mode = settings.gradingMode ?? 'flexible'
-  if (mode === 'strict')   return gradeStrict(userAnswer, expected)
-  if (mode === 'smart_ai') return gradeSmartAI(userAnswer, expected, settings)
-  return gradeFlexible(userAnswer, expected, settings)
+  if (mode === 'strict')   return gradeStrict(userAnswer, eff)
+  if (mode === 'smart_ai') return gradeSmartAI(userAnswer, eff, settings)
+  return gradeFlexible(userAnswer, eff, settings)
 }
 
 // ─── Multi-field synonym grading ───────────────────────────────────────────────

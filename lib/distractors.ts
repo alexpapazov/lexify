@@ -22,6 +22,7 @@
 import type { Card, CardSide, CardChoices, CardConfusion } from '@/domain'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
+import { displayText } from '@/lib/cardText'
 
 export const OPTIONS_NEEDED = 4
 
@@ -123,7 +124,7 @@ function isPotentialSynonym(correct: string, candidate: string): boolean {
 function deckFallback(card: Card, side: CardSide, deckCards: Card[], correct: string, count: number, excludeNorms?: Set<string>): string[] {
   const pool = deckCards
     .filter(c => c.id !== card.id)
-    .map(c => (side === 'front' ? c.front : c.back))
+    .map(c => displayText(side === 'front' ? c.front : c.back))
     .filter(v => !isPotentialSynonym(correct, v))
     .filter(v => !excludeNorms?.has(norm(v)))
   return shuffle(dedupeAgainst(correct, pool)).slice(0, count)
@@ -174,7 +175,7 @@ export function buildOptions(
   deckCards: Card[],
   excludeTexts?: string[],
 ): string[] {
-  const correct = side === 'front' ? card.front : card.back
+  const correct = displayText(side === 'front' ? card.front : card.back)
   const synonyms = (side === 'front' ? card.choices?.frontSynonyms : card.choices?.backSynonyms) ?? []
   const distractorsNeeded = OPTIONS_NEEDED - 1
   const excludeNorms = new Set((excludeTexts ?? []).map(norm))
@@ -196,7 +197,7 @@ export function buildOptions(
 
 /** True if `card` still needs AI/cached distractors generated for `side`. */
 export function needsChoices(card: Card, side: CardSide): boolean {
-  const correct = side === 'front' ? card.front : card.back
+  const correct = displayText(side === 'front' ? card.front : card.back)
   const pool = dedupeAgainst(correct, card.choices?.[side] ?? [])
   return pool.length < OPTIONS_NEEDED - 1
 }

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Card, CardChoices, CardSide, Rating } from '@/domain'
 import { buildOptions, ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
 import { speak } from '@/lib/speak'
+import { displayText, isQuoted } from '@/lib/cardText'
 import { EditablePromptPanel } from './EditablePromptPanel'
 
 /**
@@ -57,11 +58,11 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   /** When false, suppresses automatic audio playback; the manual speaker button still works. */
   autoPlayAudio?: boolean
 }) {
-  const correct  = answerSide === 'front' ? card.front : card.back
+  const correct  = displayText(answerSide === 'front' ? card.front : card.back)
 
   // Pick one gloss word randomly on mount (stable for this card show via key remount).
   const [glossWord] = useState<string | null>(() => {
-    if (!splitGlossFromBack) return null
+    if (!splitGlossFromBack || isQuoted(card.back)) return null
     const words = card.back.split(/[,/]/).map(w => w.trim()).filter(Boolean)
     if (words.length <= 1) return null
     return words[Math.floor(Math.random() * words.length)] ?? null
@@ -83,7 +84,9 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   const [editingChoice, setEditingChoice] = useState<string | null>(null)
   const [editValue,     setEditValue]     = useState('')
   const [editSaving,    setEditSaving]    = useState(false)
-  const editInputRef = useRef<HTMLInputElement>(null)
+  const editInputRef   = useRef<HTMLInputElement>(null)
+  // Timer to distinguish single click (choose) from double click (edit)
+  const clickTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     const opts = buildOptions(card, answerSide, deckCards, excludeAnswerTexts)
@@ -110,7 +113,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id])
 
-  const prompt   = promptSide === 'front' ? card.front : card.back
+  const prompt   = displayText(promptSide === 'front' ? card.front : card.back)
   const synonyms = (answerSide === 'front' ? card.choices?.frontSynonyms : card.choices?.backSynonyms) ?? []
 
   function norm(s: string) { return s.trim().toLowerCase() }
@@ -134,11 +137,18 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     onRate(wasCorrect ? 'good' : 'again', wasCorrect, selected)
   }
 
-  function startEditChoice(choice: string) {
-    if (!onChoiceEdit || selected || revealed) return
+  function handleChoiceClick(choice: string) {
+    if (!onChoiceEdit) { choose(choice); return }
+    if (editingChoice) return
+    // Delay single-click action so a double-click can cancel it
+    clickTimerRef.current = setTimeout(() => { clickTimerRef.current = null; choose(choice) }, 220)
+  }
+
+  function handleChoiceDoubleClick(choice: string) {
+    if (!onChoiceEdit) return
+    if (clickTimerRef.current) { clearTimeout(clickTimerRef.current); clickTimerRef.current = null }
     setEditingChoice(choice)
     setEditValue(choice)
-    // Focus the input on next tick
     setTimeout(() => editInputRef.current?.select(), 0)
   }
 
@@ -146,13 +156,15 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     if (!editingChoice || editSaving) return
     const isCorrect = norm(editingChoice) === norm(displayCorrect)
     const trimmed = editValue.trim()
-    // No change — cancel
     if (trimmed === editingChoice) { setEditingChoice(null); return }
     setEditSaving(true)
     try {
       await onChoiceEdit?.(editingChoice, trimmed, isCorrect)
-      // Update local choices state immediately
-      if (!isCorrect) {
+      if (isCorrect) {
+        // Reset so the card reflects the new correct answer text
+        setSelected(null)
+        setViaSynonym(false)
+      } else {
         setChoices(prev => {
           if (!trimmed) return prev.filter(c => c !== editingChoice)
           return prev.map(c => c === editingChoice ? trimmed : c)
@@ -210,10 +222,10 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
           return (
             <div
               key={choice}
-              className={`panel py-4 px-5 transition-colors text-base ${style} ${!selected && !isEditing ? 'cursor-pointer' : ''}`}
-              onClick={() => !isEditing && choose(choice)}
-              onDoubleClick={() => startEditChoice(choice)}
-              title={onChoiceEdit && !selected && !revealed ? 'Double-click to edit' : undefined}
+              className={`panel py-4 px-5 transition-colors text-base ${style} ${!isEditing ? 'cursor-pointer' : ''}`}
+              onClick={() => !isEditing && handleChoiceClick(choice)}
+              onDoubleClick={() => handleChoiceDoubleClick(choice)}
+              title={onChoiceEdit && !isEditing ? 'Double-click to edit' : undefined}
             >
               {isEditing ? (
                 <input

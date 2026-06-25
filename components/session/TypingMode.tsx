@@ -5,6 +5,7 @@ import type { Card, GradingSettings, GradingIssueType, GradingStatus, Rating } f
 import { gradeTyping, normalizeAnswer } from '@/engine/grading'
 import { speak } from '@/lib/speak'
 import { langNativeName } from '@/lib/languages'
+import { displayText } from '@/lib/cardText'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
 
@@ -92,8 +93,9 @@ export function TypingMode({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id])
 
-  const prompt   = promptSide === 'front' ? card.front : card.back
-  const expected = promptSide === 'front' ? card.back  : card.front
+  const prompt   = displayText(promptSide === 'front' ? card.front : card.back)
+  const expected = promptSide === 'front' ? card.back  : card.front   // raw — gradeTyping strips quotes internally
+  const displayExpected = displayText(expected)                        // for showing to the learner
 
   const finalCorrect = override ?? result?.correct ?? false
 
