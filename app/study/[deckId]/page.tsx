@@ -768,6 +768,7 @@ interface SyncReviewRow {
   editBack:       string
   confirmExisting: boolean  // user must confirm before editing an existing card
   deckId:         string    // synced deck for this direction (from infra)
+  checked:        boolean   // selected for bulk sync
 }
 
 function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose }: {
@@ -825,7 +826,7 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
             uiError: null, editMode: false,
             editFront: existingLink.generatedFront,
             editBack:  existingLink.generatedBack,
-            confirmExisting: false, deckId: '',
+            confirmExisting: false, deckId: '', checked: false,
           }
         }
 
@@ -860,7 +861,7 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
               uiStatus: 'error' as const,
               uiError: `Translation failed: ${data.reason ?? 'unknown error'}`,
               editMode: false, editFront: '', editBack: '',
-              confirmExisting: false, deckId: '',
+              confirmExisting: false, deckId: '', checked: false,
             }
           }
           generatedFront = data.front
@@ -880,7 +881,7 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
           existingCard, existingLink,
           uiStatus: 'pending' as const, uiError: null,
           editMode: false, editFront: generatedFront, editBack: generatedBack,
-          confirmExisting: false, deckId: '',
+          confirmExisting: false, deckId: '', checked: true,
         }
       }))
 
@@ -989,8 +990,16 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
     }
   }
 
-  const pendingRows = rows.filter(r => r.uiStatus === 'pending' || r.uiStatus === 'already_active')
-  const allDone     = rows.length > 0 && rows.every(r => ['approved', 'dismissed', 'already_active', 'error'].includes(r.uiStatus))
+  async function handleSyncSelected() {
+    const toSync = rows.map((r, i) => ({ row: r, idx: i })).filter(({ row }) => row.checked && row.uiStatus === 'pending')
+    for (const { idx } of toSync) {
+      await handleApprove(idx)
+    }
+  }
+
+  const checkedCount = rows.filter(r => r.checked && r.uiStatus === 'pending').length
+  const allDone      = rows.length > 0 && rows.every(r => ['approved', 'dismissed', 'already_active', 'error'].includes(r.uiStatus))
+  const anySyncing   = rows.some(r => r.uiStatus === 'approving')
 
   return (
     <div
@@ -1034,67 +1043,78 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
         {/* Review rows */}
         {loadStatus === 'ready' && rows.map((row, idx) => (
           <div key={row.rule.id} className={`rounded-card border p-4 space-y-3 ${
-            row.uiStatus === 'approved'      ? 'border-success/30 bg-success/5' :
-            row.uiStatus === 'dismissed'     ? 'border-white/5 opacity-50' :
-            row.uiStatus === 'already_active' ? 'border-accent/20 bg-accent/5' :
-            row.uiStatus === 'error'         ? 'border-danger/30 bg-danger/5' :
+            row.uiStatus === 'approved'       ? 'border-success/30 bg-success/5' :
+            row.uiStatus === 'already_active' ? 'border-accent/20 bg-accent/5 opacity-60' :
+            row.uiStatus === 'error'          ? 'border-danger/30 bg-danger/5' :
+            !row.checked                      ? 'border-white/5 opacity-40' :
             'border-white/10'
           }`}>
-            {/* Row header — dest pair + status badge */}
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-ink-muted uppercase tracking-wider">
-                {langName(row.destPair.sourceLanguage)} → {langName(row.destPair.targetLanguage)}
-              </span>
-              {row.uiStatus === 'already_active' && (
-                <span className="text-xs text-accent bg-accent/10 px-2 py-0.5 rounded-full">Already synced</span>
-              )}
-              {row.uiStatus === 'approved' && (
-                <span className="text-xs text-success bg-success/10 px-2 py-0.5 rounded-full">✓ Approved</span>
-              )}
-              {row.uiStatus === 'dismissed' && (
-                <span className="text-xs text-ink-faint px-2 py-0.5">Dismissed</span>
-              )}
+            {/* Row header — checkbox + dest pair + status badge */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                {row.uiStatus === 'pending' && (
+                  <input
+                    type="checkbox"
+                    checked={row.checked}
+                    onChange={e => updateRow(idx, { checked: e.target.checked })}
+                    className="shrink-0 accent-accent w-4 h-4"
+                    disabled={anySyncing}
+                  />
+                )}
+                <span className="text-xs font-medium text-ink-muted uppercase tracking-wider truncate">
+                  {langName(row.destPair.sourceLanguage)} → {langName(row.destPair.targetLanguage)}
+                </span>
+              </div>
+              <div className="shrink-0 flex items-center gap-2">
+                {row.uiStatus === 'already_active' && (
+                  <span className="text-xs text-accent bg-accent/10 px-2 py-0.5 rounded-full">Already synced</span>
+                )}
+                {row.uiStatus === 'approved' && (
+                  <span className="text-xs text-success bg-success/10 px-2 py-0.5 rounded-full">✓ Synced</span>
+                )}
+                {row.uiStatus === 'approving' && (
+                  <span className="text-xs text-ink-faint px-2 py-0.5">Syncing…</span>
+                )}
+              </div>
             </div>
 
             {/* Generated card preview */}
-            {row.uiStatus !== 'dismissed' && (
-              <div className="grid grid-cols-2 gap-3">
-                {row.editMode ? (
-                  <>
-                    <div className="space-y-1">
-                      <label className="text-xs text-ink-faint">{langName(row.destPair.sourceLanguage)}</label>
-                      <input
-                        className="input text-sm"
-                        value={row.editFront}
-                        onChange={e => updateRow(idx, { editFront: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs text-ink-faint">{langName(row.destPair.targetLanguage)}</label>
-                      <input
-                        className="input text-sm"
-                        value={row.editBack}
-                        onChange={e => updateRow(idx, { editBack: e.target.value })}
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="space-y-0.5">
-                      <p className="text-xs text-ink-faint">{langName(row.destPair.sourceLanguage)}</p>
-                      <p className="font-medium text-ink">{row.generatedFront}</p>
-                    </div>
-                    <div className="space-y-0.5">
-                      <p className="text-xs text-ink-faint">{langName(row.destPair.targetLanguage)}</p>
-                      <p className="text-ink-muted">{row.generatedBack}</p>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
+            <div className="grid grid-cols-2 gap-3">
+              {row.editMode ? (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-xs text-ink-faint">{langName(row.destPair.sourceLanguage)}</label>
+                    <input
+                      className="input text-sm"
+                      value={row.editFront}
+                      onChange={e => updateRow(idx, { editFront: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs text-ink-faint">{langName(row.destPair.targetLanguage)}</label>
+                    <input
+                      className="input text-sm"
+                      value={row.editBack}
+                      onChange={e => updateRow(idx, { editBack: e.target.value })}
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-ink-faint">{langName(row.destPair.sourceLanguage)}</p>
+                    <p className="font-medium text-ink">{row.generatedFront || '—'}</p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-ink-faint">{langName(row.destPair.targetLanguage)}</p>
+                    <p className="text-ink-muted">{row.generatedBack || '—'}</p>
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* Confidence / warning */}
-            {row.warning && row.uiStatus !== 'dismissed' && (
+            {row.warning && (
               <p className="text-xs text-warning/80">⚠ {row.warning}</p>
             )}
 
@@ -1103,7 +1123,7 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
               <p className="text-xs text-accent/80 bg-accent/5 border border-accent/20 rounded px-2 py-1.5">
                 Existing card found: <span className="font-mono">{row.existingCard.front}</span>
                 {' = '}<span className="font-mono">{row.existingCard.back}</span>
-                {' — approving will link to this card.'}
+                {' — syncing will link to this card.'}
               </p>
             )}
 
@@ -1135,51 +1155,43 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
               <p className="text-xs text-danger">{row.uiError}</p>
             )}
 
-            {/* Action buttons */}
-            {(row.uiStatus === 'pending' || row.uiStatus === 'approving') && (
+            {/* Edit translation button (only for pending rows, not yet syncing) */}
+            {row.uiStatus === 'pending' && row.checked && !anySyncing && (
               <div className="flex gap-2">
-                <button
-                  className="btn-primary text-sm py-1.5 px-4"
-                  disabled={row.uiStatus === 'approving' || (row.editMode && row.existingCard !== null && !row.confirmExisting)}
-                  onClick={() => handleApprove(idx)}
-                >
-                  {row.uiStatus === 'approving' ? 'Saving…' : row.existingCard && !row.editMode ? 'Approve (link existing)' : 'Approve'}
-                </button>
-                {!row.editMode && (
+                {!row.editMode ? (
                   <button
-                    className="btn-ghost text-sm py-1.5 px-3"
-                    disabled={row.uiStatus === 'approving'}
+                    className="btn-ghost text-xs py-1 px-3"
                     onClick={() => updateRow(idx, { editMode: true })}
                   >
-                    Edit
+                    Edit translation
                   </button>
-                )}
-                {row.editMode && (
+                ) : (
                   <button
-                    className="btn-ghost text-sm py-1.5 px-3"
-                    disabled={row.uiStatus === 'approving'}
+                    className="btn-ghost text-xs py-1 px-3"
                     onClick={() => updateRow(idx, { editMode: false, editFront: row.generatedFront, editBack: row.generatedBack, confirmExisting: false })}
                   >
                     Cancel edit
                   </button>
                 )}
-                <button
-                  className="btn-ghost text-sm py-1.5 px-3 text-ink-faint"
-                  disabled={row.uiStatus === 'approving'}
-                  onClick={() => handleDismiss(idx)}
-                >
-                  Dismiss
-                </button>
               </div>
             )}
           </div>
         ))}
 
         {/* Footer */}
-        <div className="flex justify-end pt-1">
-          <button className="btn-ghost" onClick={onClose}>
+        <div className="flex items-center justify-between pt-1">
+          <button className="btn-ghost text-sm" onClick={onClose}>
             {allDone ? 'Close' : 'Cancel'}
           </button>
+          {loadStatus === 'ready' && !allDone && (
+            <button
+              className="btn-primary text-sm px-5 py-2 disabled:opacity-50"
+              disabled={checkedCount === 0 || anySyncing}
+              onClick={handleSyncSelected}
+            >
+              {anySyncing ? 'Syncing…' : `Sync selected (${checkedCount})`}
+            </button>
+          )}
         </div>
       </div>
     </div>

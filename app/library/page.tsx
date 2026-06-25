@@ -757,7 +757,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                 >
                   {/* Gear icon — pair settings */}
                   <button
-                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-ink-faint hover:text-ink transition-opacity text-sm leading-none"
+                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-ink-faint hover:text-ink transition-opacity text-3xl leading-none"
                     onClick={e => {
                       e.stopPropagation(); e.preventDefault()
                       setPairInstructions(p.instructions ?? '')
