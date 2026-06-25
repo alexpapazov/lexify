@@ -2137,32 +2137,28 @@ export default function DeckDetailPage() {
             return (
               <div
                 key={card.id}
-                className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-surface-raised/50 transition-colors group"
+                onClick={() => setEditingCard(card)}
+                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-surface-raised/50 transition-colors group"
               >
-                <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onClick={e => e.stopPropagation()}>
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => {
-                      setSelectedCardIds(prev => {
-                        const next = new Set(prev)
-                        if (next.has(card.id)) next.delete(card.id)
-                        else next.add(card.id)
-                        return next
-                      })
-                    }}
-                    className="accent-accent w-4 h-4 shrink-0"
-                    onClick={e => e.stopPropagation()}
-                  />
-                  <div
-                    className="flex gap-6 text-sm min-w-0 flex-1"
-                    onClick={() => setEditingCard(card)}
-                  >
-                    <span className="text-ink font-medium w-40 truncate shrink-0">{card.front}</span>
-                    <span className="text-ink-muted truncate">{card.back}</span>
-                  </div>
-                </label>
-                <span className="chip shrink-0 ml-2" onClick={() => setEditingCard(card)}>{status}</span>
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => {
+                    setSelectedCardIds(prev => {
+                      const next = new Set(prev)
+                      if (next.has(card.id)) next.delete(card.id)
+                      else next.add(card.id)
+                      return next
+                    })
+                  }}
+                  className="accent-accent w-4 h-4 shrink-0"
+                  onClick={e => e.stopPropagation()}
+                />
+                <div className="flex gap-6 text-sm min-w-0 flex-1">
+                  <span className="text-ink font-medium w-40 truncate shrink-0">{card.front}</span>
+                  <span className="text-ink-muted truncate">{card.back}</span>
+                </div>
+                <span className="chip shrink-0 ml-2">{status}</span>
               </div>
             )
           })}

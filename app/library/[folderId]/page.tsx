@@ -453,26 +453,14 @@ function FolderPageInner() {
   const { subfolders: visibleSubfolders, decks: visibleDecks } = getVisibleItems()
 
   const folderSearchQuery = searchQuery.trim().toLowerCase()
-  // Gather all descendant folder IDs (including this folder itself) for search scope
-  const allDescendantFolderIds = new Set<string>([folderId])
-  const addDescendants = (parentId: string) => {
-    for (const f of allFolders) {
-      if (f.parentId === parentId) { allDescendantFolderIds.add(f.id); addDescendants(f.id) }
-    }
-  }
-  addDescendants(folderId)
-  const folderSearchResults: ({ type: 'folder'; item: Folder } | { type: 'deck'; item: Deck })[] = folderSearchQuery ? [
-    ...allFolders
-      .filter(f => allDescendantFolderIds.has(f.id) && f.id !== folderId &&
-        (!pairSource || !pairTarget || folderMatchesPair(f.id, allFolders, allDecks, pairSource, pairTarget)) &&
-        f.name.toLowerCase().includes(folderSearchQuery))
-      .map(f => ({ type: 'folder' as const, item: f })),
-    ...allDecks
-      .filter(d => allDescendantFolderIds.has(d.folderId ?? '') &&
-        (!pairSource || !pairTarget || (d.sourceLanguage === pairSource && d.targetLanguage === pairTarget)) &&
-        d.name.toLowerCase().includes(folderSearchQuery))
-      .map(d => ({ type: 'deck' as const, item: d })),
-  ] : []
+  // Card search across all decks in this folder (and subfolders)
+  const folderCardResults: { card: Card; deckId: string; deckName: string }[] = folderSearchQuery
+    ? deckStats.flatMap(({ deck, cards }) =>
+        cards
+          .filter(c => c.front.toLowerCase().includes(folderSearchQuery) || c.back.toLowerCase().includes(folderSearchQuery))
+          .map(c => ({ card: c, deckId: deck.id, deckName: deck.name }))
+      )
+    : []
 
   return (
     <div
@@ -663,7 +651,7 @@ function FolderPageInner() {
           </svg>
           <input
             className="input pl-9 py-2 text-sm w-full"
-            placeholder="Search folders and decks…"
+            placeholder="Search cards…"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
           />
@@ -692,31 +680,23 @@ function FolderPageInner() {
 
       {/* Contents */}
       {folderSearchQuery ? (
-        folderSearchResults.length === 0 ? (
+        folderCardResults.length === 0 ? (
           <div className="panel text-ink-muted text-sm text-center py-10">
-            No folders or decks match &ldquo;{searchQuery}&rdquo;.
+            No cards match &ldquo;{searchQuery}&rdquo;.
           </div>
         ) : (
           <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
-            {folderSearchResults.map(({ type, item }) => type === 'folder' ? (
+            {folderCardResults.map(({ card, deckId, deckName }) => (
               <Link
-                key={item.id}
-                href={`/library/${item.id}${qs}`}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+                key={`${card.id}-${deckId}`}
+                href={`/study/${deckId}`}
+                className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
               >
-                <FolderIcon />
-                <span className="text-sm font-medium text-ink truncate">{item.name}</span>
-              </Link>
-            ) : (
-              <Link
-                key={item.id}
-                href={`/study/${item.id}`}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors"
-              >
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className="text-ink-muted shrink-0">
-                  <rect x="2" y="6" width="20" height="14" rx="2"/><path d="M6 6V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>
-                </svg>
-                <span className="text-sm font-medium text-ink truncate">{item.name}</span>
+                <div className="flex gap-6 text-sm min-w-0">
+                  <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
+                  <span className="text-ink-muted truncate">{card.back}</span>
+                </div>
+                <span className="text-xs text-ink-faint shrink-0 ml-2 hidden sm:block">{deckName}</span>
               </Link>
             ))}
           </div>
