@@ -490,6 +490,15 @@ function AllDueSessionInner() {
     handleAnswer('good', true, '')
   }, [queue, index, handleAnswer])
 
+  const handleResetCard = useCallback(() => {
+    const current = queue[index]
+    if (!current) return
+    const stateRepo = new SupabaseCardStateRepository()
+    const fresh = initialCardState(userId, current.card.id, current.pipeline.id)
+    stateRepo.upsert(fresh).catch(console.error)
+    setIndex(i => i + 1)
+  }, [queue, index, userId])
+
 
 
   const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
@@ -629,7 +638,8 @@ function AllDueSessionInner() {
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
-          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onResetCard={handleResetCard} />
       )}
     </div>
   )

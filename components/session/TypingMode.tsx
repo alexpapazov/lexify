@@ -22,7 +22,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, answerLanguage, autoPlayAudio = true,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -42,6 +42,7 @@ export function TypingMode({
   onPromptEdit?: (newText: string) => void
   /** Called when a deck-sibling answer is detected; the parent should credit that card. */
   onSiblingAnswered?: (siblingCardId: string) => void
+  onResetCard?: () => void
   answerLanguage?: string
   autoPlayAudio?: boolean
 }) {
@@ -67,6 +68,7 @@ export function TypingMode({
   const [siblingText,     setSiblingText]     = useState('')
   const [canonInput,      setCanonInput]      = useState('')
   const [composingCanon,  setComposingCanon]  = useState(false)
+  const [resetConfirm, setResetConfirm] = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
   const retypeRef   = useRef<HTMLInputElement>(null)
   const canonRef    = useRef<HTMLInputElement>(null)
@@ -204,27 +206,58 @@ export function TypingMode({
 
       {/* Prompt */}
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
-        <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />
-        {promptLanguage && (
-          <button
-            onClick={() => speak(prompt, promptLanguage, card.audioData)}
-            title="Listen"
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 text-ink-faint hover:text-ink-muted transition-colors"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
-              <path d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-4.5 4.5H4.508c-1.141 0-2.318.664-2.66 1.905A9.76 9.76 0 0 0 1.5 12c0 .898.121 1.768.35 2.595.341 1.24 1.518 1.905 2.659 1.905h1.93l4.5 4.5c.945.945 2.561.276 2.561-1.06V4.06ZM18.584 5.106a.75.75 0 0 1 1.06 0c3.808 3.807 3.808 9.98 0 13.788a.75.75 0 0 1-1.06-1.06 8.25 8.25 0 0 0 0-11.668.75.75 0 0 1 0-1.06Z" />
-              <path d="M15.932 7.757a.75.75 0 0 1 1.061 0 6 6 0 0 1 0 8.486.75.75 0 0 1-1.06-1.061 4.5 4.5 0 0 0 0-6.364.75.75 0 0 1 0-1.06Z" />
-            </svg>
-          </button>
-        )}
-        {!result && !revealed && !gradedReview && onIDontKnow && (
-          <button
-            onClick={() => { onIDontKnow(); setRevealed(true) }}
-            title="I don't know"
-            className="absolute bottom-3 right-3 text-lg text-danger/70 hover:text-danger transition-colors leading-none"
-          >
-            ?
-          </button>
+        {resetConfirm ? (
+          <div className="space-y-3 py-2 w-full">
+            <p className="text-sm text-ink">Reset this card to the beginning of the learning pipeline?</p>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => { onResetCard?.(); setResetConfirm(false) }}
+                className="btn-primary text-sm px-4 py-1.5"
+              >
+                Yes, reset
+              </button>
+              <button
+                onClick={() => setResetConfirm(false)}
+                className="text-sm text-ink-muted hover:text-ink transition-colors px-4 py-1.5"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />
+            {promptLanguage && (
+              <button
+                onClick={() => speak(prompt, promptLanguage, card.audioData)}
+                title="Listen"
+                className="absolute bottom-3 left-1/2 -translate-x-1/2 text-ink-faint hover:text-ink-muted transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                  <path d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-4.5 4.5H4.508c-1.141 0-2.318.664-2.66 1.905A9.76 9.76 0 0 0 1.5 12c0 .898.121 1.768.35 2.595.341 1.24 1.518 1.905 2.659 1.905h1.93l4.5 4.5c.945.945 2.561.276 2.561-1.06V4.06ZM18.584 5.106a.75.75 0 0 1 1.06 0c3.808 3.807 3.808 9.98 0 13.788a.75.75 0 0 1-1.06-1.06 8.25 8.25 0 0 0 0-11.668.75.75 0 0 1 0-1.06Z" />
+                  <path d="M15.932 7.757a.75.75 0 0 1 1.061 0 6 6 0 0 1 0 8.486.75.75 0 0 1-1.06-1.061 4.5 4.5 0 0 0 0-6.364.75.75 0 0 1 0-1.06Z" />
+                </svg>
+              </button>
+            )}
+            {!result && !revealed && !gradedReview && onIDontKnow && (
+              <button
+                onClick={() => { onIDontKnow(); setRevealed(true) }}
+                title="I don't know"
+                className="absolute bottom-3 right-3 text-lg text-danger/70 hover:text-danger transition-colors leading-none"
+              >
+                ?
+              </button>
+            )}
+            {!result && !revealed && gradedReview && onResetCard && (
+              <button
+                onClick={() => setResetConfirm(true)}
+                title="Reset card to learning pipeline"
+                className="absolute top-3 right-3 text-xs text-ink-faint hover:text-ink-muted transition-colors leading-none w-5 h-5 flex items-center justify-center rounded-full border border-white/10 hover:border-white/20"
+              >
+                ↺
+              </button>
+            )}
+          </>
         )}
       </div>
 

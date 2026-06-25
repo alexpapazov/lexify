@@ -803,6 +803,15 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     handleAnswer('good', true, '')
   }, [queue, index, handleAnswer])
 
+  const handleResetCard = useCallback(() => {
+    const current = queue[index]
+    if (!current) return
+    const stateRepo = new SupabaseCardStateRepository()
+    const fresh = initialCardState(userId, current.card.id, current.pipeline.id)
+    stateRepo.upsert(fresh).catch(console.error)
+    setIndex(i => i + 1)
+  }, [queue, index, userId])
+
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (showElectivePicker && electivePickerData) {
@@ -1012,7 +1021,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
-          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onResetCard={handleResetCard} />
       )}
     </div>
   )
