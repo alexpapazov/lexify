@@ -44,12 +44,22 @@ export function SynonymTypingMode({
   const [wrongTyped,   setWrongTyped]    = useState('')
   const [ratingOverrides, setRatingOverrides] = useState<Record<string, Rating>>({})
 
-  const inputRef    = useRef<HTMLInputElement>(null)
-  const continueRef = useRef<HTMLButtonElement>(null)
+  const inputRef        = useRef<HTMLInputElement>(null)
+  const continueRef     = useRef<HTMLButtonElement>(null)
+  const autoAdvancedRef = useRef(false)
 
   const answeredIds = new Set(locked.map(e => e.lexicalItemId))
   const remaining   = dueFields.filter(f => !answeredIds.has(f.lexicalItemId))
   const allDone     = remaining.length === 0
+
+  // If every form was already answered today, skip silently — nothing to type.
+  useEffect(() => {
+    if (dueFields.length === 0 && !autoAdvancedRef.current) {
+      autoAdvancedRef.current = true
+      onAdvance([])
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Re-focus input after a successful step (new form ready).
   useEffect(() => {
@@ -113,6 +123,9 @@ export function SynonymTypingMode({
     ? `Type all ${totalDue} forms — any order is fine`
     : `${remaining.length} form${remaining.length !== 1 ? 's' : ''} remaining`
 
+  // Don't render anything while auto-advancing past a fully-prefilled card.
+  if (dueFields.length === 0) return null
+
   return (
     <div className="space-y-4 w-full max-w-xl mx-auto">
       {/* Gloss */}
@@ -147,12 +160,16 @@ export function SynonymTypingMode({
           )}
           <input
             ref={inputRef}
-            autoFocus
             className="input text-center text-lg font-mono"
             placeholder="Type your answer…"
             value={input}
             onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCheck() } }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                handleCheck()
+              }
+            }}
           />
           <div className="flex justify-center">
             <button onClick={handleCheck} disabled={!input.trim()} className="btn-primary">
