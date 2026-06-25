@@ -15,7 +15,7 @@ import { fastTrackCardState }                  from '@/engine/pipeline'
 import { batchFastTrackDueDates }              from '@/engine/density'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
-import { folderMatchesPair } from '@/lib/folderStats'
+import { folderMatchesPair, descendantDeckIds } from '@/lib/folderStats'
 import { langName } from '@/lib/languages'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
@@ -33,7 +33,15 @@ const ROOT_FOLDER_VALUE = '__root__'
  * use in a flat <select> picker.
  */
 function buildFolderOptions(folders: Folder[], decks: Deck[], sourceLanguage: string, targetLanguage: string): Array<{ folder: Folder; depth: number }> {
-  const matching = folders.filter(f => folderMatchesPair(f.id, folders, decks, sourceLanguage, targetLanguage))
+  // Exclude synced folders with no descendant decks — empty, shouldn't be offered as destinations
+  const matching = folders.filter(f => {
+    if (!folderMatchesPair(f.id, folders, decks, sourceLanguage, targetLanguage)) return false
+    if (f.isSynced) {
+      const dIds: string[] = descendantDeckIds(f.id, folders, decks)
+      if (dIds.length === 0) return false
+    }
+    return true
+  })
   const byParent = new Map<string | null, Folder[]>()
   for (const f of matching) {
     const arr = byParent.get(f.parentId) ?? []
@@ -385,7 +393,18 @@ export default function UploadPage() {
       pairRepo.list(session.user.id),
       ruleRepo.listForUser(session.user.id),
     ])
-    setFolders(allFolders)
+    // Delete empty synced vocabulary folders (stale remnants from old sync operations)
+    const emptySynced = allFolders.filter(f => {
+      if (!f.isSynced) return false
+      return descendantDeckIds(f.id, allFolders, allDecks).length === 0
+    })
+    if (emptySynced.length > 0) {
+      await Promise.all(emptySynced.map(f => folderRepo.softDelete(f.id)))
+      const deletedIds = new Set(emptySynced.map(f => f.id))
+      setFolders(allFolders.filter(f => !deletedIds.has(f.id)))
+    } else {
+      setFolders(allFolders)
+    }
     setDecksForFolders(allDecks)
     const sourcePair = allPairs.find(p => p.sourceLanguage === targetLang && p.targetLanguage === basisLang)
     const hasRules = sourcePair ? allRules.some(r => r.enabled && r.sourcePairId === sourcePair.id) : false
