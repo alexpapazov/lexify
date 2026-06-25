@@ -25,7 +25,7 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { SynonymTypingMode } from '@/components/session/SynonymTypingMode'
 import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
-import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
+import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday } from '@/lib/dates'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
@@ -479,6 +479,29 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       void prefetchAudio([{ card: updated, sourceLanguage }], handleAudioCached)
     }
   }, [allCards, sourceLanguage, handleAudioCached])
+
+  const handleChoiceEdit = useCallback(async (cardId: string, answerSide: CardSide, originalChoice: string, newText: string, isCorrect: boolean) => {
+    const cardRepo = new SupabaseCardRepository()
+    const card = allCards.find(c => c.id === cardId)
+    if (!card) return
+    let updated: typeof card
+    if (isCorrect) {
+      const patch = answerSide === 'front' ? { front: newText } : { back: newText }
+      updated = await cardRepo.update(cardId, patch)
+    } else {
+      const existing = card.choices ?? { front: [], back: [], frontSynonyms: [], backSynonyms: [] }
+      const newPool = !newText
+        ? (existing[answerSide] ?? []).filter((d: string) => d !== originalChoice)
+        : (existing[answerSide] ?? []).map((d: string) => d === originalChoice ? newText : d)
+      updated = await cardRepo.update(cardId, { choices: { ...existing, [answerSide]: newPool } })
+      if (needsChoices(updated, answerSide)) {
+        void ensureChoicesGenerated(updated, answerSide, allCards, sourceLanguage, targetLanguage)
+          .then(ai => { if (ai) handleChoicesCached(cardId, ai) })
+      }
+    }
+    setAllCards(prev => prev.map(c => c.id === cardId ? updated : c))
+    setQueue(prev => prev.map(it => it.card.id === cardId ? { ...it, card: updated } : it))
+  }, [allCards, sourceLanguage, targetLanguage, handleChoicesCached])
 
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
     const current = queue[index]
@@ -948,7 +971,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onAdvance={() => setIndex(i => i + 1)}
           onRepeat={stepWillComplete ? handleRepeat : undefined}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
-          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)} />
+          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
+          onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
         // Stages 2 & 3 where group members have distinct expected answers.

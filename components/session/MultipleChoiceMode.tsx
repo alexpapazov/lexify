@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Card, CardChoices, CardSide, Rating } from '@/domain'
 import { buildOptions, ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
 import { speak } from '@/lib/speak'
@@ -18,7 +18,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, autoPlayAudio = true }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, autoPlayAudio = true }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -49,6 +49,11 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   onRepeat?: () => void
   /** Double-click-to-edit on the prompt panel. newText='' means delete the card. */
   onPromptEdit?: (newText: string) => void
+  /**
+   * Double-click-to-edit on a choice. originalChoice = the current text,
+   * newText = edited value ('' means delete distractor), isCorrect = whether it's the right answer.
+   */
+  onChoiceEdit?: (originalChoice: string, newText: string, isCorrect: boolean) => Promise<void>
   /** When false, suppresses automatic audio playback; the manual speaker button still works. */
   autoPlayAudio?: boolean
 }) {
@@ -73,6 +78,12 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   const [selected,  setSelected]  = useState<string | null>(null)
   const [viaSynonym, setViaSynonym] = useState(false)
   const [revealed,  setRevealed]  = useState(false)
+
+  // Inline choice editing (double-click)
+  const [editingChoice, setEditingChoice] = useState<string | null>(null)
+  const [editValue,     setEditValue]     = useState('')
+  const [editSaving,    setEditSaving]    = useState(false)
+  const editInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const opts = buildOptions(card, answerSide, deckCards, excludeAnswerTexts)
@@ -123,6 +134,36 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     onRate(wasCorrect ? 'good' : 'again', wasCorrect, selected)
   }
 
+  function startEditChoice(choice: string) {
+    if (!onChoiceEdit || selected || revealed) return
+    setEditingChoice(choice)
+    setEditValue(choice)
+    // Focus the input on next tick
+    setTimeout(() => editInputRef.current?.select(), 0)
+  }
+
+  async function commitEditChoice() {
+    if (!editingChoice || editSaving) return
+    const isCorrect = norm(editingChoice) === norm(displayCorrect)
+    const trimmed = editValue.trim()
+    // No change — cancel
+    if (trimmed === editingChoice) { setEditingChoice(null); return }
+    setEditSaving(true)
+    try {
+      await onChoiceEdit?.(editingChoice, trimmed, isCorrect)
+      // Update local choices state immediately
+      if (!isCorrect) {
+        setChoices(prev => {
+          if (!trimmed) return prev.filter(c => c !== editingChoice)
+          return prev.map(c => c === editingChoice ? trimmed : c)
+        })
+      }
+    } finally {
+      setEditSaving(false)
+      setEditingChoice(null)
+    }
+  }
+
   return (
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
@@ -156,6 +197,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
           const isCorrect  = norm(choice) === norm(displayCorrect)
           const isSelected = choice === selected
           const isSyn      = !isCorrect && isSynonym(choice)
+          const isEditing  = editingChoice === choice
           let style = 'border-white/10 hover:border-accent/40 hover:bg-surface-raised/50 text-ink'
           if (selected) {
             if (isCorrect)        style = 'border-success/60 bg-success/10 text-success'
@@ -164,11 +206,34 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
             else if (isSelected)  style = 'border-danger/60 bg-danger/10 text-danger'
             else                  style = 'border-white/5 text-ink-faint opacity-50'
           }
+          if (isEditing) style = 'border-accent/60 bg-surface-raised'
           return (
-            <button key={choice} onClick={() => choose(choice)} disabled={!!selected}
-              className={`panel text-left py-4 px-5 transition-colors text-base ${style}`}>
-              {choice}
-            </button>
+            <div
+              key={choice}
+              className={`panel py-4 px-5 transition-colors text-base ${style} ${!selected && !isEditing ? 'cursor-pointer' : ''}`}
+              onClick={() => !isEditing && choose(choice)}
+              onDoubleClick={() => startEditChoice(choice)}
+              title={onChoiceEdit && !selected && !revealed ? 'Double-click to edit' : undefined}
+            >
+              {isEditing ? (
+                <input
+                  ref={editInputRef}
+                  className="w-full bg-transparent outline-none text-ink text-base"
+                  value={editValue}
+                  onChange={e => setEditValue(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { e.preventDefault(); void commitEditChoice() }
+                    if (e.key === 'Escape') { setEditingChoice(null) }
+                  }}
+                  onBlur={() => { void commitEditChoice() }}
+                  disabled={editSaving}
+                  placeholder={isCorrect ? 'Edit answer…' : 'Edit distractor… (clear to remove)'}
+                  autoFocus
+                />
+              ) : (
+                choice
+              )}
+            </div>
           )
         })}
       </div>
