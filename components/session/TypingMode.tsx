@@ -21,7 +21,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, answerLanguage, autoPlayAudio = true,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, answerLanguage, autoPlayAudio = true,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -31,14 +31,17 @@ export function TypingMode({
   deckName?:        string
   overrideAnswers?: string[]
   synonyms?:        string[]
+  /** Same-deck cards that map to the same meaning — triggers a two-phase flow where the sibling gets credit and the canonical answer is still required. */
+  deckSiblings?:    { id: string; answer: string }[]
   onOverrideAnswer?: (normalizedAnswer: string, accept: boolean) => void
   onRate: (r: Rating, wasCorrect: boolean, userAnswer: string, issueType?: GradingIssueType) => void
   onRepeat?: () => void
   onIDontKnow?: () => void
   onAdvance?: () => void
   onPromptEdit?: (newText: string) => void
+  /** Called when a deck-sibling answer is detected; the parent should credit that card. */
+  onSiblingAnswered?: (siblingCardId: string) => void
   answerLanguage?: string
-  /** When false, suppresses automatic audio playback; the manual speaker button still works. */
   autoPlayAudio?: boolean
 }) {
   type LocalResult = {
@@ -54,12 +57,18 @@ export function TypingMode({
 
   const [input,      setInput]      = useState('')
   const [result,     setResult]     = useState<LocalResult | null>(null)
-  const [override,   setOverride]   = useState<boolean | null>(null)
-  const [retype,     setRetype]     = useState('')
-  const [revealed,   setRevealed]   = useState(false)
-  const [composing,  setComposing]  = useState(false)
+  const [override,        setOverride]        = useState<boolean | null>(null)
+  const [retype,          setRetype]          = useState('')
+  const [revealed,        setRevealed]        = useState(false)
+  const [composing,       setComposing]       = useState(false)
+  // Sibling phase: user typed a deck-sibling answer; canonical answer still required
+  const [siblingId,       setSiblingId]       = useState<string | null>(null)
+  const [siblingText,     setSiblingText]     = useState('')
+  const [canonInput,      setCanonInput]      = useState('')
+  const [composingCanon,  setComposingCanon]  = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
   const retypeRef   = useRef<HTMLInputElement>(null)
+  const canonRef    = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setInput('')
@@ -68,6 +77,10 @@ export function TypingMode({
     setRetype('')
     setRevealed(false)
     setComposing(false)
+    setSiblingId(null)
+    setSiblingText('')
+    setCanonInput('')
+    setComposingCanon(false)
   }, [card.id])
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
@@ -98,22 +111,25 @@ export function TypingMode({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!result, needsRetype])
 
-  // Delay focus on the retype input so IME composition has fully settled before
-  // the new input receives focus. Without the delay, the composing syllable that
-  // was pending when the user pressed Enter gets inserted into the retype box.
   useEffect(() => {
     if (!needsRetype) return
     const t = setTimeout(() => retypeRef.current?.focus(), 80)
     return () => clearTimeout(t)
   }, [needsRetype])
 
-  function check() {
-    const base = gradeTyping(input, expected, gradingSettings)
+  // Focus the canonical input when sibling phase begins.
+  useEffect(() => {
+    if (!siblingId) return
+    const t = setTimeout(() => canonRef.current?.focus(), 80)
+    return () => clearTimeout(t)
+  }, [siblingId])
+
+  function gradeAndSetResult(typedInput: string) {
+    const base = gradeTyping(typedInput, expected, gradingSettings)
     const viaOverride = base.status !== 'correct' &&
       (overrideAnswers ?? []).includes(base.normalizedUser)
     const viaSynonym  = base.status !== 'correct' && !viaOverride &&
-      (synonyms ?? []).some(s => gradeTyping(input, s, gradingSettings).status === 'correct')
-
+      (synonyms ?? []).some(s => gradeTyping(typedInput, s, gradingSettings).status === 'correct')
     const effectivelyCorrect = base.correct || viaOverride || viaSynonym
     setResult({
       status:         effectivelyCorrect ? 'correct' : base.status,
@@ -127,10 +143,27 @@ export function TypingMode({
     })
     setOverride(null)
     setRetype('')
-    // Auto-play when typing the source language (e.g. typed Korean correctly).
     if (autoPlayAudio && effectivelyCorrect && answerLanguage) {
       speak(card.front, answerLanguage, card.audioData)
     }
+  }
+
+  function check() {
+    // Check deck siblings first — they require a two-phase flow.
+    const matchedSibling = deckSiblings?.find(
+      s => gradeTyping(input, s.answer, gradingSettings).status === 'correct'
+    )
+    if (matchedSibling) {
+      setSiblingId(matchedSibling.id)
+      setSiblingText(input)
+      onSiblingAnswered?.(matchedSibling.id)
+      return
+    }
+    gradeAndSetResult(input)
+  }
+
+  function checkCanonical() {
+    gradeAndSetResult(canonInput)
   }
 
   function advanceRetype() {
@@ -212,32 +245,69 @@ export function TypingMode({
           </>
         ) : (
         <>
+        {/* Phase 1 input — shows sibling answer (green, disabled) or live input */}
         <input
           className={`input text-center text-lg font-mono ${
-            !result ? '' :
+            siblingId   ? 'border-success/60 bg-success/5' :
+            !result     ? '' :
             finalCorrect ? 'border-success/60 bg-success/5' :
             result.status === 'almost' && override !== false ? 'border-warning/60 bg-warning/5' :
             'border-danger/60 bg-danger/5'
           }`}
           placeholder="Type your answer…"
-          value={input}
-          onChange={e => { if (!result) setInput(e.target.value) }}
+          value={siblingId ? siblingText : input}
+          onChange={e => { if (!result && !siblingId) setInput(e.target.value) }}
           onCompositionStart={() => setComposing(true)}
           onCompositionEnd={() => setComposing(false)}
           onKeyDown={e => {
-            // Ignore Enter while IME is composing — the composing syllable would
-            // otherwise leak into the retype input that appears next.
-            if (e.key === 'Enter' && !result && !composing) check()
+            if (e.key === 'Enter' && !result && !composing && !siblingId) check()
           }}
-          disabled={!!result}
-          autoFocus={!revealed}
+          disabled={!!result || !!siblingId}
+          autoFocus={!revealed && !siblingId}
         />
 
-        {!result ? (
+        {/* Sibling phase: success note + canonical input */}
+        {siblingId && !result && (
+          <div className="space-y-3">
+            <div className="panel border-success/30 bg-success/5 text-center py-3 space-y-1">
+              <p className="text-success font-medium">Correct! Also in your deck</p>
+              <p className="text-xs text-ink-muted">Now type the answer for this specific card:</p>
+            </div>
+            <input
+              ref={canonRef}
+              className="input text-center text-lg font-mono"
+              placeholder="Type your answer…"
+              value={canonInput}
+              onChange={e => setCanonInput(e.target.value)}
+              onCompositionStart={() => setComposingCanon(true)}
+              onCompositionEnd={() => setComposingCanon(false)}
+              onKeyDown={e => { if (e.key === 'Enter' && !composingCanon) checkCanonical() }}
+            />
+            <div className="flex justify-center">
+              <button onClick={checkCanonical} disabled={!canonInput.trim()} className="btn-primary">Check</button>
+            </div>
+          </div>
+        )}
+
+        {/* Canonical input result display (sibling phase, after canonical graded) */}
+        {siblingId && result && (
+          <input
+            className={`input text-center text-lg font-mono ${
+              finalCorrect ? 'border-success/60 bg-success/5' :
+              result.status === 'almost' && override !== false ? 'border-warning/60 bg-warning/5' :
+              'border-danger/60 bg-danger/5'
+            }`}
+            value={canonInput}
+            readOnly
+            disabled
+          />
+        )}
+
+        {!siblingId && !result ? (
           <div className="flex gap-3 justify-center">
             <button onClick={check} disabled={!input.trim()} className="btn-primary">Check</button>
           </div>
-        ) : (
+        ) : result ? (
           <div className="space-y-4">
             {/* Result panel */}
             <div className={`panel text-center py-3 ${feedbackClass}`}>
@@ -354,7 +424,7 @@ export function TypingMode({
               )
             )}
           </div>
-        )}
+        ) : null}
         </>
         )}
       </div>

@@ -66,6 +66,28 @@ export function deckSiblingAnswers(
   }
 }
 
+/**
+ * Like deckSiblingAnswers but returns {id, answer} pairs so the session can
+ * credit the sibling card as well as requiring the canonical answer.
+ */
+export function deckSiblings(
+  card:      Card,
+  answerSide: CardSide,
+  deckCards: Card[],
+): { id: string; answer: string }[] {
+  if (answerSide === 'front') {
+    const target = norm(card.back)
+    return deckCards
+      .filter(c => c.id !== card.id && norm(c.back) === target)
+      .map(c => ({ id: c.id, answer: c.front }))
+  } else {
+    const target = norm(card.front)
+    return deckCards
+      .filter(c => c.id !== card.id && norm(c.front) === target)
+      .map(c => ({ id: c.id, answer: c.back }))
+  }
+}
+
 export function dedupeAgainst(correct: string, pool: string[]): string[] {
   const seen = new Set([norm(correct)])
   const out: string[] = []

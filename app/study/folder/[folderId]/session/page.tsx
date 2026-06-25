@@ -31,7 +31,7 @@ import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
-import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblingAnswers, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
+import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday } from '@/lib/dates'
 
 /** How many slots ahead an "I don't know" card is re-queued to resurface in the same session. */
@@ -463,6 +463,36 @@ function FolderSessionInner() {
     }
   }, [queue, index, userId, submitting])
 
+  const handleSiblingAnswered = useCallback(async (siblingCardId: string) => {
+    const current = queue[index]
+    if (!current) return
+    const { pipeline, deckCards } = current
+    const siblingCard = deckCards.find(c => c.id === siblingCardId)
+    if (!siblingCard) return
+    try {
+      const stateRepo = new SupabaseCardStateRepository()
+      const eventRepo = new SupabaseReviewEventRepository()
+      const nowDate   = new Date()
+      const existing  = await stateRepo.get(userId, siblingCardId)
+      const state     = existing ?? initialCardState(userId, siblingCardId, pipeline.id)
+      const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+      const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
+      const reviewMode = classifyReviewMode(state, nowDate)
+      await eventRepo.create({
+        userId, cardId: siblingCardId, mode: step.stepType,
+        promptSide: 'back', answerSide: 'front',
+        promptShown: siblingCard.back, expected: siblingCard.front,
+        userAnswer: siblingCard.front, wasCorrect: true, rating: 'good', responseMs: null,
+        reviewMode, wasTyped: true,
+      })
+      const newState = progressAfterReview(state, pipeline, { wasCorrect: true, rating: 'good', wrongSeverity: undefined, wasTyped: false }, nowDate)
+      await stateRepo.upsert(newState)
+      setQueue(prev => prev.map(item => item.card.id === siblingCardId ? { ...item, state: newState } : item))
+    } catch (err) {
+      console.error('Failed to credit sibling card:', err)
+    }
+  }, [queue, index, userId])
+
   const handleRepeat = useCallback(() => {
     const current = queue[index]
     if (!current) return
@@ -595,7 +625,9 @@ function FolderSessionInner() {
           answerLanguage={step.promptSide === 'back' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
-          synonyms={[...(step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])), ...deckSiblingAnswers(card, step.answerSide, deckCards)]}
+          synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+          deckSiblings={deckSiblings(card, step.answerSide, deckCards)}
+          onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onRepeat={stepWillComplete ? handleRepeat : undefined}
           onIDontKnow={handleIDontKnow}
@@ -611,7 +643,9 @@ function FolderSessionInner() {
           answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : undefined}
           gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
-          synonyms={[...(reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])), ...deckSiblingAnswers(card, reviewAnswerSide, deckCards)]}
+          synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+          deckSiblings={deckSiblings(card, reviewAnswerSide, deckCards)}
+          onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
