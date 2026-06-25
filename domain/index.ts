@@ -134,6 +134,7 @@ export interface LanguagePair {
   targetLanguage: string
   position:       number
   flag:           string | null
+  instructions:   string | null
   createdAt:      string
 }
 

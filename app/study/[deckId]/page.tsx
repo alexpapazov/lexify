@@ -848,6 +848,7 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
               fromLanguage:      sourceLanguage,
               toLearnedLanguage: destPair.sourceLanguage,
               toBasisLanguage:   destPair.targetLanguage,
+              ...(destPair.instructions ? { instructions: destPair.instructions } : {}),
             }),
           })
           const data = await res.json()

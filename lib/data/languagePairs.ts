@@ -9,6 +9,7 @@ function rowToPair(row: Record<string, unknown>): LanguagePair {
     targetLanguage: row.target_language as string,
     position:       (row.position as number) ?? 0,
     flag:           (row.flag as string | null) ?? null,
+    instructions:   (row.instructions as string | null) ?? null,
     createdAt:      row.created_at as string,
   }
 }
@@ -48,6 +49,13 @@ export class SupabaseLanguagePairRepository {
   /** Update the flag emoji for an existing pairing. */
   async updateFlag(sourceLanguage: string, targetLanguage: string, flag: string): Promise<void> {
     const { error } = await this.db.from('language_pairs').update({ flag })
+      .match({ source_language: sourceLanguage, target_language: targetLanguage })
+    if (error) throw new Error(error.message)
+  }
+
+  /** Update the AI instructions for an existing pairing (null clears them). */
+  async updateInstructions(sourceLanguage: string, targetLanguage: string, instructions: string | null): Promise<void> {
+    const { error } = await this.db.from('language_pairs').update({ instructions })
       .match({ source_language: sourceLanguage, target_language: targetLanguage })
     if (error) throw new Error(error.message)
   }

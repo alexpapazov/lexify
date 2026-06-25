@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }              from '@/lib/data/decks'
@@ -22,7 +22,7 @@ import {
   analyzeDuplicate, type DuplicateAnalysis,
   tier1Match, tier2Match,
 } from '@/lib/duplicates'
-import type { Card, Folder, Deck } from '@/domain'
+import type { Card, Folder, Deck, LanguagePair } from '@/domain'
 
 const NEW_FOLDER_VALUE = '__new__'
 const ROOT_FOLDER_VALUE = '__root__'
@@ -256,8 +256,21 @@ export default function UploadPage() {
   const [fastTrackCardIds,  setFastTrackCardIds]  = useState<Set<number>>(new Set())
   const [syncFastTrackMode, setSyncFastTrackMode] = useState<'none' | 'new_only'>('new_only')
 
+  // All language pairs for the current user (loaded on mount for instructions fallback)
+  const [allPairsCache, setAllPairsCache] = useState<LanguagePair[]>([])
+
   const router   = useRouter()
   const supabase = createClient()
+
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) return
+      const pairRepo = new SupabaseLanguagePairRepository()
+      const pairs = await pairRepo.list(session.user.id)
+      setAllPairsCache(pairs)
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const placeholder = useMemo(
     () => buildPlaceholder(pairSepOpt, customPairSep, cardSepOpt, customCardSep, targetLang, basisLang),
@@ -319,9 +332,13 @@ export default function UploadPage() {
 
     setAgentRunning(true)
     try {
+      // If user hasn't typed a custom prompt, fall back to the language pair's saved instructions
+      const pairDefaultInstructions = aiPrompt.trim()
+        ? aiPrompt
+        : (allPairsCache.find(p => p.sourceLanguage === targetLang && p.targetLanguage === basisLang)?.instructions ?? '')
       const body = aiMode === 'wordlist'
-        ? { mode: 'wordlist', content: rawText, instructions: aiPrompt, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
-        : { mode: 'extraction', text: rawText, instructions: aiPrompt, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
+        ? { mode: 'wordlist', content: rawText, instructions: pairDefaultInstructions, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
+        : { mode: 'extraction', text: rawText, instructions: pairDefaultInstructions, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
 
       const res  = await fetch('/api/cards/generate', {
         method: 'POST',

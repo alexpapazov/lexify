@@ -144,6 +144,7 @@ export async function autoSyncNewCards(
             fromLanguage:      pair.sourceLanguage,
             toLearnedLanguage: dest.sourceLanguage,
             toBasisLanguage:   dest.targetLanguage,
+            ...(dest.instructions ? { instructions: dest.instructions } : {}),
           }),
         })
         const data = await res.json()

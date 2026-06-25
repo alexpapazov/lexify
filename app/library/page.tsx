@@ -179,6 +179,11 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   // Flag editor for existing pairs
   const [editFlagFor, setEditFlagFor] = useState<string | null>(null)  // "src|tgt" key
 
+  // Per-pair settings panel (instructions)
+  const [pairSettingsFor,  setPairSettingsFor]  = useState<string | null>(null)  // "src|tgt" key
+  const [pairInstructions, setPairInstructions] = useState('')
+  const [savingInstructions, setSavingInstructions] = useState(false)
+
   // Drag state (folder/deck tree — only active in the inPair view)
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
   const [dropTarget,  setDropTarget]  = useState<DropTarget>(null)
@@ -464,6 +469,23 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     setEditFlagFor(null)
   }
 
+  async function handleSaveInstructions() {
+    if (!pairSettingsFor) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    setSavingInstructions(true)
+    try {
+      const pairRepo = new SupabaseLanguagePairRepository()
+      const trimmed = pairInstructions.trim() || null
+      await pairRepo.updateInstructions(src, tgt, trimmed)
+      setPairs(prev => prev.map(p =>
+        p.sourceLanguage === src && p.targetLanguage === tgt ? { ...p, instructions: trimmed } : p
+      ))
+      setPairSettingsFor(null)
+    } finally {
+      setSavingInstructions(false)
+    }
+  }
+
   async function handleDeletePair() {
     if (!pairSource || !pairTarget) return
     const confirmed = confirm(
@@ -514,7 +536,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       const key = `${d.sourceLanguage}|${d.targetLanguage}`
       if (!seen.has(key)) {
         seen.add(key)
-        result.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, flag: null, createdAt: '' })
+        result.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, flag: null, instructions: null, createdAt: '' })
       }
     }
     if (pairOrder) {
@@ -729,10 +751,23 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                     setPairDropTarget(null)
                     if (fromKey && fromKey !== key) commitPairDrop(fromKey, key, pos)
                   }}
-                  className={`panel flex flex-col items-center justify-center gap-1 py-6 text-center transition-all cursor-grab active:cursor-grabbing select-none relative ${
+                  className={`panel flex flex-col items-center justify-center gap-1 py-6 text-center transition-all cursor-grab active:cursor-grabbing select-none relative group ${
                     isDragging ? 'opacity-40' : 'hover:bg-surface-raised/50'
                   } ${pdt?.pos === 'before' ? 'border-l-2 border-l-accent' : pdt?.pos === 'after' ? 'border-r-2 border-r-accent' : ''}`}
                 >
+                  {/* Gear icon — pair settings */}
+                  <button
+                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-ink-faint hover:text-ink transition-opacity text-sm leading-none"
+                    onClick={e => {
+                      e.stopPropagation(); e.preventDefault()
+                      setPairInstructions(p.instructions ?? '')
+                      setPairSettingsFor(key)
+                    }}
+                    title="Pair settings"
+                    draggable={false}
+                  >
+                    ⚙
+                  </button>
                   {/* Flag — click to change */}
                   <div className="relative group/flag mb-1">
                     <span className="text-2xl leading-none">{flag}</span>
@@ -787,6 +822,47 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             </div>
           </div>
         )}
+
+        {/* Pair settings modal */}
+        {pairSettingsFor && (() => {
+          const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+          return (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+              onClick={() => setPairSettingsFor(null)}
+            >
+              <div className="panel p-5 max-w-sm w-full mx-4 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-ink">{langNativeName(src)} / {langNativeName(tgt)} — Settings</h3>
+                  <button onClick={() => setPairSettingsFor(null)} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-medium text-ink-muted uppercase tracking-wide">AI Instructions</label>
+                  <p className="text-xs text-ink-faint">Default formatting rules used by the word-list agent and language syncing when no custom prompt is provided (e.g. &quot;use infinitive form for verbs&quot;).</p>
+                  <textarea
+                    className="input w-full text-sm resize-none"
+                    rows={5}
+                    maxLength={2000}
+                    placeholder="e.g. Use infinitive form for verbs. Use masculine nominative singular for nouns."
+                    value={pairInstructions}
+                    onChange={e => setPairInstructions(e.target.value)}
+                  />
+                  <span className="text-xs text-ink-faint text-right">{pairInstructions.length} / 2000</span>
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button onClick={() => setPairSettingsFor(null)} className="text-sm text-ink-muted hover:text-ink transition-colors">Cancel</button>
+                  <button
+                    onClick={handleSaveInstructions}
+                    disabled={savingInstructions}
+                    className="btn-primary text-sm px-4 py-1.5 disabled:opacity-50"
+                  >
+                    {savingInstructions ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
       </div>
     )
   }

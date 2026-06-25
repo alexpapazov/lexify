@@ -25,6 +25,7 @@ interface RequestBody {
   fromLanguage:      string   // source-pair learned language code, e.g. "fr"
   toLearnedLanguage: string   // dest-pair learned language code,  e.g. "ko"
   toBasisLanguage:   string   // dest-pair basis language code,    e.g. "en"
+  instructions?:     string   // optional per-pair formatting instructions
 }
 
 function extractJson(text: string): unknown {
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, reason: 'bad-request' }, { status: 400 })
   }
 
-  const { sourceFront, sourceBack, fromLanguage, toLearnedLanguage, toBasisLanguage } = body
+  const { sourceFront, sourceBack, fromLanguage, toLearnedLanguage, toBasisLanguage, instructions } = body
   if (!sourceFront?.trim()) {
     return NextResponse.json({ ok: false, reason: 'bad-request' }, { status: 400 })
   }
@@ -64,7 +65,7 @@ Translate this into a new language pair:
   New back:  the equivalent word/phrase in ${toBasisName}  (the basis/native language in the destination pair)
 
 IMPORTANT: derive the translation from the SOURCE FRONT ("${sourceFront}"), not from the back gloss.
-
+${instructions?.trim() ? `\nFormatting instructions — follow these when choosing word forms (e.g. infinitive for verbs, masculine nominative singular for nouns):\n${instructions.trim()}\n` : ''}
 Return ONLY a JSON object, no other text:
 {
   "front": "translated word/phrase in ${toLearnedName}",
