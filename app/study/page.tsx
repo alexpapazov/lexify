@@ -159,8 +159,21 @@ export default function StudyPage() {
             ? new Date(s.dueAt) <= new Date()
             : s.dueAt.slice(0, 10) === selectedForecastDate
           if (!isOnSelected) continue
-          // Skip relearn loop cards and cards without a valid last rating
+          // Skip relearn loop cards
           if (s.relearningStep > 0) continue
+
+          // Fast-track cards on their first review cycle: window = [today, graduatedAt + 14 days]
+          if (s.acceleratedMode === 'import_known' && s.reps === 0 && s.graduatedAt) {
+            const gradDay = new Date(s.graduatedAt)
+            gradDay.setUTCHours(0, 0, 0, 0)
+            const maxDate = new Date(gradDay.getTime() + 14 * 24 * 60 * 60 * 1000)
+            const earliest = todayStr
+            const latest   = maxDate.toISOString().slice(0, 10)
+            if (earliest <= latest) movable.push({ state: s, earliest, latest })
+            continue
+          }
+
+          // Standard graduated cards: use smooth multiplier window
           if (!s.lastRating || s.lastRating === 'again') continue
           if (!s.lastReviewedAt || s.scheduledIntervalDays <= 0) continue
 

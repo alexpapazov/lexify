@@ -23,7 +23,8 @@ import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { speak } from '@/lib/speak'
 import { classifyReviewMode } from '@/engine/scheduler'
-import { initialCardState } from '@/engine/pipeline'
+import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
+import { batchFastTrackDueDates } from '@/engine/density'
 
 // ─── Card edit modal ─────────────────────────────────────────────────────────
 
@@ -94,7 +95,8 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [resetting,   setResetting]   = useState(false)
   const [resetError,  setResetError]  = useState<string | null>(null)
   const [resetDone,   setResetDone]   = useState<string | null>(null)
-  const [graduating,       setGraduating]       = useState(false)
+  const [graduating,          setGraduating]          = useState(false)
+  const [graduateAccelerated, setGraduateAccelerated] = useState(false)
   const [confusions,       setConfusions]       = useState<CardConfusion[]>([])
   const [generatingAudio,  setGeneratingAudio]  = useState(false)
   const [audioError,       setAudioError]       = useState<string | null>(null)
@@ -210,7 +212,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     }
   }
 
-  /** Skip the learning pipeline and graduate the card immediately with a 3-day first interval. */
+  /** Skip the learning pipeline and graduate the card immediately. */
   async function handleGraduateNow() {
     setGraduating(true)
     setResetError(null)
@@ -221,28 +223,34 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
         const pipelineRepo = new SupabasePipelineRepository()
         pipelineId = (await pipelineRepo.getDefault()).id
       }
-      const now     = new Date()
-      const nowIso  = now.toISOString()
-      const dueAt   = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString()
-      const base    = state ?? initialCardState(userId, card.id, pipelineId)
-      const graduated: CardState = {
-        ...base,
-        graduated:             true,
-        currentStepOrder:      0,
-        correctInStep:         0,
-        dueAt,
-        intervalDays:          3,
-        scheduledIntervalDays: 3,
-        ease:                  base.graduated ? base.ease : 2.5,
-        reps:                  Math.max(base.reps, 1),
-        lapses:                base.lapses,
-        lastRating:            'good',
-        lastReviewedAt:        nowIso,
-        graduatedAt:           base.graduatedAt ?? nowIso,
-        relearningStep:        0,
-        pendingIntervalDays:   null,
-        lapseClusterCount:     0,
-        lastLapseAt:           null,
+      const now    = new Date()
+      const nowIso = now.toISOString()
+      let graduated: CardState
+      if (graduateAccelerated) {
+        const [dueAt] = await batchFastTrackDueDates(userId, 1, now, stateRepo)
+        graduated = fastTrackCardState(userId, card.id, pipelineId, dueAt ?? nowIso, 14, now)
+      } else {
+        const dueAt = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString()
+        const base  = state ?? initialCardState(userId, card.id, pipelineId)
+        graduated = {
+          ...base,
+          graduated:             true,
+          currentStepOrder:      0,
+          correctInStep:         0,
+          dueAt,
+          intervalDays:          3,
+          scheduledIntervalDays: 3,
+          ease:                  base.graduated ? base.ease : 2.5,
+          reps:                  Math.max(base.reps, 1),
+          lapses:                base.lapses,
+          lastRating:            'good',
+          lastReviewedAt:        nowIso,
+          graduatedAt:           base.graduatedAt ?? nowIso,
+          relearningStep:        0,
+          pendingIntervalDays:   null,
+          lapseClusterCount:     0,
+          lastLapseAt:           null,
+        }
       }
       const updated = await stateRepo.upsert(graduated)
       onStateChange(updated)
@@ -377,15 +385,28 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
         {showStats && (
           <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm max-h-80 overflow-y-auto">
             {!state?.graduated && (
-              <div className="border-b border-white/5 pb-3">
+              <div className="border-b border-white/5 pb-3 space-y-2">
                 <button
                   onClick={handleGraduateNow}
                   disabled={graduating || resetting}
                   className="w-full text-left px-3 py-2 rounded-lg border border-accent/20 bg-accent/5 hover:bg-accent/10 text-accent text-xs font-medium transition-colors disabled:opacity-40"
                 >
                   {graduating ? 'Graduating…' : 'Graduate now'}
-                  <span className="block text-ink-faint font-normal mt-0.5">Skip the learning pipeline — card goes straight to graduated review (3-day first interval).</span>
+                  <span className="block text-ink-faint font-normal mt-0.5">
+                    {graduateAccelerated
+                      ? 'Accelerated track — first review spread across the next 14 days.'
+                      : 'Skip the learning pipeline — card goes straight to graduated review (3-day first interval).'}
+                  </span>
                 </button>
+                <label className="flex items-center gap-2 cursor-pointer select-none px-1">
+                  <input
+                    type="checkbox"
+                    checked={graduateAccelerated}
+                    onChange={e => setGraduateAccelerated(e.target.checked)}
+                    className="accent-accent w-3.5 h-3.5"
+                  />
+                  <span className="text-xs text-ink-muted">Accelerated track</span>
+                </label>
               </div>
             )}
             {!state ? (
@@ -1733,6 +1754,7 @@ export default function DeckDetailPage() {
   const [loading,          setLoading]          = useState(true)
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
   const [bulkGraduating,   setBulkGraduating]   = useState(false)
+  const [bulkAccelerated,  setBulkAccelerated]  = useState(false)
   const [showGear,         setShowGear]         = useState(false)
   const [renamingDeck,     setRenamingDeck]     = useState(false)
   const [deckNameValue,    setDeckNameValue]    = useState('')
@@ -1842,33 +1864,47 @@ export default function DeckDetailPage() {
       const defaultPipeline = await pipelineRepo.getDefault()
       const now    = new Date()
       const nowIso = now.toISOString()
-      const dueAt  = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString()
-      const updates = await Promise.all(
-        [...selectedCardIds].map(async cardId => {
-          const existing  = states.find(s => s.cardId === cardId)
-          const base      = existing ?? initialCardState(userId, cardId, defaultPipeline.id)
-          const graduated: CardState = {
-            ...base,
-            graduated:             true,
-            currentStepOrder:      0,
-            correctInStep:         0,
-            dueAt,
-            intervalDays:          3,
-            scheduledIntervalDays: 3,
-            ease:                  base.graduated ? base.ease : 2.5,
-            reps:                  Math.max(base.reps, 1),
-            lapses:                base.lapses,
-            lastRating:            'good',
-            lastReviewedAt:        nowIso,
-            graduatedAt:           base.graduatedAt ?? nowIso,
-            relearningStep:        0,
-            pendingIntervalDays:   null,
-            lapseClusterCount:     0,
-            lastLapseAt:           null,
-          }
-          return stateRepo.upsert(graduated)
-        })
-      )
+      const cardIds = [...selectedCardIds]
+
+      let updates: CardState[]
+      if (bulkAccelerated) {
+        // Spread due dates across a 14-day window, using the existing schedule as a guide
+        const dueDates = await batchFastTrackDueDates(userId, cardIds.length, now, stateRepo)
+        updates = await Promise.all(
+          cardIds.map(async (cardId, i) => {
+            const dueAt = dueDates[i] ?? (nowIso)
+            return stateRepo.upsert(fastTrackCardState(userId, cardId, defaultPipeline.id, dueAt, 14, now))
+          })
+        )
+      } else {
+        const dueAt = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString()
+        updates = await Promise.all(
+          cardIds.map(async cardId => {
+            const existing = states.find(s => s.cardId === cardId)
+            const base     = existing ?? initialCardState(userId, cardId, defaultPipeline.id)
+            const graduated: CardState = {
+              ...base,
+              graduated:             true,
+              currentStepOrder:      0,
+              correctInStep:         0,
+              dueAt,
+              intervalDays:          3,
+              scheduledIntervalDays: 3,
+              ease:                  base.graduated ? base.ease : 2.5,
+              reps:                  Math.max(base.reps, 1),
+              lapses:                base.lapses,
+              lastRating:            'good',
+              lastReviewedAt:        nowIso,
+              graduatedAt:           base.graduatedAt ?? nowIso,
+              relearningStep:        0,
+              pendingIntervalDays:   null,
+              lapseClusterCount:     0,
+              lastLapseAt:           null,
+            }
+            return stateRepo.upsert(graduated)
+          })
+        )
+      }
       setStates(prev => {
         const map = new Map(prev.map(s => [s.cardId, s]))
         for (const s of updates) map.set(s.cardId, s)
@@ -2101,23 +2137,34 @@ export default function DeckDetailPage() {
         })()}
 
         {selectedCardIds.size > 0 && (
-          <div className="flex items-center justify-between px-3 py-2 rounded-card border border-accent/30 bg-accent/5 text-sm">
-            <span className="text-ink-muted">{selectedCardIds.size} card{selectedCardIds.size !== 1 ? 's' : ''} selected</span>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setSelectedCardIds(new Set())}
-                className="text-xs text-ink-faint hover:text-ink transition-colors"
-              >
-                Clear
-              </button>
-              <button
-                onClick={handleBulkGraduate}
-                disabled={bulkGraduating}
-                className="btn-primary text-xs px-3 py-1"
-              >
-                {bulkGraduating ? 'Graduating…' : 'Graduate selected'}
-              </button>
+          <div className="flex flex-col gap-2 px-3 py-2 rounded-card border border-accent/30 bg-accent/5 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-ink-muted">{selectedCardIds.size} card{selectedCardIds.size !== 1 ? 's' : ''} selected</span>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setSelectedCardIds(new Set())}
+                  className="text-xs text-ink-faint hover:text-ink transition-colors"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={handleBulkGraduate}
+                  disabled={bulkGraduating}
+                  className="btn-primary text-xs px-3 py-1"
+                >
+                  {bulkGraduating ? 'Graduating…' : 'Graduate selected'}
+                </button>
+              </div>
             </div>
+            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+              <input
+                type="checkbox"
+                checked={bulkAccelerated}
+                onChange={e => setBulkAccelerated(e.target.checked)}
+                className="accent-accent w-3.5 h-3.5"
+              />
+              <span className="text-xs text-ink-muted">Accelerated track — spread due dates across 14 days</span>
+            </label>
           </div>
         )}
 
