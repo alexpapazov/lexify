@@ -758,7 +758,8 @@ function AllDueSessionInner() {
           ipaText={currentIpaText} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
-          onRate={rating => handleAnswer(rating, rating !== 'again')} />
+          onRate={rating => handleAnswer(rating, rating !== 'again')}
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}

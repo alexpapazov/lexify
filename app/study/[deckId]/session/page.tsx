@@ -1138,7 +1138,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
-          onRate={rating => handleAnswer(rating, rating !== 'again')} />
+          onRate={rating => handleAnswer(rating, rating !== 'again')}
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
       ) : synMemberCards.length > 0 ? (
         // ── Post-graduation typed recall with synonym chain ──────────────────
         <SynonymDueNowMode
@@ -1150,6 +1151,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           overrideAnswers={Array.from(overrides.get(`${card.id}:front`) ?? [])}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onSynonymTyped={handleSynonymDueNowTyped}
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
         />
       ) : (
         // ── Post-graduation typed recall (no synonym group) ───────────────────

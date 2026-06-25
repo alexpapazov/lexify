@@ -4,6 +4,7 @@ import { useState } from 'react'
 import type { Card, GradingSettings, Rating } from '@/domain'
 import { gradeTyping } from '@/engine/grading'
 import { RatingButtons } from './RatingButtons'
+import { EditablePromptPanel } from './EditablePromptPanel'
 
 /**
  * Due Now typed-production mode for synonym-group cards.
@@ -26,6 +27,7 @@ export function SynonymDueNowMode({
   overrideAnswers,
   onRate,
   onSynonymTyped,
+  onPromptEdit,
 }: {
   /** The card that is actually due — its state gets updated by onRate. */
   card: Card
@@ -39,6 +41,7 @@ export function SynonymDueNowMode({
   onRate: (rating: Rating, wasCorrect: boolean, userAnswer: string) => void
   /** Called each time the learner correctly types a (non-due) synonym. */
   onSynonymTyped: (synonymCardId: string) => void
+  onPromptEdit?: (newText: string) => void
 }) {
   const [sessionCompleted, setSessionCompleted] =
     useState<Array<{ card: Card; typed: string }>>([])
@@ -93,7 +96,9 @@ export function SynonymDueNowMode({
     <div className="space-y-4 w-full max-w-xl mx-auto">
       {/* Prompt */}
       <div className="panel min-h-[120px] flex items-center justify-center text-center">
-        <p className="text-2xl font-medium text-ink">{card.back}</p>
+        {onPromptEdit
+          ? <EditablePromptPanel text={card.back} onEdit={t => onPromptEdit(t)} />
+          : <p className="text-2xl font-medium text-ink">{card.back}</p>}
       </div>
 
       {/* Pre-answered synonyms (grayed) */}
