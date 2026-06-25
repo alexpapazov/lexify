@@ -603,7 +603,7 @@ function AllDueSessionInner() {
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
-          answerLanguage={step.promptSide === 'back' ? sourceLanguage : undefined}
+          answerLanguage={step.promptSide === 'back' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings} autoPlayAudio={studyModeAutoplay && (gradingSettings.autoPlayAudio ?? true)} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
@@ -621,7 +621,7 @@ function AllDueSessionInner() {
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
-          answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : undefined}
+          answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings} autoPlayAudio={studyModeAutoplay && (gradingSettings.autoPlayAudio ?? true)} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}

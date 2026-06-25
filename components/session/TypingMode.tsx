@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Card, GradingSettings, GradingIssueType, GradingStatus, Rating } from '@/domain'
 import { gradeTyping, normalizeAnswer } from '@/engine/grading'
 import { speak } from '@/lib/speak'
+import { langNativeName } from '@/lib/languages'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
 
@@ -254,7 +255,7 @@ export function TypingMode({
             result.status === 'almost' && override !== false ? 'border-warning/60 bg-warning/5' :
             'border-danger/60 bg-danger/5'
           }`}
-          placeholder="Type your answer…"
+          placeholder={answerLanguage ? `Type ${langNativeName(answerLanguage)} answer…` : 'Type your answer…'}
           value={siblingId ? siblingText : input}
           onChange={e => { if (!result && !siblingId) setInput(e.target.value) }}
           onCompositionStart={() => setComposing(true)}
@@ -276,7 +277,7 @@ export function TypingMode({
             <input
               ref={canonRef}
               className="input text-center text-lg font-mono"
-              placeholder="Type your answer…"
+              placeholder={answerLanguage ? `Type ${langNativeName(answerLanguage)} answer…` : 'Type your answer…'}
               value={canonInput}
               onChange={e => setCanonInput(e.target.value)}
               onCompositionStart={() => setComposingCanon(true)}
