@@ -209,6 +209,8 @@ export interface Card {
   audioGenerated?: boolean
   /** Base64-encoded mp3 for card.front, produced by OpenAI TTS. Null until generated. */
   audioData?:      string | null
+  /** IPA transcription for card.front (source language). Null until generated. */
+  ipa?:            string | null
 }
 
 // ─── Synonym groups ───────────────────────────────────────────────────────────

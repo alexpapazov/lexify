@@ -129,6 +129,10 @@ export default function SessionPage() {
   const [studyDayKey,             setStudyDayKey]             = useState('')
   /** IDs of synonym-group cards answered in this session via multi-field — auto-advance when encountered. */
   const [sessionAnsweredSynonyms, setSessionAnsweredSynonyms] = useState<Set<string>>(new Set())
+  /** Whether to show IPA transcription below the source-language prompt. Persisted to localStorage. */
+  const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
+  /** In-session IPA cache: cardId → IPA text (supplements card.ipa from DB). */
+  const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
 const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
@@ -458,6 +462,31 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentCardId, sessionAnsweredSynonyms])
+
+  // Persist IPA toggle preference.
+  useEffect(() => {
+    localStorage.setItem('lexify_ipa', showIPA ? '1' : '0')
+  }, [showIPA])
+
+  // When IPA is on and the current card lacks IPA, fetch it in the background.
+  useEffect(() => {
+    if (!showIPA || !currentCardId) return
+    const card = queue[index]?.card
+    if (!card || ipaCache.has(card.id) || card.ipa) return
+    fetch('/api/ipa', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: card.front, language: sourceLanguage }),
+    })
+      .then(r => r.json())
+      .then((d: { ok: boolean; ipa?: string }) => {
+        if (!d.ok || !d.ipa) return
+        setIpaCache(prev => new Map(prev).set(card.id, d.ipa!))
+        new SupabaseCardRepository().update(card.id, { ipa: d.ipa }).catch(() => {})
+      })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showIPA, currentCardId])
 
   const handlePromptEdit = useCallback(async (cardId: string, promptSide: 'front' | 'back', newText: string) => {
     const cardRepo = new SupabaseCardRepository()
@@ -928,12 +957,26 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     ...sessionAnsweredSynonyms,
   ])
 
+  const promptShowsSource = !state.graduated ? step.promptSide === 'front' : reviewPromptSide === 'front'
+  const currentIpaText = showIPA && promptShowsSource
+    ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
+    : undefined
+
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="flex items-center justify-between">
         <Link href={`/study/${deckId}`} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
-        <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowIPA(v => !v)}
+            title={showIPA ? 'Hide IPA' : 'Show IPA transcription'}
+            className={`text-xs transition-colors ${showIPA ? 'text-accent' : 'text-ink-faint hover:text-ink-muted'}`}
+          >
+            IPA
+          </button>
+          <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
+        </div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
         <div className="h-full bg-accent rounded-full transition-all duration-300"
@@ -975,7 +1018,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
-          onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)} />
+          onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
+          ipaText={currentIpaText} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
         // Stages 2 & 3 where group members have distinct expected answers.
@@ -1019,7 +1063,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
-          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)} />
+          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
+          ipaText={currentIpaText} />
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
@@ -1049,7 +1094,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
-          onResetCard={handleResetCard} />
+          onResetCard={handleResetCard}
+          ipaText={currentIpaText} />
       )}
     </div>
   )

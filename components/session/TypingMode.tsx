@@ -23,7 +23,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -46,6 +46,8 @@ export function TypingMode({
   onResetCard?: () => void
   answerLanguage?: string
   autoPlayAudio?: boolean
+  /** IPA transcription for the prompt (source language). Shown below the prompt when provided. */
+  ipaText?: string
 }) {
   type LocalResult = {
     status:        GradingStatus
@@ -69,6 +71,9 @@ export function TypingMode({
   const [siblingText,     setSiblingText]     = useState('')
   const [canonInput,      setCanonInput]      = useState('')
   const [composingCanon,  setComposingCanon]  = useState(false)
+  // Synonym phase: user typed a synonym; canonical answer still required
+  const [synonymPhase,     setSynonymPhase]     = useState(false)
+  const [synonymPhaseText, setSynonymPhaseText] = useState('')
   const [resetConfirm, setResetConfirm] = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
   const retypeRef   = useRef<HTMLInputElement>(null)
@@ -85,6 +90,8 @@ export function TypingMode({
     setSiblingText('')
     setCanonInput('')
     setComposingCanon(false)
+    setSynonymPhase(false)
+    setSynonymPhaseText('')
   }, [card.id])
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
@@ -122,18 +129,24 @@ export function TypingMode({
     return () => clearTimeout(t)
   }, [needsRetype])
 
-  // Focus the canonical input when sibling phase begins.
+  // Focus the canonical input when sibling or synonym phase begins.
   useEffect(() => {
     if (!siblingId) return
     const t = setTimeout(() => canonRef.current?.focus(), 80)
     return () => clearTimeout(t)
   }, [siblingId])
 
-  function gradeAndSetResult(typedInput: string) {
+  useEffect(() => {
+    if (!synonymPhase) return
+    const t = setTimeout(() => canonRef.current?.focus(), 80)
+    return () => clearTimeout(t)
+  }, [synonymPhase])
+
+  function gradeAndSetResult(typedInput: string, skipSynonymCheck = false) {
     const base = gradeTyping(typedInput, expected, gradingSettings)
     const viaOverride = base.status !== 'correct' &&
       (overrideAnswers ?? []).includes(base.normalizedUser)
-    const viaSynonym  = base.status !== 'correct' && !viaOverride &&
+    const viaSynonym  = !skipSynonymCheck && base.status !== 'correct' && !viaOverride &&
       (synonyms ?? []).some(s => gradeTyping(typedInput, s, gradingSettings).status === 'correct')
     const effectivelyCorrect = base.correct || viaOverride || viaSynonym
     setResult({
@@ -164,20 +177,31 @@ export function TypingMode({
       onSiblingAnswered?.(matchedSibling.id)
       return
     }
+    // Synonyms require a two-phase flow: accept the synonym, then require the canonical.
+    if (synonyms?.length) {
+      const matchedSynonym = synonyms.find(
+        s => gradeTyping(input, s, gradingSettings).status === 'correct'
+      )
+      if (matchedSynonym) {
+        setSynonymPhase(true)
+        setSynonymPhaseText(input)
+        return
+      }
+    }
     gradeAndSetResult(input)
   }
 
   function checkCanonical() {
-    gradeAndSetResult(canonInput)
+    gradeAndSetResult(canonInput, synonymPhase)
   }
 
   function advanceRetype() {
     if (!retypeCorrect) return
-    onRate('again', false, input, result?.issueType)
+    onRate('again', false, synonymPhase ? canonInput : input, result?.issueType)
   }
 
   function tryAdvance(rating: Rating) {
-    onRate(rating, finalCorrect, input, result?.issueType)
+    onRate(rating, finalCorrect, synonymPhase ? canonInput : input, result?.issueType)
   }
 
   function setOverrideAndPersist(next: boolean | null) {
@@ -263,6 +287,10 @@ export function TypingMode({
         )}
       </div>
 
+      {ipaText && (
+        <p className="text-xs text-ink-muted text-center font-mono">[{ipaText}]</p>
+      )}
+
       {/* Input + feedback */}
       <div className="space-y-3">
         {revealed ? (
@@ -281,25 +309,26 @@ export function TypingMode({
           </>
         ) : (
         <>
-        {/* Phase 1 input — shows sibling answer (green, disabled) or live input */}
+        {/* Phase 1 input — shows sibling/synonym answer (amber/green, disabled) or live input */}
         <input
           className={`input text-center text-lg font-mono ${
-            siblingId   ? 'border-success/60 bg-success/5' :
-            !result     ? '' :
+            siblingId    ? 'border-success/60 bg-success/5' :
+            synonymPhase ? 'border-warning/60 bg-warning/5' :
+            !result      ? '' :
             finalCorrect ? 'border-success/60 bg-success/5' :
             result.status === 'almost' && override !== false ? 'border-warning/60 bg-warning/5' :
             'border-danger/60 bg-danger/5'
           }`}
           placeholder={answerLanguage ? `Type ${langNativeName(answerLanguage)} answer…` : 'Type your answer…'}
-          value={siblingId ? siblingText : input}
-          onChange={e => { if (!result && !siblingId) setInput(e.target.value) }}
+          value={siblingId ? siblingText : synonymPhase ? synonymPhaseText : input}
+          onChange={e => { if (!result && !siblingId && !synonymPhase) setInput(e.target.value) }}
           onCompositionStart={() => setComposing(true)}
           onCompositionEnd={() => setComposing(false)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !result && !composing && !siblingId) check()
+            if (e.key === 'Enter' && !result && !composing && !siblingId && !synonymPhase) check()
           }}
-          disabled={!!result || !!siblingId}
-          autoFocus={!revealed && !siblingId}
+          disabled={!!result || !!siblingId || synonymPhase}
+          autoFocus={!revealed && !siblingId && !synonymPhase}
         />
 
         {/* Sibling phase: success note + canonical input */}
@@ -339,7 +368,44 @@ export function TypingMode({
           />
         )}
 
-        {!siblingId && !result ? (
+        {/* Synonym phase: accepted note + canonical input */}
+        {synonymPhase && !result && (
+          <div className="space-y-3">
+            <div className="panel border-warning/30 bg-warning/5 text-center py-3 space-y-1">
+              <p className="text-warning font-medium">Synonym accepted!</p>
+              <p className="text-xs text-ink-muted">Now type the canonical form to continue:</p>
+            </div>
+            <input
+              ref={canonRef}
+              className="input text-center text-lg font-mono"
+              placeholder={answerLanguage ? `Type ${langNativeName(answerLanguage)} answer…` : 'Type your answer…'}
+              value={canonInput}
+              onChange={e => setCanonInput(e.target.value)}
+              onCompositionStart={() => setComposingCanon(true)}
+              onCompositionEnd={() => setComposingCanon(false)}
+              onKeyDown={e => { if (e.key === 'Enter' && !composingCanon) checkCanonical() }}
+            />
+            <div className="flex justify-center">
+              <button onClick={checkCanonical} disabled={!canonInput.trim()} className="btn-primary">Check</button>
+            </div>
+          </div>
+        )}
+
+        {/* Canonical input result display (synonym phase, after canonical graded) */}
+        {synonymPhase && result && (
+          <input
+            className={`input text-center text-lg font-mono ${
+              finalCorrect ? 'border-success/60 bg-success/5' :
+              result.status === 'almost' && override !== false ? 'border-warning/60 bg-warning/5' :
+              'border-danger/60 bg-danger/5'
+            }`}
+            value={canonInput}
+            readOnly
+            disabled
+          />
+        )}
+
+        {!siblingId && !synonymPhase && !result ? (
           <div className="flex gap-3 justify-center">
             <button onClick={check} disabled={!input.trim()} className="btn-primary">Check</button>
           </div>
@@ -443,7 +509,7 @@ export function TypingMode({
                 <div className="flex justify-center gap-3">
                   {onRepeat && finalCorrect && (
                     <button
-                      onClick={() => { setResult(null); setInput(''); onRepeat() }}
+                      onClick={() => { setResult(null); setInput(''); setSynonymPhase(false); setSynonymPhaseText(''); setCanonInput(''); onRepeat() }}
                       className="btn-ghost px-6"
                     >
                       Repeat

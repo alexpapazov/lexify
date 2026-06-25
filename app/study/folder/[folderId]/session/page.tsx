@@ -99,6 +99,8 @@ function FolderSessionInner() {
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
   /** Graduated cards in the 10-minute relearn loop — held out of the main queue until their dueAt passes (or the queue runs out). */
   const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
+  const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
+  const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -312,6 +314,31 @@ function FolderSessionInner() {
     setRelearnPool(sorted.slice(1))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, queue.length, done, loading])
+
+  useEffect(() => {
+    localStorage.setItem('lexify_ipa', showIPA ? '1' : '0')
+  }, [showIPA])
+
+  useEffect(() => {
+    if (!showIPA) return
+    const current = queue[index]
+    if (!current) return
+    const { card, sourceLanguage } = current
+    if (ipaCache.has(card.id) || card.ipa) return
+    fetch('/api/ipa', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: card.front, language: sourceLanguage }),
+    })
+      .then(r => r.json())
+      .then((d: { ok: boolean; ipa?: string }) => {
+        if (!d.ok || !d.ipa) return
+        setIpaCache(prev => new Map(prev).set(card.id, d.ipa!))
+        new SupabaseCardRepository().update(card.id, { ipa: d.ipa }).catch(() => {})
+      })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showIPA, queue[index]?.card.id])
 
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
     const current = queue[index]
@@ -620,12 +647,26 @@ function FolderSessionInner() {
   const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
   const stepWillComplete = !state.graduated && state.correctInStep + 1 >= step.requiredCorrect
 
+  const promptShowsSource = !state.graduated ? step.promptSide === 'front' : reviewPromptSide === 'front'
+  const currentIpaText = showIPA && promptShowsSource
+    ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
+    : undefined
+
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="flex items-center justify-between">
         <Link href={backHref} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
-        <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowIPA(v => !v)}
+            title={showIPA ? 'Hide IPA' : 'Show IPA transcription'}
+            className={`text-xs transition-colors ${showIPA ? 'text-accent' : 'text-ink-faint hover:text-ink-muted'}`}
+          >
+            IPA
+          </button>
+          <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
+        </div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
         <div className="h-full bg-accent rounded-full transition-all duration-300"
@@ -657,7 +698,8 @@ function FolderSessionInner() {
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
-          onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)} />
+          onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
+          ipaText={currentIpaText} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
@@ -672,7 +714,8 @@ function FolderSessionInner() {
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
-          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)} />
+          onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
+          ipaText={currentIpaText} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
           onRate={rating => handleAnswer(rating, rating !== 'again')} />
@@ -688,7 +731,8 @@ function FolderSessionInner() {
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
-          onResetCard={handleResetCard} />
+          onResetCard={handleResetCard}
+          ipaText={currentIpaText} />
       )}
     </div>
   )

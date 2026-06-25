@@ -285,6 +285,27 @@ export default function UploadPage() {
     return parseCards(rawText, effectiveCardSep, effectivePairSep)
   }, [rawText, effectiveCardSep, effectivePairSep])
 
+  const duplicateCount = useMemo(() => {
+    const seen = new Set<string>()
+    return parsed.filter(c => {
+      const key = `${c.front.trim().toLowerCase()}|||${c.back.trim().toLowerCase()}`
+      if (seen.has(key)) return true
+      seen.add(key)
+      return false
+    }).length
+  }, [parsed])
+
+  function removeDuplicates() {
+    const seen = new Set<string>()
+    const unique = parsed.filter(c => {
+      const key = `${c.front.trim().toLowerCase()}|||${c.back.trim().toLowerCase()}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    setRawText(unique.map(c => `${c.front}${effectivePairSep}${c.back}`).join(effectiveCardSep))
+  }
+
   const textareaLabel = aiFormatEnabled && aiMode === 'wordlist' ? 'Paste words here' : 'Paste text here'
 
   const textareaPlaceholder = !aiFormatEnabled
@@ -967,9 +988,17 @@ export default function UploadPage() {
 
       {!aiFormatEnabled && parsed.length > 0 && (
         <div className="space-y-2">
-          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
-            Preview — {parsed.length} card{parsed.length !== 1 ? 's' : ''} detected
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
+              Preview — {parsed.length} card{parsed.length !== 1 ? 's' : ''} detected
+            </h2>
+            {duplicateCount > 0 && (
+              <button type="button" onClick={removeDuplicates}
+                className="text-xs text-ink-faint hover:text-danger transition-colors">
+                Remove {duplicateCount} exact duplicate{duplicateCount !== 1 ? 's' : ''}
+              </button>
+            )}
+          </div>
           <div className="panel space-y-2 max-h-56 overflow-y-auto">
             {parsed.map((card, i) => (
               <div key={i} className="flex gap-4 text-sm">

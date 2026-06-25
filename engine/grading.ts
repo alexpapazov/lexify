@@ -21,6 +21,35 @@ function stripAccents(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '')
 }
 
+function containsHangul(s: string): boolean {
+  return /[가-힣]/.test(s)
+}
+
+/**
+ * Decomposes Hangul syllable blocks into constituent jamo (consonants + vowels).
+ * 당 (ㄷ+ㅏ+ㅇ) becomes 3 jamo characters, giving accurate Levenshtein distance
+ * for Korean text. Non-Hangul characters pass through unchanged.
+ */
+function decomposeHangul(s: string): string {
+  const BASE    = 0xAC00
+  const INITIAL = ['ㄱ','ㄲ','ㄴ','ㄷ','ㄸ','ㄹ','ㅁ','ㅂ','ㅃ','ㅅ','ㅆ','ㅇ','ㅈ','ㅉ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ']
+  const VOWEL   = ['ㅏ','ㅐ','ㅑ','ㅒ','ㅓ','ㅔ','ㅕ','ㅖ','ㅗ','ㅘ','ㅙ','ㅚ','ㅛ','ㅜ','ㅝ','ㅞ','ㅟ','ㅠ','ㅡ','ㅢ','ㅣ']
+  const FINAL   = ['','ㄱ','ㄲ','ㄳ','ㄴ','ㄵ','ㄶ','ㄷ','ㄹ','ㄺ','ㄻ','ㄼ','ㄽ','ㄾ','ㄿ','ㅀ','ㅁ','ㅂ','ㅄ','ㅅ','ㅆ','ㅇ','ㅈ','ㅊ','ㅋ','ㅌ','ㅍ','ㅎ']
+  let result = ''
+  for (const char of s) {
+    const code = char.codePointAt(0)!
+    if (code >= BASE && code < BASE + 11172) {
+      const offset = code - BASE
+      result += INITIAL[Math.floor(offset / 588)]! +
+                VOWEL[Math.floor((offset % 588) / 28)]! +
+                (offset % 28 > 0 ? FINAL[offset % 28]! : '')
+    } else {
+      result += char
+    }
+  }
+  return result
+}
+
 function levenshtein(a: string, b: string): number {
   const m = a.length
   const n = b.length
@@ -68,7 +97,7 @@ function stripLeadingArticle(s: string): string {
 
 /** Flexible-mode normalization — applies only the enabled toggles. */
 function normalizeFlexible(raw: string, settings: GradingSettings): string {
-  let s = raw.trim().replace(/\s+/g, ' ')
+  let s = raw.normalize('NFC').trim().replace(/\s+/g, ' ')
   if (settings.ignoreCapitalization !== false) s = s.toLowerCase()
   if (settings.ignoreAccents)                  s = stripAccents(s)
   if (settings.ignoreDefiniteArticles)         s = stripLeadingArticle(s)
@@ -77,7 +106,7 @@ function normalizeFlexible(raw: string, settings: GradingSettings): string {
 
 /** Strict-mode normalization — trim, collapse spaces, lowercase only. */
 function normalizeStrict(raw: string): string {
-  return raw.trim().replace(/\s+/g, ' ').toLowerCase()
+  return raw.normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
 /**
@@ -192,30 +221,8 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
     }
   }
 
-  // Article-only difference
-  if (!settings.ignoreDefiniteArticles) {
-    const userNoArticle = stripLeadingArticle(normUser)
-    if (candidates.some(c => stripLeadingArticle(c) === userNoArticle)) {
-      return makeResult('almost', 'article',
-        'Your answer is missing or has a different definite article.',
-        userAnswer, expected, normUser, normExp)
-    }
-  }
-
-  // Minor typo (edit distance ≤ 1 or ratio ≤ 15%)
-  if (!settings.ignoreMinorTypos) {
-    const dists  = candidates.map(c => levenshtein(normUser, c))
-    const minDist = Math.min(...dists)
-    const closestIdx = dists.indexOf(minDist)
-    const maxLen  = Math.max(normUser.length, (candidates[closestIdx] ?? '').length, 1)
-    if (minDist === 1 || (minDist > 0 && minDist / maxLen <= 0.15)) {
-      return makeResult('almost', 'typo',
-        'Your answer has a minor spelling difference.',
-        userAnswer, expected, normUser, normExp)
-    }
-  }
-
-  // Missing required parenthetical content (user typed the base without the clarification)
+  // Missing required parenthetical content — must run before the article check so
+  // '(el) camello' is diagnosed as 'parenthetical' rather than 'article'.
   if (settings.requireParentheticalContent && /\(/.test(expected)) {
     const slashParts = settings.slashAlternativesMode === 'accept_any'
       ? expected.split(/\s*[\/,;]\s*/)
@@ -228,6 +235,39 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
           'Your answer is missing the required parenthetical content.',
           userAnswer, expected, normUser, normExp)
       }
+    }
+  }
+
+  // Article-only difference
+  if (!settings.ignoreDefiniteArticles) {
+    const userNoArticle = stripLeadingArticle(normUser)
+    if (candidates.some(c => stripLeadingArticle(c) === userNoArticle)) {
+      return makeResult('almost', 'article',
+        'Your answer is missing or has a different definite article.',
+        userAnswer, expected, normUser, normExp)
+    }
+  }
+
+  // Minor typo (edit distance ≤ 1 or ratio ≤ 15%)
+  // Korean syllable blocks are decomposed to jamo before measuring distance so
+  // a 1-block difference (e.g. 당 vs 악) isn't incorrectly treated as a minor typo.
+  // When ignoreMinorTypos=true the typo is forgiven and returns 'correct';
+  // when false it returns 'almost' so the learner is notified.
+  {
+    const jamo = (c: string) => containsHangul(c) ? decomposeHangul(c) : c
+    const dUser = jamo(normUser)
+    const dists  = candidates.map(c => levenshtein(dUser, jamo(c)))
+    const minDist = Math.min(...dists)
+    const closestIdx = dists.indexOf(minDist)
+    const maxLen  = Math.max(dUser.length, jamo(candidates[closestIdx] ?? '').length, 1)
+    if (minDist === 1 || (minDist > 0 && minDist / maxLen <= 0.15)) {
+      if (settings.ignoreMinorTypos) {
+        return makeResult('correct', 'none', '',
+          userAnswer, expected, normUser, normExp, candidates[closestIdx])
+      }
+      return makeResult('almost', 'typo',
+        'Your answer has a minor spelling difference.',
+        userAnswer, expected, normUser, normExp)
     }
   }
 

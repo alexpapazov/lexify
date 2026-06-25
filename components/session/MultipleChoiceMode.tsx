@@ -19,7 +19,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, overrideAnswers, onOverrideAnswer, autoPlayAudio = true }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, overrideAnswers, onOverrideAnswer, autoPlayAudio = true, ipaText }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -61,6 +61,8 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   onOverrideAnswer?: (normalizedChoice: string, accept: boolean) => void
   /** When false, suppresses automatic audio playback; the manual speaker button still works. */
   autoPlayAudio?: boolean
+  /** IPA transcription for the prompt (source language). Shown below the prompt when provided. */
+  ipaText?: string
 }) {
   const correct  = displayText(answerSide === 'front' ? card.front : card.back)
 
@@ -229,6 +231,10 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
           </button>
         )}
       </div>
+
+      {ipaText && (
+        <p className="text-xs text-ink-muted text-center font-mono">[{ipaText}]</p>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {choices.map(choice => {
