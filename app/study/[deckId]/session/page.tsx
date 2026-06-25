@@ -422,7 +422,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       }
 
       setElectiveSession(false)
-      await finalizeQueue(finalQueue, { deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, userId: session.user.id })
+      const cappedQueue = batchLimit != null ? finalQueue.slice(0, batchLimit) : finalQueue
+      await finalizeQueue(cappedQueue, { deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, userId: session.user.id })
     }
     void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -969,7 +970,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
-          onRepeat={stepWillComplete ? handleRepeat : undefined}
+          onRepeat={handleRepeat}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
@@ -1014,7 +1015,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           deckSiblings={deckSiblings(card, step.answerSide, allCards)}
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
-          onRepeat={stepWillComplete ? handleRepeat : undefined}
+          onRepeat={handleRepeat}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}

@@ -633,7 +633,7 @@ function AllDueSessionInner() {
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
-          onRepeat={stepWillComplete ? handleRepeat : undefined}
+          onRepeat={handleRepeat}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
@@ -649,7 +649,7 @@ function AllDueSessionInner() {
           deckSiblings={deckSiblings(card, step.answerSide, deckCards)}
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
-          onRepeat={stepWillComplete ? handleRepeat : undefined}
+          onRepeat={handleRepeat}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
