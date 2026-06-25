@@ -17,7 +17,7 @@ import type { Card } from '@/domain'
 
 // ─── Input caps ──────────────────────────────────────────────────────────────
 
-export const INSTRUCTIONS_CHAR_CAP = 500
+export const INSTRUCTIONS_CHAR_CAP = 3000
 
 /** Shared word-count cap for the main input box, in both wordlist and extraction modes. */
 export const INPUT_WORD_CAP = 1000
