@@ -133,6 +133,9 @@ export default function SessionPage() {
   const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
   /** In-session IPA cache: cardId → IPA text (supplements card.ipa from DB). */
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
+  /** Undo/redo stacks — each entry captures the card state before/after handleAnswer ran. */
+  const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
+  const [redoStack, setRedoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([]);
 const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
@@ -253,6 +256,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setRemainingElective([])
     setIndex(0)
     setQueue([])
+    setUndoStack([])
+    setRedoStack([])
 
     async function load() {
       const { data: { session } } = await supabase.auth.getSession()
@@ -356,6 +361,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       const cardsPerSession = prefs?.cardsPerSession ?? null
 
+      // Exclude states for soft-deleted cards so they don't skew budget math.
+      const activeCardIdSet   = new Set(cards.map(c => c.id))
+      const activeStates      = existingStates.filter(s => activeCardIdSet.has(s.cardId))
+
       let newCardBudget: number
 
       if (cardsPerSession && cardsPerSession > 0) {
@@ -363,7 +372,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         // pipeline (introduced but not yet graduated) at once, regardless of
         // calendar day. Once a card graduates, the next session introduces
         // another to refill the batch.
-        const inPipelineTotal = existingStates.filter(s => !s.graduated).length
+        const inPipelineTotal = activeStates.filter(s => !s.graduated).length
         newCardBudget = Math.max(0, Math.min(cardsPerSession, cards.length) - inPipelineTotal)
       } else {
         const dailyLimit  = Math.min(
@@ -372,9 +381,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         )
         const spilloverOn = prefs?.spilloverDue ?? false
 
-        const introducedToday   = existingStates.filter(s => s.introducedDate === today).length
+        const introducedToday   = activeStates.filter(s => s.introducedDate === today).length
         // In-pipeline cards introduced before today (i.e. the "backlog")
-        const inPipelineBacklog = existingStates.filter(s => !s.graduated && s.introducedDate && s.introducedDate < today).length
+        const inPipelineBacklog = activeStates.filter(s => !s.graduated && s.introducedDate && s.introducedDate < today).length
 
         // Without spillover: backlog cards count against today's budget
         // With spillover:    backlog is additive — full daily budget for new cards
@@ -610,6 +619,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         return next
       })
 
+      // Capture undo entry before any branch that advances the index.
+      setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState }])
+      setRedoStack([])
+
       // 10-minute "Again" relearn loop: hold the card in the relearn pool until
       // its dueAt passes. The pool-injection useEffect above reintroduces it
       // once the main queue runs out, ordered by elapsed percentage.
@@ -634,6 +647,49 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       setSubmitting(false)
     }
   }, [queue, index, userId, gradingSettings, submitting, relearnPool])
+
+  const handleUndo = useCallback(async () => {
+    const entry = undoStack[undoStack.length - 1]
+    if (!entry || submitting) return
+    setUndoStack(prev => prev.slice(0, -1))
+    setRedoStack(prev => [...prev, entry])
+    try {
+      const stateRepo = new SupabaseCardStateRepository()
+      await stateRepo.upsert(entry.prevState)
+      setCardStates(prev => { const n = new Map(prev); n.set(entry.prevState.cardId, entry.prevState); return n })
+      setQueue(prev => prev.map((item, i) => i === entry.queueIndex ? { ...item, state: entry.prevState } : item))
+      setRelearnPool(prev => prev.filter(item => item.card.id !== entry.prevState.cardId))
+      setDone(false)
+      setIndex(entry.queueIndex)
+    } catch (err) { console.error('Undo failed:', err) }
+  }, [undoStack, submitting])
+
+  const handleRedo = useCallback(async () => {
+    const entry = redoStack[redoStack.length - 1]
+    if (!entry || submitting) return
+    setRedoStack(prev => prev.slice(0, -1))
+    setUndoStack(prev => [...prev, entry])
+    try {
+      const stateRepo = new SupabaseCardStateRepository()
+      await stateRepo.upsert(entry.newState)
+      setCardStates(prev => { const n = new Map(prev); n.set(entry.newState.cardId, entry.newState); return n })
+      setQueue(prev => prev.map((item, i) => i === entry.queueIndex ? { ...item, state: entry.newState } : item))
+      const nextIdx = entry.queueIndex + 1
+      if (nextIdx >= queue.length && relearnPool.length === 0) { setDone(true) } else { setIndex(nextIdx) }
+    } catch (err) { console.error('Redo failed:', err) }
+  }, [redoStack, submitting, queue.length, relearnPool.length])
+
+  // Keyboard undo/redo: Cmd+Z / Ctrl+Z to undo, Cmd+Shift+Z / Ctrl+Shift+Z / Ctrl+Y to redo.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); void handleUndo() }
+      if ((e.key === 'z' && e.shiftKey) || e.key === 'y') { e.preventDefault(); void handleRedo() }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleUndo, handleRedo])
 
   /**
    * Called by SynonymTypingMode (pipeline multi-field prompt) with ALL field
@@ -968,6 +1024,20 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         <Link href={`/study/${deckId}`} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
+          {undoStack.length > 0 && (
+            <button onClick={() => void handleUndo()} disabled={submitting}
+              title="Undo last answer (⌘Z / Ctrl+Z)"
+              className="text-base text-ink-faint hover:text-ink-muted transition-colors disabled:opacity-40 py-1 px-1 leading-none">
+              ↩
+            </button>
+          )}
+          {redoStack.length > 0 && (
+            <button onClick={() => void handleRedo()} disabled={submitting}
+              title="Redo (⌘⇧Z / Ctrl+Y)"
+              className="text-base text-ink-faint hover:text-ink-muted transition-colors disabled:opacity-40 py-1 px-1 leading-none">
+              ↪
+            </button>
+          )}
           <button
             onClick={() => setShowIPA(v => !v)}
             title={showIPA ? 'Hide IPA' : 'Show IPA transcription'}

@@ -101,6 +101,8 @@ function FolderSessionInner() {
   const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
   const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
+  const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
+  const [redoStack, setRedoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -411,6 +413,9 @@ function FolderSessionInner() {
 
       await stateRepo.upsert(newState)
 
+      setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState }])
+      setRedoStack([])
+
       // 10-minute "Again" relearn loop: hold the card in the relearn pool until
       // its dueAt passes. The pool-injection useEffect above reintroduces it
       // once the main queue runs out, ordered by elapsed percentage.
@@ -435,6 +440,46 @@ function FolderSessionInner() {
       setSubmitting(false)
     }
   }, [queue, index, userId, submitting, relearnPool])
+
+  const handleUndo = useCallback(async () => {
+    const entry = undoStack[undoStack.length - 1]
+    if (!entry || submitting) return
+    setUndoStack(prev => prev.slice(0, -1))
+    setRedoStack(prev => [...prev, entry])
+    try {
+      const stateRepo = new SupabaseCardStateRepository()
+      await stateRepo.upsert(entry.prevState)
+      setQueue(prev => prev.map((item, i) => i === entry.queueIndex ? { ...item, state: entry.prevState } : item))
+      setRelearnPool(prev => prev.filter(item => item.card.id !== entry.prevState.cardId))
+      setDone(false)
+      setIndex(entry.queueIndex)
+    } catch (err) { console.error('Undo failed:', err) }
+  }, [undoStack, submitting])
+
+  const handleRedo = useCallback(async () => {
+    const entry = redoStack[redoStack.length - 1]
+    if (!entry || submitting) return
+    setRedoStack(prev => prev.slice(0, -1))
+    setUndoStack(prev => [...prev, entry])
+    try {
+      const stateRepo = new SupabaseCardStateRepository()
+      await stateRepo.upsert(entry.newState)
+      setQueue(prev => prev.map((item, i) => i === entry.queueIndex ? { ...item, state: entry.newState } : item))
+      const nextIdx = entry.queueIndex + 1
+      if (nextIdx >= queue.length && relearnPool.length === 0) { setDone(true) } else { setIndex(nextIdx) }
+    } catch (err) { console.error('Redo failed:', err) }
+  }, [redoStack, submitting, queue.length, relearnPool.length])
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const mod = e.metaKey || e.ctrlKey
+      if (!mod) return
+      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); void handleUndo() }
+      if ((e.key === 'z' && e.shiftKey) || e.key === 'y') { e.preventDefault(); void handleRedo() }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleUndo, handleRedo])
 
   const handleIDontKnow = useCallback(async () => {
     const current = queue[index]
@@ -658,6 +703,20 @@ function FolderSessionInner() {
         <Link href={backHref} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
+          {undoStack.length > 0 && (
+            <button onClick={() => void handleUndo()} disabled={submitting}
+              title="Undo last answer (⌘Z / Ctrl+Z)"
+              className="text-base text-ink-faint hover:text-ink-muted transition-colors disabled:opacity-40 py-1 px-1 leading-none">
+              ↩
+            </button>
+          )}
+          {redoStack.length > 0 && (
+            <button onClick={() => void handleRedo()} disabled={submitting}
+              title="Redo (⌘⇧Z / Ctrl+Y)"
+              className="text-base text-ink-faint hover:text-ink-muted transition-colors disabled:opacity-40 py-1 px-1 leading-none">
+              ↪
+            </button>
+          )}
           <button
             onClick={() => setShowIPA(v => !v)}
             title={showIPA ? 'Hide IPA' : 'Show IPA transcription'}

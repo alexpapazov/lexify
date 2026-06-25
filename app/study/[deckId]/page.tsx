@@ -2082,10 +2082,12 @@ export default function DeckDetailPage() {
       const segs = detectSynonymSplit(c.front)
       return segs ? [{ card: c, segments: segs, split: true }] : []
     })
+  const activeCardIds  = new Set(cards.map(c => c.id))
+  const activeStates   = states.filter(s => activeCardIds.has(s.cardId))
   const unlearned = cards.filter(c => !stateMap.has(c.id)).length
-  const learning  = states.filter(s => !s.graduated).length
-  const graduated = states.filter(s => s.graduated).length
-  const dueNow    = states.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length
+  const learning  = activeStates.filter(s => !s.graduated).length
+  const graduated = activeStates.filter(s => s.graduated).length
+  const dueNow    = activeStates.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length
 
   const prefRepo    = new SupabaseDeckPreferencesRepository()
   const rawLimit    = prefs ? prefRepo.effectiveDailyLimit(prefs) : defaultLimit
