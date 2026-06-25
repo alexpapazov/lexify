@@ -21,6 +21,7 @@ import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder, Lan
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
+import { displayText } from '@/lib/cardText'
 import { speak } from '@/lib/speak'
 import { classifyReviewMode } from '@/engine/scheduler'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
@@ -2216,7 +2217,7 @@ export default function DeckDetailPage() {
                 />
                 <div className="flex gap-6 text-sm min-w-0 flex-1">
                   <span className="text-ink font-medium w-40 truncate shrink-0">{card.front}</span>
-                  <span className="text-ink-muted truncate">{card.back}</span>
+                  <span className="text-ink-muted truncate">{displayText(card.back)}</span>
                 </div>
                 <span className="chip shrink-0 ml-2">{status}</span>
               </div>

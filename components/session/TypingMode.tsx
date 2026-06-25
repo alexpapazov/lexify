@@ -269,7 +269,7 @@ export function TypingMode({
           <>
             <input
               className="input text-center text-lg font-mono border-danger/60 bg-danger/5"
-              value={expected}
+              value={displayExpected}
               readOnly
               disabled
             />

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import type { Card, Rating } from '@/domain'
+import { displayText } from '@/lib/cardText'
 import { RatingButtons } from './RatingButtons'
 
 /**
@@ -14,8 +15,8 @@ export function FlashcardMode({ card, promptSide, deckName, onRate }: {
 }) {
   const [revealed, setRevealed] = useState(false)
   useEffect(() => setRevealed(false), [card.id])
-  const prompt = promptSide === 'front' ? card.front : card.back
-  const answer = promptSide === 'front' ? card.back  : card.front
+  const prompt = displayText(promptSide === 'front' ? card.front : card.back)
+  const answer = displayText(promptSide === 'front' ? card.back  : card.front)
   return (
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
