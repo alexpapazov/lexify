@@ -19,7 +19,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, autoPlayAudio = true }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, overrideAnswers, onOverrideAnswer, autoPlayAudio = true }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -55,6 +55,10 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
    * newText = edited value ('' means delete distractor), isCorrect = whether it's the right answer.
    */
   onChoiceEdit?: (originalChoice: string, newText: string, isCorrect: boolean) => Promise<void>
+  /** Normalized choice texts that have been previously overridden as correct for this card/side. */
+  overrideAnswers?: string[]
+  /** Called when the learner manually marks a choice correct or incorrect. Receives the normalized choice text. */
+  onOverrideAnswer?: (normalizedChoice: string, accept: boolean) => void
   /** When false, suppresses automatic audio playback; the manual speaker button still works. */
   autoPlayAudio?: boolean
 }) {
@@ -79,6 +83,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   const [selected,  setSelected]  = useState<string | null>(null)
   const [viaSynonym, setViaSynonym] = useState(false)
   const [revealed,  setRevealed]  = useState(false)
+  const [override,  setOverride]  = useState<boolean | null>(null)
 
   // Inline choice editing (double-click)
   const [editingChoice, setEditingChoice] = useState<string | null>(null)
@@ -98,6 +103,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     setSelected(null)
     setViaSynonym(false)
     setRevealed(false)
+    setOverride(null)
 
     // Auto-play when source language is shown as the prompt (e.g. Korean on front).
     if (autoPlayAudio && promptSide === 'front') speak(card.front, sourceLanguage, card.audioData)
@@ -131,10 +137,30 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
 
   function continueNext() {
     if (!selected) return
-    const isExactMatch  = norm(selected) === norm(displayCorrect)
-    const isSyn         = !isExactMatch && isSynonym(selected)
-    const wasCorrect    = isExactMatch || isSyn
+    const isExactMatch   = norm(selected) === norm(displayCorrect)
+    const isSyn          = !isExactMatch && isSynonym(selected)
+    const isViaOverride  = !isExactMatch && !isSyn && (overrideAnswers ?? []).some(o => o === norm(selected))
+    const naturalCorrect = isExactMatch || isSyn || isViaOverride
+    const wasCorrect     = override !== null ? override : naturalCorrect
     onRate(wasCorrect ? 'good' : 'again', wasCorrect, selected)
+  }
+
+  function setOverrideAndPersist(next: boolean | null) {
+    if (selected) {
+      const normalizedChoice = norm(selected)
+      const isExactMatch = normalizedChoice === norm(displayCorrect)
+      const isSyn = !isExactMatch && isSynonym(selected)
+      const isViaOvr = !isExactMatch && !isSyn && (overrideAnswers ?? []).some(o => o === normalizedChoice)
+      if (next === true && override !== true) {
+        onOverrideAnswer?.(normalizedChoice, true)
+      } else if (next === false && override !== false) {
+        if (isViaOvr) onOverrideAnswer?.(normalizedChoice, false)
+      } else if (next === null) {
+        if (override === true) onOverrideAnswer?.(normalizedChoice, false)
+        else if (override === false && isViaOvr) onOverrideAnswer?.(normalizedChoice, true)
+      }
+    }
+    setOverride(next)
   }
 
   function handleChoiceClick(choice: string) {
@@ -206,17 +232,19 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {choices.map(choice => {
-          const isCorrect  = norm(choice) === norm(displayCorrect)
-          const isSelected = choice === selected
-          const isSyn      = !isCorrect && isSynonym(choice)
-          const isEditing  = editingChoice === choice
+          const isCorrect    = norm(choice) === norm(displayCorrect)
+          const isSelected   = choice === selected
+          const isSyn        = !isCorrect && isSynonym(choice)
+          const isViaOvr     = isSelected && !isCorrect && !isSyn && (overrideAnswers ?? []).some(o => o === norm(choice))
+          const isEditing    = editingChoice === choice
           let style = 'border-white/10 hover:border-accent/40 hover:bg-surface-raised/50 text-ink'
           if (selected) {
-            if (isCorrect)        style = 'border-success/60 bg-success/10 text-success'
+            if (isCorrect)           style = 'border-success/60 bg-success/10 text-success'
             else if (isSyn && isSelected) style = 'border-warning/60 bg-warning/10 text-warning'
-            else if (isSyn)       style = 'border-warning/30 bg-warning/5 text-warning/60 opacity-60'
-            else if (isSelected)  style = 'border-danger/60 bg-danger/10 text-danger'
-            else                  style = 'border-white/5 text-ink-faint opacity-50'
+            else if (isSyn)          style = 'border-warning/30 bg-warning/5 text-warning/60 opacity-60'
+            else if (isViaOvr)       style = 'border-warning/60 bg-warning/10 text-warning'
+            else if (isSelected)     style = 'border-danger/60 bg-danger/10 text-danger'
+            else                     style = 'border-white/5 text-ink-faint opacity-50'
           }
           if (isEditing) style = 'border-accent/60 bg-surface-raised'
           return (
@@ -255,20 +283,49 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
       )}
 
       {selected && (() => {
-        const isCorrect = norm(selected) === norm(displayCorrect) || isSynonym(selected)
+        const normalizedSelected = norm(selected)
+        const isExactMatch  = normalizedSelected === norm(displayCorrect)
+        const isSyn         = !isExactMatch && isSynonym(selected)
+        const isViaOvr      = !isExactMatch && !isSyn && (overrideAnswers ?? []).some(o => o === normalizedSelected)
+        const naturalCorrect = isExactMatch || isSyn || isViaOvr
+        const finalCorrect   = override !== null ? override : naturalCorrect
         return (
-          <div className="flex justify-center gap-3">
-            {!revealed && onRepeat && isCorrect && (
-              <button
-                onClick={() => { setSelected(null); setViaSynonym(false); onRepeat() }}
-                className="btn-ghost px-6"
-              >
-                Repeat
-              </button>
+          <div className="space-y-3">
+            {isViaOvr && override === null && (
+              <p className="text-xs text-center text-warning/80">Also accepted — remembered override.</p>
             )}
-            <button onClick={revealed ? onAdvance : continueNext} autoFocus className="btn-primary px-10">
-              Continue
-            </button>
+            {onOverrideAnswer && (
+              <div className="flex items-center justify-center gap-3">
+                {naturalCorrect && override !== false && (
+                  <button onClick={() => setOverrideAndPersist(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
+                    Override as incorrect
+                  </button>
+                )}
+                {!naturalCorrect && override !== true && (
+                  <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
+                    Override as correct
+                  </button>
+                )}
+                {override !== null && (
+                  <button onClick={() => setOverrideAndPersist(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
+                    Undo override
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="flex justify-center gap-3">
+              {!revealed && onRepeat && finalCorrect && (
+                <button
+                  onClick={() => { setSelected(null); setViaSynonym(false); setOverride(null); onRepeat() }}
+                  className="btn-ghost px-6"
+                >
+                  Repeat
+                </button>
+              )}
+              <button onClick={revealed ? onAdvance : continueNext} autoFocus className="btn-primary px-10">
+                Continue
+              </button>
+            </div>
           </div>
         )
       })()}

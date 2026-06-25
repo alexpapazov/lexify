@@ -635,6 +635,8 @@ function AllDueSessionInner() {
           onAdvance={() => setIndex(i => i + 1)}
           onRepeat={stepWillComplete ? handleRepeat : undefined}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
+          onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)} />
       ) : !state.graduated ? (
