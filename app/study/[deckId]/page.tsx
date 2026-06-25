@@ -17,7 +17,8 @@ import { SupabaseSyncedCardLinkRepository }  from '@/lib/data/syncedCardLinks'
 import { SupabaseLanguagePairRepository }    from '@/lib/data/languagePairs'
 import { ensureSyncInfra }                   from '@/lib/syncFolderInfra'
 import { triggerSyncFill }                   from '@/lib/triggerSyncFill'
-import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink } from '@/domain'
+import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
+import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
@@ -99,6 +100,8 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [graduating,          setGraduating]          = useState(false)
   const [graduateAccelerated, setGraduateAccelerated] = useState(false)
   const [confusions,       setConfusions]       = useState<CardConfusion[]>([])
+  const [overrides,        setOverrides]        = useState<TypedAnswerOverride[]>([])
+  const [pipeline,         setPipeline]         = useState<Pipeline | null>(null)
   const [generatingAudio,  setGeneratingAudio]  = useState(false)
   const [audioError,       setAudioError]       = useState<string | null>(null)
   const frontRef = useRef<HTMLTextAreaElement>(null)
@@ -107,9 +110,16 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
 
   useEffect(() => {
     let cancelled = false
-    new SupabaseCardConfusionRepository().listForCard(userId, card.id)
-      .then(rows => { if (!cancelled) setConfusions(rows) })
-      .catch(err => console.error('Failed to load card confusions:', err))
+    Promise.all([
+      new SupabaseCardConfusionRepository().listForCard(userId, card.id),
+      new SupabaseTypedAnswerOverrideRepository().listForUser(userId),
+      new SupabasePipelineRepository().getDefault(),
+    ]).then(([rows, allOverrides, pl]) => {
+      if (cancelled) return
+      setConfusions(rows)
+      setOverrides(allOverrides.filter(o => o.cardId === card.id))
+      setPipeline(pl)
+    }).catch(err => console.error('Failed to load card stats:', err))
     return () => { cancelled = true }
   }, [userId, card.id])
 
@@ -384,7 +394,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
         )}
 
         {showStats && (
-          <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm max-h-80 overflow-y-auto">
+          <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm max-h-[32rem] overflow-y-auto">
             {!state?.graduated && (
               <div className="border-b border-white/5 pb-3 space-y-2">
                 <button
@@ -410,6 +420,72 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 </label>
               </div>
             )}
+
+            {/* ── Card properties ──────────────────────────────────────────── */}
+            <div className="space-y-2">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                Card
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs text-ink-faint uppercase tracking-wider">Created</div>
+                  <div className="text-ink font-medium text-sm">{formatDate(card.createdAt)}</div>
+                </div>
+                <div className="space-y-0.5">
+                  <div className="text-xs text-ink-faint uppercase tracking-wider">Updated</div>
+                  <div className="text-ink font-medium text-sm">{formatDate(card.updatedAt)}</div>
+                </div>
+                {card.register && card.register !== 'neutral' && (
+                  <div className="space-y-0.5">
+                    <div className="text-xs text-ink-faint uppercase tracking-wider">Register</div>
+                    <div className="text-ink font-medium text-sm capitalize">{card.register}</div>
+                  </div>
+                )}
+                {card.region && (
+                  <div className="space-y-0.5">
+                    <div className="text-xs text-ink-faint uppercase tracking-wider">Region</div>
+                    <div className="text-ink font-medium text-sm">{card.region}</div>
+                  </div>
+                )}
+                <div className="space-y-0.5">
+                  <div className="text-xs text-ink-faint uppercase tracking-wider">Audio</div>
+                  <div className={`text-sm font-medium ${card.audioGenerated ? 'text-success' : 'text-ink-faint'}`}>
+                    {card.audioGenerated ? 'Generated' : 'Not yet generated'}
+                  </div>
+                </div>
+                {card.synonymGroupId && (
+                  <div className="space-y-0.5">
+                    <div className="text-xs text-ink-faint uppercase tracking-wider">Synonym group</div>
+                    <div className="text-ink font-medium text-sm font-mono text-[10px]">{card.synonymGroupId.slice(0, 8)}…</div>
+                  </div>
+                )}
+              </div>
+              {card.hints.length > 0 && (
+                <div>
+                  <div className="text-[10px] text-ink-faint mb-1">Hints</div>
+                  <div className="flex flex-wrap gap-1">
+                    {card.hints.map(h => <span key={h} className="chip">{h}</span>)}
+                  </div>
+                </div>
+              )}
+              {(card.acceptedFrontAlternatives?.length ?? 0) > 0 && (
+                <div>
+                  <div className="text-[10px] text-ink-faint mb-1">Accepted {langName(sourceLanguage)} alternatives</div>
+                  <div className="flex flex-wrap gap-1">
+                    {card.acceptedFrontAlternatives!.map(a => <span key={a} className="chip text-success/80">{a}</span>)}
+                  </div>
+                </div>
+              )}
+              {(card.acceptedBackAlternatives?.length ?? 0) > 0 && (
+                <div>
+                  <div className="text-[10px] text-ink-faint mb-1">Accepted {langName(targetLanguage)} alternatives</div>
+                  <div className="flex flex-wrap gap-1">
+                    {card.acceptedBackAlternatives!.map(a => <span key={a} className="chip text-success/80">{a}</span>)}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {!state ? (
               <p className="text-ink-faint text-xs">New — not yet studied. No stats yet.</p>
             ) : (() => {
@@ -438,16 +514,33 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 ? state.intervalHistory.map(d => formatIntervalDays(d)).join(' → ')
                 : '—'
 
+              const currentStep = pipeline?.steps.find(s => s.stepOrder === state.currentStepOrder)
+              const errorTotal = state.accentMistakeCount + state.articleMistakeCount + state.genderMistakeCount
+                + state.typoMistakeCount + state.semanticMistakeCount + state.wrongSynonymCount
+
               return (
                 <>
                   <StatGroup title="Status" rows={[
-                    ['Status',        status],
-                    ['Review mode',   reviewModeLabel],
-                    ['Reps',          String(state.reps)],
-                    ['Lapses',        String(state.lapses)],
-                    ['Ease',          state.ease.toFixed(2)],
-                    ['Last rating',   rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
+                    ['Status',         status],
+                    ['Review mode',    reviewModeLabel],
+                    ['Reps',           String(state.reps)],
+                    ['Lapses',         String(state.lapses)],
+                    ['Ease',           state.ease.toFixed(2)],
+                    ['Last rating',    rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
+                    ["I don't know",   String(state.iDontKnowCount)],
                   ]} />
+
+                  {!state.graduated && (
+                    <StatGroup title="Pipeline progress" rows={[
+                      ['Correct in step',     currentStep
+                        ? `${state.correctInStep} / ${currentStep.requiredCorrect}`
+                        : String(state.correctInStep)],
+                      ['Step type',           currentStep?.stepType ?? '—'],
+                      ['Typing streak',       String(state.typingMistakeStreak)],
+                      ['Typing fail cycles',  String(state.typingFailCycles)],
+                      ['Same-day window',     state.stage3EnteredDate ?? 'Not entered'],
+                    ]} />
+                  )}
 
                   <StatGroup title="Scheduling" rows={[
                     ['Interval (ideal)',    formatIntervalDays(state.intervalDays)],
@@ -468,11 +561,22 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                   ]} />
 
                   <StatGroup title="Typed production" rows={[
-                    ['Typed reviews',          String(state.typedReviewCount)],
-                    ['Typed accuracy (recent)', typedAccuracy],
-                    ['Last typed review',      formatDate(state.lastTypedReviewAt, 'Never')],
-                    ['Forced typed remaining', String(state.forcedTypedRemaining)],
+                    ['Typed reviews',           String(state.typedReviewCount)],
+                    ['Typed accuracy (recent)',  typedAccuracy],
+                    ['Last typed review',        formatDate(state.lastTypedReviewAt, 'Never')],
+                    ['Forced typed remaining',   String(state.forcedTypedRemaining)],
                   ]} />
+
+                  {errorTotal > 0 && (
+                    <StatGroup title="Error breakdown" rows={[
+                      ['Accent',       String(state.accentMistakeCount)],
+                      ['Article',      String(state.articleMistakeCount)],
+                      ['Gender',       String(state.genderMistakeCount)],
+                      ['Typo',         String(state.typoMistakeCount)],
+                      ['Semantic',     String(state.semanticMistakeCount)],
+                      ['Wrong synonym',String(state.wrongSynonymCount)],
+                    ]} />
+                  )}
 
                   <div className="space-y-1">
                     <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
@@ -585,27 +689,61 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
               )}
             </div>
 
+            {/* Typed answer overrides */}
+            {overrides.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                  Answer overrides
+                </div>
+                <div className="space-y-2">
+                  {(['front', 'back'] as const).map(side => {
+                    const sideOverrides = overrides.filter(o => o.answerSide === side)
+                    if (sideOverrides.length === 0) return null
+                    return (
+                      <div key={side}>
+                        <div className="text-[10px] text-ink-faint mb-1">
+                          {side === 'front' ? langName(sourceLanguage) : langName(targetLanguage)} answers (marked correct)
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {sideOverrides.map(o => <span key={o.answerText} className="chip text-warning/80">{o.answerText}</span>)}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Often confused with */}
             {confusions.length > 0 && (
               <div className="space-y-2">
                 <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
                   Often confused with
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {confusions.map(c => {
                     const linked = c.confusedWithCardId ? deckCards.find(d => d.id === c.confusedWithCardId) : undefined
+                    const sideLabel = c.answerSide === 'front' ? langName(sourceLanguage) : langName(targetLanguage)
                     return (
-                      <div key={c.confusedText} className="flex items-center justify-between gap-2">
-                        <div className="min-w-0 text-sm">
-                          <span className="text-ink font-medium break-words">{c.confusedText}</span>
-                          {linked && <span className="text-ink-faint"> — {linked.back}</span>}
+                      <div key={`${c.confusedText}-${c.answerSide}`} className="space-y-0.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <span className="text-ink font-medium break-words">{c.confusedText}</span>
+                            {linked && <span className="text-ink-faint text-xs"> — {linked.back}</span>}
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span className="chip">{c.count}×</span>
+                            {linked && onJumpToCard && (
+                              <button onClick={() => onJumpToCard(linked.id)} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                                Open
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="chip">{c.count}×</span>
-                          {linked && onJumpToCard && (
-                            <button onClick={() => onJumpToCard(linked.id)} className="text-xs text-accent hover:text-accent-soft transition-colors">
-                              Open
-                            </button>
-                          )}
+                        <div className="flex items-center gap-2 text-[10px] text-ink-faint">
+                          <span>{sideLabel} answer</span>
+                          {c.isWordMixup && <span className="text-warning/70">word-level mixup</span>}
+                          <span>last: {formatDate(c.lastConfusedAt)}</span>
                         </div>
                       </div>
                     )
