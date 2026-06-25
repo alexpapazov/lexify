@@ -81,9 +81,7 @@ export function TypingMode({
 
   const finalCorrect = override ?? result?.correct ?? false
 
-  // Post-grad: no retype — wrong answers auto-submit 'again' via a Continue button.
-  // Pre-grad:  retype for both 'incorrect' and 'almost'.
-  const needsRetype = !!result && !finalCorrect && !gradedReview
+  const needsRetype = !!result && !finalCorrect
 
   const retypeCorrect = needsRetype &&
     gradeTyping(retype, expected, gradingSettings).status === 'correct'
