@@ -9,6 +9,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { getToday } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState } from '@/domain'
+import { effectiveMultiplierRange, acceleratedEffectiveMultiplierRange } from '@/engine/scheduler'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
 
@@ -56,14 +57,19 @@ export default function StudyPage() {
   const [forecast,     setForecast]     = useState<ForecastDay[]>([])
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
+  const [userId,       setUserId]       = useState('')
+  const [todayStr,     setTodayStr]     = useState('')
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null)
+  const [redistributing, setRedistributing] = useState(false)
+  const [redistributeMsg, setRedistributeMsg] = useState<string | null>(null)
   const supabase = createClient()
 
   async function load() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { setLoading(false); return }
     setAuthed(true)
+    setUserId(session.user.id)
 
     const deckRepo  = new SupabaseDeckRepository()
     const cardRepo  = new SupabaseCardRepository()
@@ -77,6 +83,7 @@ export default function StudyPage() {
     const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'
     const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
     const todayStr     = getToday(tz, turnoverHour)
+    setTodayStr(todayStr)
     const todayDate    = new Date(todayStr + 'T00:00:00.000Z')
     const now          = new Date()
 
@@ -129,6 +136,153 @@ export default function StudyPage() {
     setForecast(days)
 
     setLoading(false)
+  }
+
+  async function handleRedistribute() {
+    if (!selectedForecastDate || redistributing || !userId || !todayStr) return
+    setRedistributing(true)
+    setRedistributeMsg(null)
+    try {
+      const today = new Date(todayStr + 'T00:00:00.000Z')
+      const isToday = selectedForecastDate === forecast[0]?.date
+
+      // Build a window of days from today through selectedDate
+      const selectedDate = new Date(selectedForecastDate + 'T00:00:00.000Z')
+      const windowDays: string[] = []
+      for (let d = new Date(today); d <= selectedDate; d.setUTCDate(d.getUTCDate() + 1)) {
+        windowDays.push(d.toISOString().slice(0, 10))
+      }
+
+      // Build a load map: how many cards are currently due each day in the window
+      const loadMap = new Map<string, number>()
+      for (const day of windowDays) loadMap.set(day, 0)
+      for (const { states } of deckStats) {
+        for (const s of states) {
+          if (!s.graduated || !s.dueAt) continue
+          const dayKey = s.dueAt.slice(0, 10)
+          if (!loadMap.has(dayKey)) continue
+          loadMap.set(dayKey, (loadMap.get(dayKey) ?? 0) + 1)
+        }
+      }
+
+      // Compute each card's acceptable date range using its smooth window.
+      // The smooth window = [lastReviewedAt + baseInterval*range.min,
+      //                      lastReviewedAt + baseInterval*range.max]
+      // where baseInterval = scheduledIntervalDays / range.ideal
+      // and the range is the effective (decayed) multiplier range for the last rating.
+      // Cards with lastRating='again' or in the relearn loop are not movable.
+      interface Movable { state: CardState; earliest: string; latest: string }
+      const movable: Movable[] = []
+
+      for (const { states } of deckStats) {
+        for (const s of states) {
+          if (!s.graduated || !s.dueAt) continue
+          // Only process cards on the selected date
+          const isOnSelected = isToday
+            ? new Date(s.dueAt) <= new Date()
+            : s.dueAt.slice(0, 10) === selectedForecastDate
+          if (!isOnSelected) continue
+          // Skip relearn loop cards and cards without a valid last rating
+          if (s.relearningStep > 0) continue
+          if (!s.lastRating || s.lastRating === 'again') continue
+          if (!s.lastReviewedAt || s.scheduledIntervalDays <= 0) continue
+
+          const rating = s.lastRating as 'hard' | 'good' | 'easy'
+          // Use scheduledIntervalDays as the proxy for the previous interval in the
+          // decay calculation — slight overestimate, errs toward a narrower window.
+          const range = s.acceleratedMode === 'import_known' && s.acceleratedWrongStreak < 2
+            ? acceleratedEffectiveMultiplierRange(rating, s.scheduledIntervalDays, s.acceleratedPenalty)
+            : effectiveMultiplierRange(rating, s.scheduledIntervalDays)
+
+          const baseInterval = s.scheduledIntervalDays / range.ideal
+          const smoothMinDays = baseInterval * range.min
+          const smoothMaxDays = baseInterval * range.max
+
+          const lastReviewed = new Date(s.lastReviewedAt)
+          lastReviewed.setUTCHours(0, 0, 0, 0)
+
+          const minDate = new Date(lastReviewed)
+          minDate.setUTCDate(minDate.getUTCDate() + Math.ceil(smoothMinDays))
+          const maxDate = new Date(lastReviewed)
+          maxDate.setUTCDate(maxDate.getUTCDate() + Math.floor(smoothMaxDays))
+
+          // Constrain earliest to today (can't move to the past)
+          const earliestDate = minDate < today ? today : minDate
+          const earliest = earliestDate.toISOString().slice(0, 10)
+          const latest   = maxDate.toISOString().slice(0, 10)
+
+          // Only movable if a valid window exists within our redistribution range
+          if (earliest <= latest && earliest <= selectedForecastDate) {
+            movable.push({ state: s, earliest, latest: latest < selectedForecastDate ? latest : selectedForecastDate })
+          }
+        }
+      }
+
+      if (movable.length === 0) {
+        setRedistributeMsg('No cards can be moved — all are at the boundary of their scheduling window.')
+        return
+      }
+
+      // Greedy assignment: sort by earliest, assign each to the least-loaded
+      // day in [earliest, latest].
+      movable.sort((a, b) => a.earliest.localeCompare(b.earliest))
+      const assignments = new Map<string, string>()
+      for (const { state, earliest, latest } of movable) {
+        let bestDay = earliest
+        let bestLoad = Infinity
+        for (const day of windowDays) {
+          if (day < earliest || day > latest) continue
+          const load = loadMap.get(day) ?? 0
+          if (load < bestLoad) { bestLoad = load; bestDay = day }
+        }
+        assignments.set(state.cardId, bestDay)
+        loadMap.set(bestDay, (loadMap.get(bestDay) ?? 0) + 1)
+        const prevDay = state.dueAt!.slice(0, 10)
+        loadMap.set(prevDay, Math.max(0, (loadMap.get(prevDay) ?? 1) - 1))
+      }
+
+      // Upsert only states where the date changed
+      const stateRepo = new SupabaseCardStateRepository()
+      const toUpdate: CardState[] = []
+      for (const { state } of movable) {
+        const newDay = assignments.get(state.cardId)
+        if (!newDay || newDay === state.dueAt!.slice(0, 10)) continue
+        const timePart = state.dueAt!.slice(10)
+        toUpdate.push({ ...state, dueAt: newDay + timePart })
+      }
+
+      if (toUpdate.length > 0) {
+        await stateRepo.upsertBatch(toUpdate)
+        const updatedMap = new Map(toUpdate.map(s => [s.cardId, s]))
+        setDeckStats(prev => prev.map(ds => ({
+          ...ds,
+          states: ds.states.map(s => updatedMap.get(s.cardId) ?? s),
+        })))
+        setForecast(prev => {
+          const next = prev.map(d => ({ ...d }))
+          for (const s of toUpdate) {
+            const orig = movable.find(m => m.state.cardId === s.cardId)?.state
+            if (!orig?.dueAt) continue
+            const oldDay = orig.dueAt.slice(0, 10)
+            const newDay = s.dueAt!.slice(0, 10)
+            if (oldDay === newDay) continue
+            const oi = next.findIndex(d => d.date === oldDay)
+            const ni = next.findIndex(d => d.date === newDay)
+            if (oi >= 0) next[oi]!.count = Math.max(0, next[oi]!.count - 1)
+            if (ni >= 0) next[ni]!.count = next[ni]!.count + 1
+          }
+          return next
+        })
+        setRedistributeMsg(`Moved ${toUpdate.length} card${toUpdate.length !== 1 ? 's' : ''} — ${movable.length - toUpdate.length} already optimal.`)
+      } else {
+        setRedistributeMsg('Cards are already well distributed within their scheduling windows.')
+      }
+    } catch (err) {
+      console.error('Redistribute failed:', err)
+      setRedistributeMsg('Something went wrong. Please try again.')
+    } finally {
+      setRedistributing(false)
+    }
   }
 
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -289,6 +443,7 @@ export default function StudyPage() {
                           if (day.count === 0) return
                           setSelectedForecastDate(isSelected ? null : day.date)
                           setActiveFilter(null)
+                          setRedistributeMsg(null)
                         }}
                         disabled={day.count === 0}
                         className="flex-1 flex flex-col items-center justify-end h-full gap-1 min-w-0 group"
@@ -319,17 +474,32 @@ export default function StudyPage() {
             {/* ── Forecast day card list ──────────────────────────────── */}
             {selectedForecastDate && (
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
                   <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
                     {forecast.find(d => d.date === selectedForecastDate)?.label === 'Today'
                       ? 'Due Today'
                       : `Due ${forecast.find(d => d.date === selectedForecastDate)?.label} ${forecast.find(d => d.date === selectedForecastDate)?.dayNum}`
                     } — {forecastCards.length} card{forecastCards.length !== 1 ? 's' : ''}
                   </h2>
-                  <button onClick={() => setSelectedForecastDate(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
-                    Close ✕
-                  </button>
+                  <div className="flex items-center gap-3">
+                    {selectedForecastDate !== forecast[0]?.date && (
+                      <button
+                        onClick={handleRedistribute}
+                        disabled={redistributing}
+                        className="btn-primary text-xs px-3 py-1"
+                        title="Spread these cards across earlier days within their acceptable review window"
+                      >
+                        {redistributing ? 'Redistributing…' : 'Redistribute'}
+                      </button>
+                    )}
+                    <button onClick={() => { setSelectedForecastDate(null); setRedistributeMsg(null) }} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                      Close ✕
+                    </button>
+                  </div>
                 </div>
+                {redistributeMsg && (
+                  <p className="text-xs text-ink-muted">{redistributeMsg}</p>
+                )}
                 {forecastCards.length === 0 ? (
                   <div className="panel text-ink-muted text-sm text-center py-6">No cards found.</div>
                 ) : (
