@@ -140,6 +140,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   useEffect(() => {
     setPairSource(initPairSource)
     setPairTarget(initPairTarget)
+    setSearchQuery('')
   }, [initPairSource, initPairTarget])
 
   // Reset pair selection when the Navbar Library link is clicked while already
@@ -163,6 +164,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   const [pairCounts,   setPairCounts]   = useState<FolderCounts>(EMPTY_COUNTS)
   const [pairDeckStats, setPairDeckStats] = useState<DeckStats[]>([])
   const [activeFilter,  setActiveFilter]  = useState<FilterKey | null>(null)
+  const [searchQuery,   setSearchQuery]   = useState('')
 
   // "+ New language" form
   const [addingPair,    setAddingPair]    = useState(false)
@@ -552,6 +554,14 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
 
   if (!inPair) {
     const allPairs = getAllPairs()
+    const q = searchQuery.trim().toLowerCase()
+    const visiblePairs = q
+      ? allPairs.filter(p =>
+          langName(p.sourceLanguage).toLowerCase().includes(q) ||
+          langNativeName(p.sourceLanguage).toLowerCase().includes(q) ||
+          langName(p.targetLanguage).toLowerCase().includes(q)
+        )
+      : allPairs
 
     const activePairFlag = (p: LanguagePair) => p.flag || langFlag(p.sourceLanguage)
 
@@ -566,6 +576,20 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             + New language
           </button>
         </div>
+
+        {allPairs.length > 0 && (
+          <div className="relative">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+            </svg>
+            <input
+              className="input pl-9 py-2 text-sm w-full"
+              placeholder="Search languages…"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+          </div>
+        )}
 
         {addingPair && (
           <div className="panel space-y-3 py-3">
@@ -617,9 +641,13 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           <div className="panel text-ink-muted text-sm text-center py-10">
             No languages yet. Press &quot;+ New language&quot; to start a new vocabulary collection.
           </div>
+        ) : visiblePairs.length === 0 ? (
+          <div className="panel text-ink-muted text-sm text-center py-10">
+            No languages match &ldquo;{searchQuery}&rdquo;.
+          </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {allPairs.map(p => {
+            {visiblePairs.map(p => {
               const key        = `${p.sourceLanguage}|${p.targetLanguage}`
               const isDragging = draggingPairKey === key
               const pdt        = pairDropTarget?.key === key ? pairDropTarget : null
@@ -729,6 +757,17 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   const { rootFolders, rootDecks } = getVisibleRoots()
   const hasContent = rootFolders.length > 0 || rootDecks.length > 0
 
+  // Flat search results across all folders + decks in this pairing
+  const pairSearchQuery = searchQuery.trim().toLowerCase()
+  const searchResults: ({ type: 'folder'; folder: Folder } | { type: 'deck'; deck: Deck })[] = pairSearchQuery ? [
+    ...allFolders
+      .filter(f => folderMatchesPair(f.id, allFolders, allDecks, pairSource!, pairTarget!) && f.name.toLowerCase().includes(pairSearchQuery))
+      .map(f => ({ type: 'folder' as const, folder: f })),
+    ...allDecks
+      .filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget && d.name.toLowerCase().includes(pairSearchQuery))
+      .map(d => ({ type: 'deck' as const, deck: d })),
+  ] : []
+
   // Build the filtered card list across the whole pairing
   const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? pairDeckStats.flatMap(({ deck, cards, states }) => {
@@ -801,6 +840,19 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             Delete language
           </button>
         </div>
+      </div>
+
+      {/* Search bar */}
+      <div className="relative">
+        <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+        </svg>
+        <input
+          className="input pl-9 py-2 text-sm w-full"
+          placeholder="Search folders and decks…"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+        />
       </div>
 
       {/* Pairing-wide stat counters */}
@@ -893,7 +945,36 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         </div>
       )}
 
-      {!hasContent && !addingFolder ? (
+      {pairSearchQuery ? (
+        // ── Search results ──────────────────────────────────────────────────
+        searchResults.length === 0 ? (
+          <div className="panel text-ink-muted text-sm text-center py-10">
+            No folders or decks match &ldquo;{searchQuery}&rdquo;.
+          </div>
+        ) : (
+          <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+            {searchResults.map(item => item.type === 'folder' ? (
+              <Link
+                key={item.folder.id}
+                href={`/library/${item.folder.id}?source=${pairSource}&target=${pairTarget}`}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+              >
+                <FolderIcon />
+                <span className="text-sm font-medium text-ink truncate">{item.folder.name}</span>
+              </Link>
+            ) : (
+              <Link
+                key={item.deck.id}
+                href={`/study/${item.deck.id}`}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+              >
+                <DeckIcon />
+                <span className="text-sm font-medium text-ink truncate">{item.deck.name}</span>
+              </Link>
+            ))}
+          </div>
+        )
+      ) : !hasContent && !addingFolder ? (
         <div className="panel text-ink-muted text-sm text-center py-10">
           Nothing here yet. Create a folder or move decks here from Study.
         </div>

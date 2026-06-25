@@ -1731,6 +1731,8 @@ export default function DeckDetailPage() {
   const [defaultLimit,     setDefaultLimit]     = useState(DEFAULT_DAILY_NEW_CARDS)
   const [defaultSpillover, setDefaultSpillover] = useState(false)
   const [loading,          setLoading]          = useState(true)
+  const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
+  const [bulkGraduating,   setBulkGraduating]   = useState(false)
   const [showGear,         setShowGear]         = useState(false)
   const [renamingDeck,     setRenamingDeck]     = useState(false)
   const [deckNameValue,    setDeckNameValue]    = useState('')
@@ -1829,6 +1831,55 @@ export default function DeckDetailPage() {
     await deckRepo.update(deckId, { name })
     setDeck(prev => prev ? { ...prev, name } : prev)
     setRenamingDeck(false)
+  }
+
+  async function handleBulkGraduate() {
+    if (selectedCardIds.size === 0 || bulkGraduating) return
+    setBulkGraduating(true)
+    try {
+      const stateRepo    = new SupabaseCardStateRepository()
+      const pipelineRepo = new SupabasePipelineRepository()
+      const defaultPipeline = await pipelineRepo.getDefault()
+      const now    = new Date()
+      const nowIso = now.toISOString()
+      const dueAt  = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString()
+      const updates = await Promise.all(
+        [...selectedCardIds].map(async cardId => {
+          const existing  = states.find(s => s.cardId === cardId)
+          const base      = existing ?? initialCardState(userId, cardId, defaultPipeline.id)
+          const graduated: CardState = {
+            ...base,
+            graduated:             true,
+            currentStepOrder:      0,
+            correctInStep:         0,
+            dueAt,
+            intervalDays:          3,
+            scheduledIntervalDays: 3,
+            ease:                  base.graduated ? base.ease : 2.5,
+            reps:                  Math.max(base.reps, 1),
+            lapses:                base.lapses,
+            lastRating:            'good',
+            lastReviewedAt:        nowIso,
+            graduatedAt:           base.graduatedAt ?? nowIso,
+            relearningStep:        0,
+            pendingIntervalDays:   null,
+            lapseClusterCount:     0,
+            lastLapseAt:           null,
+          }
+          return stateRepo.upsert(graduated)
+        })
+      )
+      setStates(prev => {
+        const map = new Map(prev.map(s => [s.cardId, s]))
+        for (const s of updates) map.set(s.cardId, s)
+        return [...map.values()]
+      })
+      setSelectedCardIds(new Set())
+    } catch (err) {
+      console.error('Bulk graduate failed:', err)
+    } finally {
+      setBulkGraduating(false)
+    }
   }
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -2049,6 +2100,27 @@ export default function DeckDetailPage() {
           )
         })()}
 
+        {selectedCardIds.size > 0 && (
+          <div className="flex items-center justify-between px-3 py-2 rounded-card border border-accent/30 bg-accent/5 text-sm">
+            <span className="text-ink-muted">{selectedCardIds.size} card{selectedCardIds.size !== 1 ? 's' : ''} selected</span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setSelectedCardIds(new Set())}
+                className="text-xs text-ink-faint hover:text-ink transition-colors"
+              >
+                Clear
+              </button>
+              <button
+                onClick={handleBulkGraduate}
+                disabled={bulkGraduating}
+                className="btn-primary text-xs px-3 py-1"
+              >
+                {bulkGraduating ? 'Graduating…' : 'Graduate selected'}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
           {cards.filter(card => {
             if (!activeFilter) return true
@@ -2061,17 +2133,36 @@ export default function DeckDetailPage() {
           }).map(card => {
             const s = stateMap.get(card.id)
             const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+            const isSelected = selectedCardIds.has(card.id)
             return (
               <div
                 key={card.id}
-                onClick={() => setEditingCard(card)}
                 className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-surface-raised/50 transition-colors group"
               >
-                <div className="flex gap-6 text-sm min-w-0">
-                  <span className="text-ink font-medium w-40 truncate shrink-0">{card.front}</span>
-                  <span className="text-ink-muted truncate">{card.back}</span>
-                </div>
-                <span className="chip shrink-0 ml-2">{status}</span>
+                <label className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onClick={e => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => {
+                      setSelectedCardIds(prev => {
+                        const next = new Set(prev)
+                        if (next.has(card.id)) next.delete(card.id)
+                        else next.add(card.id)
+                        return next
+                      })
+                    }}
+                    className="accent-accent w-4 h-4 shrink-0"
+                    onClick={e => e.stopPropagation()}
+                  />
+                  <div
+                    className="flex gap-6 text-sm min-w-0 flex-1"
+                    onClick={() => setEditingCard(card)}
+                  >
+                    <span className="text-ink font-medium w-40 truncate shrink-0">{card.front}</span>
+                    <span className="text-ink-muted truncate">{card.back}</span>
+                  </div>
+                </label>
+                <span className="chip shrink-0 ml-2" onClick={() => setEditingCard(card)}>{status}</span>
               </div>
             )
           })}

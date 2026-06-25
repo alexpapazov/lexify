@@ -137,6 +137,7 @@ function FolderPageInner() {
   const [counts,       setCounts]       = useState<FolderCounts | null>(null)
   const [deckStats,    setDeckStats]    = useState<DeckWithCards[]>([])
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
+  const [searchQuery,  setSearchQuery]  = useState('')
 
   // Drag state
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
@@ -451,6 +452,28 @@ function FolderPageInner() {
 
   const { subfolders: visibleSubfolders, decks: visibleDecks } = getVisibleItems()
 
+  const folderSearchQuery = searchQuery.trim().toLowerCase()
+  // Gather all descendant folder IDs (including this folder itself) for search scope
+  const allDescendantFolderIds = new Set<string>([folderId])
+  const addDescendants = (parentId: string) => {
+    for (const f of allFolders) {
+      if (f.parentId === parentId) { allDescendantFolderIds.add(f.id); addDescendants(f.id) }
+    }
+  }
+  addDescendants(folderId)
+  const folderSearchResults: ({ type: 'folder'; item: Folder } | { type: 'deck'; item: Deck })[] = folderSearchQuery ? [
+    ...allFolders
+      .filter(f => allDescendantFolderIds.has(f.id) && f.id !== folderId &&
+        (!pairSource || !pairTarget || folderMatchesPair(f.id, allFolders, allDecks, pairSource, pairTarget)) &&
+        f.name.toLowerCase().includes(folderSearchQuery))
+      .map(f => ({ type: 'folder' as const, item: f })),
+    ...allDecks
+      .filter(d => allDescendantFolderIds.has(d.folderId ?? '') &&
+        (!pairSource || !pairTarget || (d.sourceLanguage === pairSource && d.targetLanguage === pairTarget)) &&
+        d.name.toLowerCase().includes(folderSearchQuery))
+      .map(d => ({ type: 'deck' as const, item: d })),
+  ] : []
+
   return (
     <div
       className="space-y-5"
@@ -632,6 +655,21 @@ function FolderPageInner() {
         </div>
       )}
 
+      {/* Search bar */}
+      {(visibleSubfolders.length > 0 || visibleDecks.length > 0 || searchQuery) && (
+        <div className="relative">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input
+            className="input pl-9 py-2 text-sm w-full"
+            placeholder="Search folders and decks…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+        </div>
+      )}
+
       {/* New folder input */}
       {addingFolder && (
         <div className="panel flex items-center gap-3 py-2.5">
@@ -653,7 +691,37 @@ function FolderPageInner() {
       )}
 
       {/* Contents */}
-      {visibleSubfolders.length === 0 && visibleDecks.length === 0 && !addingFolder ? (
+      {folderSearchQuery ? (
+        folderSearchResults.length === 0 ? (
+          <div className="panel text-ink-muted text-sm text-center py-10">
+            No folders or decks match &ldquo;{searchQuery}&rdquo;.
+          </div>
+        ) : (
+          <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+            {folderSearchResults.map(({ type, item }) => type === 'folder' ? (
+              <Link
+                key={item.id}
+                href={`/library/${item.id}${qs}`}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+              >
+                <FolderIcon />
+                <span className="text-sm font-medium text-ink truncate">{item.name}</span>
+              </Link>
+            ) : (
+              <Link
+                key={item.id}
+                href={`/study/${item.id}`}
+                className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className="text-ink-muted shrink-0">
+                  <rect x="2" y="6" width="20" height="14" rx="2"/><path d="M6 6V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>
+                </svg>
+                <span className="text-sm font-medium text-ink truncate">{item.name}</span>
+              </Link>
+            ))}
+          </div>
+        )
+      ) : visibleSubfolders.length === 0 && visibleDecks.length === 0 && !addingFolder ? (
         <div className="panel text-ink-muted text-sm text-center py-10">
           This folder is empty. Add a subfolder or drag decks here.
         </div>
