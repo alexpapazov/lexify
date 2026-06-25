@@ -600,8 +600,8 @@ function AllDueSessionInner() {
     if (!currentItem) return
     if (newText === (promptSide === 'front' ? currentItem.card.front : currentItem.card.back)) return
     const patch = promptSide === 'front'
-      ? { front: newText, audioGenerated: false as const, audioData: null }
-      : { back: newText }
+      ? { front: newText, audioGenerated: false as const, audioData: null, choices: null }
+      : { back: newText, choices: null }
     const updated = await cardRepo.update(cardId, patch)
     setQueue(prev => prev.map(it => ({
       ...it,
@@ -611,7 +611,11 @@ function AllDueSessionInner() {
     if (promptSide === 'front') {
       void prefetchAudio([{ card: updated, sourceLanguage: currentItem.sourceLanguage }], handleAudioCached)
     }
-  }, [queue, handleAudioCached])
+    for (const side of ['front', 'back'] as const) {
+      void ensureChoicesGenerated(updated, side, currentItem.deckCards, currentItem.sourceLanguage, currentItem.targetLanguage)
+        .then(ai => { if (ai) handleChoicesCached(cardId, ai) })
+    }
+  }, [queue, handleAudioCached, handleChoicesCached])
 
   const handleChoiceEdit = useCallback(async (cardId: string, answerSide: CardSide, originalChoice: string, newText: string, isCorrect: boolean) => {
     const cardRepo = new SupabaseCardRepository()
@@ -684,27 +688,6 @@ function AllDueSessionInner() {
         <Link href="/study" className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
-          {undoStack.length > 0 && (
-            <button onClick={() => void handleUndo()} disabled={submitting}
-              title="Undo last answer (⌘Z / Ctrl+Z)"
-              className="text-base text-ink-faint hover:text-ink-muted transition-colors disabled:opacity-40 py-1 px-1 leading-none">
-              ↩
-            </button>
-          )}
-          {redoStack.length > 0 && (
-            <button onClick={() => void handleRedo()} disabled={submitting}
-              title="Redo (⌘⇧Z / Ctrl+Y)"
-              className="text-base text-ink-faint hover:text-ink-muted transition-colors disabled:opacity-40 py-1 px-1 leading-none">
-              ↪
-            </button>
-          )}
-          <button
-            onClick={() => setShowIPA(v => !v)}
-            title={showIPA ? 'Hide IPA' : 'Show IPA transcription'}
-            className={`text-xs transition-colors ${showIPA ? 'text-accent' : 'text-ink-faint hover:text-ink-muted'}`}
-          >
-            IPA
-          </button>
           <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
         </div>
       </div>
@@ -739,7 +722,7 @@ function AllDueSessionInner() {
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
-          ipaText={currentIpaText} />
+          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}

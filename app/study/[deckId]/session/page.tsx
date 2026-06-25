@@ -509,15 +509,20 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     if (!existing) return
     if (newText === (promptSide === 'front' ? existing.front : existing.back)) return
     const patch = promptSide === 'front'
-      ? { front: newText, audioGenerated: false as const, audioData: null }
-      : { back: newText }
+      ? { front: newText, audioGenerated: false as const, audioData: null, choices: null }
+      : { back: newText, choices: null }
     const updated = await cardRepo.update(cardId, patch)
     setAllCards(prev => prev.map(c => c.id === cardId ? updated : c))
     setQueue(prev => prev.map(it => it.card.id === cardId ? { ...it, card: updated } : it))
     if (promptSide === 'front') {
       void prefetchAudio([{ card: updated, sourceLanguage }], handleAudioCached)
     }
-  }, [allCards, sourceLanguage, handleAudioCached])
+    // Regenerate distractors for both sides — the changed text makes existing choices stale.
+    for (const side of ['front', 'back'] as const) {
+      void ensureChoicesGenerated(updated, side, allCards, sourceLanguage, targetLanguage)
+        .then(ai => { if (ai) handleChoicesCached(cardId, ai) })
+    }
+  }, [allCards, sourceLanguage, targetLanguage, handleAudioCached, handleChoicesCached])
 
   const handleChoiceEdit = useCallback(async (cardId: string, answerSide: CardSide, originalChoice: string, newText: string, isCorrect: boolean) => {
     const cardRepo = new SupabaseCardRepository()
@@ -1024,27 +1029,6 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         <Link href={`/study/${deckId}`} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
-          {undoStack.length > 0 && (
-            <button onClick={() => void handleUndo()} disabled={submitting}
-              title="Undo last answer (⌘Z / Ctrl+Z)"
-              className="text-base text-ink-faint hover:text-ink-muted transition-colors disabled:opacity-40 py-1 px-1 leading-none">
-              ↩
-            </button>
-          )}
-          {redoStack.length > 0 && (
-            <button onClick={() => void handleRedo()} disabled={submitting}
-              title="Redo (⌘⇧Z / Ctrl+Y)"
-              className="text-base text-ink-faint hover:text-ink-muted transition-colors disabled:opacity-40 py-1 px-1 leading-none">
-              ↪
-            </button>
-          )}
-          <button
-            onClick={() => setShowIPA(v => !v)}
-            title={showIPA ? 'Hide IPA' : 'Show IPA transcription'}
-            className={`text-xs transition-colors ${showIPA ? 'text-accent' : 'text-ink-faint hover:text-ink-muted'}`}
-          >
-            IPA
-          </button>
           <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
         </div>
       </div>
@@ -1089,7 +1073,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
-          ipaText={currentIpaText} />
+          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
         // Stages 2 & 3 where group members have distinct expected answers.
@@ -1134,7 +1118,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
-          ipaText={currentIpaText} />
+          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
@@ -1167,7 +1151,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onResetCard={handleResetCard}
-          ipaText={currentIpaText} />
+          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       )}
     </div>
   )

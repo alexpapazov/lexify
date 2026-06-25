@@ -23,7 +23,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -46,8 +46,10 @@ export function TypingMode({
   onResetCard?: () => void
   answerLanguage?: string
   autoPlayAudio?: boolean
-  /** IPA transcription for the prompt (source language). Shown below the prompt when provided. */
+  /** IPA transcription for the prompt (source language). Shown inside the prompt card when provided. */
   ipaText?: string
+  /** Toggles IPA on/off; when provided a faint "IPA" button appears in the prompt card corner. */
+  onToggleIPA?: () => void
 }) {
   type LocalResult = {
     status:        GradingStatus
@@ -283,13 +285,20 @@ export function TypingMode({
                 ↺
               </button>
             )}
+            {ipaText ? (
+              <span className="absolute bottom-3 left-3 text-xs text-ink-muted font-mono leading-none"
+                onClick={onToggleIPA} title="Hide IPA" style={onToggleIPA ? {cursor:'pointer'} : undefined}>
+                [{ipaText}]
+              </span>
+            ) : onToggleIPA ? (
+              <button onClick={onToggleIPA} title="Show IPA transcription"
+                className="absolute bottom-3 left-3 text-xs text-ink-faint hover:text-ink-muted transition-colors leading-none">
+                IPA
+              </button>
+            ) : null}
           </>
         )}
       </div>
-
-      {ipaText && (
-        <p className="text-xs text-ink-muted text-center font-mono">[{ipaText}]</p>
-      )}
 
       {/* Input + feedback */}
       <div className="space-y-3">
