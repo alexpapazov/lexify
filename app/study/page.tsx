@@ -146,30 +146,7 @@ export default function StudyPage() {
       const today = new Date(todayStr + 'T00:00:00.000Z')
       const isToday = selectedForecastDate === forecast[0]?.date
 
-      // Build a window of days from today through selectedDate
-      const selectedDate = new Date(selectedForecastDate + 'T00:00:00.000Z')
-      const windowDays: string[] = []
-      for (let d = new Date(today); d <= selectedDate; d.setUTCDate(d.getUTCDate() + 1)) {
-        windowDays.push(d.toISOString().slice(0, 10))
-      }
-
-      // Build a load map: how many cards are currently due each day in the window
-      const loadMap = new Map<string, number>()
-      for (const day of windowDays) loadMap.set(day, 0)
-      for (const { states } of deckStats) {
-        for (const s of states) {
-          if (!s.graduated || !s.dueAt) continue
-          const dayKey = s.dueAt.slice(0, 10)
-          if (!loadMap.has(dayKey)) continue
-          loadMap.set(dayKey, (loadMap.get(dayKey) ?? 0) + 1)
-        }
-      }
-
-      // Compute each card's acceptable date range using its smooth window.
-      // The smooth window = [lastReviewedAt + baseInterval*range.min,
-      //                      lastReviewedAt + baseInterval*range.max]
-      // where baseInterval = scheduledIntervalDays / range.ideal
-      // and the range is the effective (decayed) multiplier range for the last rating.
+      // First pass: compute each card's full acceptable date range.
       // Cards with lastRating='again' or in the relearn loop are not movable.
       interface Movable { state: CardState; earliest: string; latest: string }
       const movable: Movable[] = []
@@ -188,8 +165,6 @@ export default function StudyPage() {
           if (!s.lastReviewedAt || s.scheduledIntervalDays <= 0) continue
 
           const rating = s.lastRating as 'hard' | 'good' | 'easy'
-          // Use scheduledIntervalDays as the proxy for the previous interval in the
-          // decay calculation — slight overestimate, errs toward a narrower window.
           const range = s.acceleratedMode === 'import_known' && s.acceleratedWrongStreak < 2
             ? acceleratedEffectiveMultiplierRange(rating, s.scheduledIntervalDays, s.acceleratedPenalty)
             : effectiveMultiplierRange(rating, s.scheduledIntervalDays)
@@ -211,9 +186,8 @@ export default function StudyPage() {
           const earliest = earliestDate.toISOString().slice(0, 10)
           const latest   = maxDate.toISOString().slice(0, 10)
 
-          // Only movable if a valid window exists within our redistribution range
-          if (earliest <= latest && earliest <= selectedForecastDate) {
-            movable.push({ state: s, earliest, latest: latest < selectedForecastDate ? latest : selectedForecastDate })
+          if (earliest <= latest) {
+            movable.push({ state: s, earliest, latest })
           }
         }
       }
@@ -223,12 +197,34 @@ export default function StudyPage() {
         return
       }
 
-      // Greedy assignment: sort by earliest, assign each to the least-loaded
-      // day in [earliest, latest].
-      movable.sort((a, b) => a.earliest.localeCompare(b.earliest))
+      // Build windowDays spanning from today to the furthest card's latest date.
+      const maxLatest = movable.reduce((m, c) => c.latest > m ? c.latest : m, todayStr)
+      const windowDays: string[] = []
+      for (let d = new Date(today); d.toISOString().slice(0, 10) <= maxLatest; d.setUTCDate(d.getUTCDate() + 1)) {
+        windowDays.push(d.toISOString().slice(0, 10))
+      }
+
+      // Build a load map counting all graduated cards on any day in the window.
+      const loadMap = new Map<string, number>()
+      for (const day of windowDays) loadMap.set(day, 0)
+      for (const { states } of deckStats) {
+        for (const s of states) {
+          if (!s.graduated || !s.dueAt) continue
+          const dayKey = s.dueAt.slice(0, 10)
+          if (loadMap.has(dayKey)) loadMap.set(dayKey, (loadMap.get(dayKey) ?? 0) + 1)
+        }
+      }
+
+      // Greedy assignment: sort by tightest window first, assign each card to the
+      // least-loaded day in [earliest, latest].
+      movable.sort((a, b) => {
+        const aSpan = windowDays.filter(d => d >= a.earliest && d <= a.latest).length
+        const bSpan = windowDays.filter(d => d >= b.earliest && d <= b.latest).length
+        return aSpan - bSpan
+      })
       const assignments = new Map<string, string>()
       for (const { state, earliest, latest } of movable) {
-        let bestDay = earliest
+        let bestDay = state.dueAt!.slice(0, 10)
         let bestLoad = Infinity
         for (const day of windowDays) {
           if (day < earliest || day > latest) continue
@@ -269,7 +265,19 @@ export default function StudyPage() {
             const oi = next.findIndex(d => d.date === oldDay)
             const ni = next.findIndex(d => d.date === newDay)
             if (oi >= 0) next[oi]!.count = Math.max(0, next[oi]!.count - 1)
-            if (ni >= 0) next[ni]!.count = next[ni]!.count + 1
+            if (ni >= 0) {
+              next[ni]!.count = next[ni]!.count + 1
+            } else {
+              // Card moved to a day not yet in the forecast — insert it sorted
+              const d = new Date(newDay + 'T00:00:00.000Z')
+              next.push({
+                date: newDay,
+                count: 1,
+                label: d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
+                dayNum: d.getUTCDate(),
+              })
+              next.sort((a, b) => a.date.localeCompare(b.date))
+            }
           }
           return next
         })
