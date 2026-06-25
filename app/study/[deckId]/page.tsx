@@ -277,7 +277,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="panel w-full max-w-lg space-y-4 mx-4">
+      <div className="panel w-full max-w-lg space-y-4 mx-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-ink">Edit card</h2>
           <div className="flex items-center gap-2">
@@ -394,7 +394,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
         )}
 
         {showStats && (
-          <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm max-h-[32rem] overflow-y-auto">
+          <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm">
             {!state?.graduated && (
               <div className="border-b border-white/5 pb-3 space-y-2">
                 <button
