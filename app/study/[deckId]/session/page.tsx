@@ -167,9 +167,20 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
    * run mid-`load()` before `setAllCards`/`setUserId`/etc. have flushed.
    */
   const finalizeQueue = useCallback(async (
-    finalQueue: SessionCard[],
+    rawQueue: SessionCard[],
     ctx: { deckCards: Card[]; sourceLanguage: string; targetLanguage: string; userId: string },
   ) => {
+    // Deduplicate synonym groups: only keep one card per group so the session
+    // counter matches reality. handleSynonymTypingAdvance updates all member states.
+    const seenGroups = new Set<string>()
+    const finalQueue = rawQueue.filter(item => {
+      const gid = item.card.synonymGroupId
+      if (!gid) return true
+      if (seenGroups.has(gid)) return false
+      seenGroups.add(gid)
+      return true
+    })
+
     if (finalQueue.length === 0) { setEmptySession(true); setDone(true); setLoading(false); return }
     setQueue(finalQueue)
     setLoading(false)
@@ -740,7 +751,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         )
         await stateRepo.upsert(newState)
         newStates.set(lexicalItemId, newState)
-        markSynonymAnswered(userId, lexicalItemId, studyDayKey)
+        // Only mark as answered-today if the form was actually correct;
+        // failed forms should resurface in the next session attempt.
+        if (wasCorrect) markSynonymAnswered(userId, lexicalItemId, studyDayKey)
       }
 
       setCardStates(prev => {
