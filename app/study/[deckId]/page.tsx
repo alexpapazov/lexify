@@ -69,7 +69,7 @@ function StatGroup({ title, rows }: { title: string; rows: [string, string][] })
   )
 }
 
-function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard, onSyncCard, initialShowStats }: {
+function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard, onSyncCard, initialShowStats, onDelete }: {
   card:           Card
   state:          CardState | undefined
   userId:         string
@@ -87,6 +87,8 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   onSyncCard?: () => void
   /** Open directly to the stats/info panel. */
   initialShowStats?: boolean
+  /** Called after the card has been soft-deleted. */
+  onDelete?: (cardId: string) => void
 }) {
   const [front,   setFront]   = useState(card.front)
   const [back,    setBack]    = useState(card.back)
@@ -101,6 +103,8 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [resetDone,   setResetDone]   = useState<string | null>(null)
   const [graduating,          setGraduating]          = useState(false)
   const [graduateAccelerated, setGraduateAccelerated] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting,         setDeleting]         = useState(false)
   const [confusions,       setConfusions]       = useState<CardConfusion[]>([])
   const [overrides,        setOverrides]        = useState<TypedAnswerOverride[]>([])
   const [pipeline,         setPipeline]         = useState<Pipeline | null>(null)
@@ -328,6 +332,48 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 </div>
               )}
             </div>
+            {onDelete && (
+              confirmingDelete ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-danger">Delete?</span>
+                  <button
+                    onClick={async () => {
+                      setDeleting(true)
+                      try {
+                        const cardRepo = new SupabaseCardRepository()
+                        await cardRepo.softDelete(card.id)
+                        onDelete(card.id)
+                      } finally {
+                        setDeleting(false)
+                        setConfirmingDelete(false)
+                      }
+                    }}
+                    disabled={deleting}
+                    className="text-xs bg-danger/80 hover:bg-danger text-white px-2 py-0.5 rounded transition-colors disabled:opacity-50"
+                  >
+                    {deleting ? '…' : 'Yes'}
+                  </button>
+                  <button
+                    onClick={() => setConfirmingDelete(false)}
+                    disabled={deleting}
+                    className="text-xs text-ink-faint hover:text-ink px-1.5 py-0.5 rounded border border-white/10 transition-colors"
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmingDelete(true)}
+                  title="Delete card"
+                  aria-label="Delete card"
+                  className="w-7 h-7 rounded-full border border-white/10 text-danger/60 hover:text-danger hover:border-danger/40 flex items-center justify-center transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                  </svg>
+                </button>
+              )
+            )}
             <button
               onClick={() => setShowStats(s => !s)}
               title="Card stats"
@@ -2022,6 +2068,12 @@ export default function DeckDetailPage() {
     })
   }
 
+  function handleCardDelete(cardId: string) {
+    setCards(prev => prev.filter(c => c.id !== cardId))
+    setStates(prev => prev.filter(s => s.cardId !== cardId))
+    setEditingCard(null)
+  }
+
   async function handleNewCardSave(front: string, back: string) {
     if (!deck) return
     const cardRepo = new SupabaseCardRepository()
@@ -2147,6 +2199,7 @@ export default function DeckDetailPage() {
           onCardChange={handleCardUpdate}
           onStateChange={handleStateUpdate}
           onClose={() => setEditingCard(null)}
+          onDelete={handleCardDelete}
           onJumpToCard={cardId => {
             const target = cards.find(c => c.id === cardId)
             if (target) setEditingCard(target)
