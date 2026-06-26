@@ -141,6 +141,15 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     return this.upsert({ ...existing, cardId: toCardId })
   }
 
+  async listAllGraduated(userId: UserId): Promise<CardState[]> {
+    const { data, error } = await this.db.from('card_states')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('graduated', true)
+    if (error) throw new Error(error.message)
+    return (data ?? []).map(rowToCardState)
+  }
+
   async countDueByDateRange(userId: UserId, startIso: string, endIso: string): Promise<Map<string, number>> {
     const { data, error } = await this.db.from('card_states')
       .select('due_at')

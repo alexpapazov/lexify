@@ -4,11 +4,14 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckPreferencesRepository }  from '@/lib/data/deckPreferences'
+import { SupabaseCardStateRepository }        from '@/lib/data/cardStates'
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
 import { SupabaseLanguagePairRepository }     from '@/lib/data/languagePairs'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
-import type { LanguagePair, LanguageSyncRule } from '@/domain'
+import type { LanguagePair, LanguageSyncRule, CardState } from '@/domain'
 import { langName } from '@/lib/languages'
+import { effectiveMultiplierRange, acceleratedEffectiveMultiplierRange } from '@/engine/scheduler'
+import { getToday } from '@/lib/dates'
 
 const LANGUAGES = [
   { code: 'es', label: 'Spanish'    },
@@ -313,9 +316,11 @@ export default function SettingsPage() {
   const [turnoverHour,        setTurnoverHour]        = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [saved,         setSaved]         = useState(false)
-  const [confirmReset,  setConfirmReset]  = useState(false)
-  const [resetDone,     setResetDone]     = useState(false)
-  const [tzList,        setTzList]        = useState<string[]>([])
+  const [confirmReset,      setConfirmReset]      = useState(false)
+  const [resetDone,         setResetDone]         = useState(false)
+  const [tzList,            setTzList]            = useState<string[]>([])
+  const [redistributing,    setRedistributing]    = useState(false)
+  const [redistributeMsg,   setRedistributeMsg]   = useState<string | null>(null)
 
   const router   = useRouter()
   const supabase = createClient()
@@ -377,6 +382,126 @@ export default function SettingsPage() {
     setConfirmReset(false)
     setResetDone(true)
     setTimeout(() => setResetDone(false), 3000)
+  }
+
+  async function handleGlobalRedistribute() {
+    if (redistributing || !userId) return
+    setRedistributing(true)
+    setRedistributeMsg(null)
+    try {
+      const todayStr = getToday()
+      const today    = new Date(todayStr + 'T00:00:00.000Z')
+
+      const stateRepo = new SupabaseCardStateRepository()
+      const allStates = await stateRepo.listAllGraduated(userId)
+
+      interface Movable { state: CardState; earliest: string; latest: string }
+      const movable: Movable[] = []
+
+      for (const s of allStates) {
+        if (!s.dueAt) continue
+        if (s.relearningStep > 0) continue
+
+        // Fast-track cards on first review cycle: window = [today, graduatedAt + 14 days]
+        if (s.acceleratedMode === 'import_known' && s.reps === 0 && s.graduatedAt) {
+          const gradDay = new Date(s.graduatedAt)
+          gradDay.setUTCHours(0, 0, 0, 0)
+          const maxDate = new Date(gradDay.getTime() + 14 * 24 * 60 * 60 * 1000)
+          const earliest = todayStr
+          const latest   = maxDate.toISOString().slice(0, 10)
+          if (earliest <= latest) movable.push({ state: s, earliest, latest })
+          continue
+        }
+
+        if (!s.lastRating || s.lastRating === 'again') continue
+        if (!s.lastReviewedAt || s.scheduledIntervalDays <= 0) continue
+
+        const rating = s.lastRating as 'hard' | 'good' | 'easy'
+        const range = s.acceleratedMode === 'import_known' && s.acceleratedWrongStreak < 2
+          ? acceleratedEffectiveMultiplierRange(rating, s.scheduledIntervalDays, s.acceleratedPenalty)
+          : effectiveMultiplierRange(rating, s.scheduledIntervalDays)
+
+        const baseInterval = s.scheduledIntervalDays / range.ideal
+        const smoothMinDays = baseInterval * range.min
+        const smoothMaxDays = baseInterval * range.max
+
+        const lastReviewed = new Date(s.lastReviewedAt)
+        lastReviewed.setUTCHours(0, 0, 0, 0)
+
+        const minDate = new Date(lastReviewed)
+        minDate.setUTCDate(minDate.getUTCDate() + Math.ceil(smoothMinDays))
+        const maxDate = new Date(lastReviewed)
+        maxDate.setUTCDate(maxDate.getUTCDate() + Math.floor(smoothMaxDays))
+
+        const earliestDate = minDate < today ? today : minDate
+        const earliest = earliestDate.toISOString().slice(0, 10)
+        const latest   = maxDate.toISOString().slice(0, 10)
+
+        if (earliest <= latest) movable.push({ state: s, earliest, latest })
+      }
+
+      if (movable.length === 0) {
+        setRedistributeMsg('No cards can be moved — all are at the boundary of their scheduling window.')
+        return
+      }
+
+      // Build windowDays spanning from today to the furthest card's latest date
+      const maxLatest = movable.reduce((m, c) => c.latest > m ? c.latest : m, todayStr)
+      const windowDays: string[] = []
+      for (let d = new Date(today); d.toISOString().slice(0, 10) <= maxLatest; d.setUTCDate(d.getUTCDate() + 1)) {
+        windowDays.push(d.toISOString().slice(0, 10))
+      }
+
+      // Load map from ALL graduated states
+      const loadMap = new Map<string, number>()
+      for (const day of windowDays) loadMap.set(day, 0)
+      for (const s of allStates) {
+        if (!s.dueAt) continue
+        const dayKey = s.dueAt.slice(0, 10)
+        if (loadMap.has(dayKey)) loadMap.set(dayKey, (loadMap.get(dayKey) ?? 0) + 1)
+      }
+
+      // Greedy: tightest window first
+      movable.sort((a, b) => {
+        const aSpan = windowDays.filter(d => d >= a.earliest && d <= a.latest).length
+        const bSpan = windowDays.filter(d => d >= b.earliest && d <= b.latest).length
+        return aSpan - bSpan
+      })
+      const assignments = new Map<string, string>()
+      for (const { state, earliest, latest } of movable) {
+        let bestDay  = state.dueAt!.slice(0, 10)
+        let bestLoad = Infinity
+        for (const day of windowDays) {
+          if (day < earliest || day > latest) continue
+          const load = loadMap.get(day) ?? 0
+          if (load < bestLoad) { bestLoad = load; bestDay = day }
+        }
+        assignments.set(state.cardId, bestDay)
+        loadMap.set(bestDay, (loadMap.get(bestDay) ?? 0) + 1)
+        const prevDay = state.dueAt!.slice(0, 10)
+        loadMap.set(prevDay, Math.max(0, (loadMap.get(prevDay) ?? 1) - 1))
+      }
+
+      const toUpdate: CardState[] = []
+      for (const { state } of movable) {
+        const newDay = assignments.get(state.cardId)
+        if (!newDay || newDay === state.dueAt!.slice(0, 10)) continue
+        const timePart = state.dueAt!.slice(10)
+        toUpdate.push({ ...state, dueAt: newDay + timePart })
+      }
+
+      if (toUpdate.length > 0) {
+        await stateRepo.upsertBatch(toUpdate)
+        setRedistributeMsg(`Moved ${toUpdate.length} card${toUpdate.length !== 1 ? 's' : ''} — ${movable.length - toUpdate.length} already optimal.`)
+      } else {
+        setRedistributeMsg('Cards are already well distributed within their scheduling windows.')
+      }
+    } catch (err) {
+      console.error('Global redistribute failed:', err)
+      setRedistributeMsg('Something went wrong. Please try again.')
+    } finally {
+      setRedistributing(false)
+    }
   }
 
   function toggle(code: string) {
@@ -529,6 +654,31 @@ export default function SettingsPage() {
             </p>
           </div>
           <LanguageSyncPanel userId={userId} />
+        </div>
+      )}
+
+      {/* Global redistribute */}
+      {userId && (
+        <div className="panel space-y-3">
+          <div>
+            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Redistribute cards</h2>
+            <p className="text-xs text-ink-faint mt-1">
+              Spreads all graduated cards evenly across their scheduling windows so no single day is overloaded.
+              Cards already at the edge of their window are left in place.
+            </p>
+          </div>
+          {redistributeMsg && (
+            <p className={`text-xs ${redistributeMsg.startsWith('Moved') || redistributeMsg.startsWith('Cards are') ? 'text-success' : 'text-danger'}`}>
+              {redistributeMsg}
+            </p>
+          )}
+          <button
+            onClick={handleGlobalRedistribute}
+            disabled={redistributing}
+            className="text-sm border border-white/20 text-ink-muted hover:text-ink hover:border-white/40 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {redistributing ? 'Redistributing…' : '⟳ Redistribute all cards'}
+          </button>
         </div>
       )}
 
