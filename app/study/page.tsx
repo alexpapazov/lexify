@@ -51,6 +51,80 @@ interface ForecastDay {
 
 const FORECAST_DAYS = 14
 
+const RATING_LABEL: Record<string, string> = { hard: 'Hard', good: 'Good', easy: 'Easy', again: 'Again' }
+
+function ForecastCardDetail({ item, onBack }: { item: FilteredCard; onBack: () => void }) {
+  const { card, state, deckId, deckName, sourceLanguage, targetLanguage } = item
+
+  function fmt(iso: string | null | undefined) {
+    if (!iso) return '—'
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+  }
+
+  return (
+    <div className="panel space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <button
+          onClick={onBack}
+          className="text-xs text-ink-muted hover:text-ink transition-colors flex items-center gap-1"
+        >
+          ← Back to list
+        </button>
+        <Link
+          href={`/study/${deckId}`}
+          className="btn-primary text-xs px-3 py-1.5"
+        >
+          Go to deck
+        </Link>
+      </div>
+
+      {/* Card face */}
+      <div className="space-y-1">
+        <p className="text-2xl font-semibold text-ink">{card.front}</p>
+        {card.ipa && <p className="text-sm text-ink-faint font-mono">{card.ipa}</p>}
+        <p className="text-base text-ink-muted">{card.back}</p>
+      </div>
+
+      {card.hints && card.hints.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Hints</p>
+          <ul className="space-y-0.5">
+            {card.hints.map((h, i) => (
+              <li key={i} className="text-sm text-ink-faint">{h}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Meta */}
+      <div className="text-xs text-ink-faint space-y-0.5">
+        <p>{langName(sourceLanguage)} / {langName(targetLanguage)} · {deckName}</p>
+        {card.register && <p>Register: {card.register}</p>}
+        {card.region   && <p>Region: {card.region}</p>}
+      </div>
+
+      {/* Scheduling */}
+      {state && (
+        <div className="border-t border-white/10 pt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+          <div className="text-ink-faint">Due</div>
+          <div className="text-ink">{fmt(state.dueAt)}</div>
+          <div className="text-ink-faint">Interval</div>
+          <div className="text-ink">{state.scheduledIntervalDays > 0 ? `${state.scheduledIntervalDays}d` : '—'}</div>
+          <div className="text-ink-faint">Last rating</div>
+          <div className="text-ink">{state.lastRating ? RATING_LABEL[state.lastRating] ?? state.lastRating : '—'}</div>
+          <div className="text-ink-faint">Reviews</div>
+          <div className="text-ink">{state.reps}</div>
+          <div className="text-ink-faint">Lapses</div>
+          <div className="text-ink">{state.lapses}</div>
+          <div className="text-ink-faint">Last reviewed</div>
+          <div className="text-ink">{fmt(state.lastReviewedAt)}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function StudyPage() {
   const [deckStats,    setDeckStats]    = useState<DeckWithStats[]>([])
   const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dueNow: 0 })
@@ -61,6 +135,7 @@ export default function StudyPage() {
   const [todayStr,     setTodayStr]     = useState('')
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null)
+  const [selectedForecastCard, setSelectedForecastCard] = useState<FilteredCard | null>(null)
   const [redistributing, setRedistributing] = useState(false)
   const [redistributeMsg, setRedistributeMsg] = useState<string | null>(null)
   const supabase = createClient()
@@ -515,7 +590,7 @@ export default function StudyPage() {
                         {redistributing ? 'Redistributing…' : 'Redistribute'}
                       </button>
                     )}
-                    <button onClick={() => { setSelectedForecastDate(null); setRedistributeMsg(null) }} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                    <button onClick={() => { setSelectedForecastDate(null); setRedistributeMsg(null); setSelectedForecastCard(null) }} className="text-xs text-accent hover:text-accent-soft transition-colors">
                       Close ✕
                     </button>
                   </div>
@@ -523,24 +598,29 @@ export default function StudyPage() {
                 {redistributeMsg && (
                   <p className="text-xs text-ink-muted">{redistributeMsg}</p>
                 )}
-                {forecastCards.length === 0 ? (
+                {selectedForecastCard ? (
+                  <ForecastCardDetail
+                    item={selectedForecastCard}
+                    onBack={() => setSelectedForecastCard(null)}
+                  />
+                ) : forecastCards.length === 0 ? (
                   <div className="panel text-ink-muted text-sm text-center py-6">No cards found.</div>
                 ) : (
                   <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
-                    {forecastCards.map(({ card, deckName, deckId, sourceLanguage, targetLanguage }) => (
-                      <Link
-                        key={card.id}
-                        href={`/study/${deckId}`}
-                        className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
+                    {forecastCards.map((item) => (
+                      <button
+                        key={item.card.id}
+                        onClick={() => setSelectedForecastCard(item)}
+                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors text-left"
                       >
                         <div className="flex gap-6 text-sm min-w-0">
-                          <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
-                          <span className="text-ink-muted truncate">{card.back}</span>
+                          <span className="text-ink font-medium w-36 truncate shrink-0">{item.card.front}</span>
+                          <span className="text-ink-muted truncate">{item.card.back}</span>
                         </div>
                         <span className="text-xs text-ink-faint hidden sm:block shrink-0 ml-2">
-                          {langName(sourceLanguage)} / {langName(targetLanguage)} · {deckName}
+                          {langName(item.sourceLanguage)} / {langName(item.targetLanguage)} · {item.deckName}
                         </span>
-                      </Link>
+                      </button>
                     ))}
                   </div>
                 )}
