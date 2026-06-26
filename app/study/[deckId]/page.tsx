@@ -2356,7 +2356,7 @@ export default function DeckDetailPage() {
                   onClick={e => e.stopPropagation()}
                 />
                 <div className="flex gap-6 text-sm min-w-0 flex-1">
-                  <span className="text-ink font-medium w-40 truncate shrink-0">{card.front}</span>
+                  <span className="text-ink font-medium w-40 truncate shrink-0">{displayText(card.front)}</span>
                   <span className="text-ink-muted truncate">{displayText(card.back)}</span>
                 </div>
                 <span className="chip shrink-0 ml-2">{status}</span>
