@@ -158,8 +158,9 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
   const [userId,       setUserId]       = useState('')
-  const [addingFolder, setAddingFolder] = useState(false)
-  const [newName,      setNewName]      = useState('')
+  const [addingFolder,   setAddingFolder]   = useState(false)
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [newName,        setNewName]        = useState('')
   const [folderCounts, setFolderCounts] = useState<Record<string, FolderCounts>>({})
   const [pairCounts,   setPairCounts]   = useState<FolderCounts>(EMPTY_COUNTS)
   const [pairDeckStats, setPairDeckStats] = useState<DeckStats[]>([])
@@ -429,16 +430,21 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
 
   async function handleAddFolder() {
     const name = newName.trim()
-    if (!name || !userId) return
+    if (!name || !userId || creatingFolder) return
     if (name.toUpperCase() === 'SYNCED VOCABULARY') {
       alert('"SYNCED VOCABULARY" is reserved for automatically synced cards.')
       return
     }
-    const folderRepo = new SupabaseFolderRepository()
-    await folderRepo.create(userId, name, null)
-    setNewName('')
-    setAddingFolder(false)
-    load()
+    setCreatingFolder(true)
+    try {
+      const folderRepo = new SupabaseFolderRepository()
+      await folderRepo.create(userId, name, null)
+      setNewName('')
+      setAddingFolder(false)
+      load()
+    } finally {
+      setCreatingFolder(false)
+    }
   }
 
   async function handlePin(deckId: string, pinned: boolean) {
@@ -1054,7 +1060,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
               if (e.key === 'Escape') { setAddingFolder(false); setNewName('') }
             }}
           />
-          <button onClick={handleAddFolder} className="btn-primary text-xs py-1 px-3">Create</button>
+          <button onClick={handleAddFolder} disabled={creatingFolder} className="btn-primary text-xs py-1 px-3 disabled:opacity-50">{creatingFolder ? 'Creating…' : 'Create'}</button>
           <button onClick={() => setAddingFolder(false)} className="text-ink-faint hover:text-ink text-xs transition-colors">Cancel</button>
         </div>
       )}

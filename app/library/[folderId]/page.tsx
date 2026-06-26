@@ -130,8 +130,9 @@ function FolderPageInner() {
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
   const [userId,       setUserId]       = useState('')
-  const [addingFolder, setAddingFolder] = useState(false)
-  const [newName,      setNewName]      = useState('')
+  const [addingFolder,   setAddingFolder]   = useState(false)
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [newName,        setNewName]        = useState('')
   const [renaming,     setRenaming]     = useState(false)
   const [renameValue,  setRenameValue]  = useState('')
   const [counts,       setCounts]       = useState<FolderCounts | null>(null)
@@ -369,16 +370,21 @@ function FolderPageInner() {
 
   async function handleAddFolder() {
     const name = newName.trim()
-    if (!name || !userId) return
+    if (!name || !userId || creatingFolder) return
     if (name.toUpperCase() === 'SYNCED VOCABULARY') {
       alert('"SYNCED VOCABULARY" is a reserved name used by the sync system.')
       return
     }
-    const folderRepo = new SupabaseFolderRepository()
-    await folderRepo.create(userId, name, folderId)
-    setNewName('')
-    setAddingFolder(false)
-    load()
+    setCreatingFolder(true)
+    try {
+      const folderRepo = new SupabaseFolderRepository()
+      await folderRepo.create(userId, name, folderId)
+      setNewName('')
+      setAddingFolder(false)
+      load()
+    } finally {
+      setCreatingFolder(false)
+    }
   }
 
   async function handleRenameFolder() {
@@ -673,7 +679,7 @@ function FolderPageInner() {
               if (e.key === 'Escape') { setAddingFolder(false); setNewName('') }
             }}
           />
-          <button onClick={handleAddFolder} className="btn-primary text-xs py-1 px-3">Create</button>
+          <button onClick={handleAddFolder} disabled={creatingFolder} className="btn-primary text-xs py-1 px-3 disabled:opacity-50">{creatingFolder ? 'Creating…' : 'Create'}</button>
           <button onClick={() => setAddingFolder(false)} className="text-ink-faint hover:text-ink text-xs transition-colors">Cancel</button>
         </div>
       )}
