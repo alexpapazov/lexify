@@ -542,14 +542,26 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                     ]} />
                   )}
 
-                  <StatGroup title="Scheduling" rows={[
-                    ['Interval (ideal)',    formatIntervalDays(state.intervalDays)],
-                    ['Scheduled interval',  formatIntervalDays(state.scheduledIntervalDays)],
-                    ['Next due',            state.graduated ? formatDate(state.dueAt) : '—'],
-                    ['Last reviewed',       formatDate(state.lastReviewedAt, 'Never')],
-                    ['Introduced',          formatDate(state.introducedDate, 'Not yet')],
-                    ['Graduated at',        formatDate(state.graduatedAt, '—')],
-                  ]} />
+                  {(() => {
+                    const schedInterval = state.scheduledIntervalDays > 0 ? state.scheduledIntervalDays : state.intervalDays
+                    const reviewWindow = state.graduated && state.lastReviewedAt && schedInterval > 0 && state.dueAt
+                      ? (() => {
+                          const earliest = new Date(new Date(state.lastReviewedAt).getTime() + schedInterval * 0.30 * 86400_000)
+                          return `${formatDate(earliest.toISOString())} → ${formatDate(state.dueAt)}`
+                        })()
+                      : '—'
+                    return (
+                      <StatGroup title="Scheduling" rows={[
+                        ['Interval (ideal)',    formatIntervalDays(state.intervalDays)],
+                        ['Scheduled interval',  formatIntervalDays(state.scheduledIntervalDays)],
+                        ['Review window',       reviewWindow],
+                        ['Next due',            state.graduated ? formatDate(state.dueAt) : '—'],
+                        ['Last reviewed',       formatDate(state.lastReviewedAt, 'Never')],
+                        ['Introduced',          formatDate(state.introducedDate, 'Not yet')],
+                        ['Graduated at',        formatDate(state.graduatedAt, '—')],
+                      ]} />
+                    )
+                  })()}
 
                   <StatGroup title="Lapses & relearning" rows={[
                     ['Recent lapses (cluster)', String(state.lapseClusterCount)],
