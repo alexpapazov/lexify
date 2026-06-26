@@ -187,8 +187,11 @@ export function TypingMode({
       onSiblingAnswered?.(matchedSibling.id)
       return
     }
-    // Synonyms require a two-phase flow: accept the synonym, then require the canonical.
-    if (synonyms?.length) {
+    // Synonyms: two-phase canonical flow only when typing the target language
+    // (promptSide='back' = native language shown, type target/Korean).
+    // When typing the native language (promptSide='front'), accept synonyms directly
+    // via gradeAndSetResult's viaSynonym path — no need to also type the canonical.
+    if (synonyms?.length && promptSide === 'back') {
       const matchedSynonym = synonyms.find(
         s => gradeTyping(input, s, gradingSettings).status === 'correct'
       )
