@@ -24,7 +24,7 @@ import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { speak } from '@/lib/speak'
-import { classifyReviewMode } from '@/engine/scheduler'
+import { classifyReviewMode, MULTIPLIER_RANGE } from '@/engine/scheduler'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
 import { batchFastTrackDueDates } from '@/engine/density'
 
@@ -543,13 +543,22 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                   )}
 
                   {(() => {
-                    const schedInterval = state.scheduledIntervalDays > 0 ? state.scheduledIntervalDays : state.intervalDays
-                    const reviewWindow = state.graduated && state.lastReviewedAt && schedInterval > 0 && state.dueAt
-                      ? (() => {
-                          const earliest = new Date(new Date(state.lastReviewedAt).getTime() + schedInterval * 0.30 * 86400_000)
-                          return `${formatDate(earliest.toISOString())} → ${formatDate(state.dueAt)}`
-                        })()
-                      : '—'
+                    // Review window: the [min, max] interval range the scheduler
+                    // may place the next due date within, based on last rating.
+                    // prevInterval ≈ scheduledIntervalDays / idealMultiplier.
+                    const reviewWindow = (() => {
+                      if (!state.graduated || !state.lastReviewedAt || !state.dueAt) return '—'
+                      const rating = state.lastRating
+                      if (!rating || rating === 'again') return '—'
+                      const r = MULTIPLIER_RANGE[rating]
+                      const sched = state.scheduledIntervalDays > 0 ? state.scheduledIntervalDays : state.intervalDays
+                      if (sched <= 0) return '—'
+                      const prevInterval = sched / r.ideal
+                      const base = new Date(state.lastReviewedAt).getTime()
+                      const minDate = new Date(base + prevInterval * r.min * 86400_000)
+                      const maxDate = new Date(base + prevInterval * r.max * 86400_000)
+                      return `${formatDate(minDate.toISOString())} → ${formatDate(maxDate.toISOString())}`
+                    })()
                     return (
                       <StatGroup title="Scheduling" rows={[
                         ['Interval (ideal)',    formatIntervalDays(state.intervalDays)],
