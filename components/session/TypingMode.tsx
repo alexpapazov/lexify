@@ -169,6 +169,14 @@ export function TypingMode({
   }
 
   function check() {
+    // If the input already matches the expected answer directly, grade it as canonical
+    // and skip sibling/synonym phases — prevents the word being its own "synonym".
+    const directMatch = gradeTyping(input, expected, gradingSettings)
+    if (directMatch.status === 'correct') {
+      gradeAndSetResult(input)
+      return
+    }
+
     // Check deck siblings first — they require a two-phase flow.
     const matchedSibling = deckSiblings?.find(
       s => gradeTyping(input, s.answer, gradingSettings).status === 'correct'
