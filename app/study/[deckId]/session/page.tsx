@@ -31,10 +31,8 @@ import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
 import { triggerSyncFill } from '@/lib/triggerSyncFill'
 
-/** How many slots ahead an "I don't know" card is re-queued to resurface in the same session. */
+const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
-/** How many slots ahead a "Repeat" card is re-queued (further than IDontKnow so it feels like "later"). */
-const REPEAT_REQUEUE_OFFSET = 6
 
 interface SessionCard {
   card: Card
@@ -853,12 +851,15 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         setQueue(prev => prev.map((item, i) => i === index ? { ...current, state: counted } : item))
         setRelearnPool(prev => [...prev, requeued])
       } else {
-        // Pre-graduation or relapsed back into pipeline — reinsert ahead in queue
+        // Pre-graduation or relapsed back into pipeline — reinsert ahead, displace last card.
         setQueue(prev => {
           const next = [...prev]
           next[index] = { ...current, state: counted }
-          const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
-          next.splice(insertPos, 0, requeued)
+          if (index + 1 < next.length) {
+            const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
+            next.splice(insertPos, 0, requeued)
+            next.pop()
+          }
           return next
         })
       }
@@ -901,19 +902,22 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   }, [queue, index, userId, allCards])
 
   /**
-   * "Repeat" — credits the current correct answer, then re-queues the card
-   * REPEAT_REQUEUE_OFFSET slots ahead so the learner sees it again later in
-   * the session rather than immediately.
+   * "Repeat" — credits the current correct answer, then reinserts it REPEAT_REQUEUE_OFFSET
+   * slots ahead. The last card in the queue is displaced (removed) to keep the total count
+   * constant. If there are no future cards to displace, just advances normally.
    */
   const handleRepeat = useCallback(() => {
     const current = queue[index]
     if (!current) return
-    const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
-    setQueue(prev => {
-      const next = [...prev]
-      next.splice(insertAt, 0, { ...current })
-      return next
-    })
+    if (index + 1 < queue.length) {
+      const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
+      setQueue(prev => {
+        const next = [...prev]
+        next.splice(insertAt, 0, { ...current })
+        next.pop()
+        return next
+      })
+    }
     handleAnswer('good', true, '')
   }, [queue, index, handleAnswer])
 

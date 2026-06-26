@@ -34,9 +34,8 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday } from '@/lib/dates'
 
-/** How many slots ahead an "I don't know" card is re-queued to resurface in the same session. */
+const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
-const REPEAT_REQUEUE_OFFSET = 6
 
 interface SessionCard {
   card:            Card
@@ -518,12 +517,15 @@ function FolderSessionInner() {
         setQueue(prev => prev.map((item, i) => i === index ? { ...current, state: counted } : item))
         setRelearnPool(prev => [...prev, requeued])
       } else {
-        // Pre-graduation or relapsed back into pipeline — reinsert ahead in queue
+        // Pre-graduation or relapsed back into pipeline — reinsert ahead, displace last card.
         setQueue(prev => {
           const next = [...prev]
           next[index] = { ...current, state: counted }
-          const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
-          next.splice(insertPos, 0, requeued)
+          if (index + 1 < next.length) {
+            const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
+            next.splice(insertPos, 0, requeued)
+            next.pop()
+          }
           return next
         })
       }
@@ -577,12 +579,15 @@ function FolderSessionInner() {
   const handleRepeat = useCallback(() => {
     const current = queue[index]
     if (!current) return
-    const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
-    setQueue(prev => {
-      const next = [...prev]
-      next.splice(insertAt, 0, { ...current })
-      return next
-    })
+    if (index + 1 < queue.length) {
+      const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
+      setQueue(prev => {
+        const next = [...prev]
+        next.splice(insertAt, 0, { ...current })
+        next.pop()
+        return next
+      })
+    }
     handleAnswer('good', true, '')
   }, [queue, index, handleAnswer])
 
