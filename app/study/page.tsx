@@ -112,14 +112,16 @@ export default function StudyPage() {
     setGlobal(globalCounts)
 
     // ── Upcoming review forecast ────────────────────────────────────────
-    // Today's count comes from globalCounts.dueNow (already computed from loaded
-    // states) — this is more reliable than a DB range query for past-due cards.
-    // Only query future dates (tomorrow onward) from the DB.
-    const tomorrowDate = new Date(todayDate)
-    tomorrowDate.setUTCDate(tomorrowDate.getUTCDate() + 1)
-    const endDate = new Date(todayDate)
-    endDate.setUTCDate(endDate.getUTCDate() + FORECAST_DAYS)
-    const counts = await stateRepo.countDueByDateRange(session.user.id, tomorrowDate.toISOString(), endDate.toISOString())
+    // Build counts from the already-loaded deckStats so the bars always match
+    // the detail panel (both exclude orphaned states for cards not in any deck).
+    const deckCounts = new Map<string, number>()
+    for (const { states } of stats) {
+      for (const s of states) {
+        if (!s.graduated || !s.dueAt) continue
+        const day = s.dueAt.slice(0, 10)
+        deckCounts.set(day, (deckCounts.get(day) ?? 0) + 1)
+      }
+    }
 
     const days: ForecastDay[] = []
     for (let i = 0; i < FORECAST_DAYS; i++) {
@@ -130,7 +132,7 @@ export default function StudyPage() {
         date:   dateStr,
         label:  i === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
         dayNum: d.getUTCDate(),
-        count:  i === 0 ? globalCounts.dueNow : (counts.get(dateStr) ?? 0),
+        count:  i === 0 ? globalCounts.dueNow : (deckCounts.get(dateStr) ?? 0),
       })
     }
     setForecast(days)
