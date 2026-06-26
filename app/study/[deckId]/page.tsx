@@ -69,7 +69,7 @@ function StatGroup({ title, rows }: { title: string; rows: [string, string][] })
   )
 }
 
-function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard, onSyncCard }: {
+function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard, onSyncCard, initialShowStats }: {
   card:           Card
   state:          CardState | undefined
   userId:         string
@@ -85,13 +85,15 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   onJumpToCard?: (cardId: string) => void
   /** Open the sync-review modal for this card. */
   onSyncCard?: () => void
+  /** Open directly to the stats/info panel. */
+  initialShowStats?: boolean
 }) {
   const [front,   setFront]   = useState(card.front)
   const [back,    setBack]    = useState(card.back)
   const [saving,   setSaving]   = useState(false)
   const [saved,    setSaved]    = useState(false)
   const [validErr, setValidErr] = useState<string | null>(null)
-  const [showStats, setShowStats] = useState(false)
+  const [showStats, setShowStats] = useState(initialShowStats ?? false)
   const [showResetMenu, setShowResetMenu] = useState(false)
   const [resetAction, setResetAction] = useState<'distractors' | 'progress' | 'audio' | 'all' | null>(null)
   const [resetting,   setResetting]   = useState(false)
@@ -1940,6 +1942,7 @@ export default function DeckDetailPage() {
   )
   const searchParams = useSearchParams()
   const activeFilter = searchParams.get('filter') as 'new' | 'learning' | 'graduated' | 'due' | null
+  const cardParam    = searchParams.get('card')
 
   async function loadAll(uid: string) {
     const deckRepo  = new SupabaseDeckRepository()
@@ -1983,6 +1986,13 @@ export default function DeckDetailPage() {
       loadAll(uid)
     })
   }, [deckId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-open card detail when ?card=<id> param is present
+  useEffect(() => {
+    if (!cardParam || cards.length === 0 || editingCard) return
+    const target = cards.find(c => c.id === cardParam)
+    if (target) setEditingCard(target)
+  }, [cardParam, cards]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleCardSave(cardId: string, front: string, back: string) {
     const cardRepo  = new SupabaseCardRepository()
@@ -2142,6 +2152,7 @@ export default function DeckDetailPage() {
             if (target) setEditingCard(target)
           }}
           onSyncCard={() => setSyncingCard(editingCard)}
+          initialShowStats={editingCard.id === cardParam}
         />
       )}
 
