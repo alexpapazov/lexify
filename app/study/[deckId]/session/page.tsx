@@ -627,9 +627,34 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       await stateRepo.upsert(newState)
 
+      // Co-advance all synonym group members at the same pre-graduation step.
+      // Steps 3 (TypingMode, same back answer) and 4 (final recognition) are
+      // only rendered for the representative card.  Running progressAfterReview
+      // for the other members here keeps every group member in sync so none
+      // get stuck behind while the representative moves on.
+      const coAdvancedStates = new Map<string, CardState>()
+      if (!state.graduated && card.synonymGroupId) {
+        const groupMemberIds = synonymGroups.get(card.synonymGroupId)?.itemIds ?? []
+        for (const memberId of groupMemberIds) {
+          if (memberId === card.id) continue
+          const memberCard  = allCards.find(c => c.id === memberId)
+          const memberState = cardStates.get(memberId)
+          if (!memberCard || !memberState || memberState.graduated) continue
+          if (memberState.currentStepOrder !== state.currentStepOrder) continue
+          const memberNewState = progressAfterReview(
+            memberState, pipeline,
+            { wasCorrect, rating, wrongSeverity: undefined, wasTyped: wasTyped ?? false },
+            nowDate,
+          )
+          await stateRepo.upsert(memberNewState)
+          coAdvancedStates.set(memberId, memberNewState)
+        }
+      }
+
       setCardStates(prev => {
         const next = new Map(prev)
         next.set(card.id, newState)
+        for (const [id, s] of coAdvancedStates) next.set(id, s)
         return next
       })
 
@@ -649,7 +674,29 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       }
 
       setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
-      if (index + 1 < queue.length || relearnPool.length > 0) {
+
+      // Re-insert the group into the queue when the representative advances to
+      // a new step within the same-day window.  This lets steps 3 and 4 run
+      // in the same session as step 2, preventing same-day-window resets.
+      const windowStart = sortedSteps[Math.max(0, sortedSteps.length - 3)]!
+      const didReinsert = (
+        !newState.graduated &&
+        newState.currentStepOrder !== state.currentStepOrder &&
+        newState.currentStepOrder >= windowStart.stepOrder &&
+        !!card.synonymGroupId
+      )
+      if (didReinsert) {
+        const currentItem = queue[index]!
+        setQueue(prev => {
+          const next = [...prev]
+          next.splice(index + 1, 0, { ...currentItem, state: newState })
+          return next
+        })
+      }
+
+      // `queue.length` is stale here when we just re-inserted, so use
+      // `didReinsert` to guarantee advancement in that case.
+      if (didReinsert || index + 1 < queue.length || relearnPool.length > 0) {
         setIndex(i => i + 1)
       } else {
         setDone(true)
@@ -660,7 +707,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     } finally {
       setSubmitting(false)
     }
-  }, [queue, index, userId, gradingSettings, submitting, relearnPool])
+  }, [queue, index, userId, gradingSettings, submitting, relearnPool, synonymGroups, allCards, cardStates])
 
   const handleUndo = useCallback(async () => {
     const entry = undoStack[undoStack.length - 1]
@@ -751,9 +798,24 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         )
         await stateRepo.upsert(newState)
         newStates.set(lexicalItemId, newState)
-        // Only mark as answered-today if the form was actually correct;
-        // failed forms should resurface in the next session attempt.
-        if (wasCorrect) markSynonymAnswered(userId, lexicalItemId, studyDayKey)
+      }
+
+      // Members that advanced to a new step must NOT be marked as answered
+      // today — they need to appear fresh at the new step (step 3 asks a
+      // different direction than step 2).  Members that stayed at the same
+      // step are done for today and should be pre-filled on re-entry.
+      const advancingIds = new Set<string>()
+      for (const { lexicalItemId } of results) {
+        const prev = cardStates.get(lexicalItemId)
+        const next = newStates.get(lexicalItemId)
+        if (prev && next && !next.graduated && next.currentStepOrder !== prev.currentStepOrder) {
+          advancingIds.add(lexicalItemId)
+        }
+      }
+      for (const { lexicalItemId, wasCorrect } of results) {
+        if (wasCorrect && !advancingIds.has(lexicalItemId)) {
+          markSynonymAnswered(userId, lexicalItemId, studyDayKey)
+        }
       }
 
       setCardStates(prev => {
@@ -761,11 +823,31 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         for (const [id, state] of newStates) next.set(id, state)
         return next
       })
+      // Only add to sessionAnsweredSynonyms for members that stayed at the
+      // same step — advancing members need to be shown at the new step.
       setSessionAnsweredSynonyms(prev => {
         const next = new Set(prev)
-        for (const { lexicalItemId } of results) next.add(lexicalItemId)
+        for (const { lexicalItemId } of results) {
+          if (!advancingIds.has(lexicalItemId)) next.add(lexicalItemId)
+        }
         return next
       })
+      // If any member advanced to a new step, re-insert the group into the
+      // queue so the next step runs in the same session.  This keeps synonym
+      // groups from spanning multiple sessions and triggering same-day-window
+      // resets.
+      if (advancingIds.size > 0) {
+        const repId       = queue[index]?.card.id
+        const repNewState = repId ? newStates.get(repId) : undefined
+        if (repNewState && !repNewState.graduated) {
+          const currentItem = queue[index]!
+          setQueue(prev => {
+            const next = [...prev]
+            next.splice(index + 1, 0, { ...currentItem, state: repNewState })
+            return next
+          })
+        }
+      }
       setIndex(i => i + 1)
     } catch (err: unknown) {
       console.error('Failed to record synonym answer:', err)
