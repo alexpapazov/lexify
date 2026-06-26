@@ -138,6 +138,13 @@ export class SupabaseCardRepository implements CardRepository {
     return results
   }
 
+  async listDeckIdsForCard(cardId: CardId): Promise<string[]> {
+    const { data, error } = await this.db.from('deck_cards')
+      .select('deck_id').eq('card_id', cardId)
+    if (error) throw new Error(error.message)
+    return (data ?? []).map(r => r.deck_id as string)
+  }
+
   async addToDeck(deckId: DeckId, cardId: CardId, position: number): Promise<void> {
     const { error } = await this.db.from('deck_cards')
       .upsert({ deck_id: deckId, card_id: cardId, position }, { onConflict: 'deck_id,card_id', ignoreDuplicates: true })

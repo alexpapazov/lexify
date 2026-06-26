@@ -69,7 +69,7 @@ function StatGroup({ title, rows }: { title: string; rows: [string, string][] })
   )
 }
 
-function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard, onSyncCard, initialShowStats, onDelete }: {
+function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage, targetLanguage, onSave, onCardChange, onStateChange, onClose, onJumpToCard, onSyncCard, initialShowStats, onDelete, onMerge }: {
   card:           Card
   state:          CardState | undefined
   userId:         string
@@ -89,6 +89,8 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   initialShowStats?: boolean
   /** Called after the card has been soft-deleted. */
   onDelete?: (cardId: string) => void
+  /** Called after two cards have been merged. deletedId is the removed card; survivor + its final state replace it. */
+  onMerge?: (deletedCardId: string, survivorCard: Card, survivorState: CardState | undefined) => void
 }) {
   const [front,   setFront]   = useState(card.front)
   const [back,    setBack]    = useState(card.back)
@@ -105,6 +107,17 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [graduateAccelerated, setGraduateAccelerated] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting,         setDeleting]         = useState(false)
+  // Merge state
+  const [merging,            setMerging]            = useState(false)
+  const [mergeQuery,         setMergeQuery]         = useState('')
+  const [allPairCards,       setAllPairCards]       = useState<Card[] | null>(null)
+  const [mergeCardsLoading,  setMergeCardsLoading]  = useState(false)
+  const [mergeTarget,        setMergeTarget]        = useState<Card | null>(null)
+  const [mergeTargetState,   setMergeTargetState]   = useState<CardState | null | undefined>(undefined)
+  const [mergeTargetDecks,   setMergeTargetDecks]   = useState<string[]>([])
+  const [mergeSurvivorId,    setMergeSurvivorId]    = useState<string | null>(null)
+  const [mergeExecuting,     setMergeExecuting]     = useState(false)
+  const [mergeError,         setMergeError]         = useState<string | null>(null)
   const [confusions,       setConfusions]       = useState<CardConfusion[]>([])
   const [overrides,        setOverrides]        = useState<TypedAnswerOverride[]>([])
   const [pipeline,         setPipeline]         = useState<Pipeline | null>(null)
@@ -277,6 +290,112 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
       setResetError(err instanceof Error ? err.message : 'Graduate failed')
     } finally {
       setGraduating(false)
+    }
+  }
+
+  function stateProgress(s: CardState | null | undefined): string {
+    if (!s) return 'Not started'
+    if (s.graduated) {
+      const days = s.scheduledIntervalDays || s.intervalDays
+      return `Graduated · ${days}d interval · ${s.reps} review${s.reps !== 1 ? 's' : ''}`
+    }
+    return `Learning — Step ${s.currentStepOrder + 1}`
+  }
+
+  function isAMoreAdvanced(a: CardState | undefined, b: CardState | null | undefined): boolean {
+    if (!a && !b) return true
+    if (!b) return true
+    if (!a) return false
+    if (a.graduated !== b.graduated) return a.graduated
+    if (a.graduated) {
+      const ai = a.scheduledIntervalDays || a.intervalDays
+      const bi = b.scheduledIntervalDays || b.intervalDays
+      return ai !== bi ? ai > bi : a.reps >= b.reps
+    }
+    if (a.currentStepOrder !== b.currentStepOrder) return a.currentStepOrder > b.currentStepOrder
+    return a.correctInStep >= b.correctInStep
+  }
+
+  async function openMerge() {
+    setMerging(true)
+    setMergeQuery('')
+    setMergeTarget(null)
+    setMergeTargetState(undefined)
+    setMergeSurvivorId(null)
+    setMergeError(null)
+    if (allPairCards) return
+    setMergeCardsLoading(true)
+    try {
+      const cardRepo = new SupabaseCardRepository()
+      const all = await cardRepo.listOwned(userId, sourceLanguage, targetLanguage)
+      setAllPairCards(all.filter(c => c.id !== card.id))
+    } catch { setMergeError('Failed to load cards.') }
+    finally { setMergeCardsLoading(false) }
+  }
+
+  async function selectMergeTarget(target: Card) {
+    setMergeTarget(target)
+    setMergeSurvivorId(isAMoreAdvanced(state, undefined) ? card.id : target.id)
+    setMergeTargetState(undefined)
+    try {
+      const [stateRepo, cardRepo] = [new SupabaseCardStateRepository(), new SupabaseCardRepository()]
+      const [ts, deckIds] = await Promise.all([
+        stateRepo.get(userId, target.id),
+        cardRepo.listDeckNamesForCards([target.id]),
+      ])
+      setMergeTargetState(ts ?? null)
+      setMergeTargetDecks(deckIds[target.id] ?? [])
+      setMergeSurvivorId(isAMoreAdvanced(state, ts) ? card.id : target.id)
+    } catch { /* non-fatal */ }
+  }
+
+  async function executeMerge() {
+    if (!mergeTarget || !mergeSurvivorId || mergeExecuting) return
+    setMergeExecuting(true)
+    setMergeError(null)
+    try {
+      const cardRepo  = new SupabaseCardRepository()
+      const stateRepo = new SupabaseCardStateRepository()
+
+      const deletedId  = mergeSurvivorId === card.id ? mergeTarget.id : card.id
+      const survivorId = mergeSurvivorId
+
+      // Get all deck memberships for both cards
+      const [survivorDeckIds, deletedDeckIds] = await Promise.all([
+        cardRepo.listDeckIdsForCard(survivorId),
+        cardRepo.listDeckIdsForCard(deletedId),
+      ])
+      const survivorDeckSet = new Set(survivorDeckIds)
+
+      // Add survivor to any deck the deleted card was in that survivor isn't
+      for (const did of deletedDeckIds) {
+        if (!survivorDeckSet.has(did)) await cardRepo.addToDeck(did, survivorId, 0)
+      }
+
+      // Determine final state for survivor: keep the more advanced one
+      const currentState = state
+      const targetState  = mergeTargetState
+      const survivorIsCurrentCard = survivorId === card.id
+      const survivorState = survivorIsCurrentCard ? currentState : targetState
+      const deletedState  = survivorIsCurrentCard ? targetState  : currentState
+
+      if (deletedState && !isAMoreAdvanced(survivorState ?? undefined, deletedState)) {
+        // Deleted card's state is more advanced — copy it onto the survivor
+        await stateRepo.copy(userId, deletedId, survivorId)
+      }
+
+      // Soft-delete the loser
+      await cardRepo.softDelete(deletedId)
+
+      // Fetch final survivor state to pass back
+      const finalState = await stateRepo.get(userId, survivorId)
+      const survivorCard = survivorIsCurrentCard ? card : mergeTarget
+
+      onMerge?.(deletedId, survivorCard, finalState ?? undefined)
+    } catch (err) {
+      setMergeError(err instanceof Error ? err.message : 'Merge failed.')
+    } finally {
+      setMergeExecuting(false)
     }
   }
 
@@ -863,6 +982,115 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
           )}
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
         </div>
+
+        {onMerge && !merging && (
+          <button
+            onClick={openMerge}
+            className="text-xs text-ink-faint hover:text-ink-muted transition-colors w-full text-center pt-1"
+          >
+            ⇌ Merge with another card…
+          </button>
+        )}
+
+        {/* ── Merge UI ────────────────────────────────────────── */}
+        {merging && (
+          <div className="border-t border-white/10 pt-4 space-y-3">
+            {!mergeTarget ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Merge with…</p>
+                  <button onClick={() => setMerging(false)} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+                </div>
+                <input
+                  autoFocus
+                  className="input text-sm w-full"
+                  placeholder="Search by front or back…"
+                  value={mergeQuery}
+                  onChange={e => setMergeQuery(e.target.value)}
+                />
+                {mergeCardsLoading && <p className="text-xs text-ink-faint">Loading…</p>}
+                {mergeError && <p className="text-xs text-danger">{mergeError}</p>}
+                {allPairCards && (() => {
+                  const q = mergeQuery.trim().toLowerCase()
+                  const results = q
+                    ? allPairCards.filter(c =>
+                        c.front.toLowerCase().includes(q) || c.back.toLowerCase().includes(q))
+                    : allPairCards
+                  return results.length === 0 ? (
+                    <p className="text-xs text-ink-faint text-center py-3">No cards found.</p>
+                  ) : (
+                    <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-52 overflow-y-auto">
+                      {results.slice(0, 50).map(c => (
+                        <button
+                          key={c.id}
+                          onClick={() => selectMergeTarget(c)}
+                          className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors"
+                        >
+                          <span className="text-sm font-medium text-ink w-32 truncate shrink-0">{c.front}</span>
+                          <span className="text-sm text-ink-muted truncate">{c.back}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                })()}
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <button
+                    onClick={() => { setMergeTarget(null); setMergeTargetState(undefined); setMergeSurvivorId(null) }}
+                    className="text-xs text-ink-faint hover:text-ink transition-colors flex items-center gap-1"
+                  >
+                    ← Back
+                  </button>
+                  <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Choose which card to keep</p>
+                  <button onClick={() => setMerging(false)} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {([
+                    { c: card,        s: state,           label: 'This card' },
+                    { c: mergeTarget, s: mergeTargetState, label: mergeTargetDecks.length ? mergeTargetDecks.join(', ') : 'Other card' },
+                  ] as const).map(({ c, s, label }) => {
+                    const chosen = mergeSurvivorId === c.id
+                    const recommended = isAMoreAdvanced(
+                      c.id === card.id ? state : mergeTargetState ?? undefined,
+                      c.id === card.id ? mergeTargetState ?? undefined : state,
+                    )
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => setMergeSurvivorId(c.id)}
+                        className={`rounded-card border p-3 text-left space-y-1.5 transition-colors ${chosen ? 'border-accent/60 bg-accent/5' : 'border-white/10 hover:border-white/20'}`}
+                      >
+                        <div className="flex items-start justify-between gap-1">
+                          <p className="text-xs text-ink-faint truncate">{label}</p>
+                          {recommended && <span className="text-[10px] text-accent shrink-0">recommended</span>}
+                        </div>
+                        <p className="text-sm font-medium text-ink leading-snug">{c.front}</p>
+                        <p className="text-xs text-ink-muted leading-snug">{c.back}</p>
+                        <p className="text-[11px] text-ink-faint mt-1">{stateProgress(s)}</p>
+                      </button>
+                    )
+                  })}
+                </div>
+                {mergeError && <p className="text-xs text-danger">{mergeError}</p>}
+                <p className="text-xs text-ink-faint">
+                  The chosen card will be added to both decks.
+                  {isAMoreAdvanced(state, mergeTargetState ?? undefined) !== (mergeSurvivorId === card.id)
+                    ? ' The further-along progress will be kept.'
+                    : ''}
+                </p>
+                <button
+                  onClick={executeMerge}
+                  disabled={!mergeSurvivorId || mergeExecuting}
+                  className="btn-primary w-full disabled:opacity-50"
+                >
+                  {mergeExecuting ? 'Merging…' : 'Merge cards'}
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -2074,6 +2302,21 @@ export default function DeckDetailPage() {
     setEditingCard(null)
   }
 
+  function handleCardMerge(deletedCardId: string, survivorCard: Card, survivorState: CardState | undefined) {
+    setCards(prev => {
+      const without = prev.filter(c => c.id !== deletedCardId)
+      return without.some(c => c.id === survivorCard.id) ? without : [...without, survivorCard]
+    })
+    setStates(prev => {
+      const without = prev.filter(s => s.cardId !== deletedCardId)
+      if (!survivorState) return without
+      return without.some(s => s.cardId === survivorState.cardId)
+        ? without.map(s => s.cardId === survivorState.cardId ? survivorState : s)
+        : [...without, survivorState]
+    })
+    setEditingCard(null)
+  }
+
   async function handleNewCardSave(front: string, back: string) {
     if (!deck) return
     const cardRepo = new SupabaseCardRepository()
@@ -2200,6 +2443,7 @@ export default function DeckDetailPage() {
           onStateChange={handleStateUpdate}
           onClose={() => setEditingCard(null)}
           onDelete={handleCardDelete}
+          onMerge={handleCardMerge}
           onJumpToCard={cardId => {
             const target = cards.find(c => c.id === cardId)
             if (target) setEditingCard(target)
