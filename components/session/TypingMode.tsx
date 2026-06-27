@@ -116,6 +116,9 @@ export function TypingMode({
   const retypeCorrect = needsRetype &&
     gradeTyping(retype, expected, gradingSettings).status === 'correct'
 
+  const revealedRetypeCorrect = revealed &&
+    gradeTyping(retype, expected, gradingSettings).status === 'correct'
+
   const suggestedRating: Rating =
     finalCorrect              ? 'good' :
     result?.status === 'almost' ? 'hard' :
@@ -133,6 +136,12 @@ export function TypingMode({
     const t = setTimeout(() => retypeRef.current?.focus(), 80)
     return () => clearTimeout(t)
   }, [needsRetype])
+
+  useEffect(() => {
+    if (!revealed) return
+    const t = setTimeout(() => retypeRef.current?.focus(), 80)
+    return () => clearTimeout(t)
+  }, [revealed])
 
   // Focus the canonical input when sibling or synonym phase begins.
   useEffect(() => {
@@ -349,17 +358,24 @@ export function TypingMode({
       <div className="space-y-3">
         {revealed ? (
           <>
+            <p className="text-center text-sm text-ink-muted">
+              Answer: <span className="font-mono text-ink">{displayExpected}</span>
+            </p>
             <input
-              className="input text-center text-lg font-mono border-danger/60 bg-danger/5"
-              value={displayExpected}
-              readOnly
-              disabled
+              ref={retypeRef}
+              className={`input text-center text-lg font-mono ${revealedRetypeCorrect ? 'border-success/60 bg-success/5' : ''}`}
+              placeholder="Type the answer to continue…"
+              value={retype}
+              onChange={e => setRetype(e.target.value)}
+              onCompositionStart={() => setComposing(true)}
+              onCompositionEnd={() => setComposing(false)}
+              onKeyDown={e => { if (e.key === 'Enter' && !composing && revealedRetypeCorrect) onAdvance?.() }}
             />
-            <div className="flex justify-center">
-              <button ref={continueRef} onClick={onAdvance} className="btn-primary px-10" autoFocus>
-                Continue
-              </button>
-            </div>
+            {revealedRetypeCorrect && (
+              <div className="flex justify-center">
+                <button onClick={onAdvance} className="btn-primary px-10">Continue</button>
+              </div>
+            )}
           </>
         ) : (
         <>
@@ -498,7 +514,7 @@ export function TypingMode({
                   <p className="text-warning font-medium">Almost!</p>
                   {result.reason && <p className="text-ink-muted text-sm">{result.reason}</p>}
                   <p className="text-ink-muted text-sm">
-                    Answer: <span className="text-ink font-mono">{result.expected}</span>
+                    Answer: <span className="text-ink font-mono">{displayExpected}</span>
                   </p>
                 </div>
               ) : (
@@ -508,7 +524,7 @@ export function TypingMode({
                     {override === false && <span className="text-ink-faint font-normal"> (marked wrong)</span>}
                   </p>
                   <p className="text-ink-muted text-sm">
-                    Answer: <span className="text-ink font-mono">{result.expected}</span>
+                    Answer: <span className="text-ink font-mono">{displayExpected}</span>
                   </p>
                 </div>
               )}
