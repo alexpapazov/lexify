@@ -20,7 +20,7 @@ import { triggerSyncFill }                   from '@/lib/triggerSyncFill'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import type { Deck, Card, CardState, CardChoices, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
-import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
+import { prefetchChoices, needsChoices, ensureChoicesGenerated, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { speak } from '@/lib/speak'
@@ -107,6 +107,10 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [graduateAccelerated, setGraduateAccelerated] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting,         setDeleting]         = useState(false)
+  // Distractor editing state — tracks which chip is being edited: [side, originalText]
+  const [editingDistractor,  setEditingDistractor]  = useState<['front'|'back', string] | null>(null)
+  const [distractorEditText, setDistractorEditText] = useState('')
+  const [distractorAddText,  setDistractorAddText]  = useState<{front: string; back: string}>({front: '', back: ''})
   // Synonym editing state
   const [synonymInput,       setSynonymInput]       = useState('')
   const [synonymSaving,      setSynonymSaving]      = useState(false)
@@ -332,6 +336,46 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
       setAllPairCards(all.filter(c => c.id !== card.id))
     } catch { setLinkError('Failed to load cards.') }
     finally { setMergeCardsLoading(false) }
+  }
+
+  async function updateDistractorPool(side: 'front' | 'back', newPool: string[]) {
+    const supabase = createClient()
+    const base: CardChoices = card.choices ?? { front: [], back: [] }
+    const updated: CardChoices = { ...base, [side]: newPool }
+    await supabase.from('cards').update({ choices: updated }).eq('id', card.id)
+    onCardChange({ ...card, choices: updated })
+  }
+
+  async function handleDistractorDelete(side: 'front' | 'back', text: string) {
+    const pool = card.choices?.[side] ?? []
+    await updateDistractorPool(side, pool.filter(d => d !== text))
+  }
+
+  async function handleDistractorSaveEdit(side: 'front' | 'back', original: string) {
+    const newText = distractorEditText.trim()
+    setEditingDistractor(null)
+    if (!newText || newText === original) return
+    const pool = card.choices?.[side] ?? []
+    await updateDistractorPool(side, pool.map(d => d === original ? newText : d))
+  }
+
+  async function handleDistractorAdd(side: 'front' | 'back') {
+    const text = distractorAddText[side].trim()
+    if (!text) return
+    const pool = card.choices?.[side] ?? []
+    if (pool.some(d => d.toLowerCase() === text.toLowerCase())) {
+      setDistractorAddText(prev => ({ ...prev, [side]: '' }))
+      return
+    }
+    setDistractorAddText(prev => ({ ...prev, [side]: '' }))
+    const base: CardChoices = card.choices ?? { front: [], back: [] }
+    await updateDistractorPool(side, [...pool, text])
+    // If still below threshold, trigger background regeneration
+    const updated = { ...card, choices: { ...base, [side]: [...pool, text] } }
+    if (needsChoices(updated, side)) {
+      void ensureChoicesGenerated(updated, side, deckCards, sourceLanguage, targetLanguage)
+        .then(ai => { if (ai) onCardChange({ ...updated, choices: ai }) })
+    }
   }
 
   async function updateBackSynonyms(newList: string[]) {
@@ -900,27 +944,66 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 Distractors
               </div>
               {card.choices ? (
-                <div className="space-y-2.5">
-                  {card.choices.back.length > 0 && (
-                    <div>
-                      <div className="text-[10px] text-ink-faint mb-1">
-                        Prompt {langName(sourceLanguage)} → pick {langName(targetLanguage)}
+                <div className="space-y-3">
+                  {(['back', 'front'] as const).map(side => {
+                    const pool = card.choices![side]
+                    const label = side === 'back'
+                      ? `Prompt ${langName(sourceLanguage)} → pick ${langName(targetLanguage)}`
+                      : `Prompt ${langName(targetLanguage)} → pick ${langName(sourceLanguage)}`
+                    return (
+                      <div key={side} className="space-y-1.5">
+                        <div className="text-[10px] text-ink-faint">{label}</div>
+                        <div className="flex flex-wrap gap-1">
+                          {pool.map(d => {
+                            const isEditing = editingDistractor?.[0] === side && editingDistractor?.[1] === d
+                            return isEditing ? (
+                              <input
+                                key={d}
+                                autoFocus
+                                className="input text-xs px-2 py-0.5 h-auto w-32"
+                                value={distractorEditText}
+                                onChange={e => setDistractorEditText(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') void handleDistractorSaveEdit(side, d)
+                                  if (e.key === 'Escape') setEditingDistractor(null)
+                                }}
+                                onBlur={() => void handleDistractorSaveEdit(side, d)}
+                              />
+                            ) : (
+                              <span
+                                key={d}
+                                className="chip flex items-center gap-1 cursor-pointer hover:border-white/20 group"
+                                onClick={() => { setEditingDistractor([side, d]); setDistractorEditText(d) }}
+                                title="Click to edit"
+                              >
+                                {d}
+                                <button
+                                  onClick={e => { e.stopPropagation(); void handleDistractorDelete(side, d) }}
+                                  className="text-ink-faint hover:text-danger transition-colors leading-none opacity-0 group-hover:opacity-100"
+                                  title="Delete"
+                                >×</button>
+                              </span>
+                            )
+                          })}
+                        </div>
+                        {/* Add distractor */}
+                        <div className="flex gap-1.5">
+                          <input
+                            className="input text-xs px-2 py-1 h-auto flex-1"
+                            placeholder="Add distractor…"
+                            value={distractorAddText[side]}
+                            onChange={e => setDistractorAddText(prev => ({ ...prev, [side]: e.target.value }))}
+                            onKeyDown={e => { if (e.key === 'Enter') void handleDistractorAdd(side) }}
+                          />
+                          <button
+                            onClick={() => void handleDistractorAdd(side)}
+                            disabled={!distractorAddText[side].trim()}
+                            className="text-xs text-ink-faint hover:text-ink transition-colors disabled:opacity-30 px-1"
+                          >Add</button>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-1">
-                        {card.choices.back.map(d => <span key={d} className="chip">{d}</span>)}
-                      </div>
-                    </div>
-                  )}
-                  {card.choices.front.length > 0 && (
-                    <div>
-                      <div className="text-[10px] text-ink-faint mb-1">
-                        Prompt {langName(targetLanguage)} → pick {langName(sourceLanguage)}
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {card.choices.front.map(d => <span key={d} className="chip">{d}</span>)}
-                      </div>
-                    </div>
-                  )}
+                    )
+                  })}
                   {(card.choices.backSynonyms?.length ?? 0) > 0 && (
                     <div>
                       <div className="text-[10px] text-ink-faint mb-1">
@@ -943,7 +1026,33 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                   )}
                 </div>
               ) : (
-                <p className="text-ink-faint text-xs italic">Not yet generated — will be created during your next study session.</p>
+                <div className="space-y-3">
+                  <p className="text-ink-faint text-xs italic">Not yet generated — will be created during your next study session.</p>
+                  {(['back', 'front'] as const).map(side => {
+                    const label = side === 'back'
+                      ? `Prompt ${langName(sourceLanguage)} → pick ${langName(targetLanguage)}`
+                      : `Prompt ${langName(targetLanguage)} → pick ${langName(sourceLanguage)}`
+                    return (
+                      <div key={side} className="space-y-1">
+                        <div className="text-[10px] text-ink-faint">{label}</div>
+                        <div className="flex gap-1.5">
+                          <input
+                            className="input text-xs px-2 py-1 h-auto flex-1"
+                            placeholder="Add distractor…"
+                            value={distractorAddText[side]}
+                            onChange={e => setDistractorAddText(prev => ({ ...prev, [side]: e.target.value }))}
+                            onKeyDown={e => { if (e.key === 'Enter') void handleDistractorAdd(side) }}
+                          />
+                          <button
+                            onClick={() => void handleDistractorAdd(side)}
+                            disabled={!distractorAddText[side].trim()}
+                            className="text-xs text-ink-faint hover:text-ink transition-colors disabled:opacity-30 px-1"
+                          >Add</button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               )}
             </div>
 

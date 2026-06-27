@@ -942,6 +942,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       await stateRepo.upsert(counted)
       setCardStates(prev => { const m = new Map(prev); m.set(card.id, counted); return m })
 
+      // True when the penalty sent the card backwards in the pipeline (e.g. typing-streak reset to step 0).
+      const wasReset = counted.currentStepOrder < prevState.currentStepOrder
+
       const requeued: SessionCard = { card, state: counted, pipeline, productionMode, idontknow: true }
       if (counted.graduated && counted.relearningStep > 0) {
         // Graduated card entered relearn loop — hold in pool until timer elapses
@@ -951,9 +954,15 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         // Pre-graduation or relapsed back into pipeline — reinsert ahead, displace last card.
         setQueue(prev => {
           const next = [...prev]
-          next[index] = { ...current, state: counted }
+          if (!wasReset) {
+            // Normal ? press: update the current slot so state stays consistent
+            next[index] = { ...current, state: counted }
+          }
+          // If the card was reset to an earlier step, leave the current slot alone so
+          // the active component (TypingMode) doesn't get replaced mid-screen.
           if (index + 1 < next.length) {
-            const insertPos = Math.min(index + 1 + IDONTKNOW_REQUEUE_OFFSET, next.length)
+            const offset = wasReset ? 3 : IDONTKNOW_REQUEUE_OFFSET
+            const insertPos = Math.min(index + 1 + offset, next.length)
             next.splice(insertPos, 0, requeued)
             next.pop()
           }
