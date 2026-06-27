@@ -18,7 +18,7 @@ import { SupabaseLanguagePairRepository }    from '@/lib/data/languagePairs'
 import { ensureSyncInfra }                   from '@/lib/syncFolderInfra'
 import { triggerSyncFill }                   from '@/lib/triggerSyncFill'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
-import type { Deck, Card, CardState, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
+import type { Deck, Card, CardState, CardChoices, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
@@ -107,6 +107,13 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [graduateAccelerated, setGraduateAccelerated] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting,         setDeleting]         = useState(false)
+  // Synonym editing state
+  const [synonymInput,       setSynonymInput]       = useState('')
+  const [synonymSaving,      setSynonymSaving]      = useState(false)
+  const [linkSynonymMode,    setLinkSynonymMode]    = useState(false)
+  const [linkQuery,          setLinkQuery]          = useState('')
+  const [linkSaving,         setLinkSaving]         = useState(false)
+  const [linkError,          setLinkError]          = useState<string | null>(null)
   // Merge state
   const [merging,            setMerging]            = useState(false)
   const [mergeQuery,         setMergeQuery]         = useState('')
@@ -316,6 +323,76 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     return a.correctInStep >= b.correctInStep
   }
 
+  async function loadAllPairCards() {
+    if (allPairCards) return
+    setMergeCardsLoading(true)
+    try {
+      const cardRepo = new SupabaseCardRepository()
+      const all = await cardRepo.listOwned(userId, sourceLanguage, targetLanguage)
+      setAllPairCards(all.filter(c => c.id !== card.id))
+    } catch { setLinkError('Failed to load cards.') }
+    finally { setMergeCardsLoading(false) }
+  }
+
+  async function updateBackSynonyms(newList: string[]) {
+    const supabase = createClient()
+    const base: CardChoices = card.choices ?? { front: [], back: [] }
+    const updated: CardChoices = { ...base, backSynonyms: newList.length > 0 ? newList : undefined }
+    await supabase.from('cards').update({ choices: updated }).eq('id', card.id)
+    onCardChange({ ...card, choices: updated })
+  }
+
+  async function handleAddSynonym() {
+    const text = synonymInput.trim()
+    if (!text || synonymSaving) return
+    const existing = card.choices?.backSynonyms ?? []
+    if (existing.some(s => s.toLowerCase() === text.toLowerCase())) { setSynonymInput(''); return }
+    setSynonymSaving(true)
+    try {
+      await updateBackSynonyms([...existing, text])
+      setSynonymInput('')
+    } catch { /* non-fatal */ }
+    finally { setSynonymSaving(false) }
+  }
+
+  async function handleRemoveSynonym(text: string) {
+    const existing = card.choices?.backSynonyms ?? []
+    try { await updateBackSynonyms(existing.filter(s => s !== text)) }
+    catch { /* non-fatal */ }
+  }
+
+  async function handleLinkSynonym(target: Card) {
+    if (linkSaving) return
+    setLinkSaving(true)
+    setLinkError(null)
+    try {
+      const supabase = createClient()
+      // Add target's back to this card's backSynonyms
+      const thisBase: CardChoices = card.choices ?? { front: [], back: [] }
+      const thisSyns = thisBase.backSynonyms ?? []
+      const targetBack = displayText(target.back)
+      if (!thisSyns.some(s => s.toLowerCase() === targetBack.toLowerCase())) {
+        const thisUpdated: CardChoices = { ...thisBase, backSynonyms: [...thisSyns, targetBack] }
+        await supabase.from('cards').update({ choices: thisUpdated }).eq('id', card.id)
+        onCardChange({ ...card, choices: thisUpdated })
+      }
+      // Add this card's back to target's backSynonyms
+      const targetBase: CardChoices = target.choices ?? { front: [], back: [] }
+      const targetSyns = targetBase.backSynonyms ?? []
+      const thisBack = displayText(card.back)
+      if (!targetSyns.some(s => s.toLowerCase() === thisBack.toLowerCase())) {
+        const targetUpdated: CardChoices = { ...targetBase, backSynonyms: [...targetSyns, thisBack] }
+        await supabase.from('cards').update({ choices: targetUpdated }).eq('id', target.id)
+      }
+      setLinkSynonymMode(false)
+      setLinkQuery('')
+    } catch (err: unknown) {
+      setLinkError(err instanceof Error ? err.message : 'Link failed')
+    } finally {
+      setLinkSaving(false)
+    }
+  }
+
   async function openMerge() {
     setMerging(true)
     setMergeQuery('')
@@ -323,14 +400,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     setMergeTargetState(undefined)
     setMergeSurvivorId(null)
     setMergeError(null)
-    if (allPairCards) return
-    setMergeCardsLoading(true)
-    try {
-      const cardRepo = new SupabaseCardRepository()
-      const all = await cardRepo.listOwned(userId, sourceLanguage, targetLanguage)
-      setAllPairCards(all.filter(c => c.id !== card.id))
-    } catch { setMergeError('Failed to load cards.') }
-    finally { setMergeCardsLoading(false) }
+    await loadAllPairCards()
   }
 
   async function selectMergeTarget(target: Card) {
@@ -962,6 +1032,102 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
         </div>
 
         {validErr && <p className="text-danger text-xs">{validErr}</p>}
+
+        {/* ── Synonyms ─────────────────────────────────────────────── */}
+        <div className="space-y-2 border-t border-white/10 pt-3">
+          <div className="flex items-center justify-between">
+            <label className="text-xs text-ink-muted uppercase tracking-wider">
+              Synonyms <span className="normal-case font-normal">(accepted as correct answers)</span>
+            </label>
+          </div>
+
+          {/* Existing synonym chips */}
+          {(card.choices?.backSynonyms?.length ?? 0) > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {card.choices!.backSynonyms!.map(s => (
+                <span key={s} className="flex items-center gap-1 chip text-success/80">
+                  {s}
+                  <button
+                    onClick={() => handleRemoveSynonym(s)}
+                    className="text-ink-faint hover:text-danger transition-colors leading-none ml-0.5"
+                    title="Remove synonym"
+                  >×</button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Add manual synonym */}
+          <div className="flex gap-2">
+            <input
+              className="input text-sm flex-1"
+              placeholder={`Add a synonym…`}
+              value={synonymInput}
+              onChange={e => setSynonymInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAddSynonym() } }}
+            />
+            <button
+              onClick={() => void handleAddSynonym()}
+              disabled={!synonymInput.trim() || synonymSaving}
+              className="btn-ghost text-sm px-3 disabled:opacity-40"
+            >
+              Add
+            </button>
+          </div>
+
+          {/* Link synonym card */}
+          {!linkSynonymMode ? (
+            <button
+              onClick={async () => { setLinkSynonymMode(true); setLinkQuery(''); setLinkError(null); await loadAllPairCards() }}
+              className="text-xs text-ink-faint hover:text-ink-muted transition-colors"
+            >
+              ⇌ Link another card as synonym…
+            </button>
+          ) : (
+            <div className="space-y-2 rounded-card border border-white/10 p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Link synonym card</p>
+                <button onClick={() => { setLinkSynonymMode(false); setLinkQuery(''); setLinkError(null) }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+              </div>
+              <p className="text-xs text-ink-faint">
+                Pick a card — its answer will be added to this card&apos;s synonyms, and this card&apos;s answer will be added to that card&apos;s synonyms.
+              </p>
+              <input
+                autoFocus
+                className="input text-sm w-full"
+                placeholder="Search by front or back…"
+                value={linkQuery}
+                onChange={e => setLinkQuery(e.target.value)}
+              />
+              {mergeCardsLoading && <p className="text-xs text-ink-faint">Loading…</p>}
+              {linkError && <p className="text-xs text-danger">{linkError}</p>}
+              {allPairCards && (() => {
+                const q = linkQuery.trim().toLowerCase()
+                const results = q
+                  ? allPairCards.filter(c => c.front.toLowerCase().includes(q) || c.back.toLowerCase().includes(q))
+                  : allPairCards
+                return results.length === 0 ? (
+                  <p className="text-xs text-ink-faint text-center py-2">No cards found.</p>
+                ) : (
+                  <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-44 overflow-y-auto">
+                    {results.slice(0, 50).map(c => (
+                      <button
+                        key={c.id}
+                        onClick={() => void handleLinkSynonym(c)}
+                        disabled={linkSaving}
+                        className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors disabled:opacity-50"
+                      >
+                        <span className="text-sm font-medium text-ink w-32 truncate shrink-0">{displayText(c.front)}</span>
+                        <span className="text-sm text-ink-muted truncate">{displayText(c.back)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
+              {linkSaving && <p className="text-xs text-ink-faint text-center">Linking…</p>}
+            </div>
+          )}
+        </div>
 
         <div className="flex gap-3 flex-wrap">
           <button
