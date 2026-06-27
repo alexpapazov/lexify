@@ -2572,9 +2572,10 @@ export default function DeckDetailPage() {
   const [defaultSpillover, setDefaultSpillover] = useState(false)
   const [loading,          setLoading]          = useState(true)
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
-  const [bulkGraduating,   setBulkGraduating]   = useState(false)
-  const [bulkAccelerated,  setBulkAccelerated]  = useState(false)
-  const [bulkDeleting,     setBulkDeleting]     = useState(false)
+  const [bulkGraduating,      setBulkGraduating]      = useState(false)
+  const [bulkAccelerated,     setBulkAccelerated]     = useState(false)
+  const [bulkMovingToLearning,setBulkMovingToLearning]= useState(false)
+  const [bulkDeleting,        setBulkDeleting]        = useState(false)
   const [bulkDeleteConfirm,setBulkDeleteConfirm]= useState(false)
   const [bulkResetting,    setBulkResetting]    = useState<string | null>(null)
   const [showBulkResetMenu,setShowBulkResetMenu]= useState(false)
@@ -2753,6 +2754,48 @@ export default function DeckDetailPage() {
     await deckRepo.update(deckId, { name })
     setDeck(prev => prev ? { ...prev, name } : prev)
     setRenamingDeck(false)
+  }
+
+  async function handleBulkMoveToLearning() {
+    if (selectedCardIds.size === 0 || bulkMovingToLearning) return
+    setBulkMovingToLearning(true)
+    try {
+      const stateRepo      = new SupabaseCardStateRepository()
+      const pipelineRepo   = new SupabasePipelineRepository()
+      const defaultPipeline = await pipelineRepo.getDefault()
+      const updates = await Promise.all(
+        [...selectedCardIds].map(cardId => {
+          const existing = states.find(s => s.cardId === cardId)
+          const base     = existing ?? initialCardState(userId, cardId, defaultPipeline.id)
+          const learning: CardState = {
+            ...base,
+            graduated:              false,
+            currentStepOrder:       0,
+            correctInStep:          0,
+            dueAt:                  null,
+            intervalDays:           0,
+            scheduledIntervalDays:  0,
+            lastRating:             null,
+            relearningStep:         0,
+            pendingIntervalDays:    null,
+            typingMistakeStreak:    0,
+            typingFailCycles:       0,
+            stage3EnteredDate:      null,
+          }
+          return stateRepo.upsert(learning)
+        })
+      )
+      setStates(prev => {
+        const map = new Map(prev.map(s => [s.cardId, s]))
+        for (const s of updates) map.set(s.cardId, s)
+        return [...map.values()]
+      })
+      setSelectedCardIds(new Set())
+    } catch (err) {
+      console.error('Bulk move to learning failed:', err)
+    } finally {
+      setBulkMovingToLearning(false)
+    }
   }
 
   async function handleBulkGraduate() {
@@ -3147,6 +3190,13 @@ export default function DeckDetailPage() {
                       </div>
                     )}
                   </div>
+                  <button
+                    onClick={handleBulkMoveToLearning}
+                    disabled={bulkMovingToLearning}
+                    className="text-xs px-3 py-1 rounded border border-white/10 hover:border-white/20 text-ink-muted hover:text-ink transition-colors disabled:opacity-40"
+                  >
+                    {bulkMovingToLearning ? 'Moving…' : 'Move to learning'}
+                  </button>
                   <button
                     onClick={() => setBulkDeleteConfirm(true)}
                     className="text-xs px-3 py-1 rounded border border-danger/30 text-danger hover:bg-danger/10 transition-colors"
