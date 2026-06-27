@@ -113,7 +113,8 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [distractorEditText, setDistractorEditText] = useState('')
   const [distractorAddText,  setDistractorAddText]  = useState<{front: string; back: string}>({front: '', back: ''})
   // Synonym editing state
-  const [synonymInput,       setSynonymInput]       = useState('')
+  const [sourceSynonymInput, setSourceSynonymInput] = useState('')
+  const [targetSynonymInput, setTargetSynonymInput] = useState('')
   const [synonymSaving,      setSynonymSaving]      = useState(false)
   const [linkSynonymMode,    setLinkSynonymMode]    = useState(false)
   const [linkQuery,          setLinkQuery]          = useState('')
@@ -388,32 +389,42 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     onCardChange({ ...card, choices: updated })
   }
 
-  async function handleAddSynonym() {
-    const text = synonymInput.trim()
+  async function handleAddSourceSynonym() {
+    const text = sourceSynonymInput.trim()
     if (!text || synonymSaving) return
     setSynonymSaving(true)
-    setSynonymInput('')
+    setSourceSynonymInput('')
     try {
-      // Lazily load all cards in this language pair so we can check if the
-      // typed word is a source-language word (card front) or a native synonym.
+      // Source-language synonym: check if a card with this front already exists.
       await loadAllPairCards()
       const matchedCard = allPairCards?.find(
         c => c.front.toLowerCase() === text.toLowerCase()
       ) ?? null
 
       if (matchedCard) {
-        // Typed word is an existing card → link directly (bidirectional)
         await handleLinkSynonym(matchedCard)
         return
       }
 
-      // No existing card matches. Save a COMMON pending link so it auto-resolves
-      // if a card with this front is created later, then also add to backSynonyms
-      // so it's immediately accepted during study (will be cleaned up if/when the
-      // card is created and COMMON resolves).
+      // No card exists yet — save COMMON pending link so it auto-resolves later,
+      // and add as placeholder to backSynonyms so it's accepted during study now.
       const [pendingRepo] = [new SupabasePendingSynonymLinkRepository()]
       await pendingRepo.create(userId, text, sourceLanguage, targetLanguage, card.id)
 
+      const existing = card.choices?.backSynonyms ?? []
+      if (!existing.some(s => s.toLowerCase() === text.toLowerCase())) {
+        await updateBackSynonyms([...existing, text])
+      }
+    } catch { /* non-fatal */ }
+    finally { setSynonymSaving(false) }
+  }
+
+  async function handleAddTargetSynonym() {
+    const text = targetSynonymInput.trim()
+    if (!text || synonymSaving) return
+    setSynonymSaving(true)
+    setTargetSynonymInput('')
+    try {
       const existing = card.choices?.backSynonyms ?? []
       if (!existing.some(s => s.toLowerCase() === text.toLowerCase())) {
         await updateBackSynonyms([...existing, text])
@@ -1207,22 +1218,38 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
             </div>
           )}
 
-          {/* Add manual synonym */}
-          <div className="flex gap-2">
+          {/* Target-language synonym (e.g. English) — goes directly to backSynonyms */}
+          <div className="flex gap-2 items-center">
+            <span className="text-xs text-ink-faint w-24 shrink-0">{langName(targetLanguage)}:</span>
             <input
               className="input text-sm flex-1"
-              placeholder={`Add a synonym…`}
-              value={synonymInput}
-              onChange={e => setSynonymInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAddSynonym() } }}
+              placeholder={`Add ${langName(targetLanguage)} synonym…`}
+              value={targetSynonymInput}
+              onChange={e => setTargetSynonymInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAddTargetSynonym() } }}
             />
             <button
-              onClick={() => void handleAddSynonym()}
-              disabled={!synonymInput.trim() || synonymSaving}
+              onClick={() => void handleAddTargetSynonym()}
+              disabled={!targetSynonymInput.trim() || synonymSaving}
               className="btn-ghost text-sm px-3 disabled:opacity-40"
-            >
-              Add
-            </button>
+            >Add</button>
+          </div>
+
+          {/* Source-language synonym (e.g. Spanish) — COMMON-aware, links cards */}
+          <div className="flex gap-2 items-center">
+            <span className="text-xs text-ink-faint w-24 shrink-0">{langName(sourceLanguage)}:</span>
+            <input
+              className="input text-sm flex-1"
+              placeholder={`Add ${langName(sourceLanguage)} synonym…`}
+              value={sourceSynonymInput}
+              onChange={e => setSourceSynonymInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAddSourceSynonym() } }}
+            />
+            <button
+              onClick={() => void handleAddSourceSynonym()}
+              disabled={!sourceSynonymInput.trim() || synonymSaving}
+              className="btn-ghost text-sm px-3 disabled:opacity-40"
+            >Add</button>
           </div>
 
           {/* Link synonym card */}
