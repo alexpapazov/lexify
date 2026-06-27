@@ -18,6 +18,7 @@ import { SupabaseLanguagePairRepository }    from '@/lib/data/languagePairs'
 import { ensureSyncInfra }                   from '@/lib/syncFolderInfra'
 import { triggerSyncFill }                   from '@/lib/triggerSyncFill'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
+import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymLinks'
 import type { Deck, Card, CardState, CardChoices, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, type PrefetchItem } from '@/lib/distractors'
@@ -118,6 +119,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [linkQuery,          setLinkQuery]          = useState('')
   const [linkSaving,         setLinkSaving]         = useState(false)
   const [linkError,          setLinkError]          = useState<string | null>(null)
+  const [pendingLinkSaved,   setPendingLinkSaved]   = useState<string | null>(null) // word saved as pending
   // Merge state
   const [merging,            setMerging]            = useState(false)
   const [mergeQuery,         setMergeQuery]         = useState('')
@@ -432,6 +434,24 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
       setLinkQuery('')
     } catch (err: unknown) {
       setLinkError(err instanceof Error ? err.message : 'Link failed')
+    } finally {
+      setLinkSaving(false)
+    }
+  }
+
+  async function handleSavePendingLink(word: string) {
+    if (linkSaving) return
+    setLinkSaving(true)
+    setLinkError(null)
+    try {
+      const repo = new SupabasePendingSynonymLinkRepository()
+      await repo.create(userId, word, sourceLanguage, targetLanguage, card.id)
+      setPendingLinkSaved(word)
+      setLinkSynonymMode(false)
+      setLinkQuery('')
+      setTimeout(() => setPendingLinkSaved(null), 3000)
+    } catch (err: unknown) {
+      setLinkError(err instanceof Error ? err.message : 'Failed to save pending link')
     } finally {
       setLinkSaving(false)
     }
@@ -1185,9 +1205,14 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
           </div>
 
           {/* Link synonym card */}
+          {pendingLinkSaved && (
+            <p className="text-xs text-success/80">
+              Pending link saved for &quot;{pendingLinkSaved}&quot; — it will auto-connect when you create that card.
+            </p>
+          )}
           {!linkSynonymMode ? (
             <button
-              onClick={async () => { setLinkSynonymMode(true); setLinkQuery(''); setLinkError(null); await loadAllPairCards() }}
+              onClick={async () => { setLinkSynonymMode(true); setLinkQuery(''); setLinkError(null); setPendingLinkSaved(null); await loadAllPairCards() }}
               className="text-xs text-ink-faint hover:text-ink-muted transition-colors"
             >
               ⇌ Link another card as synonym…
@@ -1199,7 +1224,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 <button onClick={() => { setLinkSynonymMode(false); setLinkQuery(''); setLinkError(null) }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
               </div>
               <p className="text-xs text-ink-faint">
-                Pick a card — its answer will be added to this card&apos;s synonyms, and this card&apos;s answer will be added to that card&apos;s synonyms.
+                Pick an existing card, or type a word that doesn&apos;t exist yet to save a pending connection.
               </p>
               <input
                 autoFocus
@@ -1211,29 +1236,42 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
               {mergeCardsLoading && <p className="text-xs text-ink-faint">Loading…</p>}
               {linkError && <p className="text-xs text-danger">{linkError}</p>}
               {allPairCards && (() => {
-                const q = linkQuery.trim().toLowerCase()
+                const q = linkQuery.trim()
                 const results = q
-                  ? allPairCards.filter(c => c.front.toLowerCase().includes(q) || c.back.toLowerCase().includes(q))
+                  ? allPairCards.filter(c => c.front.toLowerCase().includes(q.toLowerCase()) || c.back.toLowerCase().includes(q.toLowerCase()))
                   : allPairCards
-                return results.length === 0 ? (
-                  <p className="text-xs text-ink-faint text-center py-2">No cards found.</p>
-                ) : (
-                  <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-44 overflow-y-auto">
-                    {results.slice(0, 50).map(c => (
-                      <button
-                        key={c.id}
-                        onClick={() => void handleLinkSynonym(c)}
-                        disabled={linkSaving}
-                        className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors disabled:opacity-50"
-                      >
-                        <span className="text-sm font-medium text-ink w-32 truncate shrink-0">{displayText(c.front)}</span>
-                        <span className="text-sm text-ink-muted truncate">{displayText(c.back)}</span>
-                      </button>
-                    ))}
-                  </div>
+                return (
+                  <>
+                    {results.length > 0 && (
+                      <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-44 overflow-y-auto">
+                        {results.slice(0, 50).map(c => (
+                          <button
+                            key={c.id}
+                            onClick={() => void handleLinkSynonym(c)}
+                            disabled={linkSaving}
+                            className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors disabled:opacity-50"
+                          >
+                            <span className="text-sm font-medium text-ink w-32 truncate shrink-0">{displayText(c.front)}</span>
+                            <span className="text-sm text-ink-muted truncate">{displayText(c.back)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {results.length === 0 && q && (
+                      <div className="rounded-card border border-white/10 px-3 py-3 space-y-2">
+                        <p className="text-xs text-ink-faint">No card named &quot;{q}&quot; exists yet.</p>
+                        <button
+                          onClick={() => void handleSavePendingLink(q)}
+                          disabled={linkSaving}
+                          className="text-xs text-accent hover:text-accent/80 transition-colors disabled:opacity-50"
+                        >
+                          {linkSaving ? 'Saving…' : `Save pending link for "${q}" →`}
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )
               })()}
-              {linkSaving && <p className="text-xs text-ink-faint text-center">Linking…</p>}
             </div>
           )}
         </div>
@@ -2607,9 +2645,54 @@ export default function DeckDetailPage() {
 
   async function handleNewCardSave(front: string, back: string) {
     if (!deck) return
-    const cardRepo = new SupabaseCardRepository()
-    const created  = await cardRepo.bulkCreate(deckId, userId, deck.sourceLanguage, deck.targetLanguage, [{ front, back, position: cards.length }])
-    if (created[0]) setCards(prev => [...prev, created[0]!])
+    const supabase  = createClient()
+    const cardRepo  = new SupabaseCardRepository()
+    const created   = await cardRepo.bulkCreate(deckId, userId, deck.sourceLanguage, deck.targetLanguage, [{ front, back, position: cards.length }])
+    const newCard   = created[0]
+    if (!newCard) return
+    setCards(prev => [...prev, newCard])
+
+    // Resolve any pending synonym links for this word (case-insensitive match on front)
+    try {
+      const pendingRepo = new SupabasePendingSynonymLinkRepository()
+      const pending = await pendingRepo.findByWord(userId, front, deck.sourceLanguage, deck.targetLanguage)
+      if (pending.length === 0) return
+
+      // Bidirectionally apply backSynonyms for each pending link
+      let updatedNewCard = newCard
+      for (const link of pending) {
+        const linkedCard = cards.find(c => c.id === link.linkedCardId)
+        if (!linkedCard) { await pendingRepo.deleteById(link.id); continue }
+
+        const newCardBack    = displayText(newCard.back)
+        const linkedCardBack = displayText(linkedCard.back)
+
+        // Add linked card's back to new card's backSynonyms
+        const newBase   : CardChoices = updatedNewCard.choices ?? { front: [], back: [] }
+        const newSyns    = newBase.backSynonyms ?? []
+        if (!newSyns.some(s => s.toLowerCase() === linkedCardBack.toLowerCase())) {
+          const newChoices: CardChoices = { ...newBase, backSynonyms: [...newSyns, linkedCardBack] }
+          await supabase.from('cards').update({ choices: newChoices }).eq('id', newCard.id)
+          updatedNewCard = { ...updatedNewCard, choices: newChoices }
+        }
+
+        // Add new card's back to linked card's backSynonyms
+        const linkedBase: CardChoices = linkedCard.choices ?? { front: [], back: [] }
+        const linkedSyns = linkedBase.backSynonyms ?? []
+        if (!linkedSyns.some(s => s.toLowerCase() === newCardBack.toLowerCase())) {
+          const linkedChoices: CardChoices = { ...linkedBase, backSynonyms: [...linkedSyns, newCardBack] }
+          await supabase.from('cards').update({ choices: linkedChoices }).eq('id', linkedCard.id)
+          setCards(prev => prev.map(c => c.id === linkedCard.id ? { ...c, choices: linkedChoices } : c))
+        }
+
+        await pendingRepo.deleteById(link.id)
+      }
+
+      // Update the new card in state with resolved synonyms
+      setCards(prev => prev.map(c => c.id === newCard.id ? updatedNewCard : c))
+    } catch {
+      // Non-fatal — the card was created, pending links just weren't auto-resolved
+    }
   }
 
   async function handleRenameDeck() {
