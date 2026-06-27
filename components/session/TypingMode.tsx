@@ -446,6 +446,12 @@ export function TypingMode({
                       The original term is: <span className="font-mono text-ink">{result.expected}</span>
                     </p>
                   )}
+                  {!result.viaSynonym && !result.viaOverride &&
+                    (synonymPhase ? canonInput : input).trim() !== displayExpected.trim() && (
+                    <p className="text-xs text-ink-muted">
+                      Card says: <span className="font-mono text-ink">{displayExpected}</span>
+                    </p>
+                  )}
                 </div>
               ) : result.status === 'almost' && override !== false ? (
                 <div className="space-y-1">
