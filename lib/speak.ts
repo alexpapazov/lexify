@@ -12,6 +12,7 @@ const SPEECH_LANG: Record<string, string> = {
  * Falls back to the browser Web Speech API when no cached audio exists.
  */
 export function speak(text: string, langCode: string, audioData?: string | null): void {
+  return // TEMP: audio disabled for troubleshooting
   if (typeof window === 'undefined') return
 
   if (audioData) {

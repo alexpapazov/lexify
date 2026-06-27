@@ -326,6 +326,7 @@ export async function prefetchAudio(
   onAudioCached: (cardId: string, audioData: string) => void,
   concurrency = 2,
 ): Promise<void> {
+  return // TEMP: audio disabled for troubleshooting
   const toFetch = items.filter(it => !it.card.audioGenerated && TTS_SUPPORTED_LANGUAGES.has(it.sourceLanguage))
   if (toFetch.length === 0) return
   let next = 0

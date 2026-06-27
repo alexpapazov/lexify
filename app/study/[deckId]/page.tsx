@@ -2204,6 +2204,10 @@ export default function DeckDetailPage() {
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
   const [bulkGraduating,   setBulkGraduating]   = useState(false)
   const [bulkAccelerated,  setBulkAccelerated]  = useState(false)
+  const [bulkDeleting,     setBulkDeleting]     = useState(false)
+  const [bulkDeleteConfirm,setBulkDeleteConfirm]= useState(false)
+  const [bulkResetting,    setBulkResetting]    = useState<string | null>(null)
+  const [showBulkResetMenu,setShowBulkResetMenu]= useState(false)
   const [showGear,         setShowGear]         = useState(false)
   const [renamingDeck,     setRenamingDeck]     = useState(false)
   const [deckNameValue,    setDeckNameValue]    = useState('')
@@ -2396,6 +2400,60 @@ export default function DeckDetailPage() {
     }
   }
 
+  async function handleBulkDelete() {
+    if (selectedCardIds.size === 0 || bulkDeleting) return
+    setBulkDeleting(true)
+    setBulkDeleteConfirm(false)
+    try {
+      const cardRepo = new SupabaseCardRepository()
+      const ids = [...selectedCardIds]
+      await Promise.all(ids.map(id => cardRepo.softDelete(id)))
+      setCards(prev => prev.filter(c => !selectedCardIds.has(c.id)))
+      setStates(prev => prev.filter(s => !selectedCardIds.has(s.cardId)))
+      setSelectedCardIds(new Set())
+    } catch (err) {
+      console.error('Bulk delete failed:', err)
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
+
+  async function handleBulkReset(action: 'distractors' | 'progress' | 'audio' | 'all') {
+    if (selectedCardIds.size === 0 || bulkResetting) return
+    setBulkResetting(action)
+    setShowBulkResetMenu(false)
+    const ids = [...selectedCardIds]
+    try {
+      if (action === 'distractors' || action === 'all') {
+        await supabase.from('cards').update({ choices: null }).in('id', ids)
+        setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, choices: null } : c))
+      }
+      if (action === 'progress' || action === 'all') {
+        const stateRepo    = new SupabaseCardStateRepository()
+        const pipelineRepo = new SupabasePipelineRepository()
+        const defaultPipeline = await pipelineRepo.getDefault()
+        const updatedStates = await Promise.all(ids.map(cardId => {
+          const existing = states.find(s => s.cardId === cardId)
+          const fresh = initialCardState(userId, cardId, defaultPipeline.id)
+          return stateRepo.upsert({ ...fresh, introducedDate: existing?.introducedDate ?? fresh.introducedDate })
+        }))
+        setStates(prev => {
+          const updated = new Map(updatedStates.map(s => [s.cardId, s]))
+          return prev.map(s => updated.get(s.cardId) ?? s)
+        })
+      }
+      if (action === 'audio' || action === 'all') {
+        await supabase.from('cards').update({ audio_generated: false, audio_data: null }).in('id', ids)
+        setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, audioGenerated: false, audioData: null } : c))
+      }
+      setSelectedCardIds(new Set())
+    } catch (err) {
+      console.error('Bulk reset failed:', err)
+    } finally {
+      setBulkResetting(null)
+    }
+  }
+
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
   if (!deck)   return null
 
@@ -2414,6 +2472,17 @@ export default function DeckDetailPage() {
   const learning  = activeStates.filter(s => !s.graduated).length
   const graduated = activeStates.filter(s => s.graduated).length
   const dueNow    = activeStates.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length
+
+  const visibleCards = cards.filter(card => {
+    if (!activeFilter) return true
+    const s = stateMap.get(card.id)
+    if (activeFilter === 'new')       return !s
+    if (activeFilter === 'learning')  return s && !s.graduated
+    if (activeFilter === 'graduated') return s?.graduated
+    if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
+    return true
+  })
+  const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(c => selectedCardIds.has(c.id))
 
   const prefRepo    = new SupabaseDeckPreferencesRepository()
   const rawLimit    = prefs ? prefRepo.effectiveDailyLimit(prefs) : defaultLimit
@@ -2621,46 +2690,113 @@ export default function DeckDetailPage() {
 
         {selectedCardIds.size > 0 && (
           <div className="flex flex-col gap-2 px-3 py-2 rounded-card border border-accent/30 bg-accent/5 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-ink-muted">{selectedCardIds.size} card{selectedCardIds.size !== 1 ? 's' : ''} selected</span>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setSelectedCardIds(new Set())}
-                  className="text-xs text-ink-faint hover:text-ink transition-colors"
-                >
-                  Clear
-                </button>
-                <button
-                  onClick={handleBulkGraduate}
-                  disabled={bulkGraduating}
-                  className="btn-primary text-xs px-3 py-1"
-                >
-                  {bulkGraduating ? 'Graduating…' : 'Graduate selected'}
-                </button>
+            {bulkDeleteConfirm ? (
+              <div className="flex items-center justify-between">
+                <span className="text-ink-muted text-xs">Delete {selectedCardIds.size} card{selectedCardIds.size !== 1 ? 's' : ''}? This cannot be undone.</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setBulkDeleteConfirm(false)} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+                  <button onClick={handleBulkDelete} disabled={bulkDeleting} className="text-xs px-3 py-1 rounded bg-danger/80 hover:bg-danger text-white transition-colors">
+                    {bulkDeleting ? 'Deleting…' : 'Yes, delete'}
+                  </button>
+                </div>
               </div>
-            </div>
-            <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
-              <input
-                type="checkbox"
-                checked={bulkAccelerated}
-                onChange={e => setBulkAccelerated(e.target.checked)}
-                className="accent-accent w-3.5 h-3.5"
-              />
-              <span className="text-xs text-ink-muted">Accelerated track — spread due dates across 14 days</span>
-            </label>
+            ) : (
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-ink-muted">{selectedCardIds.size} card{selectedCardIds.size !== 1 ? 's' : ''} selected</span>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button onClick={() => setSelectedCardIds(new Set())} className="text-xs text-ink-faint hover:text-ink transition-colors">
+                    Clear
+                  </button>
+                  {/* Reset dropdown */}
+                  {showBulkResetMenu && (
+                    <div className="fixed inset-0 z-40" onClick={() => setShowBulkResetMenu(false)} />
+                  )}
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowBulkResetMenu(v => !v)}
+                      disabled={!!bulkResetting}
+                      className="text-xs px-3 py-1 rounded border border-white/10 hover:border-white/20 text-ink-muted hover:text-ink transition-colors"
+                    >
+                      {bulkResetting ? 'Resetting…' : 'Reset ▾'}
+                    </button>
+                    {showBulkResetMenu && (
+                      <div className="absolute right-0 top-full mt-1 z-50 bg-surface-raised border border-white/10 rounded-card shadow-lg py-1 min-w-[200px]">
+                        {([
+                          ['distractors', 'Reset distractors',  'Clears cached multiple-choice options.'],
+                          ['progress',    'Reset progress',     'Erases reps, lapses, schedule.'],
+                          ['audio',       'Reset audio',        'Clears cached audio.'],
+                          ['all',         'Reset entirely',     'Resets progress, distractors, and audio.'],
+                        ] as const).map(([action, label, desc]) => (
+                          <button
+                            key={action}
+                            onClick={() => handleBulkReset(action)}
+                            className={`w-full text-left px-3 py-2 hover:bg-white/5 transition-colors ${action === 'all' ? 'text-danger' : 'text-ink'}`}
+                          >
+                            <span className="block text-sm">{label}</span>
+                            <span className="block text-xs text-ink-faint">{desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setBulkDeleteConfirm(true)}
+                    className="text-xs px-3 py-1 rounded border border-danger/30 text-danger hover:bg-danger/10 transition-colors"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    onClick={handleBulkGraduate}
+                    disabled={bulkGraduating}
+                    className="btn-primary text-xs px-3 py-1"
+                  >
+                    {bulkGraduating ? 'Graduating…' : 'Graduate selected'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {!bulkDeleteConfirm && (
+              <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
+                <input
+                  type="checkbox"
+                  checked={bulkAccelerated}
+                  onChange={e => setBulkAccelerated(e.target.checked)}
+                  className="accent-accent w-3.5 h-3.5"
+                />
+                <span className="text-xs text-ink-muted">Accelerated track — spread due dates across 14 days</span>
+              </label>
+            )}
           </div>
         )}
 
+        <div className="flex items-center justify-between px-1 mb-1">
+          <span className="text-xs text-ink-faint">{visibleCards.length} card{visibleCards.length !== 1 ? 's' : ''}</span>
+          {visibleCards.length > 0 && (
+            <button
+              onClick={() => {
+                if (allVisibleSelected) {
+                  setSelectedCardIds(prev => {
+                    const next = new Set(prev)
+                    visibleCards.forEach(c => next.delete(c.id))
+                    return next
+                  })
+                } else {
+                  setSelectedCardIds(prev => {
+                    const next = new Set(prev)
+                    visibleCards.forEach(c => next.add(c.id))
+                    return next
+                  })
+                }
+              }}
+              className="text-xs text-ink-faint hover:text-ink transition-colors"
+            >
+              {allVisibleSelected ? 'Deselect all' : 'Select all'}
+            </button>
+          )}
+        </div>
+
         <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
-          {cards.filter(card => {
-            if (!activeFilter) return true
-            const s = stateMap.get(card.id)
-            if (activeFilter === 'new')       return !s
-            if (activeFilter === 'learning')  return s && !s.graduated
-            if (activeFilter === 'graduated') return s?.graduated
-            if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
-            return true
-          }).map(card => {
+          {visibleCards.map(card => {
             const s = stateMap.get(card.id)
             const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
             const isSelected = selectedCardIds.has(card.id)
@@ -2692,15 +2828,7 @@ export default function DeckDetailPage() {
               </div>
             )
           })}
-          {cards.filter(card => {
-            if (!activeFilter) return false
-            const s = stateMap.get(card.id)
-            if (activeFilter === 'new')       return !s
-            if (activeFilter === 'learning')  return s && !s.graduated
-            if (activeFilter === 'graduated') return s?.graduated
-            if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
-            return false
-          }).length === 0 && activeFilter && (
+          {visibleCards.length === 0 && activeFilter && (
             <div className="px-4 py-6 text-center text-ink-muted text-sm">
               No cards in this category.
             </div>
