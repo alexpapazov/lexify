@@ -76,6 +76,8 @@ export function TypingMode({
   // Synonym phase: user typed a synonym; canonical answer still required
   const [synonymPhase,     setSynonymPhase]     = useState(false)
   const [synonymPhaseText, setSynonymPhaseText] = useState('')
+  // How many times a synonym/sibling was typed in the canonical input before the canonical itself
+  const [canonicalLoopCount, setCanonicalLoopCount] = useState(0)
   const [resetConfirm, setResetConfirm] = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
   const retypeRef   = useRef<HTMLInputElement>(null)
@@ -94,6 +96,7 @@ export function TypingMode({
     setComposingCanon(false)
     setSynonymPhase(false)
     setSynonymPhaseText('')
+    setCanonicalLoopCount(0)
   }, [card.id])
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
@@ -143,6 +146,13 @@ export function TypingMode({
     const t = setTimeout(() => canonRef.current?.focus(), 80)
     return () => clearTimeout(t)
   }, [synonymPhase])
+
+  // Refocus canonical input after a synonym/sibling loop (canonicalLoopCount incremented)
+  useEffect(() => {
+    if (canonicalLoopCount === 0) return
+    const t = setTimeout(() => canonRef.current?.focus(), 80)
+    return () => clearTimeout(t)
+  }, [canonicalLoopCount])
 
   function gradeAndSetResult(typedInput: string, skipSynonymCheck = false) {
     const base = gradeTyping(typedInput, expected, gradingSettings)
@@ -205,16 +215,40 @@ export function TypingMode({
   }
 
   function checkCanonical() {
-    gradeAndSetResult(canonInput, synonymPhase)
+    // Exact canonical → success
+    if (gradeTyping(canonInput, expected, gradingSettings).status === 'correct') {
+      gradeAndSetResult(canonInput, true)
+      return
+    }
+    // Another sibling card → credit the sibling and keep asking for the canonical
+    const matchedSibling = deckSiblings?.find(
+      s => gradeTyping(canonInput, s.answer, gradingSettings).status === 'correct'
+    )
+    if (matchedSibling) {
+      onSiblingAnswered?.(matchedSibling.id)
+      setCanonicalLoopCount(c => c + 1)
+      setCanonInput('')
+      return
+    }
+    // Another synonym string → keep asking (don't accept as final answer)
+    if (synonyms?.some(s => gradeTyping(canonInput, s, gradingSettings).status === 'correct')) {
+      setCanonicalLoopCount(c => c + 1)
+      setCanonInput('')
+      return
+    }
+    // Wrong answer → fail
+    gradeAndSetResult(canonInput, true)
   }
+
+  const inCanonicalPhase = synonymPhase || !!siblingId
 
   function advanceRetype() {
     if (!retypeCorrect) return
-    onRate('again', false, synonymPhase ? canonInput : input, result?.issueType)
+    onRate('again', false, inCanonicalPhase ? canonInput : input, result?.issueType)
   }
 
   function tryAdvance(rating: Rating) {
-    onRate(rating, finalCorrect, synonymPhase ? canonInput : input, result?.issueType)
+    onRate(rating, finalCorrect, inCanonicalPhase ? canonInput : input, result?.issueType)
   }
 
   function setOverrideAndPersist(next: boolean | null) {
@@ -355,8 +389,12 @@ export function TypingMode({
         {siblingId && !result && (
           <div className="space-y-3">
             <div className="panel border-success/30 bg-success/5 text-center py-3 space-y-1">
-              <p className="text-success font-medium">Correct! Also in your deck</p>
-              <p className="text-xs text-ink-muted">Now type the answer for this specific card:</p>
+              <p className="text-success font-medium">
+                {canonicalLoopCount > 0 ? 'That\'s another form!' : 'Correct! Also in your deck'}
+              </p>
+              <p className="text-xs text-ink-muted">
+                {canonicalLoopCount > 0 ? 'Now type the main answer for this card:' : 'Now type the answer for this specific card:'}
+              </p>
             </div>
             <input
               ref={canonRef}
@@ -392,8 +430,10 @@ export function TypingMode({
         {synonymPhase && !result && (
           <div className="space-y-3">
             <div className="panel border-warning/30 bg-warning/5 text-center py-3 space-y-1">
-              <p className="text-warning font-medium">Synonym accepted!</p>
-              <p className="text-xs text-ink-muted">Now type the canonical form to continue:</p>
+              <p className="text-warning font-medium">
+                {canonicalLoopCount > 0 ? 'That\'s another synonym!' : 'Synonym accepted!'}
+              </p>
+              <p className="text-xs text-ink-muted">Now type the main term to continue:</p>
             </div>
             <input
               ref={canonRef}

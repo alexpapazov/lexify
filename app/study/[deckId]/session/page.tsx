@@ -238,6 +238,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setRemainingElective(rest)
     setElectiveSession(true)
     setShowElectivePicker(false)
+    setDone(false)
+    setEmptySession(false)
     setIndex(0)
     setLoading(true)
     void finalizeQueue(batch, { deckCards: allCards, sourceLanguage, targetLanguage, userId })
@@ -459,7 +461,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   // session continues. Cards are sorted by dueAt ASC (soonest due = most of
   // their relearn interval has already elapsed).
   useEffect(() => {
-    if (loading || done || index < queue.length) return
+    if (loading || showElectivePicker || done || index < queue.length) return
     if (relearnPool.length === 0) { setDone(true); return }
     const sorted = [...relearnPool].sort((a, b) =>
       (a.state.dueAt ? new Date(a.state.dueAt).getTime() : 0) -
@@ -468,7 +470,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setQueue(prev => [...prev, sorted[0]!])
     setRelearnPool(sorted.slice(1))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, queue.length, done, loading])
+  }, [index, queue.length, done, loading, showElectivePicker])
 
   // Auto-advance past any synonym-group card that was already answered in
   // this session via a multi-field prompt (to avoid showing it again).
