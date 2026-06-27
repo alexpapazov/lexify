@@ -93,6 +93,10 @@ export default function SessionPage() {
       ? categoryParam
       : null
 
+  // When a category session completes, return to the deck page with the same
+  // filter active so the user can immediately study that category again.
+  const deckUrl = category ? `/study/${deckId}?filter=${category}` : `/study/${deckId}`
+
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [allCards,        setAllCards]        = useState<Card[]>([])
   const [index,           setIndex]           = useState(0)
@@ -1058,7 +1062,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           <h2 className="text-2xl font-semibold text-ink">{heading}</h2>
           <p className="text-ink-muted">{message}</p>
           <div className="flex justify-center">
-            <Link href={`/study/${deckId}`} className="btn-primary">Back to deck</Link>
+            <Link href={deckUrl} className="btn-primary">Back to deck</Link>
           </div>
         </div>
       )
@@ -1076,7 +1080,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           </p>
         )}
         <div className="flex gap-3 justify-center flex-wrap">
-          <Link href={`/study/${deckId}`} className="btn-primary">Back to deck</Link>
+          <Link href={deckUrl} className="btn-primary">Back to deck</Link>
           {electiveSession && remainingElective.length > 0 && (
             <button onClick={continueElectiveSession} className="btn-ghost">
               Study ahead ({Math.min(electiveBatchLimit ?? remainingElective.length, remainingElective.length)} more)
@@ -1136,7 +1140,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="flex items-center justify-between">
-        <Link href={`/study/${deckId}`} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
+        <Link href={deckUrl} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
           <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
@@ -1321,7 +1325,7 @@ function ElectivePicker({ deckId, data, onStart }: {
         <button onClick={() => onStart({ unlearned, earlyReview })} disabled={!canStart} className="btn-primary">
           Start studying
         </button>
-        <Link href={`/study/${deckId}`} className="btn-ghost">Back to deck</Link>
+        <Link href={deckUrl} className="btn-ghost">Back to deck</Link>
       </div>
     </div>
   )
