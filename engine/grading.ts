@@ -154,11 +154,12 @@ function detectIssueType(normUser: string, normExpected: string): GradingIssueTy
 
 // ─── Strict grading ────────────────────────────────────────────────────────────
 
-function gradeStrict(userAnswer: string, expected: string): GradingResult {
+function gradeStrict(userAnswer: string, expected: string, settings?: GradingSettings): GradingResult {
   const userNorm = normalizeStrict(userAnswer)
 
-  // Slash alternatives are accepted; parenthetical content is required (parens stripped).
-  const slashParts = expected.split(/\s*[\/,;]\s*/)
+  // Split on slash/comma/semicolon alternatives unless the setting says to keep whole.
+  const splitAlts = !settings || settings.slashAlternativesMode !== 'require_all'
+  const slashParts = splitAlts ? expected.split(/\s*[\/,;]\s*/) : [expected]
   const candidates = [...new Set(slashParts.map(part =>
     normalizeStrict(part.replace(/\(([^)]+)\)/g, '$1').replace(/\s+/g, ' ').trim())
   ))]
@@ -319,7 +320,7 @@ export function gradeTyping(
     ? expected.slice(1, -1)
     : expected
   const mode = settings.gradingMode ?? 'flexible'
-  if (mode === 'strict')   return gradeStrict(userAnswer, eff)
+  if (mode === 'strict')   return gradeStrict(userAnswer, eff, settings)
   if (mode === 'smart_ai') return gradeSmartAI(userAnswer, eff, settings)
   return gradeFlexible(userAnswer, eff, settings)
 }

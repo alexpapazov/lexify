@@ -2105,6 +2105,22 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                 ))}
               </div>
 
+              {/* Slash/comma splitting — applies to all grading modes */}
+              <label className="flex items-start gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={slashMode === 'accept_any'}
+                  onChange={e => setSlashMode(e.target.checked ? 'accept_any' : 'require_all')}
+                  className="accent-accent w-4 h-4 mt-0.5"
+                />
+                <span className="text-sm text-ink">
+                  Split slash / comma / semicolon alternatives
+                  <span className="block text-xs text-ink-faint mt-0.5">
+                    When on: "word / other" accepts either part. When off: the full text must be typed as-is.
+                  </span>
+                </span>
+              </label>
+
               {gradingMode === 'flexible' && (
                 <div className="pl-4 space-y-2 border-l border-white/10">
                   {([
@@ -2122,13 +2138,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                     <input type="checkbox" checked={requireParenContent} onChange={e => setRequireParenContent(e.target.checked)} className="accent-accent w-4 h-4" />
                     <span className="text-sm text-ink">Require parenthetical content</span>
                   </label>
-                  <div className="space-y-1">
-                    <p className="text-xs text-ink-faint">Alternatives (e.g. "a / b", "a, b", "a; b")</p>
-                    <select value={slashMode} onChange={e => setSlashMode(e.target.value as 'accept_any' | 'require_all')} className="input text-sm">
-                      <option value="accept_any">Accept any</option>
-                      <option value="require_all">Require all</option>
-                    </select>
-                  </div>
                 </div>
               )}
 
