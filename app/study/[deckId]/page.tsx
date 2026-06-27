@@ -391,12 +391,33 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   async function handleAddSynonym() {
     const text = synonymInput.trim()
     if (!text || synonymSaving) return
-    const existing = card.choices?.backSynonyms ?? []
-    if (existing.some(s => s.toLowerCase() === text.toLowerCase())) { setSynonymInput(''); return }
     setSynonymSaving(true)
+    setSynonymInput('')
     try {
-      await updateBackSynonyms([...existing, text])
-      setSynonymInput('')
+      // Lazily load all cards in this language pair so we can check if the
+      // typed word is a source-language word (card front) or a native synonym.
+      await loadAllPairCards()
+      const matchedCard = allPairCards?.find(
+        c => c.front.toLowerCase() === text.toLowerCase()
+      ) ?? null
+
+      if (matchedCard) {
+        // Typed word is an existing card → link directly (bidirectional)
+        await handleLinkSynonym(matchedCard)
+        return
+      }
+
+      // No existing card matches. Save a COMMON pending link so it auto-resolves
+      // if a card with this front is created later, then also add to backSynonyms
+      // so it's immediately accepted during study (will be cleaned up if/when the
+      // card is created and COMMON resolves).
+      const [pendingRepo] = [new SupabasePendingSynonymLinkRepository()]
+      await pendingRepo.create(userId, text, sourceLanguage, targetLanguage, card.id)
+
+      const existing = card.choices?.backSynonyms ?? []
+      if (!existing.some(s => s.toLowerCase() === text.toLowerCase())) {
+        await updateBackSynonyms([...existing, text])
+      }
     } catch { /* non-fatal */ }
     finally { setSynonymSaving(false) }
   }
@@ -2676,14 +2697,17 @@ export default function DeckDetailPage() {
           updatedNewCard = { ...updatedNewCard, choices: newChoices }
         }
 
-        // Add new card's back to linked card's backSynonyms
+        // Add new card's back to linked card's backSynonyms, removing the placeholder source word
         const linkedBase: CardChoices = linkedCard.choices ?? { front: [], back: [] }
-        const linkedSyns = linkedBase.backSynonyms ?? []
-        if (!linkedSyns.some(s => s.toLowerCase() === newCardBack.toLowerCase())) {
-          const linkedChoices: CardChoices = { ...linkedBase, backSynonyms: [...linkedSyns, newCardBack] }
-          await supabase.from('cards').update({ choices: linkedChoices }).eq('id', linkedCard.id)
-          setCards(prev => prev.map(c => c.id === linkedCard.id ? { ...c, choices: linkedChoices } : c))
+        const linkedSynsFiltered = (linkedBase.backSynonyms ?? [])
+          .filter(s => s.toLowerCase() !== link.sourceWord.toLowerCase())
+        const needsAdd = !linkedSynsFiltered.some(s => s.toLowerCase() === newCardBack.toLowerCase())
+        const linkedChoices: CardChoices = {
+          ...linkedBase,
+          backSynonyms: needsAdd ? [...linkedSynsFiltered, newCardBack] : linkedSynsFiltered,
         }
+        await supabase.from('cards').update({ choices: linkedChoices }).eq('id', linkedCard.id)
+        setCards(prev => prev.map(c => c.id === linkedCard.id ? { ...c, choices: linkedChoices } : c))
 
         await pendingRepo.deleteById(link.id)
       }
