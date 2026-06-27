@@ -2429,18 +2429,8 @@ export default function DeckDetailPage() {
         setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, choices: null } : c))
       }
       if (action === 'progress' || action === 'all') {
-        const stateRepo    = new SupabaseCardStateRepository()
-        const pipelineRepo = new SupabasePipelineRepository()
-        const defaultPipeline = await pipelineRepo.getDefault()
-        const updatedStates = await Promise.all(ids.map(cardId => {
-          const existing = states.find(s => s.cardId === cardId)
-          const fresh = initialCardState(userId, cardId, defaultPipeline.id)
-          return stateRepo.upsert({ ...fresh, introducedDate: existing?.introducedDate ?? fresh.introducedDate })
-        }))
-        setStates(prev => {
-          const updated = new Map(updatedStates.map(s => [s.cardId, s]))
-          return prev.map(s => updated.get(s.cardId) ?? s)
-        })
+        await supabase.from('card_states').delete().in('card_id', ids).eq('user_id', userId)
+        setStates(prev => prev.filter(s => !selectedCardIds.has(s.cardId)))
       }
       if (action === 'audio' || action === 'all') {
         await supabase.from('cards').update({ audio_generated: false, audio_data: null }).in('id', ids)
