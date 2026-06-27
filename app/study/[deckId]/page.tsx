@@ -19,7 +19,8 @@ import { ensureSyncInfra }                   from '@/lib/syncFolderInfra'
 import { triggerSyncFill }                   from '@/lib/triggerSyncFill'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymLinks'
-import type { Deck, Card, CardState, CardChoices, CardConfusion, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
+import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
+import type { Deck, Card, CardState, CardChoices, CardConfusion, CardConfusionLink, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
@@ -133,6 +134,10 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [mergeExecuting,     setMergeExecuting]     = useState(false)
   const [mergeError,         setMergeError]         = useState<string | null>(null)
   const [confusions,       setConfusions]       = useState<CardConfusion[]>([])
+  const [confusionLinks,   setConfusionLinks]   = useState<CardConfusionLink[]>([])
+  const [linkConfusionMode,setLinkConfusionMode]= useState(false)
+  const [linkConfusionQuery,setLinkConfusionQuery]= useState('')
+  const [linkConfusionSaving,setLinkConfusionSaving]= useState(false)
   const [overrides,        setOverrides]        = useState<TypedAnswerOverride[]>([])
   const [pipeline,         setPipeline]         = useState<Pipeline | null>(null)
   const [generatingAudio,  setGeneratingAudio]  = useState(false)
@@ -145,11 +150,13 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     let cancelled = false
     Promise.all([
       new SupabaseCardConfusionRepository().listForCard(userId, card.id),
+      new SupabaseCardConfusionLinkRepository().listForCard(userId, card.id),
       new SupabaseTypedAnswerOverrideRepository().listForUser(userId),
       new SupabasePipelineRepository().getDefault(),
-    ]).then(([rows, allOverrides, pl]) => {
+    ]).then(([rows, links, allOverrides, pl]) => {
       if (cancelled) return
       setConfusions(rows)
+      setConfusionLinks(links)
       setOverrides(allOverrides.filter(o => o.cardId === card.id))
       setPipeline(pl)
     }).catch(err => console.error('Failed to load card stats:', err))
@@ -1170,6 +1177,103 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 </div>
               </div>
             )}
+
+            {/* ── Confusion links ─────────────────────────────────────── */}
+            <div className="space-y-2">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                Confusion links
+              </div>
+              {confusionLinks.length > 0 && (
+                <div className="space-y-1.5">
+                  {confusionLinks.map(link => {
+                    const otherId = link.cardAId === card.id ? link.cardBId : link.cardAId
+                    const other   = deckCards.find(d => d.id === otherId)
+                    if (!other) return null
+                    return (
+                      <div key={link.id} className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-ink font-medium text-sm">{displayText(other.front)}</span>
+                          <span className="text-ink-faint text-xs"> — {displayText(other.back)}</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {onJumpToCard && (
+                            <button onClick={() => onJumpToCard(otherId)} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                              Open
+                            </button>
+                          )}
+                          <button
+                            onClick={async () => {
+                              await new SupabaseCardConfusionLinkRepository().unlink(userId, card.id, otherId)
+                              setConfusionLinks(prev => prev.filter(l => l.id !== link.id))
+                            }}
+                            className="text-ink-faint hover:text-danger transition-colors text-xs"
+                          >×</button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {!linkConfusionMode ? (
+                <button
+                  onClick={async () => { setLinkConfusionMode(true); setLinkConfusionQuery(''); await loadAllPairCards() }}
+                  className="text-xs text-ink-faint hover:text-ink-muted transition-colors"
+                >
+                  ⇌ Link confused card…
+                </button>
+              ) : (
+                <div className="space-y-2 rounded-card border border-white/10 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Link confused card</p>
+                    <button onClick={() => { setLinkConfusionMode(false); setLinkConfusionQuery('') }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+                  </div>
+                  <input
+                    autoFocus
+                    className="input text-sm w-full"
+                    placeholder="Search by front or back…"
+                    value={linkConfusionQuery}
+                    onChange={e => setLinkConfusionQuery(e.target.value)}
+                  />
+                  {mergeCardsLoading && <p className="text-xs text-ink-faint">Loading…</p>}
+                  {allPairCards && (() => {
+                    const q = linkConfusionQuery.trim()
+                    const results = q
+                      ? allPairCards.filter(c =>
+                          !confusionLinks.some(l => l.cardAId === c.id || l.cardBId === c.id) &&
+                          (c.front.toLowerCase().includes(q.toLowerCase()) || c.back.toLowerCase().includes(q.toLowerCase()))
+                        )
+                      : allPairCards.filter(c => !confusionLinks.some(l => l.cardAId === c.id || l.cardBId === c.id))
+                    return results.length > 0 ? (
+                      <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-44 overflow-y-auto">
+                        {results.slice(0, 50).map(c => (
+                          <button
+                            key={c.id}
+                            disabled={linkConfusionSaving}
+                            onClick={async () => {
+                              setLinkConfusionSaving(true)
+                              try {
+                                await new SupabaseCardConfusionLinkRepository().link(userId, card.id, c.id)
+                                const updated = await new SupabaseCardConfusionLinkRepository().listForCard(userId, card.id)
+                                setConfusionLinks(updated)
+                                setLinkConfusionMode(false)
+                                setLinkConfusionQuery('')
+                              } catch { /* ignore */ }
+                              finally { setLinkConfusionSaving(false) }
+                            }}
+                            className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors disabled:opacity-50"
+                          >
+                            <span className="text-sm font-medium text-ink w-32 truncate shrink-0">{displayText(c.front)}</span>
+                            <span className="text-sm text-ink-muted truncate">{displayText(c.back)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : q ? (
+                      <p className="text-xs text-ink-faint">No cards match &quot;{q}&quot;.</p>
+                    ) : null
+                  })()}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

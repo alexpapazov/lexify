@@ -323,6 +323,18 @@ export interface CardConfusion {
   lastConfusedAt:     string
 }
 
+// ─── CardConfusionLink ────────────────────────────────────────────────────────
+
+/** A bidirectional "I confuse these two cards" link, either set manually or
+ *  auto-created when a typed answer exactly matches another card. */
+export interface CardConfusionLink {
+  id:        string
+  userId:    UserId
+  cardAId:   CardId
+  cardBId:   CardId
+  createdAt: string
+}
+
 // ─── TypedAnswerOverride ────────────────────────────────────────────────────
 
 /**

@@ -11,6 +11,7 @@ import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
+import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import type { CardSide } from '@/domain'
 import { progressAfterReview, initialCardState } from '@/engine/pipeline'
@@ -596,6 +597,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           || isDifferentWordMistake(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
         new SupabaseCardConfusionRepository().record(card.id, userAnswer.trim(), reviewAnswerSide, isWordMixup, confusedWithCardId)
           .catch(err => console.error('Failed to record card confusion:', err))
+        if (confusedWithCardId) {
+          new SupabaseCardConfusionLinkRepository().link(userId, card.id, confusedWithCardId)
+            .catch(err => console.error('Failed to auto-link confusion:', err))
+        }
       }
 
       const nowDate    = new Date()
@@ -1043,7 +1048,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (showElectivePicker && electivePickerData) {
-    return <ElectivePicker deckId={deckId} data={electivePickerData} onStart={startElectiveSession} />
+    return <ElectivePicker deckId={deckId} deckUrl={deckUrl} data={electivePickerData} onStart={startElectiveSession} />
   }
 
   if (done) {
@@ -1279,9 +1284,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
  * (beyond today's new-card budget) and/or graduated cards that aren't due
  * yet ("early review"), either or both.
  */
-function ElectivePicker({ deckId, data, onStart }: {
-  deckId: string
-  data:   ElectivePickerData
+function ElectivePicker({ deckId: _deckId, deckUrl, data, onStart }: {
+  deckId:  string
+  deckUrl: string
+  data:    ElectivePickerData
   onStart: (selected: { unlearned: boolean; earlyReview: boolean }) => void
 }) {
   const hasUnlearned  = data.unlearned.length > 0
