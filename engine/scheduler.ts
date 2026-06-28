@@ -124,17 +124,18 @@ const INITIAL_INTERVAL: Record<Rating, number> = { again: 1, hard: 1, good: 3, e
  * Maps the number of wrong typing answers during the pipeline to the
  * [minDays, maxDays] interval range assigned at graduation.
  * The density smoother picks the least-loaded day within that range.
+ * The ideal is Math.floor((min+max)/2).
  *
- *   0 errors  → 5–7 days
- *   1 error   → 4–5 days
- *   2 errors  → 3 days
- *   3 errors  → 1–2 days
- *   4+ errors → 1 day
+ *   0 errors  → 4–6 days  (ideal 5)
+ *   1 error   → 3–4 days  (ideal 3)
+ *   2 errors  → 2–3 days  (ideal 2)
+ *   3 errors  → 1–2 days  (ideal 1)
+ *   4+ errors → 1 day     (ideal 1)
  */
 export function graduationIntervalRange(typingErrors: number): [number, number] {
-  if (typingErrors === 0) return [5, 7]
-  if (typingErrors === 1) return [4, 5]
-  if (typingErrors === 2) return [3, 3]
+  if (typingErrors === 0) return [4, 6]
+  if (typingErrors === 1) return [3, 4]
+  if (typingErrors === 2) return [2, 3]
   if (typingErrors === 3) return [1, 2]
   return [1, 1]
 }

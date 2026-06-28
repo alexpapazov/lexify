@@ -413,7 +413,7 @@ function AllDueSessionInner() {
       if (!state.graduated && newState.graduated && newState.dueAt) {
         const errors    = pipelineTypingErrorsRef.current.get(card.id) ?? 0
         const [minDays, maxDays] = graduationIntervalRange(errors)
-        const idealDays = Math.round((minDays + maxDays) / 2)
+        const idealDays = Math.floor((minDays + maxDays) / 2)
         const idealDueAt = new Date(nowDate.getTime() + idealDays * 24 * 60 * 60 * 1000).toISOString()
         const smoothed = (maxDays - minDays >= 1)
           ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, idealDays, stateRepo)
