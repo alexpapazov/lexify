@@ -438,7 +438,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     setCreatingFolder(true)
     try {
       const folderRepo = new SupabaseFolderRepository()
-      await folderRepo.create(userId, name, null)
+      const languagePair = inPair && pairSource && pairTarget
+        ? { sourceLanguage: pairSource, targetLanguage: pairTarget }
+        : undefined
+      await folderRepo.create(userId, name, null, languagePair)
       setNewName('')
       setAddingFolder(false)
       load()

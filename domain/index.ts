@@ -107,16 +107,19 @@ export const DEFAULT_FLEXIBLE_SETTINGS: Omit<GradingSettings, 'gradingMode'> = {
 export type FolderId = string
 
 export interface Folder {
-  id:        FolderId
-  ownerId:   UserId
-  name:      string
-  parentId:  FolderId | null
-  position:  number
-  createdAt: string
-  updatedAt: string
-  deletedAt: string | null
+  id:             FolderId
+  ownerId:        UserId
+  name:           string
+  parentId:       FolderId | null
+  position:       number
+  createdAt:      string
+  updatedAt:      string
+  deletedAt:      string | null
   /** Auto-managed by sync system — cannot be renamed or deleted by the user. */
-  isSynced:  boolean
+  isSynced:       boolean
+  /** When set, this folder only appears in this language pair's library view. */
+  sourceLanguage: string | null
+  targetLanguage: string | null
 }
 
 // ─── LanguagePair ─────────────────────────────────────────────────────────────

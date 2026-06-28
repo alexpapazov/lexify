@@ -3,15 +3,17 @@ import type { Folder, UserId, FolderId } from '@/domain'
 
 function rowToFolder(row: Record<string, unknown>): Folder {
   return {
-    id:        row.id as string,
-    ownerId:   row.owner_id as string,
-    name:      row.name as string,
-    parentId:  row.parent_id as string | null,
-    position:  row.position as number,
-    createdAt: row.created_at as string,
-    updatedAt: row.updated_at as string,
-    deletedAt: row.deleted_at as string | null,
-    isSynced:  (row.is_synced as boolean) ?? false,
+    id:             row.id as string,
+    ownerId:        row.owner_id as string,
+    name:           row.name as string,
+    parentId:       row.parent_id as string | null,
+    position:       row.position as number,
+    createdAt:      row.created_at as string,
+    updatedAt:      row.updated_at as string,
+    deletedAt:      row.deleted_at as string | null,
+    isSynced:       (row.is_synced as boolean) ?? false,
+    sourceLanguage: (row.source_language as string | null) ?? null,
+    targetLanguage: (row.target_language as string | null) ?? null,
   }
 }
 
@@ -30,11 +32,18 @@ export class SupabaseFolderRepository {
     return (data ?? []).map(rowToFolder)
   }
 
-  async create(userId: UserId, name: string, parentId: FolderId | null): Promise<Folder> {
-    const { data, error } = await this.db
-      .from('folders')
-      .insert({ owner_id: userId, name, parent_id: parentId })
-      .select().single()
+  async create(
+    userId: UserId,
+    name: string,
+    parentId: FolderId | null,
+    languagePair?: { sourceLanguage: string; targetLanguage: string },
+  ): Promise<Folder> {
+    const insert: Record<string, unknown> = { owner_id: userId, name, parent_id: parentId }
+    if (languagePair) {
+      insert.source_language = languagePair.sourceLanguage
+      insert.target_language = languagePair.targetLanguage
+    }
+    const { data, error } = await this.db.from('folders').insert(insert).select().single()
     if (error) throw new Error(error.message)
     return rowToFolder(data)
   }

@@ -30,10 +30,14 @@ export function descendantDeckIds(folderId: string, allFolders: Folder[], allDec
 }
 
 /**
- * Whether `folderId` belongs in a given language-pairing view: either it
- * (recursively) contains at least one deck matching the pairing, or it
- * contains no decks at all (a brand-new/empty folder is shown in every
- * pairing until it's populated).
+ * Whether `folderId` belongs in a given language-pairing view.
+ *
+ * Priority:
+ * 1. If the folder has an explicit language pair stamped on it → only show
+ *    in that exact pair (fixes empty folders bleeding across languages).
+ * 2. Otherwise fall back to deck-based detection: show if any descendant
+ *    deck matches, or if there are no descendant decks at all (backward-
+ *    compatible — pre-existing unlabelled folders stay visible everywhere).
  */
 export function folderMatchesPair(
   folderId: string,
@@ -42,6 +46,10 @@ export function folderMatchesPair(
   sourceLanguage: string,
   targetLanguage: string,
 ): boolean {
+  const folder = allFolders.find(f => f.id === folderId)
+  if (folder?.sourceLanguage && folder.targetLanguage) {
+    return folder.sourceLanguage === sourceLanguage && folder.targetLanguage === targetLanguage
+  }
   const deckIds = descendantDeckIds(folderId, allFolders, allDecks)
   if (deckIds.length === 0) return true
   return allDecks.some(d =>
