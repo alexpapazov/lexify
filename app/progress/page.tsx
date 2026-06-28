@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { displayText } from '@/lib/cardText'
 import { langName } from '@/lib/languages'
 import { ConnectionGraph } from '@/components/analytics/ConnectionGraph'
+import { getToday } from '@/lib/dates'
 
 type RangeDays = 7 | 14 | 30 | 90
 
@@ -23,6 +24,20 @@ interface DayData {
 
 function isoDate(d: Date) { return d.toISOString().slice(0, 10) }
 
+/**
+ * Converts a UTC ISO timestamp to a YYYY-MM-DD string in the user's timezone,
+ * adjusted for the day turnover hour (same logic as getToday / snapDueAtToStartOfDay).
+ */
+function localDateWithTurnover(isoTs: string, tz: string, turnoverHour: number): string {
+  const date  = new Date(isoTs)
+  const local = new Date(date.toLocaleString('en-US', { timeZone: tz }))
+  if (local.getHours() < turnoverHour) local.setDate(local.getDate() - 1)
+  const y = local.getFullYear()
+  const m = String(local.getMonth() + 1).padStart(2, '0')
+  const d = String(local.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 function labelDate(iso: string, range: RangeDays) {
   const d = new Date(iso + 'T12:00:00')
   if (range <= 7)  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
@@ -31,11 +46,9 @@ function labelDate(iso: string, range: RangeDays) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function fullDate(iso: string) {
-  const today     = isoDate(new Date())
-  const yesterday = isoDate(new Date(Date.now() - 86400000))
-  if (iso === today)     return 'Today'
-  if (iso === yesterday) return 'Yesterday'
+function fullDate(iso: string, todayStr: string, yesterdayStr: string) {
+  if (iso === todayStr)     return 'Today'
+  if (iso === yesterdayStr) return 'Yesterday'
   return new Date(iso + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
 }
 
@@ -58,12 +71,14 @@ const LANG_PALETTE = [
 ]
 
 export default function AnalyticsPage() {
-  const [range,    setRange]    = useState<RangeDays>(30)
-  const [data,     setData]     = useState<DayData[]>([])
-  const [loading,  setLoading]  = useState(true)
-  const [userId,   setUserId]   = useState<string | null>(null)
-  const [tooltip,  setTooltip]  = useState<{ day: DayData; x: number; y: number } | null>(null)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [range,        setRange]        = useState<RangeDays>(30)
+  const [data,         setData]         = useState<DayData[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [userId,       setUserId]       = useState<string | null>(null)
+  const [tooltip,      setTooltip]      = useState<{ day: DayData; x: number; y: number } | null>(null)
+  const [expanded,     setExpanded]     = useState<Set<string>>(new Set())
+  const [todayStr,     setTodayStr]     = useState(() => isoDate(new Date()))
+  const [yesterdayStr, setYesterdayStr] = useState(() => isoDate(new Date(Date.now() - 86400000)))
 
   const load = useCallback(async (days: RangeDays) => {
     setLoading(true)
@@ -73,37 +88,58 @@ export default function AnalyticsPage() {
     const uid = session.user.id
     setUserId(uid)
 
-    const end   = new Date()
-    const start = new Date(end)
-    start.setDate(start.getDate() - (days - 1))
-    const startIso = isoDate(start)
-    const endIso   = isoDate(end)
+    // Load profile settings so we can bucket timestamps into the correct calendar day.
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('timezone, day_turnover_hour')
+      .eq('user_id', uid)
+      .single()
+    const tz           = (profile?.timezone as string | null) ?? 'UTC'
+    const turnoverHour = (profile?.day_turnover_hour as number | null) ?? 0
 
-    // Build full date range with empty placeholders
+    // Turnover-aware "today" and "yesterday"
+    const today     = getToday(tz, turnoverHour)
+    const yesterday = localDateWithTurnover(
+      new Date(Date.now() - 86400000).toISOString(), tz, turnoverHour
+    )
+    setTodayStr(today)
+    setYesterdayStr(yesterday)
+
+    // Build full date range ending at today (turnover-aware)
     const allDays: string[] = []
-    const cur = new Date(start)
-    while (isoDate(cur) <= endIso) { allDays.push(isoDate(cur)); cur.setDate(cur.getDate() + 1) }
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(new Date(today + 'T12:00:00Z').getTime() - i * 86400000)
+      allDays.push(d.toISOString().slice(0, 10))
+    }
+    const startIso = allDays[0]!
+    const endIso   = allDays[allDays.length - 1]!
 
     const dayMap = new Map<string, DayData>(
       allDays.map(d => [d, { date: d, graduated: [], reviewed: 0, newCards: [] }])
     )
 
-    // Graduated cards — join cards table to get language pair
+    // Over-fetch by 1 day each side so turnover boundaries are always covered.
+    const queryStart = new Date(new Date(startIso + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10)
+    const queryEnd   = new Date(new Date(endIso   + 'T00:00:00Z').getTime() + 86400000).toISOString()
+
+    // Graduated cards — join cards table to get language pair.
+    // Skip cards with null language fields (deleted or incomplete cards).
     const { data: gradStates } = await supabase
       .from('card_states')
       .select('graduated_at, cards(source_language, target_language)')
       .eq('user_id', uid)
       .eq('graduated', true)
-      .gte('graduated_at', startIso)
-      .lte('graduated_at', endIso + 'T23:59:59Z')
+      .gte('graduated_at', queryStart)
+      .lte('graduated_at', queryEnd)
 
     for (const s of gradStates ?? []) {
-      const d = (s.graduated_at as string).slice(0, 10)
-      if (!dayMap.has(d)) continue
       const card = s.cards as unknown as { source_language: string | null; target_language: string | null } | null
-      const src  = card?.source_language ?? 'unknown'
-      const tgt  = card?.target_language ?? 'unknown'
-      const day  = dayMap.get(d)!
+      if (!card?.source_language || !card?.target_language) continue
+      const d = localDateWithTurnover(s.graduated_at as string, tz, turnoverHour)
+      if (!dayMap.has(d)) continue
+      const src = card.source_language
+      const tgt = card.target_language
+      const day = dayMap.get(d)!
       const existing = day.graduated.find(g => g.sourceLanguage === src && g.targetLanguage === tgt)
       if (existing) existing.count++
       else day.graduated.push({ sourceLanguage: src, targetLanguage: tgt, count: 1 })
@@ -115,11 +151,11 @@ export default function AnalyticsPage() {
       .select('card_id, reviewed_at')
       .eq('user_id', uid)
       .eq('review_mode', 'due')
-      .gte('reviewed_at', startIso)
-      .lte('reviewed_at', endIso + 'T23:59:59Z')
+      .gte('reviewed_at', queryStart)
+      .lte('reviewed_at', queryEnd)
     const reviewedByDay = new Map<string, Set<string>>()
     for (const e of events ?? []) {
-      const d = (e.reviewed_at as string).slice(0, 10)
+      const d = localDateWithTurnover(e.reviewed_at as string, tz, turnoverHour)
       if (!reviewedByDay.has(d)) reviewedByDay.set(d, new Set())
       reviewedByDay.get(d)!.add(e.card_id as string)
     }
@@ -127,7 +163,7 @@ export default function AnalyticsPage() {
       if (dayMap.has(d)) dayMap.get(d)!.reviewed = ids.size
     }
 
-    // New cards introduced — for the list section below the chart
+    // New cards introduced — introduced_date is already stored as a turnover-aware YYYY-MM-DD
     const { data: introStates } = await supabase
       .from('card_states')
       .select('card_id, introduced_date')
@@ -149,7 +185,7 @@ export default function AnalyticsPage() {
     }
 
     setData(allDays.map(d => dayMap.get(d)!))
-    setExpanded(new Set([isoDate(new Date()), isoDate(new Date(Date.now() - 86400000))]))
+    setExpanded(new Set([today, yesterday]))
     setLoading(false)
   }, [])
 
@@ -308,7 +344,7 @@ export default function AnalyticsPage() {
             className="absolute z-10 pointer-events-none bg-surface-raised border border-white/10 rounded-card shadow-lg px-3 py-2 text-xs space-y-1 w-48"
             style={{ left: Math.min(Math.max(tooltip.x - 96, 0), 9999), top: tooltip.y - 10, transform: 'translateY(-100%)' }}
           >
-            <p className="font-medium text-ink">{fullDate(tooltip.day.date)}</p>
+            <p className="font-medium text-ink">{fullDate(tooltip.day.date, todayStr, yesterdayStr)}</p>
             {tooltip.day.graduated.map(g => {
               const color = langColorMap.get(`${g.sourceLanguage}|${g.targetLanguage}`) ?? LANG_PALETTE[0]!
               return (
@@ -355,7 +391,7 @@ export default function AnalyticsPage() {
                     className="w-full flex items-center justify-between px-4 py-3 hover:bg-surface-raised/40 transition-colors text-left"
                   >
                     <div className="flex items-center gap-3">
-                      <span className="text-sm font-medium text-ink">{fullDate(day.date)}</span>
+                      <span className="text-sm font-medium text-ink">{fullDate(day.date, todayStr, yesterdayStr)}</span>
                       <span className="text-xs text-ink-faint">{day.date}</span>
                     </div>
                     <div className="flex items-center gap-3">
