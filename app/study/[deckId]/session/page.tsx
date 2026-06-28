@@ -789,6 +789,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     function onKeyDown(e: KeyboardEvent) {
       const mod = e.metaKey || e.ctrlKey
       if (!mod) return
+      const tag = (document.activeElement as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
       if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); void handleUndo() }
       if ((e.key === 'z' && e.shiftKey) || e.key === 'y') { e.preventDefault(); void handleRedo() }
     }

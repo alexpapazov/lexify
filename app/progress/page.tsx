@@ -18,7 +18,7 @@ interface LangCount {
 interface DayData {
   date:      string        // YYYY-MM-DD
   graduated: LangCount[]  // per language pair
-  reviewed:  number        // distinct graduated-card due reviews this day
+  reviewed:  LangCount[]  // distinct graduated-card due reviews this day, per language pair
   newCards:  { front: string; back: string; cardId: string }[]
 }
 
@@ -52,9 +52,8 @@ function fullDate(iso: string, todayStr: string, yesterdayStr: string) {
   return new Date(iso + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
 }
 
-function totalGrad(day: DayData) {
-  return day.graduated.reduce((s, g) => s + g.count, 0)
-}
+function totalGrad(day: DayData)     { return day.graduated.reduce((s, g) => s + g.count, 0) }
+function totalReviewed(day: DayData) { return day.reviewed.reduce((s, g) => s + g.count, 0) }
 
 // Palette for up to 10 language pairs — stable order, works on dark bg
 const LANG_PALETTE = [
@@ -115,7 +114,7 @@ export default function AnalyticsPage() {
     const endIso   = allDays[allDays.length - 1]!
 
     const dayMap = new Map<string, DayData>(
-      allDays.map(d => [d, { date: d, graduated: [], reviewed: 0, newCards: [] }])
+      allDays.map(d => [d, { date: d, graduated: [], reviewed: [], newCards: [] }])
     )
 
     // Over-fetch by 1 day each side so turnover boundaries are always covered.
@@ -145,22 +144,33 @@ export default function AnalyticsPage() {
       else day.graduated.push({ sourceLanguage: src, targetLanguage: tgt, count: 1 })
     }
 
-    // Due-mode reviews — distinct card per day
+    // Due-mode reviews — distinct card per day, broken down by language pair
     const { data: events } = await supabase
       .from('review_events')
-      .select('card_id, reviewed_at')
+      .select('card_id, reviewed_at, cards(source_language, target_language)')
       .eq('user_id', uid)
       .eq('review_mode', 'due')
       .gte('reviewed_at', queryStart)
       .lte('reviewed_at', queryEnd)
-    const reviewedByDay = new Map<string, Set<string>>()
+    // date → langKey → Set<cardId> (deduplicate multiple reviews of same card on same day)
+    const reviewedByDay = new Map<string, Map<string, Set<string>>>()
     for (const e of events ?? []) {
+      const card = e.cards as unknown as { source_language: string | null; target_language: string | null } | null
+      if (!card?.source_language || !card?.target_language) continue
+      const langKey = `${card.source_language}|${card.target_language}`
       const d = localDateWithTurnover(e.reviewed_at as string, tz, turnoverHour)
-      if (!reviewedByDay.has(d)) reviewedByDay.set(d, new Set())
-      reviewedByDay.get(d)!.add(e.card_id as string)
+      if (!reviewedByDay.has(d)) reviewedByDay.set(d, new Map())
+      const langMap = reviewedByDay.get(d)!
+      if (!langMap.has(langKey)) langMap.set(langKey, new Set())
+      langMap.get(langKey)!.add(e.card_id as string)
     }
-    for (const [d, ids] of reviewedByDay) {
-      if (dayMap.has(d)) dayMap.get(d)!.reviewed = ids.size
+    for (const [d, langMap] of reviewedByDay) {
+      if (!dayMap.has(d)) continue
+      const day = dayMap.get(d)!
+      for (const [langKey, ids] of langMap) {
+        const [src, tgt] = langKey.split('|') as [string, string]
+        day.reviewed.push({ sourceLanguage: src, targetLanguage: tgt, count: ids.size })
+      }
     }
 
     // New cards introduced — introduced_date is already stored as a turnover-aware YYYY-MM-DD
@@ -191,17 +201,20 @@ export default function AnalyticsPage() {
 
   useEffect(() => { void load(range) }, [range, load])
 
-  // Build stable language-pair → color mapping from all data
+  // Build stable language-pair → color mapping from all data (both graduated and reviewed)
   const langColorMap = useMemo(() => {
     const keys = [...new Set(
-      data.flatMap(d => d.graduated.map(g => `${g.sourceLanguage}|${g.targetLanguage}`))
+      data.flatMap(d => [
+        ...d.graduated.map(g => `${g.sourceLanguage}|${g.targetLanguage}`),
+        ...d.reviewed.map(g => `${g.sourceLanguage}|${g.targetLanguage}`),
+      ])
     )]
     return new Map(keys.map((k, i) => [k, LANG_PALETTE[i % LANG_PALETTE.length]!]))
   }, [data])
 
   const chartH  = 160
-  const maxVal  = Math.max(...data.map(d => totalGrad(d) + d.reviewed), 1)
-  const hasAny  = data.some(d => totalGrad(d) > 0 || d.reviewed > 0)
+  const maxVal  = Math.max(...data.map(d => totalGrad(d) + totalReviewed(d)), 1)
+  const hasAny  = data.some(d => totalGrad(d) > 0 || totalReviewed(d) > 0)
 
   const RANGES: { label: string; value: RangeDays }[] = [
     { label: '1W', value: 7  },
@@ -232,7 +245,7 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Legend — per language pair + reviews */}
+      {/* Legend — per language pair; lighter shade = reviews, solid = new graduated */}
       <div className="flex items-center gap-4 text-xs text-ink-muted flex-wrap">
         {[...langColorMap.entries()].map(([key, color]) => {
           const [src, tgt] = key.split('|') as [string, string]
@@ -243,10 +256,7 @@ export default function AnalyticsPage() {
             </span>
           )
         })}
-        <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm bg-accent/70 inline-block" />
-          Reviews due
-        </span>
+        <span className="text-ink-faint italic">lighter = reviews · solid = new</span>
       </div>
 
       {/* Chart */}
@@ -261,10 +271,11 @@ export default function AnalyticsPage() {
             <div className="flex items-end gap-0.5" style={{ height: chartH }}>
               {data.map((day, i) => {
                 const grad    = totalGrad(day)
-                const total   = grad + day.reviewed
+                const rev     = totalReviewed(day)
+                const total   = grad + rev
                 const totalH  = (total / maxVal) * chartH
                 const gradH   = (grad / maxVal) * chartH
-                const revH    = (day.reviewed / maxVal) * chartH
+                const revH    = (rev / maxVal) * chartH
                 const isEmpty = total === 0
 
                 return (
@@ -278,16 +289,25 @@ export default function AnalyticsPage() {
                     }}
                   >
                     <div className="w-full flex flex-col" style={{ height: totalH || (isEmpty ? 2 : 0) }}>
-                      {/* Reviews due — top segment */}
-                      {day.reviewed > 0 && (
-                        <div className="w-full bg-accent/70 rounded-t-sm shrink-0" style={{ height: revH }} />
-                      )}
+                      {/* Reviews due — top segment, per language pair (lighter shade) */}
+                      {rev > 0 && (() => {
+                        const segs = day.reviewed.filter(g => g.count > 0)
+                        return (
+                          <div className="w-full flex flex-col rounded-t-sm overflow-hidden shrink-0" style={{ height: revH }}>
+                            {segs.map((g, si) => {
+                              const segH  = (g.count / rev) * revH
+                              const color = langColorMap.get(`${g.sourceLanguage}|${g.targetLanguage}`) ?? LANG_PALETTE[0]!
+                              return <div key={si} className="w-full shrink-0" style={{ height: segH, background: color + '70' }} />
+                            })}
+                          </div>
+                        )
+                      })()}
                       {/* Graduated — stacked language segments */}
                       {grad > 0 && (() => {
                         const segments = day.graduated.filter(g => g.count > 0)
                         return (
                           <div
-                            className={`w-full flex flex-col ${day.reviewed === 0 ? 'rounded-t-sm' : ''} overflow-hidden`}
+                            className={`w-full flex flex-col ${rev === 0 ? 'rounded-t-sm' : ''} overflow-hidden`}
                             style={{ height: gradH }}
                           >
                             {segments.map((g, si) => {
@@ -355,9 +375,16 @@ export default function AnalyticsPage() {
                 </p>
               )
             })}
-            {tooltip.day.reviewed > 0 && (
-              <p className="text-accent/80">Reviews due: <span className="font-medium text-ink">{tooltip.day.reviewed}</span></p>
-            )}
+            {tooltip.day.reviewed.map(g => {
+              const color = langColorMap.get(`${g.sourceLanguage}|${g.targetLanguage}`) ?? LANG_PALETTE[0]!
+              return (
+                <p key={`rev|${g.sourceLanguage}|${g.targetLanguage}`} className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-sm inline-block shrink-0 opacity-50" style={{ background: color }} />
+                  <span className="text-ink-muted">{langPairLabel(g.sourceLanguage, g.targetLanguage)}:</span>
+                  <span className="font-medium text-ink ml-auto">{g.count} reviews</span>
+                </p>
+              )
+            })}
             {tooltip.day.newCards.length > 0 && (
               <p className="text-ink-faint">New introduced: {tooltip.day.newCards.length}</p>
             )}
