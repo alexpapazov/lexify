@@ -219,12 +219,14 @@ export function ConnectionGraph({ userId }: { userId: string }) {
         }
       }
 
-      // Confusion edges
-      const confEdges: GEdge[] = (confLinks ?? []).map(l => ({
-        s: l.card_a_id as string,
-        t: l.card_b_id as string,
-        type: 'confusion' as const,
-      }))
+      // Confusion edges — skip links where either card is missing (e.g. soft-deleted)
+      const confEdges: GEdge[] = (confLinks ?? [])
+        .filter(l => cardIndex.has(l.card_a_id as string) && cardIndex.has(l.card_b_id as string))
+        .map(l => ({
+          s: l.card_a_id as string,
+          t: l.card_b_id as string,
+          type: 'confusion' as const,
+        }))
       const confNodeIds = new Set(confEdges.flatMap(e => [e.s, e.t]))
 
       const allNodeIds = new Set([...synNodeIds, ...confNodeIds])
