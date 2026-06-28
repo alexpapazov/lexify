@@ -52,21 +52,25 @@ When `correctInStep` reaches `requiredCorrect` for the current step:
 - **Next step exists** → move to it, reset `correctInStep` to 0
 - **No next step** → **graduate**: call `scheduleNext()` to set `graduated = true`, then the session page overrides `dueAt` and `intervalDays` based on the learner's typing error count for that card (see below)
 
-### Graduation interval (error-based)
+### Graduation interval (struggle-based)
 
-The first long-term interval is not a flat value — it's determined by how many times the learner got a **typing step wrong** during the current session for that card. Multiple-choice (recognition) steps never contribute to this count. Pressing the "?" button on a typing step counts as one typing error.
+The first long-term interval is determined by a **struggle counter** accumulated during the pipeline run for that card. The counter increments on:
 
-| Wrong typing answers | Interval range | Ideal |
-|----------------------|---------------|-------|
-| 0                    | 5–7 days       | 6     |
-| 1                    | 4–5 days       | 4     |
-| 2                    | 3 days         | 3     |
-| 3                    | 1–2 days       | 1     |
-| 4+                   | 1 day          | 1     |
+- Any **wrong answer** on any step (typing or recognition/multiple-choice)
+- Any **"?" press** on any step
+- Any **Repeat press** (requesting extra practice, even after a correct answer)
 
-When the range spans more than one day (0, 1, and 3-error cases), the density smoother (`engine/density.ts: smoothDueDate`) picks the least-loaded day within the range. The day-start snap (`lib/dates.ts: snapDueAtToStartOfDay`) then aligns it to the user's turnover hour so all graduating cards surface simultaneously.
+| Struggles | Interval range | Ideal |
+|-----------|---------------|-------|
+| 0         | 4–6 days      | 5     |
+| 1         | 3–4 days      | 3     |
+| 2         | 2–3 days      | 2     |
+| 3         | 1–2 days      | 1     |
+| 4+        | 1 day         | 1     |
 
-The error counter (`pipelineTypingErrorsRef`) is per-card, lives only in the session component's refs (never persisted), and is cleared when the card graduates.
+The ideal is `Math.floor((min + max) / 2)`. When the range spans more than one day, the density smoother (`engine/density.ts: smoothDueDate`) picks the least-loaded day within the range. The day-start snap (`lib/dates.ts: snapDueAtToStartOfDay`) then aligns it to the user's turnover hour so all graduating cards surface simultaneously.
+
+The struggle counter (`pipelineTypingErrorsRef`) is per-card, lives only in the session component's refs (never persisted), and is cleared when the card graduates.
 
 Logic lives in `engine/scheduler.ts: graduationIntervalRange()` and is applied in all three session pages (`handleAnswer` graduation branch).
 
@@ -122,6 +126,7 @@ A **Repeat** button appears after answering a pipeline step correctly. Pressing 
 
 - Credits the current step as `'good'` (so progress is saved)
 - Re-inserts a copy of the card **6 slots later** in the session queue so the learner can immediately practice the step again
+- **Increments the graduation struggle counter** by 1 — choosing to repeat signals the learner isn't fully confident, so it contributes to a shorter first interval at graduation
 
 This is opt-in — the learner only sees it if they want extra practice on a card they just got right.
 
@@ -225,3 +230,4 @@ When a card is first studied, `initialCardState()` in `pipeline.ts` creates:
 |------|-------|-----|
 | 2026-06-20 | Pre-graduation typing cards auto-advanced after a single Enter press — pressing Enter called `check()`, React committed the render showing the Continue button with `autoFocus`, then the browser fired `keypress` on the newly focused button | Removed `autoFocus` from the Continue button in `TypingMode.tsx`; replaced with `useRef` + `useEffect` + `setTimeout(100ms)` so focus is applied well after the key event cycle ends |
 | 2026-06-24 | Sync fast-track applied to all synced cards regardless of which source cards were checked — `fastTrackSyncMode: 'new_only'` fast-tracked every new stub | Added `fastTrackSourceCardIds: string[]` to `SyncPayload`; `syncProcessor.ts` now filters `createdCards` to only those whose source card ID is in that set |
+| 2026-06-28 | Editing the correct answer (double-click) mid-session caused all choices to appear wrong — `choices` state was only rebuilt on `card.id` change, so after editing `card.back` from e.g. "sick (feminine)" to "sick", `displayCorrect` updated but the choices array still contained the old string; no option matched | In `MultipleChoiceMode.tsx: commitEditChoice()`, when `isCorrect=true`, replaced the old correct answer text in the `choices` array with the new trimmed value before resetting `selected` |

@@ -97,21 +97,22 @@ A `rating = 'again'` on a graduated card does **not** immediately shorten the lo
 3. `intervalDays` is left at its pre-lapse value
 
 On the 10-minute retry:
-- **Correct** → the pending interval is applied, `relearningStep` resets to 0, card returns to normal schedule
-- **Wrong again** → `pendingIntervalDays` is halved, another 10-minute retry is scheduled, `relearningStep` increments
+- **Correct** → the pending interval is multiplied by the Hard/Good/Easy multiplier (same ranges as normal scheduling), floored at 1 day (Hard/Good) or 2 days (Easy), and used as the new interval. `relearningStep` resets to 0, card returns to normal schedule.
+- **Wrong again** → `pendingIntervalDays` is reduced by another 40% (×0.60), another 10-minute retry is scheduled, `relearningStep` increments.
 
 ### How the pending interval is computed
 
-Depends on when the lapse happened and the severity of the mistake (`wrongSeverity` 0–1, provided by `grading.ts`; 0 = close typo/accent, 1 = completely wrong word):
+Each "Again" press reduces the pending interval by a flat **40%** (`×0.60`), compounding with each additional failure. Timing (early vs. due) and answer severity (`wrongSeverity`) do **not** affect the pending interval — they are tracked by `grading.ts` but the scheduler ignores them for this purpose.
 
-| Timing           | Cluster position | Range (severity 0 → severity 1)      |
-|------------------|-----------------|--------------------------------------|
-| Elective (early) | 1st lapse       | 80% → 50% of *elapsed time*          |
-| Elective (early) | 2nd lapse       | 50% → 25% of *elapsed time*          |
-| Due / overdue    | 1st lapse       | 50% → 30% of *current interval*      |
-| Due / overdue    | 2nd lapse       | 25% → 15% of *current interval*      |
+```
+First lapse:            pendingInterval = currentInterval × 0.60
+Second lapse (in loop): pendingInterval = previousPending × 0.60
+Third lapse, etc.:      compounds further
+```
 
-Pending interval is always at least 1 day and capped at 1,825 days.
+There is **no floor** on `pendingIntervalDays` itself — it can fall below 1 day for very short intervals. The output floor (1 day for Hard/Good, 2 days for Easy) is only enforced when the relearn loop exits on a correct answer.
+
+Constant in `engine/scheduler.ts`: `AGAIN_REDUCTION = 0.60`.
 
 ---
 
@@ -194,3 +195,5 @@ From the scheduler's perspective, a fast-tracked card is identical to a normally
 | Date | Error | Fix |
 |------|-------|-----|
 | 2026-06-22 | Rating buttons auto-advanced on Enter after submitting a typed answer — `autoFocus={rating === suggestedRating}` caused the suggested button to steal keyboard focus immediately on render, so the keyup from the original Enter fired it | Removed `autoFocus` and the `↵` indicator from `RatingButtons.tsx` entirely |
+| 2026-06-28 | "?" button did not appear on due-now cards — `!gradedReview` guard in `TypingMode.tsx` suppressed the button for graduated cards; additionally `onIDontKnow` and `onAdvance` were not passed to the post-graduation `TypingMode` usage in any of the three session pages | Removed `!gradedReview` from the "?" button condition; added `onIDontKnow={handleIDontKnow}` and `onAdvance={() => setIndex(i => i + 1)}` to all three session pages' graduated TypingMode |
+| 2026-06-28 | Continue button stuck after "?" retype on due-now cards — the revealed-retype Continue calls `onAdvance?.()` but `onAdvance` was undefined in the post-graduation TypingMode, making it a no-op | Same fix as above: wiring `onAdvance` to all three session pages |
