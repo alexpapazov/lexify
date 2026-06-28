@@ -76,6 +76,8 @@ function AllDueSessionInner() {
   const category: StudyCategory | null =
     categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due'
       ? categoryParam : null
+  const sourceLang = searchParams.get('source')
+  const targetLang = searchParams.get('target')
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [index,           setIndex]           = useState(0)
@@ -145,10 +147,12 @@ function AllDueSessionInner() {
       const today = getToday(tz, turnoverHour)
 
       // ?category= elective study: build queue from only that category across
-      // all decks, capped at ALL_ELECTIVE_LIMIT cards.
+      // all decks. Due sessions with a language pair are not capped.
       if (category) {
         const categoryCards: SessionCard[] = []
+        const isDueWithLang = category === 'due' && sourceLang && targetLang
         for (const deck of decks) {
+          if (isDueWithLang && (deck.sourceLanguage !== sourceLang || deck.targetLanguage !== targetLang)) continue
           const [cards, states] = await Promise.all([
             cardRepo.listByDeck(deck.id),
             stateRepo.listByDeck(session.user.id, deck.id),
@@ -168,7 +172,7 @@ function AllDueSessionInner() {
             }
           }
         }
-        const finalQueue = shuffle(categoryCards).slice(0, ALL_ELECTIVE_LIMIT)
+        const finalQueue = isDueWithLang ? shuffle(categoryCards) : shuffle(categoryCards).slice(0, ALL_ELECTIVE_LIMIT)
         if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
         setElectiveSession(true)
         setQueue(finalQueue)

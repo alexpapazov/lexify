@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }      from '@/lib/data/decks'
@@ -63,6 +64,9 @@ export default function StudyPage() {
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null)
   const [redistributing, setRedistributing] = useState(false)
   const [redistributeMsg, setRedistributeMsg] = useState<string | null>(null)
+  const [showDuePicker, setShowDuePicker] = useState(false)
+  const duePickerRef = useRef<HTMLDivElement>(null)
+  const router = useRouter()
   const supabase = createClient()
 
   async function load() {
@@ -310,6 +314,17 @@ export default function StudyPage() {
 
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (!showDuePicker) return
+    function handleClick(e: MouseEvent) {
+      if (duePickerRef.current && !duePickerRef.current.contains(e.target as Node)) {
+        setShowDuePicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showDuePicker])
+
   // Build the filtered card list across all decks
   const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? deckStats.flatMap(({ deck, cards, states }) => {
@@ -332,6 +347,17 @@ export default function StudyPage() {
 
   const totalDue = global.dueNow
   const maxForecast = Math.max(1, ...forecast.map(d => d.count))
+
+  // Group due counts by language pair for the "Study all due" popover
+  interface LangPairDue { sourceLanguage: string; targetLanguage: string; dueNow: number }
+  const langPairDue: LangPairDue[] = Object.values(
+    deckStats.reduce<Record<string, LangPairDue>>((acc, { deck, dueNow }) => {
+      const key = `${deck.sourceLanguage}|${deck.targetLanguage}`
+      if (!acc[key]) acc[key] = { sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, dueNow: 0 }
+      acc[key]!.dueNow += dueNow
+      return acc
+    }, {})
+  ).filter(p => p.dueNow > 0)
 
   // Cards due on the selected forecast date (for the click-to-expand panel)
   const forecastCards: FilteredCard[] = selectedForecastDate ? deckStats.flatMap(({ deck, cards, states }) => {
@@ -432,13 +458,31 @@ export default function StudyPage() {
 
           {/* ── Study all due ───────────────────────────────────────────── */}
           {deckStats.length > 0 && (
-            <div className="mt-8">
+            <div className="mt-8 relative inline-block" ref={duePickerRef}>
               {totalDue === 0 ? (
                 <button disabled className="btn-primary opacity-40 cursor-not-allowed">No cards due</button>
               ) : (
-                <Link href="/study/all/session?category=due" className="btn-primary">
+                <button className="btn-primary" onClick={() => setShowDuePicker(v => !v)}>
                   Study all due ({totalDue})
-                </Link>
+                </button>
+              )}
+              {showDuePicker && langPairDue.length > 0 && (
+                <div className="absolute left-0 top-full mt-2 z-20 min-w-[220px] rounded-card border border-white/10 bg-surface-deep shadow-xl overflow-hidden">
+                  <p className="px-4 py-2.5 text-xs text-ink-faint border-b border-white/10">Choose a language to study</p>
+                  {langPairDue.map(pair => (
+                    <button
+                      key={`${pair.sourceLanguage}|${pair.targetLanguage}`}
+                      className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
+                      onClick={() => {
+                        setShowDuePicker(false)
+                        router.push(`/study/all/session?category=due&source=${pair.sourceLanguage}&target=${pair.targetLanguage}`)
+                      }}
+                    >
+                      <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
+                      <span className="chip text-xs ml-3">{pair.dueNow}</span>
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
           )}
