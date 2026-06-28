@@ -628,8 +628,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
         : undefined
 
-      // Count wrong typing answers during the pipeline so graduation can pick the right interval.
-      if (!state.graduated && step.stepType === 'typing' && !wasCorrect) {
+      // Count any wrong answer or struggle during the pipeline so graduation can pick the right interval.
+      if (!state.graduated && !wasCorrect) {
         pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
       }
 
@@ -966,8 +966,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const reviewMode = classifyReviewMode(state, nowDate)
       const prevState  = { ...state }
 
-      // Count as one typing error (the learner gave up on a typing step).
-      if (!state.graduated && step.stepType === 'typing') {
+      // Count "?" as one struggle regardless of step type.
+      if (!state.graduated) {
         pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
       }
 
@@ -1062,6 +1062,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   const handleRepeat = useCallback(() => {
     const current = queue[index]
     if (!current) return
+    if (!current.state.graduated) {
+      pipelineTypingErrorsRef.current.set(current.card.id, (pipelineTypingErrorsRef.current.get(current.card.id) ?? 0) + 1)
+    }
     if (index + 1 < queue.length) {
       const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
       setQueue(prev => {

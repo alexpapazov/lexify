@@ -401,7 +401,7 @@ function FolderSessionInner() {
         ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
         : undefined
 
-      if (!state.graduated && step.stepType === 'typing' && !wasCorrect) {
+      if (!state.graduated && !wasCorrect) {
         pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
       }
 
@@ -523,7 +523,7 @@ function FolderSessionInner() {
       const nowDate    = new Date()
       const reviewMode = classifyReviewMode(state, nowDate)
       const prevState  = { ...state }
-      if (!state.graduated && step.stepType === 'typing') {
+      if (!state.graduated) {
         pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
       }
 
@@ -610,6 +610,9 @@ function FolderSessionInner() {
   const handleRepeat = useCallback(() => {
     const current = queue[index]
     if (!current) return
+    if (!current.state.graduated) {
+      pipelineTypingErrorsRef.current.set(current.card.id, (pipelineTypingErrorsRef.current.get(current.card.id) ?? 0) + 1)
+    }
     if (index + 1 < queue.length) {
       const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
       setQueue(prev => {

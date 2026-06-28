@@ -121,8 +121,8 @@ export const ACCEL_MULTIPLIER_RANGE: Record<'hard' | 'good' | 'easy', { min: num
 const INITIAL_INTERVAL: Record<Rating, number> = { again: 1, hard: 1, good: 3, easy: 7 }
 
 /**
- * Maps the number of wrong typing answers during the pipeline to the
- * [minDays, maxDays] interval range assigned at graduation.
+ * Maps the number of pipeline struggles (wrong answers on any step, "?" presses,
+ * and Repeat presses) to the [minDays, maxDays] interval range assigned at graduation.
  * The density smoother picks the least-loaded day within that range.
  * The ideal is Math.floor((min+max)/2).
  *
