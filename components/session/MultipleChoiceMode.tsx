@@ -191,7 +191,8 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     try {
       await onChoiceEdit?.(editingChoice, trimmed, isCorrect)
       if (isCorrect) {
-        // Reset so the card reflects the new correct answer text
+        // Replace the old correct answer text in the choices list so it matches the new displayCorrect
+        if (trimmed) setChoices(prev => prev.map(c => c === editingChoice ? trimmed : c))
         setSelected(null)
         setViaSynonym(false)
       } else {
