@@ -397,6 +397,14 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     onCardChange({ ...card, choices: updated })
   }
 
+  async function updateFrontSynonyms(newList: string[]) {
+    const supabase = createClient()
+    const base: CardChoices = card.choices ?? { front: [], back: [] }
+    const updated: CardChoices = { ...base, frontSynonyms: newList.length > 0 ? newList : undefined }
+    await supabase.from('cards').update({ choices: updated }).eq('id', card.id)
+    onCardChange({ ...card, choices: updated })
+  }
+
   async function handleAddSourceSynonym() {
     const text = sourceSynonymInput.trim()
     if (!text || synonymSaving) return
@@ -415,13 +423,13 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
       }
 
       // No card exists yet — save COMMON pending link so it auto-resolves later,
-      // and add as placeholder to backSynonyms so it's accepted during study now.
+      // and add as placeholder to frontSynonyms so it's accepted during study now.
       const [pendingRepo] = [new SupabasePendingSynonymLinkRepository()]
       await pendingRepo.create(userId, text, sourceLanguage, targetLanguage, card.id)
 
-      const existing = card.choices?.backSynonyms ?? []
+      const existing = card.choices?.frontSynonyms ?? []
       if (!existing.some(s => s.toLowerCase() === text.toLowerCase())) {
-        await updateBackSynonyms([...existing, text])
+        await updateFrontSynonyms([...existing, text])
       }
     } catch { /* non-fatal */ }
     finally { setSynonymSaving(false) }
@@ -441,9 +449,15 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     finally { setSynonymSaving(false) }
   }
 
-  async function handleRemoveSynonym(text: string) {
+  async function handleRemoveBackSynonym(text: string) {
     const existing = card.choices?.backSynonyms ?? []
     try { await updateBackSynonyms(existing.filter(s => s !== text)) }
+    catch { /* non-fatal */ }
+  }
+
+  async function handleRemoveFrontSynonym(text: string) {
+    const existing = card.choices?.frontSynonyms ?? []
+    try { await updateFrontSynonyms(existing.filter(s => s !== text)) }
     catch { /* non-fatal */ }
   }
 
@@ -452,24 +466,37 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     setLinkSaving(true)
     setLinkError(null)
     try {
-      const supabase = createClient()
-      // Add target's back to this card's backSynonyms
-      const thisBase: CardChoices = card.choices ?? { front: [], back: [] }
-      const thisSyns = thisBase.backSynonyms ?? []
-      const targetBack = displayText(target.back)
-      if (!thisSyns.some(s => s.toLowerCase() === targetBack.toLowerCase())) {
-        const thisUpdated: CardChoices = { ...thisBase, backSynonyms: [...thisSyns, targetBack] }
-        await supabase.from('cards').update({ choices: thisUpdated }).eq('id', card.id)
-        onCardChange({ ...card, choices: thisUpdated })
-      }
-      // Add this card's back to target's backSynonyms
+      const supabase  = createClient()
+      const thisBase  : CardChoices = card.choices   ?? { front: [], back: [] }
       const targetBase: CardChoices = target.choices ?? { front: [], back: [] }
-      const targetSyns = targetBase.backSynonyms ?? []
-      const thisBack = displayText(card.back)
-      if (!targetSyns.some(s => s.toLowerCase() === thisBack.toLowerCase())) {
-        const targetUpdated: CardChoices = { ...targetBase, backSynonyms: [...targetSyns, thisBack] }
-        await supabase.from('cards').update({ choices: targetUpdated }).eq('id', target.id)
-      }
+      const thisBack   = displayText(card.back)
+      const thisFront  = displayText(card.front)
+      const targetBack = displayText(target.back)
+      const targetFront = displayText(target.front)
+
+      // backSynonyms: each card accepts the other's back (target-language) as correct
+      const thisBacks   = thisBase.backSynonyms   ?? []
+      const targetBacks = targetBase.backSynonyms ?? []
+      const thisUpdatedBack = thisBacks.some(s => s.toLowerCase() === targetBack.toLowerCase())
+        ? thisBacks : [...thisBacks, targetBack]
+      const targetUpdatedBack = targetBacks.some(s => s.toLowerCase() === thisBack.toLowerCase())
+        ? targetBacks : [...targetBacks, thisBack]
+
+      // frontSynonyms: each card accepts the other's front (source-language) as correct
+      const thisFronts   = thisBase.frontSynonyms   ?? []
+      const targetFronts = targetBase.frontSynonyms ?? []
+      const thisUpdatedFront = thisFronts.some(s => s.toLowerCase() === targetFront.toLowerCase())
+        ? thisFronts : [...thisFronts, targetFront]
+      const targetUpdatedFront = targetFronts.some(s => s.toLowerCase() === thisFront.toLowerCase())
+        ? targetFronts : [...targetFronts, thisFront]
+
+      const thisChoices: CardChoices   = { ...thisBase,   backSynonyms: thisUpdatedBack,   frontSynonyms: thisUpdatedFront }
+      const targetChoices: CardChoices = { ...targetBase, backSynonyms: targetUpdatedBack, frontSynonyms: targetUpdatedFront }
+
+      await supabase.from('cards').update({ choices: thisChoices   }).eq('id', card.id)
+      await supabase.from('cards').update({ choices: targetChoices }).eq('id', target.id)
+      onCardChange({ ...card, choices: thisChoices })
+
       setLinkSynonymMode(false)
       setLinkQuery('')
     } catch (err: unknown) {
@@ -1312,14 +1339,31 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
             </label>
           </div>
 
-          {/* Existing synonym chips */}
+          {/* Existing synonym chips — back (target-language) */}
           {(card.choices?.backSynonyms?.length ?? 0) > 0 && (
             <div className="flex flex-wrap gap-1.5">
+              <span className="text-[10px] text-ink-faint self-center">{langName(targetLanguage)}:</span>
               {card.choices!.backSynonyms!.map(s => (
                 <span key={s} className="flex items-center gap-1 chip text-success/80">
                   {s}
                   <button
-                    onClick={() => handleRemoveSynonym(s)}
+                    onClick={() => handleRemoveBackSynonym(s)}
+                    className="text-ink-faint hover:text-danger transition-colors leading-none ml-0.5"
+                    title="Remove synonym"
+                  >×</button>
+                </span>
+              ))}
+            </div>
+          )}
+          {/* Existing synonym chips — front (source-language) */}
+          {(card.choices?.frontSynonyms?.length ?? 0) > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              <span className="text-[10px] text-ink-faint self-center">{langName(sourceLanguage)}:</span>
+              {card.choices!.frontSynonyms!.map(s => (
+                <span key={s} className="flex items-center gap-1 chip text-accent-soft">
+                  {s}
+                  <button
+                    onClick={() => handleRemoveFrontSynonym(s)}
                     className="text-ink-faint hover:text-danger transition-colors leading-none ml-0.5"
                     title="Remove synonym"
                   >×</button>
@@ -2824,25 +2868,31 @@ export default function DeckDetailPage() {
         if (!linkedCard) { await pendingRepo.deleteById(link.id); continue }
 
         const newCardBack    = displayText(newCard.back)
+        const newCardFront   = displayText(newCard.front)
         const linkedCardBack = displayText(linkedCard.back)
+        const linkedCardFront = displayText(linkedCard.front)
 
-        // Add linked card's back to new card's backSynonyms
-        const newBase   : CardChoices = updatedNewCard.choices ?? { front: [], back: [] }
-        const newSyns    = newBase.backSynonyms ?? []
-        if (!newSyns.some(s => s.toLowerCase() === linkedCardBack.toLowerCase())) {
-          const newChoices: CardChoices = { ...newBase, backSynonyms: [...newSyns, linkedCardBack] }
-          await supabase.from('cards').update({ choices: newChoices }).eq('id', newCard.id)
-          updatedNewCard = { ...updatedNewCard, choices: newChoices }
+        // Update new card: add linked card's back → backSynonyms, linked card's front → frontSynonyms
+        const newBase: CardChoices = updatedNewCard.choices ?? { front: [], back: [] }
+        const newBackSyns  = newBase.backSynonyms  ?? []
+        const newFrontSyns = newBase.frontSynonyms ?? []
+        const newChoices: CardChoices = {
+          ...newBase,
+          backSynonyms:  newBackSyns.some(s  => s.toLowerCase() === linkedCardBack.toLowerCase())  ? newBackSyns  : [...newBackSyns,  linkedCardBack],
+          frontSynonyms: newFrontSyns.some(s => s.toLowerCase() === linkedCardFront.toLowerCase()) ? newFrontSyns : [...newFrontSyns, linkedCardFront],
         }
+        await supabase.from('cards').update({ choices: newChoices }).eq('id', newCard.id)
+        updatedNewCard = { ...updatedNewCard, choices: newChoices }
 
-        // Add new card's back to linked card's backSynonyms, removing the placeholder source word
+        // Update linked card: strip placeholder from frontSynonyms, add new card's front/back
         const linkedBase: CardChoices = linkedCard.choices ?? { front: [], back: [] }
-        const linkedSynsFiltered = (linkedBase.backSynonyms ?? [])
+        const linkedBackSyns  = linkedBase.backSynonyms  ?? []
+        const linkedFrontSyns = (linkedBase.frontSynonyms ?? [])
           .filter(s => s.toLowerCase() !== link.sourceWord.toLowerCase())
-        const needsAdd = !linkedSynsFiltered.some(s => s.toLowerCase() === newCardBack.toLowerCase())
         const linkedChoices: CardChoices = {
           ...linkedBase,
-          backSynonyms: needsAdd ? [...linkedSynsFiltered, newCardBack] : linkedSynsFiltered,
+          backSynonyms:  linkedBackSyns.some(s  => s.toLowerCase() === newCardBack.toLowerCase())  ? linkedBackSyns  : [...linkedBackSyns,  newCardBack],
+          frontSynonyms: linkedFrontSyns.some(s => s.toLowerCase() === newCardFront.toLowerCase()) ? linkedFrontSyns : [...linkedFrontSyns, newCardFront],
         }
         await supabase.from('cards').update({ choices: linkedChoices }).eq('id', linkedCard.id)
         setCards(prev => prev.map(c => c.id === linkedCard.id ? { ...c, choices: linkedChoices } : c))
