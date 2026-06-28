@@ -14,7 +14,8 @@ export function isQuoted(s: string): boolean {
   return s.length >= 2 && s.startsWith('"') && s.endsWith('"')
 }
 
-/** Strip surrounding quotes for display; no-op if not quoted. */
+/** Strip surrounding quotes for display and normalize whitespace. */
 export function displayText(s: string): string {
-  return isQuoted(s) ? s.slice(1, -1) : s
+  const stripped = isQuoted(s) ? s.slice(1, -1) : s
+  return stripped.normalize('NFC').trim().replace(/\s+/g, ' ')
 }
