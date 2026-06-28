@@ -7,13 +7,14 @@ import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 
 const NAV_LINKS = [
-  { href: '/',         label: 'Home'     },
-  { href: '/study',    label: 'Study'    },
-  { href: '/library',  label: 'Library'  },
-  { href: '/browse',   label: 'Browse'   },
-  { href: '/upload',   label: 'Upload'   },
-  { href: '/profile',  label: 'Profile'  },
-  { href: '/settings', label: 'Settings' },
+  { href: '/',          label: 'Home'     },
+  { href: '/study',     label: 'Study'    },
+  { href: '/library',   label: 'Library'  },
+  { href: '/progress',  label: 'Progress' },
+  { href: '/browse',    label: 'Browse'   },
+  { href: '/upload',    label: 'Upload'   },
+  { href: '/profile',   label: 'Profile'  },
+  { href: '/settings',  label: 'Settings' },
 ]
 
 export function Navbar() {
