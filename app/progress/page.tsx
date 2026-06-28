@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { displayText } from '@/lib/cardText'
+import { ConnectionGraph } from '@/components/analytics/ConnectionGraph'
 
 type RangeDays = 7 | 14 | 30 | 90
 
@@ -34,6 +35,7 @@ export default function AnalyticsPage() {
   const [range,   setRange]   = useState<RangeDays>(30)
   const [data,    setData]    = useState<DayData[]>([])
   const [loading, setLoading] = useState(true)
+  const [userId,  setUserId]  = useState<string | null>(null)
   const [tooltip, setTooltip] = useState<{ day: DayData; x: number; y: number } | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
@@ -43,6 +45,7 @@ export default function AnalyticsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { setLoading(false); return }
     const userId = session.user.id
+    setUserId(userId)
 
     const end   = new Date()
     const start = new Date(end)
@@ -226,6 +229,14 @@ export default function AnalyticsPage() {
           </div>
         )}
       </div>
+
+      {/* Connection graphs */}
+      {userId && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Card connections</h2>
+          <ConnectionGraph userId={userId} />
+        </div>
+      )}
 
       {/* Daily new cards list */}
       {data.filter(d => d.newCards.length > 0).length > 0 && (
