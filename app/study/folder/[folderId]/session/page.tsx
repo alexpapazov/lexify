@@ -810,6 +810,7 @@ function FolderSessionInner() {
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onIDontKnow={handleIDontKnow}
+          onAdvance={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onResetCard={handleResetCard}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
