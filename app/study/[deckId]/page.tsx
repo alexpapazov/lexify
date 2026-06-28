@@ -899,15 +899,49 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                   ]} />
 
                   {!state.graduated && (
-                    <StatGroup title="Pipeline progress" rows={[
-                      ['Correct in step',     currentStep
-                        ? `${state.correctInStep} / ${currentStep.requiredCorrect}`
-                        : String(state.correctInStep)],
-                      ['Step type',           currentStep?.stepType ?? '—'],
-                      ['Typing streak',       String(state.typingMistakeStreak)],
-                      ['Typing fail cycles',  String(state.typingFailCycles)],
-                      ['Same-day window',     state.stage3EnteredDate ?? 'Not entered'],
-                    ]} />
+                    <>
+                      <StatGroup title="Pipeline progress" rows={[
+                        ['Correct in step',     currentStep
+                          ? `${state.correctInStep} / ${currentStep.requiredCorrect}`
+                          : String(state.correctInStep)],
+                        ['Step type',           currentStep?.stepType ?? '—'],
+                        ['Typing streak',       String(state.typingMistakeStreak)],
+                        ['Typing fail cycles',  String(state.typingFailCycles)],
+                        ['Same-day window',     state.stage3EnteredDate ?? 'Not entered'],
+                      ]} />
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                          Graduation interval
+                        </div>
+                        <p className="text-[10px] text-ink-faint leading-relaxed">
+                          Based on total struggles (wrong typing answers + ? presses + Repeat presses) during this pipeline run.
+                        </p>
+                        <table className="w-full text-xs border-collapse">
+                          <thead>
+                            <tr className="text-ink-faint">
+                              <th className="text-left font-normal py-0.5 pr-3">Struggles</th>
+                              <th className="text-left font-normal py-0.5 pr-3">Range</th>
+                              <th className="text-left font-normal py-0.5">Ideal</th>
+                            </tr>
+                          </thead>
+                          <tbody className="text-ink-muted">
+                            {([
+                              ['0',  '4–6 days', '5 days'],
+                              ['1',  '3–4 days', '3 days'],
+                              ['2',  '2–3 days', '2 days'],
+                              ['3',  '1–2 days', '1 day'],
+                              ['4+', '1 day',    '1 day'],
+                            ] as const).map(([s, r, i]) => (
+                              <tr key={s}>
+                                <td className="py-0.5 pr-3 font-medium text-ink">{s}</td>
+                                <td className="py-0.5 pr-3">{r}</td>
+                                <td className="py-0.5">{i}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
                   )}
 
                   {(() => {

@@ -628,8 +628,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
         : undefined
 
-      // Count any wrong answer or struggle during the pipeline so graduation can pick the right interval.
-      if (!state.graduated && !wasCorrect) {
+      // Count wrong typing answers during the pipeline so graduation can pick the right interval.
+      if (!state.graduated && step.stepType === 'typing' && !wasCorrect) {
         pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
       }
 

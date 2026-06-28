@@ -56,7 +56,7 @@ When `correctInStep` reaches `requiredCorrect` for the current step:
 
 The first long-term interval is determined by a **struggle counter** accumulated during the pipeline run for that card. The counter increments on:
 
-- Any **wrong answer** on any step (typing or recognition/multiple-choice)
+- A **wrong answer on a typing step** (recognition/multiple-choice wrong answers do not count)
 - Any **"?" press** on any step
 - Any **Repeat press** (requesting extra practice, even after a correct answer)
 

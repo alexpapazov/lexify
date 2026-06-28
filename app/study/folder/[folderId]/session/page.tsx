@@ -401,7 +401,7 @@ function FolderSessionInner() {
         ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
         : undefined
 
-      if (!state.graduated && !wasCorrect) {
+      if (!state.graduated && step.stepType === 'typing' && !wasCorrect) {
         pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
       }
 
