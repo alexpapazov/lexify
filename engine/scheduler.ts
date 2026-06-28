@@ -18,7 +18,7 @@
  *      progress >= 1.0        → due / overdue
  *  - Wrong ("again") answers on a graduated card start a 10-minute relearn
  *    loop: the card comes back due ~10 minutes later, preserving a "pending"
- *    shortened interval (currentInterval × 0.67 per "again" press, compounding,
+ *    shortened interval (currentInterval × 0.60 per "again" press, compounding,
  *    no floor). Once the learner recovers, the pending interval is multiplied
  *    by the Hard/Good/Easy multiplier and the result is floored at 1 day
  *    (Hard/Good) or 2 days (Easy).
@@ -155,8 +155,8 @@ const RELEARN_RETRY_DAYS = RELEARN_RETRY_MINUTES / (24 * 60)
 /** Below this fraction of the scheduled interval, a correct review is a pure no-op. */
 const VERY_EARLY_THRESHOLD = 0.30
 
-/** Each "again"/"?" press multiplies the pending interval by this factor (33% reduction). */
-const AGAIN_REDUCTION = 0.67
+/** Each "again"/"?" press multiplies the pending interval by this factor (40% reduction). */
+const AGAIN_REDUCTION = 0.60
 
 /** Minimum output interval for Hard and Good ratings (after multiplier). */
 const HARD_GOOD_MIN_DAYS = 1

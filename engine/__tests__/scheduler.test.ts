@@ -201,12 +201,12 @@ describe('very-early correct guard (progress < 0.30)', () => {
 })
 
 describe('wrong answers — due / overdue (entering the 10-minute relearn loop)', () => {
-  it('reduces the current interval by 33% on the first lapse', () => {
+  it('reduces the current interval by 40% on the first lapse', () => {
     const state = baseState({ intervalDays: 10, scheduledIntervalDays: 10, lastReviewedAt: daysAgo(15) }) // overdue
     const result = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 0.5 })
 
-    // AGAIN_REDUCTION = 0.67
-    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.67, 3)
+    // AGAIN_REDUCTION = 0.60
+    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.60, 3)
     // The "ideal" interval is untouched until the loop recovers.
     expect(result.intervalDays).toBe(10)
     expect(result.lapseClusterCount).toBe(1)
@@ -216,22 +216,22 @@ describe('wrong answers — due / overdue (entering the 10-minute relearn loop)'
     expect(result.dueAt).toBe(addMinutes(NOW, 10))
   })
 
-  it('wrongSeverity is ignored — pending is always currentInterval × 0.67 regardless of severity', () => {
+  it('wrongSeverity is ignored — pending is always currentInterval × 0.60 regardless of severity', () => {
     const state = baseState({ intervalDays: 10, scheduledIntervalDays: 10, lastReviewedAt: daysAgo(10) })
     const mild   = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 0 })
     const severe = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 1 })
-    expect(mild.pendingIntervalDays).toBeCloseTo(10 * 0.67, 3)
-    expect(severe.pendingIntervalDays).toBeCloseTo(10 * 0.67, 3)
+    expect(mild.pendingIntervalDays).toBeCloseTo(10 * 0.60, 3)
+    expect(severe.pendingIntervalDays).toBeCloseTo(10 * 0.60, 3)
   })
 
-  it('a second close-together lapse still uses the same 33% reduction and increments the cluster', () => {
+  it('a second close-together lapse still uses the same 40% reduction and increments the cluster', () => {
     const firstLapseAt = daysAgo(0.1) // ~2.4 hours ago — within the 24h window
     const state = baseState({
       intervalDays: 10, scheduledIntervalDays: 10, lastReviewedAt: daysAgo(10),
       lapseClusterCount: 1, lastLapseAt: firstLapseAt,
     })
     const result = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 0.5 })
-    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.67, 3)
+    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.60, 3)
     expect(result.lapseClusterCount).toBe(2)
     expect(result.relearningStep).toBe(1)
   })
@@ -244,7 +244,7 @@ describe('wrong answers — due / overdue (entering the 10-minute relearn loop)'
     })
     const result = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 0.5 })
     expect(result.lapseClusterCount).toBe(1)
-    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.67, 3)
+    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.60, 3)
   })
 
   it('a third close-together lapse always sends the card back to relearning, regardless of timing', () => {
@@ -263,11 +263,11 @@ describe('wrong answers — due / overdue (entering the 10-minute relearn loop)'
 })
 
 describe('wrong answers — early / elective', () => {
-  it('always reduces currentInterval by 33%, even on an elective (early) lapse', () => {
+  it('always reduces currentInterval by 40%, even on an elective (early) lapse', () => {
     const state = baseState({ intervalDays: 10, scheduledIntervalDays: 10, lastReviewedAt: daysAgo(2) }) // progress = 0.2
     const result = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 0.5 })
-    // AGAIN_REDUCTION = 0.67 — elapsed time no longer determines pending
-    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.67, 3)
+    // AGAIN_REDUCTION = 0.60 — elapsed time no longer determines pending
+    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.60, 3)
     expect(result.lapseClusterCount).toBe(1)
     expect(result.relearningStep).toBe(1)
     expect(result.intervalDays).toBe(10)
@@ -287,8 +287,8 @@ describe('wrong answers — early / elective', () => {
   it('pending interval has no floor — it can drop below 1 day for very short intervals', () => {
     const state = baseState({ intervalDays: 1, scheduledIntervalDays: 1, lastReviewedAt: daysAgo(0.01) }) // 1-day interval
     const result = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 1 })
-    // 1 × 0.67 = 0.67 — no floor on the pending interval itself
-    expect(result.pendingIntervalDays!).toBeCloseTo(0.67, 3)
+    // 1 × 0.60 = 0.60 — no floor on the pending interval itself
+    expect(result.pendingIntervalDays!).toBeCloseTo(0.60, 3)
   })
 })
 
@@ -323,7 +323,7 @@ describe('10-minute relearn loop — recovery and continuation', () => {
     expect(result.intervalDays).toBeGreaterThan(10)
   })
 
-  it('continuation: failing the retry again applies another 33% reduction to pending interval', () => {
+  it('continuation: failing the retry again applies another 40% reduction to pending interval', () => {
     const state = baseState({
       intervalDays: 10, scheduledIntervalDays: RELEARN_RETRY_DAYS,
       relearningStep: 1, pendingIntervalDays: 4,
@@ -332,7 +332,7 @@ describe('10-minute relearn loop — recovery and continuation', () => {
     const result = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 0.5 })
 
     expect(result.relearningStep).toBe(2)
-    expect(result.pendingIntervalDays).toBeCloseTo(4 * 0.67, 3) // 2.68
+    expect(result.pendingIntervalDays).toBeCloseTo(4 * 0.60, 3) // 2.40
     expect(result.lapseClusterCount).toBe(2)
     expect(result.intervalDays).toBe(10) // ideal interval untouched
     expect(result.scheduledIntervalDays).toBeCloseTo(RELEARN_RETRY_DAYS, 6)
@@ -340,15 +340,15 @@ describe('10-minute relearn loop — recovery and continuation', () => {
     expect(result.relearn).toBeFalsy()
   })
 
-  it('continuation falls back to currentInterval (× 0.67) when pendingIntervalDays was never recorded', () => {
+  it('continuation falls back to currentInterval (× 0.60) when pendingIntervalDays was never recorded', () => {
     const state = baseState({
       intervalDays: 10, scheduledIntervalDays: RELEARN_RETRY_DAYS,
       relearningStep: 1, pendingIntervalDays: null,
       lapseClusterCount: 1, lastLapseAt: daysAgo(0.005),
     })
     const result = scheduleNext(state, 'again', { now: NOW, wrongSeverity: 0.5 })
-    // basePending = currentInterval = 10, then × 0.67
-    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.67, 3)
+    // basePending = currentInterval = 10, then × 0.60
+    expect(result.pendingIntervalDays).toBeCloseTo(10 * 0.60, 3)
   })
 
   it('a third clustered failure while already in the loop sends the card back to relearning', () => {
