@@ -50,7 +50,25 @@ const countAsCorrect = wasCorrect && rating !== 'again' && rating !== 'hard'
 When `correctInStep` reaches `requiredCorrect` for the current step:
 
 - **Next step exists** → move to it, reset `correctInStep` to 0
-- **No next step** → **graduate**: call `scheduleNext()` for the first long-term interval, set `graduated = true`
+- **No next step** → **graduate**: call `scheduleNext()` to set `graduated = true`, then the session page overrides `dueAt` and `intervalDays` based on the learner's typing error count for that card (see below)
+
+### Graduation interval (error-based)
+
+The first long-term interval is not a flat value — it's determined by how many times the learner got a **typing step wrong** during the current session for that card. Multiple-choice (recognition) steps never contribute to this count. Pressing the "?" button on a typing step counts as one typing error.
+
+| Wrong typing answers | Interval range | Ideal |
+|----------------------|---------------|-------|
+| 0                    | 5–7 days       | 6     |
+| 1                    | 4–5 days       | 4     |
+| 2                    | 3 days         | 3     |
+| 3                    | 1–2 days       | 1     |
+| 4+                   | 1 day          | 1     |
+
+When the range spans more than one day (0, 1, and 3-error cases), the density smoother (`engine/density.ts: smoothDueDate`) picks the least-loaded day within the range. The day-start snap (`lib/dates.ts: snapDueAtToStartOfDay`) then aligns it to the user's turnover hour so all graduating cards surface simultaneously.
+
+The error counter (`pipelineTypingErrorsRef`) is per-card, lives only in the session component's refs (never persisted), and is cleared when the card graduates.
+
+Logic lives in `engine/scheduler.ts: graduationIntervalRange()` and is applied in all three session pages (`handleAnswer` graduation branch).
 
 ---
 

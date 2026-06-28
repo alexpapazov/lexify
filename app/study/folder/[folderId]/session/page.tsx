@@ -24,7 +24,7 @@ import { descendantDeckIds } from '@/lib/folderStats'
 import { progressAfterReview, initialCardState } from '@/engine/pipeline'
 import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
-import { scheduleNext, classifyReviewMode } from '@/engine/scheduler'
+import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Pipeline, Rating, GradingSettings, Folder, CardConfusion } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
@@ -105,6 +105,8 @@ function FolderSessionInner() {
 
   const tzRef       = useRef('UTC')
   const turnoverRef = useRef(0)
+  /** Wrong typing-step answers per card during the current pipeline run. */
+  const pipelineTypingErrorsRef = useRef<Map<string, number>>(new Map())
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -399,6 +401,10 @@ function FolderSessionInner() {
         ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
         : undefined
 
+      if (!state.graduated && step.stepType === 'typing' && !wasCorrect) {
+        pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
+      }
+
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
       const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity }) : null
@@ -413,6 +419,18 @@ function FolderSessionInner() {
       ) {
         const smoothed = await smoothDueDate(userId, newState.dueAt, scheduled.smoothMinDays, scheduled.smoothMaxDays, scheduled.intervalDays, stateRepo)
         newState = { ...newState, dueAt: smoothed }
+      }
+
+      if (!state.graduated && newState.graduated && newState.dueAt) {
+        const errors    = pipelineTypingErrorsRef.current.get(card.id) ?? 0
+        const [minDays, maxDays] = graduationIntervalRange(errors)
+        const idealDays = Math.round((minDays + maxDays) / 2)
+        const idealDueAt = new Date(nowDate.getTime() + idealDays * 24 * 60 * 60 * 1000).toISOString()
+        const smoothed = (maxDays - minDays >= 1)
+          ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, idealDays, stateRepo)
+          : idealDueAt
+        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays }
+        pipelineTypingErrorsRef.current.delete(card.id)
       }
 
       if (newState.graduated && newState.dueAt && newState.relearningStep === 0) {
@@ -505,6 +523,10 @@ function FolderSessionInner() {
       const nowDate    = new Date()
       const reviewMode = classifyReviewMode(state, nowDate)
       const prevState  = { ...state }
+      if (!state.graduated && step.stepType === 'typing') {
+        pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
+      }
+
       let newState = state
       const penaltyCount = state.graduated ? 1 : 3
       for (let i = 0; i < penaltyCount; i++) {

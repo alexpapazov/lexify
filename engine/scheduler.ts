@@ -120,6 +120,25 @@ export const ACCEL_MULTIPLIER_RANGE: Record<'hard' | 'good' | 'easy', { min: num
 /** First interval (days) assigned the moment a card graduates. */
 const INITIAL_INTERVAL: Record<Rating, number> = { again: 1, hard: 1, good: 3, easy: 7 }
 
+/**
+ * Maps the number of wrong typing answers during the pipeline to the
+ * [minDays, maxDays] interval range assigned at graduation.
+ * The density smoother picks the least-loaded day within that range.
+ *
+ *   0 errors  → 5–7 days
+ *   1 error   → 4–5 days
+ *   2 errors  → 3 days
+ *   3 errors  → 1–2 days
+ *   4+ errors → 1 day
+ */
+export function graduationIntervalRange(typingErrors: number): [number, number] {
+  if (typingErrors === 0) return [5, 7]
+  if (typingErrors === 1) return [4, 5]
+  if (typingErrors === 2) return [3, 3]
+  if (typingErrors === 3) return [1, 2]
+  return [1, 1]
+}
+
 /** How quickly multipliers decay toward their floor as intervals grow. */
 const DECAY_CONSTANT_DAYS = 90
 
