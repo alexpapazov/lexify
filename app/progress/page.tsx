@@ -84,7 +84,7 @@ export default function ProgressPage() {
   return (
     <div className="max-w-2xl mx-auto px-4 py-10 space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-ink">Progress</h1>
+        <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
         <p className="text-ink-muted text-sm mt-1">
           {totalCards} card{totalCards !== 1 ? 's' : ''} introduced across {days.length} day{days.length !== 1 ? 's' : ''}
         </p>

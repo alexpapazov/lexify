@@ -10,7 +10,7 @@ const NAV_LINKS = [
   { href: '/',          label: 'Home'     },
   { href: '/study',     label: 'Study'    },
   { href: '/library',   label: 'Library'  },
-  { href: '/progress',  label: 'Progress' },
+  { href: '/progress',  label: 'Analytics' },
   { href: '/browse',    label: 'Browse'   },
   { href: '/upload',    label: 'Upload'   },
   { href: '/profile',   label: 'Profile'  },
