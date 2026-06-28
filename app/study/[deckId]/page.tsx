@@ -135,9 +135,10 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [mergeError,         setMergeError]         = useState<string | null>(null)
   const [confusions,       setConfusions]       = useState<CardConfusion[]>([])
   const [confusionLinks,   setConfusionLinks]   = useState<CardConfusionLink[]>([])
-  const [linkConfusionMode,setLinkConfusionMode]= useState(false)
-  const [linkConfusionQuery,setLinkConfusionQuery]= useState('')
+  const [linkConfusionMode,  setLinkConfusionMode]  = useState(false)
+  const [linkConfusionQuery, setLinkConfusionQuery] = useState('')
   const [linkConfusionSaving,setLinkConfusionSaving]= useState(false)
+  const [linkConfusionError, setLinkConfusionError] = useState<string | null>(null)
   const [overrides,        setOverrides]        = useState<TypedAnswerOverride[]>([])
   const [pipeline,         setPipeline]         = useState<Pipeline | null>(null)
   const [generatingAudio,  setGeneratingAudio]  = useState(false)
@@ -1216,7 +1217,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
               )}
               {!linkConfusionMode ? (
                 <button
-                  onClick={async () => { setLinkConfusionMode(true); setLinkConfusionQuery(''); await loadAllPairCards() }}
+                  onClick={async () => { setLinkConfusionMode(true); setLinkConfusionQuery(''); setLinkConfusionError(null); await loadAllPairCards() }}
                   className="text-xs text-ink-faint hover:text-ink-muted transition-colors"
                 >
                   ⇌ Link confused card…
@@ -1225,7 +1226,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 <div className="space-y-2 rounded-card border border-white/10 p-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Link confused card</p>
-                    <button onClick={() => { setLinkConfusionMode(false); setLinkConfusionQuery('') }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+                    <button onClick={() => { setLinkConfusionMode(false); setLinkConfusionQuery(''); setLinkConfusionError(null) }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
                   </div>
                   <input
                     autoFocus
@@ -1235,6 +1236,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                     onChange={e => setLinkConfusionQuery(e.target.value)}
                   />
                   {mergeCardsLoading && <p className="text-xs text-ink-faint">Loading…</p>}
+                  {linkConfusionError && <p className="text-xs text-danger">{linkConfusionError}</p>}
                   {allPairCards && (() => {
                     const q = linkConfusionQuery.trim()
                     const results = q
@@ -1251,14 +1253,18 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                             disabled={linkConfusionSaving}
                             onClick={async () => {
                               setLinkConfusionSaving(true)
+                              setLinkConfusionError(null)
                               try {
                                 await new SupabaseCardConfusionLinkRepository().link(userId, card.id, c.id)
                                 const updated = await new SupabaseCardConfusionLinkRepository().listForCard(userId, card.id)
                                 setConfusionLinks(updated)
                                 setLinkConfusionMode(false)
                                 setLinkConfusionQuery('')
-                              } catch { /* ignore */ }
-                              finally { setLinkConfusionSaving(false) }
+                              } catch (err) {
+                                setLinkConfusionError(err instanceof Error ? err.message : 'Failed to link card')
+                              } finally {
+                                setLinkConfusionSaving(false)
+                              }
                             }}
                             className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors disabled:opacity-50"
                           >
