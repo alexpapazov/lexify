@@ -6,7 +6,7 @@
  * session, just with a folder-scoped queue-builder.
  */
 
-import { Suspense, useEffect, useState, useCallback } from 'react'
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -32,7 +32,7 @@ import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
-import { getToday } from '@/lib/dates'
+import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 
 const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
@@ -103,6 +103,9 @@ function FolderSessionInner() {
   const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
   const [redoStack, setRedoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
 
+  const tzRef       = useRef('UTC')
+  const turnoverRef = useRef(0)
+
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
@@ -152,6 +155,8 @@ function FolderSessionInner() {
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
+      tzRef.current       = tz
+      turnoverRef.current = turnoverHour
 
       const deckIds = new Set(descendantDeckIds(folderId, allFolders, allDecks))
       const decks   = allDecks.filter(d => deckIds.has(d.id))
@@ -408,6 +413,10 @@ function FolderSessionInner() {
       ) {
         const smoothed = await smoothDueDate(userId, newState.dueAt, scheduled.smoothMinDays, scheduled.smoothMaxDays, scheduled.intervalDays, stateRepo)
         newState = { ...newState, dueAt: smoothed }
+      }
+
+      if (newState.graduated && newState.dueAt && newState.relearningStep === 0) {
+        newState = { ...newState, dueAt: snapDueAtToStartOfDay(newState.dueAt, tzRef.current, turnoverRef.current) }
       }
 
       await stateRepo.upsert(newState)

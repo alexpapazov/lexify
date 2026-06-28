@@ -1,4 +1,39 @@
 /**
+ * Given any ISO `dueAt` timestamp, returns the ISO timestamp for the START of
+ * the logical day it falls in — i.e. `turnoverHour:00:00` in `tz` on the
+ * same calendar day (or the previous day if the hour is before `turnoverHour`).
+ *
+ * Used to snap fractional-interval due dates so all cards due on a given day
+ * appear simultaneously at day-start rather than trickling in throughout the day.
+ */
+export function snapDueAtToStartOfDay(
+  dueAt:        string,
+  tz:           string,
+  turnoverHour: number,
+): string {
+  const date  = new Date(dueAt)
+  // toLocaleString gives wall-clock time in `tz`; new Date() of that string uses
+  // the system timezone for .getTime() but the correct wall-clock for .getHours()
+  // / .getDate() — same trick as getToday().
+  const local = new Date(date.toLocaleString('en-US', { timeZone: tz }))
+  const lHour = local.getHours()
+
+  if (lHour < turnoverHour) local.setDate(local.getDate() - 1)
+
+  const sy = local.getFullYear()
+  const sm = String(local.getMonth() + 1).padStart(2, '0')
+  const sd = String(local.getDate()).padStart(2, '0')
+  const sh = String(turnoverHour).padStart(2, '0')
+
+  // The difference (date.getTime() - local.getTime()) is the offset between the
+  // actual UTC instant and the local-string-parsed-as-system-time, which equals
+  // the (system_tz − target_tz) delta. Applying it to the target local datetime
+  // (also parsed as system time) converts it back to the correct UTC instant.
+  const targetLocal = new Date(`${sy}-${sm}-${sd}T${sh}:00:00`)
+  return new Date(targetLocal.getTime() + (date.getTime() - local.getTime())).toISOString()
+}
+
+/**
  * Returns the current calendar date (YYYY-MM-DD) in the given IANA timezone,
  * adjusted for a configurable day-turnover hour.
  *

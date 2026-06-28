@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -27,7 +27,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { SynonymTypingMode } from '@/components/session/SynonymTypingMode'
 import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
-import { getToday } from '@/lib/dates'
+import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
 import { triggerSyncFill } from '@/lib/triggerSyncFill'
@@ -139,6 +139,10 @@ export default function SessionPage() {
   /** Undo/redo stacks — each entry captures the card state before/after handleAnswer ran. */
   const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
   const [redoStack, setRedoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([]);
+
+  const tzRef          = useRef('UTC')
+  const turnoverRef    = useRef(0)
+
 const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
@@ -296,6 +300,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
+      tzRef.current       = tz
+      turnoverRef.current = turnoverHour
 
       if (!deck || cards.length === 0) { router.push(`/study/${deckId}`); return }
       if (!deck.syncingComplete) triggerSyncFill()
@@ -634,6 +640,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       ) {
         const smoothed = await smoothDueDate(userId, newState.dueAt, scheduled.smoothMinDays, scheduled.smoothMaxDays, scheduled.intervalDays, stateRepo)
         newState = { ...newState, dueAt: smoothed }
+      }
+
+      // Snap to start of logical day so all cards due on the same day appear
+      // simultaneously rather than trickling in as fractional intervals expire.
+      if (newState.graduated && newState.dueAt && newState.relearningStep === 0) {
+        newState = { ...newState, dueAt: snapDueAtToStartOfDay(newState.dueAt, tzRef.current, turnoverRef.current) }
       }
 
       await stateRepo.upsert(newState)
