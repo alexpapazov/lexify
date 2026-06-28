@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { displayText } from '@/lib/cardText'
 import { langName } from '@/lib/languages'
@@ -76,6 +76,7 @@ export default function AnalyticsPage() {
   const [loading,      setLoading]      = useState(true)
   const [userId,       setUserId]       = useState<string | null>(null)
   const [tooltip,      setTooltip]      = useState<{ day: DayData; x: number; y: number } | null>(null)
+  const chartRef = useRef<HTMLDivElement>(null)
   const [expanded,     setExpanded]     = useState<Set<string>>(new Set())
   const [todayStr,     setTodayStr]     = useState(() => isoDate(new Date()))
   const [yesterdayStr, setYesterdayStr] = useState(() => isoDate(new Date(Date.now() - 86400000)))
@@ -250,7 +251,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Chart */}
-      <div className="relative select-none" onMouseLeave={() => setTooltip(null)}>
+      <div ref={chartRef} className="relative select-none" onMouseLeave={() => setTooltip(null)} onClick={() => setTooltip(null)}>
         {loading ? (
           <div style={{ height: chartH + 36 }} className="flex items-center justify-center text-ink-faint text-sm">Loading…</div>
         ) : !hasAny ? (
@@ -272,6 +273,13 @@ export default function AnalyticsPage() {
                     key={day.date}
                     className="flex flex-col justify-end flex-1 min-w-0 h-full cursor-default"
                     onMouseEnter={e => {
+                      const rect   = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                      const parent = (e.currentTarget as HTMLElement).closest('.relative')!.getBoundingClientRect()
+                      setTooltip({ day, x: rect.left - parent.left + rect.width / 2, y: rect.top - parent.top })
+                    }}
+                    onClick={e => {
+                      e.stopPropagation()
+                      if (tooltip?.day.date === day.date) { setTooltip(null); return }
                       const rect   = (e.currentTarget as HTMLElement).getBoundingClientRect()
                       const parent = (e.currentTarget as HTMLElement).closest('.relative')!.getBoundingClientRect()
                       setTooltip({ day, x: rect.left - parent.left + rect.width / 2, y: rect.top - parent.top })
@@ -339,10 +347,14 @@ export default function AnalyticsPage() {
         )}
 
         {/* Hover tooltip */}
-        {tooltip && (
+        {tooltip && (() => {
+          const tooltipW   = 192 // w-48
+          const chartWidth = chartRef.current?.offsetWidth ?? 9999
+          const clampedLeft = Math.min(Math.max(tooltip.x - tooltipW / 2, 4), chartWidth - tooltipW - 4)
+          return (
           <div
             className="absolute z-10 pointer-events-none bg-surface-raised border border-white/10 rounded-card shadow-lg px-3 py-2 text-xs space-y-1 w-48"
-            style={{ left: Math.min(Math.max(tooltip.x - 96, 0), 9999), top: tooltip.y - 10, transform: 'translateY(-100%)' }}
+            style={{ left: clampedLeft, top: tooltip.y - 10, transform: 'translateY(-100%)' }}
           >
             <p className="font-medium text-ink">{fullDate(tooltip.day.date, todayStr, yesterdayStr)}</p>
             {tooltip.day.graduated.map(g => {
@@ -362,7 +374,8 @@ export default function AnalyticsPage() {
               <p className="text-ink-faint">New introduced: {tooltip.day.newCards.length}</p>
             )}
           </div>
-        )}
+          )
+        })()}
       </div>
 
       {/* Connection graph */}
@@ -392,7 +405,7 @@ export default function AnalyticsPage() {
                   >
                     <div className="flex items-center gap-3">
                       <span className="text-sm font-medium text-ink">{fullDate(day.date, todayStr, yesterdayStr)}</span>
-                      <span className="text-xs text-ink-faint">{day.date}</span>
+                      <span className="hidden sm:inline text-xs text-ink-faint">{day.date}</span>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className="chip text-xs">{day.newCards.length} new</span>
@@ -402,8 +415,8 @@ export default function AnalyticsPage() {
                   {open && (
                     <div className="border-t border-white/10 divide-y divide-white/5">
                       {day.newCards.map(c => (
-                        <div key={c.cardId} className="flex items-center gap-4 px-4 py-2.5">
-                          <span className="text-sm font-medium text-ink w-40 truncate shrink-0">{c.front}</span>
+                        <div key={c.cardId} className="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-4 px-4 py-2.5">
+                          <span className="text-sm font-medium text-ink sm:w-40 truncate sm:shrink-0">{c.front}</span>
                           <span className="text-sm text-ink-muted truncate">{c.back}</span>
                         </div>
                       ))}
