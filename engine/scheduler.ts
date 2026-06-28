@@ -18,10 +18,10 @@
  *      progress >= 1.0        → due / overdue
  *  - Wrong ("again") answers on a graduated card start a 10-minute relearn
  *    loop: the card comes back due ~10 minutes later, preserving a "pending"
- *    shortened interval that's only applied once the learner recovers with a
- *    correct answer. How much the pending interval shrinks depends on
- *    whether the original lapse was elective or due/overdue, how severe the
- *    mistake was (wrongSeverity, 0-1), and the lapse-cluster position.
+ *    shortened interval (currentInterval × 0.67 per "again" press, compounding,
+ *    no floor). Once the learner recovers, the pending interval is multiplied
+ *    by the Hard/Good/Easy multiplier and the result is floored at 1 day
+ *    (Hard/Good) or 2 days (Easy).
  *  - 3+ "again" ratings within a 24h lapse cluster — whether during normal
  *    review or while already in the relearn loop — ALWAYS send the card back
  *    into the learning pipeline, regardless of timing.
@@ -155,12 +155,14 @@ const RELEARN_RETRY_DAYS = RELEARN_RETRY_MINUTES / (24 * 60)
 /** Below this fraction of the scheduled interval, a correct review is a pure no-op. */
 const VERY_EARLY_THRESHOLD = 0.30
 
-// Wrong-answer interval multiplier ranges, by lapse-cluster position.
-// [low, high] — `wrongSeverity` interpolates between them (0 = high/mild, 1 = low/severe).
-const EARLY_WRONG_RANGE_1 = [0.5, 0.8] as const
-const EARLY_WRONG_RANGE_2 = [0.25, 0.5] as const
-const DUE_WRONG_RANGE_1   = [0.3, 0.5] as const
-const DUE_WRONG_RANGE_2   = [0.15, 0.25] as const
+/** Each "again"/"?" press multiplies the pending interval by this factor (33% reduction). */
+const AGAIN_REDUCTION = 0.67
+
+/** Minimum output interval for Hard and Good ratings (after multiplier). */
+const HARD_GOOD_MIN_DAYS = 1
+
+/** Minimum output interval for Easy rating (after multiplier). */
+const EASY_MIN_DAYS = 2
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -261,12 +263,6 @@ export function idealIntervalRange(
   }
 }
 
-/** Interpolates a [low, high] range by severity — 0 → high, 1 → low. */
-function severityMultiplier(range: readonly [number, number], severity: number): number {
-  const [lo, hi] = range
-  return hi - (hi - lo) * clamp(severity, 0, 1)
-}
-
 function newEaseFor(rating: Rating, ease: number): number {
   if (rating === 'hard') return clamp(ease - 0.15, 1.3, 3.0)
   if (rating === 'easy') return clamp(ease + 0.15, 1.3, 3.0)
@@ -300,8 +296,7 @@ export function classifyReviewMode(state: CardState, now: Date = new Date()): 'e
 
 class AdaptiveScheduler implements Scheduler {
   schedule(state: CardState, rating: Rating, ctx: ScheduleContext = {}): ScheduleResult {
-    const now      = ctx.now ?? new Date()
-    const severity = ctx.wrongSeverity ?? 0.5
+    const now = ctx.now ?? new Date()
 
     // ── Graduation / first long-term review ────────────────────────────────
     // No prior interval to base the adaptive formula on — use a flat
@@ -345,8 +340,8 @@ class AdaptiveScheduler implements Scheduler {
 
         // Failed the retry again — shrink the pending interval further and
         // schedule another 10-minute retry.
-        const basePending = state.pendingIntervalDays ?? Math.max(1, round3(currentInterval * 0.3))
-        const pending      = Math.max(1, round3(basePending * 0.5))
+        const basePending = state.pendingIntervalDays ?? currentInterval
+        const pending      = round3(basePending * AGAIN_REDUCTION)
         return {
           dueAt: addDays(now, RELEARN_RETRY_DAYS), intervalDays: currentInterval,
           scheduledIntervalDays: RELEARN_RETRY_DAYS, ease: state.ease,
@@ -355,8 +350,11 @@ class AdaptiveScheduler implements Scheduler {
         }
       }
 
-      // Recovered — apply the interval that was pending since the lapse.
-      const interval = clamp(state.pendingIntervalDays ?? currentInterval, 1, MAX_INTERVAL_DAYS)
+      // Recovered — apply the multiplier to the pending interval.
+      const pendingInterval = state.pendingIntervalDays ?? currentInterval
+      const recoverRange    = effectiveMultiplierRange(rating as 'hard' | 'good' | 'easy', pendingInterval)
+      const outputFloorR    = rating === 'easy' ? EASY_MIN_DAYS : HARD_GOOD_MIN_DAYS
+      const interval        = clamp(Math.max(outputFloorR, round3(pendingInterval * recoverRange.ideal)), outputFloorR, MAX_INTERVAL_DAYS)
       return {
         dueAt: addDays(now, interval), intervalDays: interval, scheduledIntervalDays: interval,
         ease: newEaseFor(rating, state.ease), lapseClusterCount: 0, lastLapseAt: state.lastLapseAt,
@@ -397,19 +395,10 @@ class AdaptiveScheduler implements Scheduler {
         }
       }
 
-      // Compute the shortened interval that will be applied IF the learner
-      // recovers within the 10-minute retry — but don't apply it yet.
-      let pending: number
-      if (early) {
-        const range = clusterCount === 1 ? EARLY_WRONG_RANGE_1 : EARLY_WRONG_RANGE_2
-        const mult  = severityMultiplier(range, severity)
-        pending = Math.max(1, round3(elapsed * mult))
-      } else {
-        const range = clusterCount === 1 ? DUE_WRONG_RANGE_1 : DUE_WRONG_RANGE_2
-        const mult  = severityMultiplier(range, severity)
-        pending = Math.max(1, round3(currentInterval * mult))
-      }
-      pending = clamp(pending, 1, MAX_INTERVAL_DAYS)
+      // Reduce the current interval by AGAIN_REDUCTION — applied to the
+      // pending interval once the learner recovers, not the card's stored
+      // interval (so the multiplier has something to work with on recovery).
+      const pending = round3(currentInterval * AGAIN_REDUCTION)
 
       return {
         dueAt: addDays(now, RELEARN_RETRY_DAYS), intervalDays: currentInterval,
@@ -442,9 +431,10 @@ class AdaptiveScheduler implements Scheduler {
       smoothMinDays = baseInterval * range.min
       smoothMaxDays = baseInterval * range.max
     }
-    newInterval = clamp(Math.max(1, round3(newInterval)), 1, MAX_INTERVAL_DAYS)
-    smoothMinDays = clamp(Math.max(1, round3(smoothMinDays)), 1, MAX_INTERVAL_DAYS)
-    smoothMaxDays = clamp(Math.max(1, round3(smoothMaxDays)), 1, MAX_INTERVAL_DAYS)
+    const outputFloor = rating === 'easy' ? EASY_MIN_DAYS : HARD_GOOD_MIN_DAYS
+    newInterval   = clamp(Math.max(outputFloor, round3(newInterval)),   outputFloor, MAX_INTERVAL_DAYS)
+    smoothMinDays = clamp(Math.max(outputFloor, round3(smoothMinDays)), outputFloor, MAX_INTERVAL_DAYS)
+    smoothMaxDays = clamp(Math.max(outputFloor, round3(smoothMaxDays)), outputFloor, MAX_INTERVAL_DAYS)
 
     return {
       dueAt:                 addDays(now, newInterval),

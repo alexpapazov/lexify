@@ -321,7 +321,7 @@ export function TypingMode({
                 </svg>
               </button>
             )}
-            {!result && !revealed && !gradedReview && onIDontKnow && (
+            {!result && !revealed && onIDontKnow && (
               <button
                 onClick={() => { onIDontKnow(); setRevealed(true) }}
                 title="I don't know"

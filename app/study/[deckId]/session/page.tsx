@@ -1306,6 +1306,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onIDontKnow={handleIDontKnow}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onResetCard={handleResetCard}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
