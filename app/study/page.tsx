@@ -105,7 +105,10 @@ export default function StudyPage() {
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,
         learning:  forwardStates.filter(s => !s.graduated).length,
         graduated: forwardStates.filter(s => s.graduated).length,
-        dueNow:    forwardStates.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length,
+        dueNow:    states.filter(s =>
+          s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
+          (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
+        ).length,
       }
     }))
 
