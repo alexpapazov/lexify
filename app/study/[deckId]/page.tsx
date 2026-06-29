@@ -2849,6 +2849,7 @@ export default function DeckDetailPage() {
     if (card) setDeletedCardUndo({ card, state })
     setCards(prev => prev.filter(c => c.id !== cardId))
     setStates(prev => prev.filter(s => s.cardId !== cardId))
+    setSelectedCardIds(prev => { const next = new Set(prev); next.delete(cardId); return next })
     setEditingCard(null)
   }
 
@@ -3048,7 +3049,10 @@ export default function DeckDetailPage() {
     setBulkDeleteConfirm(false)
     try {
       const cardRepo = new SupabaseCardRepository()
-      const ids = [...selectedCardIds]
+      // Filter to IDs still present in the card list — ghost IDs (already-deleted
+      // cards whose ID stayed in selectedCardIds) would cause the RPC to error.
+      const existingCardIds = new Set(cards.map(c => c.id))
+      const ids = [...selectedCardIds].filter(id => existingCardIds.has(id))
       await Promise.all(ids.map(id => cardRepo.softDelete(id)))
       setCards(prev => prev.filter(c => !selectedCardIds.has(c.id)))
       setStates(prev => prev.filter(s => !selectedCardIds.has(s.cardId)))
