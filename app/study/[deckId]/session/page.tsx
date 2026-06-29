@@ -669,7 +669,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const isRecallReview = reviewTrack === 'recall' || !!isReverse
       const wasTyped   = state.graduated ? (isRecallReview ? false : productionMode === 'typed') : null
 
-      await eventRepo.create({
+      const reviewEvent = await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
         promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
         promptShown: reviewPromptSide === 'front' ? card.front : card.back,
@@ -750,6 +750,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams }) : null
 
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
+
+      if (state.graduated && !newState.graduated) {
+        eventRepo.markLapsed(reviewEvent.id, userId).catch(() => {})
+      }
 
       if (
         newState.graduated && newState.dueAt && scheduled &&
@@ -1170,7 +1174,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       let newState = state
       const penaltyCount = state.graduated ? 1 : 3
       for (let i = 0; i < penaltyCount; i++) {
-        await eventRepo.create({
+        const idkEvent = await eventRepo.create({
           userId: userId, cardId: card.id, mode: step.stepType,
           promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
           promptShown: reviewPromptSide === 'front' ? card.front : card.back,
@@ -1178,7 +1182,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           userAnswer: '', wasCorrect: false, rating: 'again', responseMs: null,
           reviewMode, wasTyped: state.graduated ? productionMode === 'typed' : null,
         })
+        const wasGraduated = newState.graduated
         newState = progressAfterReview(newState, pipeline, { wasCorrect: false, rating: 'again', wrongSeverity: undefined, wasTyped: false }, nowDate)
+        if (wasGraduated && !newState.graduated) {
+          eventRepo.markLapsed(idkEvent.id, userId).catch(() => {})
+        }
       }
 
       const counted = { ...newState, iDontKnowCount: (prevState.iDontKnowCount ?? 0) + 1 }

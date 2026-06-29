@@ -184,12 +184,13 @@ function AllDueSessionInner() {
       }
 
       // ?category= elective study: build queue from only that category across
-      // all decks. Due sessions with a language pair are not capped.
+      // all decks (or, when source/target are given, just that language pair).
+      // Sessions scoped to a language pair are not capped.
       if (category) {
         const categoryCards: SessionCard[] = []
-        const isDueWithLang = category === 'due' && sourceLang && targetLang
+        const hasLangFilter = !!(sourceLang && targetLang)
         for (const deck of decks) {
-          if (isDueWithLang && (deck.sourceLanguage !== sourceLang || deck.targetLanguage !== targetLang)) continue
+          if (hasLangFilter && (deck.sourceLanguage !== sourceLang || deck.targetLanguage !== targetLang)) continue
           const [cards, states] = await Promise.all([
             cardRepo.listByDeck(deck.id),
             stateRepo.listByDeck(session.user.id, deck.id),
@@ -214,7 +215,7 @@ function AllDueSessionInner() {
             }
           }
         }
-        const finalQueue = isDueWithLang ? shuffle(categoryCards) : shuffle(categoryCards).slice(0, ALL_ELECTIVE_LIMIT)
+        const finalQueue = hasLangFilter ? shuffle(categoryCards) : shuffle(categoryCards).slice(0, ALL_ELECTIVE_LIMIT)
         if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
         setElectiveSession(true)
         setQueue(finalQueue)
@@ -427,7 +428,7 @@ function AllDueSessionInner() {
       const isRecallReview = reviewTrack === 'recall' || !!isReverse
       const wasTyped   = state.graduated ? (isRecallReview ? false : productionMode === 'typed') : null
 
-      await eventRepo.create({
+      const reviewEvent = await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
         promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
         promptShown: reviewPromptSide === 'front' ? card.front : card.back,
@@ -503,6 +504,10 @@ function AllDueSessionInner() {
       const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams }) : null
 
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
+
+      if (state.graduated && !newState.graduated) {
+        eventRepo.markLapsed(reviewEvent.id, userId).catch(() => {})
+      }
 
       if (
         newState.graduated && newState.dueAt && scheduled &&
@@ -706,7 +711,7 @@ function AllDueSessionInner() {
       let newState = state
       const penaltyCount = state.graduated ? 1 : 3
       for (let i = 0; i < penaltyCount; i++) {
-        await eventRepo.create({
+        const idkEvent = await eventRepo.create({
           userId: userId, cardId: card.id, mode: step.stepType,
           promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
           promptShown: reviewPromptSide === 'front' ? card.front : card.back,
@@ -714,7 +719,11 @@ function AllDueSessionInner() {
           userAnswer: '', wasCorrect: false, rating: 'again', responseMs: null,
           reviewMode, wasTyped: state.graduated ? productionMode === 'typed' : null,
         })
+        const wasGraduated = newState.graduated
         newState = progressAfterReview(newState, pipeline, { wasCorrect: false, rating: 'again', wrongSeverity: undefined, wasTyped: false }, nowDate)
+        if (wasGraduated && !newState.graduated) {
+          eventRepo.markLapsed(idkEvent.id, userId).catch(() => {})
+        }
       }
       const counted = { ...newState, iDontKnowCount: (prevState.iDontKnowCount ?? 0) + 1 }
       await stateRepo.upsert(counted)

@@ -19,6 +19,7 @@ interface DayData {
   date:      string        // YYYY-MM-DD
   graduated: LangCount[]  // per language pair
   reviewed:  number        // distinct graduated-card due reviews this day
+  lapses:    number        // reviews that ungraduated a card back into the learning pipeline
   newCards:  { front: string; back: string; cardId: string }[]
 }
 
@@ -116,7 +117,7 @@ export default function AnalyticsPage() {
     const endIso   = allDays[allDays.length - 1]!
 
     const dayMap = new Map<string, DayData>(
-      allDays.map(d => [d, { date: d, graduated: [], reviewed: 0, newCards: [] }])
+      allDays.map(d => [d, { date: d, graduated: [], reviewed: 0, lapses: 0, newCards: [] }])
     )
 
     // Over-fetch by 1 day on the start side and 2 days on the end side so
@@ -169,6 +170,19 @@ export default function AnalyticsPage() {
       if (dayMap.has(d)) dayMap.get(d)!.reviewed = ids.size
     }
 
+    // Lapses — reviews that sent a graduated card back into the learning pipeline
+    const { data: lapseEvents } = await supabase
+      .from('review_events')
+      .select('reviewed_at')
+      .eq('user_id', uid)
+      .eq('lapsed', true)
+      .gte('reviewed_at', queryStart)
+      .lte('reviewed_at', queryEnd)
+    for (const e of lapseEvents ?? []) {
+      const d = localDateWithTurnover(e.reviewed_at as string, tz, turnoverHour)
+      if (dayMap.has(d)) dayMap.get(d)!.lapses++
+    }
+
     // New cards introduced — introduced_date is already stored as a turnover-aware YYYY-MM-DD
     const { data: introStates } = await supabase
       .from('card_states')
@@ -214,8 +228,8 @@ export default function AnalyticsPage() {
   }, [data])
 
   const chartH  = 160
-  const maxVal  = Math.max(...data.map(d => totalGrad(d) + d.reviewed), 1)
-  const hasAny  = data.some(d => totalGrad(d) > 0 || d.reviewed > 0)
+  const maxVal  = Math.max(...data.map(d => totalGrad(d) + d.reviewed + d.lapses), 1)
+  const hasAny  = data.some(d => totalGrad(d) > 0 || d.reviewed > 0 || d.lapses > 0)
 
   const RANGES: { label: string; value: RangeDays }[] = [
     { label: '1W', value: 7  },
@@ -261,6 +275,10 @@ export default function AnalyticsPage() {
           <span className="w-3 h-3 rounded-sm bg-accent/70 inline-block" />
           Reviews due
         </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-sm inline-block" style={{ background: '#ef4444b3' }} />
+          Lapsed (back to learning)
+        </span>
       </div>
 
       {/* Chart */}
@@ -275,10 +293,11 @@ export default function AnalyticsPage() {
             <div className="flex items-end gap-0.5" style={{ height: chartH }}>
               {data.map((day, i) => {
                 const grad    = totalGrad(day)
-                const total   = grad + day.reviewed
+                const total   = grad + day.reviewed + day.lapses
                 const totalH  = (total / maxVal) * chartH
                 const gradH   = (grad / maxVal) * chartH
                 const revH    = (day.reviewed / maxVal) * chartH
+                const lapseH  = (day.lapses / maxVal) * chartH
                 const isEmpty = total === 0
 
                 return (
@@ -303,12 +322,19 @@ export default function AnalyticsPage() {
                       {day.reviewed > 0 && (
                         <div className="w-full bg-accent/70 rounded-t-sm shrink-0" style={{ height: revH }} />
                       )}
+                      {/* Lapses — sent back to learning pipeline */}
+                      {day.lapses > 0 && (
+                        <div
+                          className={`w-full shrink-0 ${day.reviewed === 0 ? 'rounded-t-sm' : ''}`}
+                          style={{ height: lapseH, background: '#ef4444b3' }}
+                        />
+                      )}
                       {/* Graduated — stacked language segments */}
                       {grad > 0 && (() => {
                         const segments = day.graduated.filter(g => g.count > 0)
                         return (
                           <div
-                            className={`w-full flex flex-col ${day.reviewed === 0 ? 'rounded-t-sm' : ''} overflow-hidden`}
+                            className={`w-full flex flex-col ${day.reviewed === 0 && day.lapses === 0 ? 'rounded-t-sm' : ''} overflow-hidden`}
                             style={{ height: gradH }}
                           >
                             {segments.map((g, si) => {
@@ -382,6 +408,9 @@ export default function AnalyticsPage() {
             })}
             {tooltip.day.reviewed > 0 && (
               <p className="text-accent/80">Reviews due: <span className="font-medium text-ink">{tooltip.day.reviewed}</span></p>
+            )}
+            {tooltip.day.lapses > 0 && (
+              <p style={{ color: '#ef4444' }}>Lapsed: <span className="font-medium text-ink">{tooltip.day.lapses}</span></p>
             )}
             {tooltip.day.newCards.length > 0 && (
               <p className="text-ink-faint">New introduced: {tooltip.day.newCards.length}</p>

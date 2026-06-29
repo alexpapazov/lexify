@@ -23,6 +23,7 @@ function rowToEvent(row: Record<string, unknown>): ReviewEvent {
     acceleratedPenalty:(row.accelerated_penalty as number | null) ?? null,
     reviewDirection:   (row.review_direction as 'forward' | 'reverse' | null) ?? null,
     reps:              Number(row.reps ?? 0),
+    lapsed:            (row.lapsed as boolean | null) ?? false,
   }
 }
 
@@ -52,5 +53,12 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
       .eq('user_id', userId).eq('card_id', cardId)
     if (error) throw new Error(error.message)
     return count ?? 0
+  }
+
+  async markLapsed(id: string, userId: UserId): Promise<void> {
+    const { error } = await this.db.from('review_events')
+      .update({ lapsed: true })
+      .eq('id', id).eq('user_id', userId)
+    if (error) throw new Error(error.message)
   }
 }

@@ -97,6 +97,7 @@ export interface CreateReviewEventInput {
 export interface ReviewEventRepository {
   create(input: CreateReviewEventInput): Promise<ReviewEvent>
   countByCard(userId: UserId, cardId: CardId): Promise<number>
+  markLapsed(id: string, userId: UserId): Promise<void>
 }
 
 export interface DeckPreferencesRepository {

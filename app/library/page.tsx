@@ -1230,7 +1230,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             const cfg = PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)
             return cfg && cfg.value > 0 ? (
               <Link
-                href={`/study/all/session?category=${activeFilter}`}
+                href={`/study/all/session?category=${activeFilter}&source=${pairSource}&target=${pairTarget}`}
                 className="btn-primary block w-full text-center"
               >
                 Study {cfg.label}
