@@ -419,6 +419,9 @@ function AllDueSessionInner() {
           ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, idealDays, stateRepo)
           : idealDueAt
         newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays }
+        if (newState.intervalHistory.length > 0) {
+          newState = { ...newState, intervalHistory: [...newState.intervalHistory.slice(0, -1), idealDays] }
+        }
         pipelineTypingErrorsRef.current.delete(card.id)
       }
 

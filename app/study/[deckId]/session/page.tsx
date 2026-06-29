@@ -660,6 +660,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, idealDays, stateRepo)
           : idealDueAt
         newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays }
+        // pipeline.ts appended INITIAL_INTERVAL['good']=3 before we knew idealDays; replace it
+        if (newState.intervalHistory.length > 0) {
+          newState = { ...newState, intervalHistory: [...newState.intervalHistory.slice(0, -1), idealDays] }
+        }
         pipelineTypingErrorsRef.current.delete(card.id)
       }
 

@@ -827,6 +827,12 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                     <div className="text-ink font-medium text-sm font-mono text-[10px]">{card.synonymGroupId.slice(0, 8)}…</div>
                   </div>
                 )}
+                {card.ipa && (
+                  <div className="space-y-0.5">
+                    <div className="text-xs text-ink-faint uppercase tracking-wider">IPA</div>
+                    <div className="text-ink font-medium text-sm">{card.ipa}</div>
+                  </div>
+                )}
               </div>
               {card.hints.length > 0 && (
                 <div>
@@ -850,6 +856,102 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                   <div className="flex flex-wrap gap-1">
                     {card.acceptedBackAlternatives!.map(a => <span key={a} className="chip text-success/80">{a}</span>)}
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Synonyms (editable) ───────────────────────────────────────── */}
+            <div className="space-y-2">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                Synonyms <span className="normal-case font-normal opacity-60">(accepted as correct answers)</span>
+              </div>
+              {(card.choices?.backSynonyms?.length ?? 0) > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="text-[10px] text-ink-faint self-center">{langName(targetLanguage)}:</span>
+                  {card.choices!.backSynonyms!.map(s => (
+                    <span key={s} className="flex items-center gap-1 chip text-success/80">
+                      {s}
+                      <button onClick={() => handleRemoveBackSynonym(s)} className="text-ink-faint hover:text-danger transition-colors leading-none ml-0.5" title="Remove">×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {(card.choices?.frontSynonyms?.length ?? 0) > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="text-[10px] text-ink-faint self-center">{langName(sourceLanguage)}:</span>
+                  {card.choices!.frontSynonyms!.map(s => (
+                    <span key={s} className="flex items-center gap-1 chip text-accent-soft">
+                      {s}
+                      <button onClick={() => handleRemoveFrontSynonym(s)} className="text-ink-faint hover:text-danger transition-colors leading-none ml-0.5" title="Remove">×</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2 items-center">
+                <span className="text-xs text-ink-faint w-20 shrink-0">{langName(targetLanguage)}:</span>
+                <input className="input text-sm flex-1" placeholder={`Add ${langName(targetLanguage)} synonym…`}
+                  value={targetSynonymInput} onChange={e => setTargetSynonymInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAddTargetSynonym() } }} />
+                <button onClick={() => void handleAddTargetSynonym()} disabled={!targetSynonymInput.trim() || synonymSaving}
+                  className="btn-ghost text-sm px-3 disabled:opacity-40">Add</button>
+              </div>
+              <div className="flex gap-2 items-center">
+                <span className="text-xs text-ink-faint w-20 shrink-0">{langName(sourceLanguage)}:</span>
+                <input className="input text-sm flex-1" placeholder={`Add ${langName(sourceLanguage)} synonym…`}
+                  value={sourceSynonymInput} onChange={e => setSourceSynonymInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAddSourceSynonym() } }} />
+                <button onClick={() => void handleAddSourceSynonym()} disabled={!sourceSynonymInput.trim() || synonymSaving}
+                  className="btn-ghost text-sm px-3 disabled:opacity-40">Add</button>
+              </div>
+              {pendingLinkSaved && (
+                <p className="text-xs text-success/80">Pending link saved for &quot;{pendingLinkSaved}&quot; — it will auto-connect when you create that card.</p>
+              )}
+              {!linkSynonymMode ? (
+                <button onClick={async () => { setLinkSynonymMode(true); setLinkQuery(''); setLinkError(null); setPendingLinkSaved(null); await loadAllPairCards() }}
+                  className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
+                  ⇌ Link another card as synonym…
+                </button>
+              ) : (
+                <div className="space-y-2 rounded-card border border-white/10 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Link synonym card</p>
+                    <button onClick={() => { setLinkSynonymMode(false); setLinkQuery(''); setLinkError(null) }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
+                  </div>
+                  <p className="text-xs text-ink-faint">Pick an existing card, or type a word that doesn&apos;t exist yet to save a pending connection.</p>
+                  <input autoFocus className="input text-sm w-full" placeholder="Search by front or back…"
+                    value={linkQuery} onChange={e => setLinkQuery(e.target.value)} />
+                  {mergeCardsLoading && <p className="text-xs text-ink-faint">Loading…</p>}
+                  {linkError && <p className="text-xs text-danger">{linkError}</p>}
+                  {allPairCards && (() => {
+                    const q = linkQuery.trim()
+                    const results = q
+                      ? allPairCards.filter(c => c.front.toLowerCase().includes(q.toLowerCase()) || c.back.toLowerCase().includes(q.toLowerCase()))
+                      : allPairCards
+                    return (
+                      <>
+                        {results.length > 0 && (
+                          <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-44 overflow-y-auto">
+                            {results.slice(0, 50).map(c => (
+                              <button key={c.id} onClick={() => void handleLinkSynonym(c)} disabled={linkSaving}
+                                className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors disabled:opacity-50">
+                                <span className="text-sm font-medium text-ink w-32 truncate shrink-0">{displayText(c.front)}</span>
+                                <span className="text-sm text-ink-muted truncate">{displayText(c.back)}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {results.length === 0 && q && (
+                          <div className="rounded-card border border-white/10 px-3 py-3 space-y-2">
+                            <p className="text-xs text-ink-faint">No card named &quot;{q}&quot; exists yet.</p>
+                            <button onClick={() => void handleSavePendingLink(q)} disabled={linkSaving}
+                              className="text-xs text-accent hover:text-accent/80 transition-colors disabled:opacity-50">
+                              {linkSaving ? 'Saving…' : `Save pending link for "${q}" →`}
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )
+                  })()}
                 </div>
               )}
             </div>
@@ -961,6 +1063,16 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                       const maxDate = new Date(base + prevInterval * r.max * 86400_000)
                       return `${formatDate(minDate.toISOString())} → ${formatDate(maxDate.toISOString())}`
                     })()
+                    // Graduation interval: first entry in intervalHistory (corrected at graduation to idealDays)
+                    const gradIntervalDays = state.graduated && state.intervalHistory.length > 0
+                      ? state.intervalHistory[0]!
+                      : null
+                    const gradStruggleLabel = gradIntervalDays != null
+                      ? gradIntervalDays >= 5 ? '0'
+                        : gradIntervalDays >= 3 ? '1'
+                        : gradIntervalDays >= 2 ? '2'
+                        : '3+'
+                      : null
                     return (
                       <StatGroup title="Scheduling" rows={[
                         ['Interval (ideal)',    formatIntervalDays(state.intervalDays)],
@@ -970,6 +1082,10 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                         ['Last reviewed',       formatDate(state.lastReviewedAt, 'Never')],
                         ['Introduced',          formatDate(state.introducedDate, 'Not yet')],
                         ['Graduated at',        formatDate(state.graduatedAt, '—')],
+                        ...(gradIntervalDays != null ? [
+                          ['Graduation interval', formatIntervalDays(gradIntervalDays)] as [string, string],
+                          ['Pipeline struggles',  gradStruggleLabel!] as [string, string],
+                        ] : []),
                       ]} />
                     )
                   })()}
@@ -1125,26 +1241,6 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                       </div>
                     )
                   })}
-                  {(card.choices.backSynonyms?.length ?? 0) > 0 && (
-                    <div>
-                      <div className="text-[10px] text-ink-faint mb-1">
-                        {langName(targetLanguage)} synonyms (accepted as correct)
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {card.choices.backSynonyms!.map(s => <span key={s} className="chip text-success/80">{s}</span>)}
-                      </div>
-                    </div>
-                  )}
-                  {(card.choices.frontSynonyms?.length ?? 0) > 0 && (
-                    <div>
-                      <div className="text-[10px] text-ink-faint mb-1">
-                        {langName(sourceLanguage)} synonyms (accepted as correct)
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {card.choices.frontSynonyms!.map(s => <span key={s} className="chip text-success/80">{s}</span>)}
-                      </div>
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -1364,153 +1460,6 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
         </div>
 
         {validErr && <p className="text-danger text-xs">{validErr}</p>}
-
-        {/* ── Synonyms ─────────────────────────────────────────────── */}
-        <div className="space-y-2 border-t border-white/10 pt-3">
-          <div className="flex items-center justify-between">
-            <label className="text-xs text-ink-muted uppercase tracking-wider">
-              Synonyms <span className="normal-case font-normal">(accepted as correct answers)</span>
-            </label>
-          </div>
-
-          {/* Existing synonym chips — back (target-language) */}
-          {(card.choices?.backSynonyms?.length ?? 0) > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              <span className="text-[10px] text-ink-faint self-center">{langName(targetLanguage)}:</span>
-              {card.choices!.backSynonyms!.map(s => (
-                <span key={s} className="flex items-center gap-1 chip text-success/80">
-                  {s}
-                  <button
-                    onClick={() => handleRemoveBackSynonym(s)}
-                    className="text-ink-faint hover:text-danger transition-colors leading-none ml-0.5"
-                    title="Remove synonym"
-                  >×</button>
-                </span>
-              ))}
-            </div>
-          )}
-          {/* Existing synonym chips — front (source-language) */}
-          {(card.choices?.frontSynonyms?.length ?? 0) > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              <span className="text-[10px] text-ink-faint self-center">{langName(sourceLanguage)}:</span>
-              {card.choices!.frontSynonyms!.map(s => (
-                <span key={s} className="flex items-center gap-1 chip text-accent-soft">
-                  {s}
-                  <button
-                    onClick={() => handleRemoveFrontSynonym(s)}
-                    className="text-ink-faint hover:text-danger transition-colors leading-none ml-0.5"
-                    title="Remove synonym"
-                  >×</button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Target-language synonym (e.g. English) — goes directly to backSynonyms */}
-          <div className="flex gap-2 items-center">
-            <span className="text-xs text-ink-faint w-24 shrink-0">{langName(targetLanguage)}:</span>
-            <input
-              className="input text-sm flex-1"
-              placeholder={`Add ${langName(targetLanguage)} synonym…`}
-              value={targetSynonymInput}
-              onChange={e => setTargetSynonymInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAddTargetSynonym() } }}
-            />
-            <button
-              onClick={() => void handleAddTargetSynonym()}
-              disabled={!targetSynonymInput.trim() || synonymSaving}
-              className="btn-ghost text-sm px-3 disabled:opacity-40"
-            >Add</button>
-          </div>
-
-          {/* Source-language synonym (e.g. Spanish) — COMMON-aware, links cards */}
-          <div className="flex gap-2 items-center">
-            <span className="text-xs text-ink-faint w-24 shrink-0">{langName(sourceLanguage)}:</span>
-            <input
-              className="input text-sm flex-1"
-              placeholder={`Add ${langName(sourceLanguage)} synonym…`}
-              value={sourceSynonymInput}
-              onChange={e => setSourceSynonymInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAddSourceSynonym() } }}
-            />
-            <button
-              onClick={() => void handleAddSourceSynonym()}
-              disabled={!sourceSynonymInput.trim() || synonymSaving}
-              className="btn-ghost text-sm px-3 disabled:opacity-40"
-            >Add</button>
-          </div>
-
-          {/* Link synonym card */}
-          {pendingLinkSaved && (
-            <p className="text-xs text-success/80">
-              Pending link saved for &quot;{pendingLinkSaved}&quot; — it will auto-connect when you create that card.
-            </p>
-          )}
-          {!linkSynonymMode ? (
-            <button
-              onClick={async () => { setLinkSynonymMode(true); setLinkQuery(''); setLinkError(null); setPendingLinkSaved(null); await loadAllPairCards() }}
-              className="text-xs text-ink-faint hover:text-ink-muted transition-colors"
-            >
-              ⇌ Link another card as synonym…
-            </button>
-          ) : (
-            <div className="space-y-2 rounded-card border border-white/10 p-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Link synonym card</p>
-                <button onClick={() => { setLinkSynonymMode(false); setLinkQuery(''); setLinkError(null) }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
-              </div>
-              <p className="text-xs text-ink-faint">
-                Pick an existing card, or type a word that doesn&apos;t exist yet to save a pending connection.
-              </p>
-              <input
-                autoFocus
-                className="input text-sm w-full"
-                placeholder="Search by front or back…"
-                value={linkQuery}
-                onChange={e => setLinkQuery(e.target.value)}
-              />
-              {mergeCardsLoading && <p className="text-xs text-ink-faint">Loading…</p>}
-              {linkError && <p className="text-xs text-danger">{linkError}</p>}
-              {allPairCards && (() => {
-                const q = linkQuery.trim()
-                const results = q
-                  ? allPairCards.filter(c => c.front.toLowerCase().includes(q.toLowerCase()) || c.back.toLowerCase().includes(q.toLowerCase()))
-                  : allPairCards
-                return (
-                  <>
-                    {results.length > 0 && (
-                      <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-44 overflow-y-auto">
-                        {results.slice(0, 50).map(c => (
-                          <button
-                            key={c.id}
-                            onClick={() => void handleLinkSynonym(c)}
-                            disabled={linkSaving}
-                            className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors disabled:opacity-50"
-                          >
-                            <span className="text-sm font-medium text-ink w-32 truncate shrink-0">{displayText(c.front)}</span>
-                            <span className="text-sm text-ink-muted truncate">{displayText(c.back)}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {results.length === 0 && q && (
-                      <div className="rounded-card border border-white/10 px-3 py-3 space-y-2">
-                        <p className="text-xs text-ink-faint">No card named &quot;{q}&quot; exists yet.</p>
-                        <button
-                          onClick={() => void handleSavePendingLink(q)}
-                          disabled={linkSaving}
-                          className="text-xs text-accent hover:text-accent/80 transition-colors disabled:opacity-50"
-                        >
-                          {linkSaving ? 'Saving…' : `Save pending link for "${q}" →`}
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )
-              })()}
-            </div>
-          )}
-        </div>
 
         <div className="flex gap-3 flex-wrap">
           <button
