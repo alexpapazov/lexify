@@ -512,6 +512,14 @@ export interface CardState {
   acceleratedWrongStreak: number
   /** Permanent wrong-answer count. Each wrong linearly reduces the acceleration boost. */
   acceleratedPenalty:     number
+  /**
+   * How many production attempts remain in the post-acceleration restart window
+   * (set to 3 when acceleratedMode transitions 'import_known' → 'none').
+   * 0 = not in window.
+   */
+  postAccelRestartWindow: number
+  /** How many of those attempts were wrong (≥ 2 → pipeline restart). */
+  postAccelWrongCount:    number
   // ── Dual-interval tracks (Phase 1 / Phase 2) ──────────────────────────────
   /**
    * When non-null, the card has entered Phase 2 (recall track active).

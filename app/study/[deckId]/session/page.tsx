@@ -42,6 +42,10 @@ interface SessionCard {
   pipeline: Pipeline
   /** For graduated cards: whether this review should use typed or self-graded production. Null pre-graduation. */
   productionMode: ProductionMode | null
+  /** Which interval track triggered this queue entry ('typed' | 'recall' | 'legacy'). Undefined for pipeline cards. */
+  reviewTrack?: 'typed' | 'recall' | 'legacy'
+  /** True when this entry is for the reverse-direction (Spanish→English) recall row. */
+  isReverse?: boolean
   /** Marks a copy of a card re-inserted after "I don't know" — used for undo cleanup. */
   idontknow?: true
 }
@@ -328,8 +332,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const groupsMap = await new SupabaseSynonymGroupRepository().listForCards(cards.map(c => c.id))
       setSynonymGroups(groupsMap)
 
-      const existingStates = await stateRepo.listByDeck(session.user.id, deckId)
-      const stateMap = new Map(existingStates.map(s => [s.cardId, s]))
+      const existingStates  = await stateRepo.listByDeck(session.user.id, deckId)
+      const forwardStates   = existingStates.filter(s => s.reviewDirection !== 'reverse')
+      const reverseStatesList = existingStates.filter(s => s.reviewDirection === 'reverse')
+      const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
       setCardStates(stateMap)
 
       const existingOverrides = await new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id)
@@ -438,11 +444,30 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           newCards.push({ card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline, productionMode: null })
         } else if (!state.graduated) {
           inPipeline.push({ card, state, pipeline, productionMode: null })
-        } else if (state.dueAt && new Date(state.dueAt) <= now) {
-          dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
-        } else {
-          electiveCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+        } else if (state.graduated) {
+          const isLegacyDue = !state.typedDueAt && !!state.dueAt && new Date(state.dueAt) <= now
+          const isTypedDue  = !!state.typedDueAt  && new Date(state.typedDueAt)  <= now
+          const isRecallDue = !!state.recallDueAt && new Date(state.recallDueAt) <= now
+          if (isTypedDue) {
+            dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
+          }
+          if (isRecallDue) {
+            dueCards.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
+          }
+          if (isLegacyDue) {
+            dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
+          }
+          if (!isTypedDue && !isRecallDue && !isLegacyDue) {
+            electiveCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+          }
         }
+      }
+
+      // Add due reverse-direction rows
+      for (const reverseState of reverseStatesList) {
+        if (!reverseState.recallDueAt || new Date(reverseState.recallDueAt) > now) continue
+        const card = cards.find(c => c.id === reverseState.cardId)
+        if (card) dueCards.push({ card, state: reverseState, pipeline, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
       }
 
       // New cards: keep in deck order (first session = ordered introduction)
@@ -589,13 +614,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setAnswerError(null)
 
     try {
-      const { card, state, pipeline, productionMode } = current
+      const { card, state, pipeline, productionMode, reviewTrack, isReverse } = current
       const stateRepo  = new SupabaseCardStateRepository()
       const eventRepo  = new SupabaseReviewEventRepository()
       const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
       const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
-      const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
-      const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
+      const reviewPromptSide: CardSide = state.graduated ? (isReverse ? 'front' : 'back') : step.promptSide
+      const reviewAnswerSide: CardSide = state.graduated ? (isReverse ? 'back'  : 'front') : step.answerSide
 
       // Confusion tracking: record every wrong answer (multiple-choice pick
       // or typed response, in either direction) so it can be surfaced later
@@ -622,7 +647,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       const nowDate    = new Date()
       const reviewMode = classifyReviewMode(state, nowDate)
-      const wasTyped   = state.graduated ? productionMode === 'typed' : null
+      const isRecallReview = reviewTrack === 'recall' || !!isReverse
+      const wasTyped   = state.graduated ? (isRecallReview ? false : productionMode === 'typed') : null
 
       await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
@@ -639,6 +665,60 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
         ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
         : undefined
+
+      // Lazy reverse-row creation for existing graduated cards that predate Phase 2.
+      if (state.graduated && state.reviewDirection !== 'reverse' && !isRecallReview) {
+        const reverseExists = await stateRepo.get(userId, card.id, 'reverse')
+        if (!reverseExists) {
+          const revInterval = Math.max(1, Math.round((state.typedIntervalDays ?? state.intervalDays) / 2))
+          const revDueAt    = new Date(nowDate.getTime() + revInterval * 86_400_000).toISOString()
+          await stateRepo.upsert({
+            ...initialCardState(userId, card.id, pipeline.id),
+            graduated:             true,
+            reviewDirection:       'reverse',
+            intervalDays:          revInterval,
+            scheduledIntervalDays: revInterval,
+            recallIntervalDays:    revInterval,
+            recallDueAt:           revDueAt,
+            dueAt:                 revDueAt,
+            lastReviewedAt:        nowDate.toISOString(),
+            graduatedAt:           state.graduatedAt ?? nowDate.toISOString(),
+            introducedDate:        state.introducedDate,
+          })
+        }
+      }
+
+      // Recall/reverse review: update only the recall track then return early.
+      if (isRecallReview) {
+        const recallBase = state.recallIntervalDays != null
+          ? { ...state, intervalDays: state.recallIntervalDays, scheduledIntervalDays: state.recallIntervalDays }
+          : state
+        const recallSched = scheduleNext(recallBase, rating, { now: nowDate, wrongSeverity, params: schedulerParams })
+        const newRecallDueAt = recallSched.dueAt
+          ? snapDueAtToStartOfDay(recallSched.dueAt, tzRef.current, turnoverRef.current)
+          : state.recallDueAt
+        const recallNewState: CardState = {
+          ...state,
+          ease:               recallSched.ease,
+          lastRating:         rating,
+          lastReviewedAt:     nowDate.toISOString(),
+          reps:               rating !== 'hard' ? state.reps + 1 : state.reps,
+          lapseClusterCount:  recallSched.lapseClusterCount,
+          lastLapseAt:        recallSched.lastLapseAt,
+          recallIntervalDays: recallSched.intervalDays,
+          recallDueAt:        newRecallDueAt,
+        }
+        await stateRepo.upsert(recallNewState)
+        setCardStates(prev => {
+          if (isReverse) return prev
+          const n = new Map(prev); n.set(card.id, recallNewState); return n
+        })
+        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState }])
+        setRedoStack([])
+        setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
+        if (index + 1 < queue.length || relearnPool.length > 0) { setIndex(i => i + 1) } else { setDone(true) }
+        return
+      }
 
       // Count wrong typing answers during the pipeline so graduation can pick the right interval.
       if (!state.graduated && step.stepType === 'typing' && !wasCorrect) {
@@ -671,7 +751,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         const smoothed = (maxDays - minDays >= 1)
           ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, idealDays, stateRepo)
           : idealDueAt
-        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays }
+        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays, typedDueAt: smoothed, typedIntervalDays: idealDays }
         // pipeline.ts appended INITIAL_INTERVAL['good']=3 before we knew idealDays; replace it
         if (newState.intervalHistory.length > 0) {
           newState = { ...newState, intervalHistory: [...newState.intervalHistory.slice(0, -1), idealDays] }
@@ -685,7 +765,76 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         newState = { ...newState, dueAt: snapDueAtToStartOfDay(newState.dueAt, tzRef.current, turnoverRef.current) }
       }
 
+      // Typed track: keep typedDueAt in sync with dueAt after scheduling.
+      if (newState.graduated && !scheduled?.relearn && reviewTrack === 'typed') {
+        newState = { ...newState, typedDueAt: newState.dueAt, typedIntervalDays: newState.intervalDays }
+        // Phase 1 completion: once last 3 typed reviews are all correct, activate the recall track.
+        if (wasCorrect && !newState.recallDueAt) {
+          const w = newState.typedAccuracyWindow
+          if (w.length >= 3 && w.slice(-3).every(v => v === 1)) {
+            const recallInterval = Math.round((newState.typedIntervalDays ?? newState.intervalDays) * 1.5)
+            newState = { ...newState, recallIntervalDays: recallInterval, recallDueAt: new Date(nowDate.getTime() + recallInterval * 86_400_000).toISOString() }
+          }
+        }
+        // One-way typed→recall credit: push recall due date if it falls within 3 days.
+        if (wasCorrect && newState.recallDueAt && newState.recallIntervalDays) {
+          const recallDueSoon = (new Date(newState.recallDueAt).getTime() - nowDate.getTime()) < 3 * 86_400_000
+          if (recallDueSoon) {
+            const priorTyped   = state.typedIntervalDays ?? 1
+            const newTyped     = newState.typedIntervalDays ?? 1
+            const growthRatio  = Math.max(1, newTyped / priorTyped)
+            const newRecallInt = Math.min(Math.round(newState.recallIntervalDays * growthRatio), schedulerParams.maxIntervalDays)
+            newState = { ...newState, recallIntervalDays: newRecallInt, recallDueAt: new Date(nowDate.getTime() + newRecallInt * 86_400_000).toISOString() }
+          }
+        }
+      }
+
+      // Legacy track: check Phase 1 completion when review was typed.
+      if (newState.graduated && !scheduled?.relearn && reviewTrack === 'legacy' && wasTyped && wasCorrect && !newState.recallDueAt) {
+        const w = newState.typedAccuracyWindow
+        if (w.length >= 3 && w.slice(-3).every(v => v === 1)) {
+          const recallInterval = Math.round(newState.intervalDays * 1.5)
+          newState = { ...newState, recallIntervalDays: recallInterval, recallDueAt: new Date(nowDate.getTime() + recallInterval * 86_400_000).toISOString() }
+        }
+      }
+
+      // Post-acceleration restart window: 2+ wrong answers in 3 attempts → restart pipeline.
+      if (state.graduated && state.acceleratedMode === 'none' && state.postAccelRestartWindow > 0) {
+        const newWindow = state.postAccelRestartWindow - 1
+        const newWrong  = state.postAccelWrongCount + (wasCorrect ? 0 : 1)
+        if (newWrong >= 2) {
+          newState = {
+            ...initialCardState(userId, card.id, pipeline.id),
+            introducedDate:         state.introducedDate,
+            acceleratedMode:        'none',
+            postAccelRestartWindow: 0,
+            postAccelWrongCount:    0,
+          }
+        } else {
+          newState = { ...newState, postAccelRestartWindow: newWindow, postAccelWrongCount: newWrong }
+        }
+      }
+
       await stateRepo.upsert(newState)
+
+      // Create reverse-direction row when a card just graduated.
+      if (!state.graduated && newState.graduated) {
+        const revInterval = Math.max(1, Math.round(newState.intervalDays / 2))
+        const revDueAt    = new Date(nowDate.getTime() + revInterval * 86_400_000).toISOString()
+        await stateRepo.upsert({
+          ...initialCardState(userId, card.id, pipeline.id),
+          graduated:             true,
+          reviewDirection:       'reverse',
+          intervalDays:          revInterval,
+          scheduledIntervalDays: revInterval,
+          recallIntervalDays:    revInterval,
+          recallDueAt:           revDueAt,
+          dueAt:                 revDueAt,
+          lastReviewedAt:        nowDate.toISOString(),
+          graduatedAt:           nowDate.toISOString(),
+          introducedDate:        getToday(tzRef.current, turnoverRef.current),
+        })
+      }
 
       // Co-advance all synonym group members at the same pre-graduation step.
       // Steps 3 (TypingMode, same back answer) and 4 (final recognition) are
@@ -970,13 +1119,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setAnswerError(null)
 
     try {
-      const { card, state, pipeline, productionMode } = current
+      const { card, state, pipeline, productionMode, isReverse } = current
       const stateRepo  = new SupabaseCardStateRepository()
       const eventRepo  = new SupabaseReviewEventRepository()
       const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
       const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
-      const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
-      const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
+      const reviewPromptSide: CardSide = state.graduated ? (isReverse ? 'front' : 'back') : step.promptSide
+      const reviewAnswerSide: CardSide = state.graduated ? (isReverse ? 'back'  : 'front') : step.answerSide
 
       const nowDate    = new Date()
       const reviewMode = classifyReviewMode(state, nowDate)
@@ -1158,11 +1307,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
   const current = queue[index]
   if (!current) return null // pool-injection useEffect will add a card momentarily
-  const { card, state, pipeline } = current
+  const { card, state, pipeline, isReverse: currentIsReverse } = current
   const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
-  const reviewPromptSide: CardSide = state.graduated ? 'back' : step.promptSide
-  const reviewAnswerSide: CardSide = state.graduated ? 'front' : step.answerSide
+  const reviewPromptSide: CardSide = state.graduated ? (currentIsReverse ? 'front' : 'back') : step.promptSide
+  const reviewAnswerSide: CardSide = state.graduated ? (currentIsReverse ? 'back'  : 'front') : step.answerSide
   // Repeat is offered when a correct answer would complete the current pipeline step.
   const stepWillComplete = !state.graduated && state.correctInStep + 1 >= step.requiredCorrect
 
@@ -1205,7 +1354,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         <Link href={deckUrl} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
-          <div className="text-xs text-ink-muted">{state.graduated ? 'Review' : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
+          <div className="text-xs text-ink-muted">
+            {state.graduated
+              ? (currentIsReverse ? 'Reverse recall' : current.reviewTrack === 'recall' ? 'Recall' : 'Review')
+              : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}
+          </div>
         </div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">

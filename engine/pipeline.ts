@@ -73,6 +73,8 @@ export function initialCardState(
     acceleratedLocked:      false,
     acceleratedWrongStreak: 0,
     acceleratedPenalty:     0,
+    postAccelRestartWindow: 0,
+    postAccelWrongCount:    0,
     typedIntervalDays:   null,
     typedDueAt:          null,
     recallIntervalDays:  null,
@@ -157,6 +159,8 @@ export function progressAfterReview(
     let acceleratedLocked      = state.acceleratedLocked
     let acceleratedWrongStreak = state.acceleratedWrongStreak
     let acceleratedPenalty     = state.acceleratedPenalty
+    let postAccelRestartWindow = state.postAccelRestartWindow
+    let postAccelWrongCount    = state.postAccelWrongCount
 
     if (state.acceleratedMode === 'import_known' || state.acceleratedLocked) {
       acceleratedLocked = true   // lock after first actual review
@@ -165,12 +169,16 @@ export function progressAfterReview(
       if (rating === 'again') {
         acceleratedWrongStreak++
         acceleratedPenalty++
-        if (acceleratedWrongStreak >= 2) acceleratedMode = 'none'
+        if (acceleratedWrongStreak >= 2) {
+          acceleratedMode = 'none'
+          postAccelRestartWindow = 3
+          postAccelWrongCount    = 0
+        }
       } else {
         acceleratedWrongStreak = 0   // reset on correct; penalty is permanent
       }
     }
-    const accelFields = { acceleratedMode, acceleratedLocked, acceleratedWrongStreak, acceleratedPenalty }
+    const accelFields = { acceleratedMode, acceleratedLocked, acceleratedWrongStreak, acceleratedPenalty, postAccelRestartWindow, postAccelWrongCount }
 
     if (rating === 'again') {
       const scheduled = scheduleNext(state, 'again', { now: nowDate, wrongSeverity })

@@ -43,6 +43,8 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     acceleratedLocked:      Boolean(row.accelerated_locked ?? false),
     acceleratedWrongStreak: Number(row.accelerated_wrong_streak ?? 0),
     acceleratedPenalty:     Number(row.accelerated_penalty      ?? 0),
+    postAccelRestartWindow: Number(row.post_accel_restart_window ?? 0),
+    postAccelWrongCount:    Number(row.post_accel_wrong_count    ?? 0),
     typedIntervalDays:   row.typed_interval_days  != null ? Number(row.typed_interval_days)  : null,
     typedDueAt:          (row.typed_due_at         as string | null) ?? null,
     recallIntervalDays:  row.recall_interval_days != null ? Number(row.recall_interval_days) : null,
@@ -54,11 +56,11 @@ function rowToCardState(row: Record<string, unknown>): CardState {
 export class SupabaseCardStateRepository implements CardStateRepository {
   private get db() { return createClient() }
 
-  async get(userId: UserId, cardId: CardId): Promise<CardState | null> {
+  async get(userId: UserId, cardId: CardId, reviewDirection: 'forward' | 'reverse' = 'forward'): Promise<CardState | null> {
     const { data, error } = await this.db.from('card_states').select('*')
-      .eq('user_id', userId).eq('card_id', cardId).single()
+      .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', reviewDirection).maybeSingle()
     if (error) return null
-    return rowToCardState(data)
+    return data ? rowToCardState(data) : null
   }
 
   async listByDeck(userId: UserId, deckId: DeckId): Promise<CardState[]> {
@@ -106,6 +108,8 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       accelerated_locked:       state.acceleratedLocked,
       accelerated_wrong_streak: state.acceleratedWrongStreak,
       accelerated_penalty:      state.acceleratedPenalty,
+      post_accel_restart_window: state.postAccelRestartWindow,
+      post_accel_wrong_count:    state.postAccelWrongCount,
       typed_interval_days:      state.typedIntervalDays,
       typed_due_at:             state.typedDueAt,
       recall_interval_days:     state.recallIntervalDays,
@@ -140,6 +144,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       semantic_mistake_count: s.semanticMistakeCount, wrong_synonym_count: s.wrongSynonymCount,
       accelerated_mode: s.acceleratedMode, accelerated_locked: s.acceleratedLocked,
       accelerated_wrong_streak: s.acceleratedWrongStreak, accelerated_penalty: s.acceleratedPenalty,
+      post_accel_restart_window: s.postAccelRestartWindow, post_accel_wrong_count: s.postAccelWrongCount,
       typed_interval_days:  s.typedIntervalDays,
       typed_due_at:         s.typedDueAt,
       recall_interval_days: s.recallIntervalDays,
