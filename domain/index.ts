@@ -576,6 +576,8 @@ export interface ReviewEvent {
   acceleratedPenalty:  number | null
   /** Which review direction triggered this event. Null for legacy rows. */
   reviewDirection:     'forward' | 'reverse' | null
+  /** CardState.reps at the time of this review (before progression). 0 for pre-graduation / legacy rows. */
+  reps:                number
 }
 
 // ─── Deck preferences ─────────────────────────────────────────────────────────

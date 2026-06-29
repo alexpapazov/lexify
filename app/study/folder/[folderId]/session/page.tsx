@@ -431,6 +431,7 @@ function FolderSessionInner() {
         wasAccelerated:    state.acceleratedMode === 'import_known',
         acceleratedPenalty: state.acceleratedPenalty,
         reviewDirection:   (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
+        reps:              state.reps,
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
@@ -854,6 +855,18 @@ function FolderSessionInner() {
       deckCards: it.deckCards.map(c => c.id === cardId ? updated : c),
     })))
   }, [queue, handleChoicesCached])
+
+  useEffect(() => {
+    const sourceLanguage = queue[0]?.sourceLanguage
+    const targetLanguage = queue[0]?.targetLanguage
+    if (!done || !userId || !sourceLanguage || !targetLanguage || electiveSession) return
+    fetch('/api/calibrate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, sourceLanguage, targetLanguage }),
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done])
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 

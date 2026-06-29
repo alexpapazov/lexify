@@ -530,6 +530,17 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentCardId, sessionAnsweredSynonyms])
 
+  // Fire-and-forget calibration when the session completes.
+  useEffect(() => {
+    if (!done || !userId || !sourceLanguage || !targetLanguage || electiveSession) return
+    fetch('/api/calibrate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, sourceLanguage, targetLanguage }),
+    }).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done])
+
   // Persist IPA toggle preference.
   useEffect(() => {
     localStorage.setItem('lexify_ipa', showIPA ? '1' : '0')
@@ -660,6 +671,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         wasAccelerated:     state.acceleratedMode === 'import_known',
         acceleratedPenalty: state.acceleratedPenalty,
         reviewDirection:    (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
+        reps:               state.reps,
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)

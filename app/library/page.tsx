@@ -16,6 +16,8 @@ import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { langName, langNativeName, langFlag } from '@/lib/languages'
 import { FLAG_OPTIONS } from '@/lib/flagOptions'
 import type { Folder, Deck, LanguagePair, Card, CardState } from '@/domain'
+import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
+import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow, type SchedulerParamsHistoryRow } from '@/lib/data/userSchedulerParams'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -185,6 +187,13 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   const [pairInstructions, setPairInstructions] = useState('')
   const [savingInstructions, setSavingInstructions] = useState(false)
 
+  // SRS calibration state (inside pair settings panel)
+  const [srsParams,         setSrsParams]         = useState<SchedulerParamsRow[]>([])
+  const [srsParamsLoading,  setSrsParamsLoading]  = useState(false)
+  const [srsHistory,        setSrsHistory]        = useState<Record<string, SchedulerParamsHistoryRow[]>>({})
+  const [srsHistoryOpen,    setSrsHistoryOpen]    = useState(false)
+  const [srsHistoryLoading, setSrsHistoryLoading] = useState(false)
+
   // Drag state (folder/deck tree — only active in the inPair view)
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
   const [dropTarget,  setDropTarget]  = useState<DropTarget>(null)
@@ -290,6 +299,20 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   }
 
   useEffect(() => { load() }, [pairSource, pairTarget]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!pairSettingsFor || !userId) { setSrsParams([]); return }
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    setSrsParamsLoading(true)
+    setSrsHistory({})
+    setSrsHistoryOpen(false)
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    const buckets = ['forward_typed', 'forward_recall', 'reverse_recall']
+    Promise.all(buckets.map(b => repo.getOrCreate(userId, src, tgt, b)))
+      .then(rows => setSrsParams(rows))
+      .catch(() => {})
+      .finally(() => setSrsParamsLoading(false))
+  }, [pairSettingsFor, userId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Lazily load all cards for root-page card search (only when a query is typed and not yet loaded)
   useEffect(() => {
@@ -492,6 +515,41 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       setPairSettingsFor(null)
     } finally {
       setSavingInstructions(false)
+    }
+  }
+
+  async function handleSrsToggle(answerField: string, field: 'forward_typed_enabled' | 'forward_recall_enabled' | 'reverse_recall_enabled', value: boolean) {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    await repo.update(userId, src, tgt, answerField, { [field]: value })
+    setSrsParams(prev => prev.map(p =>
+      p.answerField === answerField ? { ...p, [field === 'forward_typed_enabled' ? 'forwardTypedEnabled' : field === 'forward_recall_enabled' ? 'forwardRecallEnabled' : 'reverseRecallEnabled']: value } : p
+    ))
+  }
+
+  async function handleSrsMaxInterval(days: number) {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    const buckets = ['forward_typed', 'forward_recall', 'reverse_recall']
+    await Promise.all(buckets.map(b => repo.update(userId, src, tgt, b, { max_interval_days: days })))
+    setSrsParams(prev => prev.map(p => ({ ...p, maxIntervalDays: days })))
+  }
+
+  async function handleLoadSrsHistory() {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    setSrsHistoryLoading(true)
+    try {
+      const repo = new SupabaseUserSchedulerParamsRepository()
+      const buckets = ['forward_typed', 'forward_recall', 'reverse_recall'] as const
+      const results = await Promise.all(buckets.map(b => repo.getHistory(userId, src, tgt, b)))
+      const map: Record<string, SchedulerParamsHistoryRow[]> = {}
+      buckets.forEach((b, i) => { map[b] = results[i]! })
+      setSrsHistory(map)
+    } finally {
+      setSrsHistoryLoading(false)
     }
   }
 
@@ -835,30 +893,189 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         {/* Pair settings modal */}
         {pairSettingsFor && (() => {
           const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+          const ftRow  = srsParams.find(p => p.answerField === 'forward_typed')
+          const frRow  = srsParams.find(p => p.answerField === 'forward_recall')
+          const rrRow  = srsParams.find(p => p.answerField === 'reverse_recall')
+          const maxDays = ftRow?.maxIntervalDays ?? DEFAULT_SCHEDULER_PARAMS.maxIntervalDays
+
+          const MAX_PRESETS = [
+            { label: '1 year',    days: 365   },
+            { label: '2 years',   days: 730   },
+            { label: '4 years',   days: 1460  },
+            { label: '8 years',   days: 2920  },
+            { label: 'No limit',  days: 999999 },
+          ]
+
+          const BUCKETS: { field: string; label: string; row: SchedulerParamsRow | undefined; dbToggle: 'forward_typed_enabled' | 'forward_recall_enabled' | 'reverse_recall_enabled'; toggleKey: 'forwardTypedEnabled' | 'forwardRecallEnabled' | 'reverseRecallEnabled' }[] = [
+            { field: 'forward_typed',  label: 'Typed production',   row: ftRow, dbToggle: 'forward_typed_enabled',  toggleKey: 'forwardTypedEnabled'  },
+            { field: 'forward_recall', label: 'Recall (self-grade)', row: frRow, dbToggle: 'forward_recall_enabled', toggleKey: 'forwardRecallEnabled' },
+            { field: 'reverse_recall', label: 'Reverse recall',      row: rrRow, dbToggle: 'reverse_recall_enabled', toggleKey: 'reverseRecallEnabled' },
+          ]
+
+          const CONST_KEYS: { key: keyof typeof DEFAULT_SCHEDULER_PARAMS; label: string }[] = [
+            { key: 'goodIdeal', label: 'Good ×' },
+            { key: 'easyIdeal', label: 'Easy ×' },
+            { key: 'gradInterval0errMin', label: 'Grad interval min (0 err)' },
+            { key: 'gradInterval0errMax', label: 'Grad interval max (0 err)' },
+          ]
+
           return (
             <div
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
               onClick={() => setPairSettingsFor(null)}
             >
-              <div className="panel p-5 max-w-sm w-full mx-4 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
-                <div className="flex items-center justify-between">
+              <div className="panel max-w-md w-full mx-4 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+                {/* Header */}
+                <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-surface-border">
                   <h3 className="text-sm font-semibold text-ink">{langNativeName(src)} / {langNativeName(tgt)} — Settings</h3>
                   <button onClick={() => setPairSettingsFor(null)} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
                 </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-medium text-ink-muted uppercase tracking-wide">AI Instructions</label>
-                  <p className="text-xs text-ink-faint">Default formatting rules used by the word-list agent and language syncing when no custom prompt is provided (e.g. &quot;use infinitive form for verbs&quot;).</p>
-                  <textarea
-                    className="input w-full text-sm resize-none"
-                    rows={5}
-                    maxLength={2000}
-                    placeholder="e.g. Use infinitive form for verbs. Use masculine nominative singular for nouns."
-                    value={pairInstructions}
-                    onChange={e => setPairInstructions(e.target.value)}
-                  />
-                  <span className="text-xs text-ink-faint text-right">{pairInstructions.length} / 2000</span>
+
+                {/* Scrollable body */}
+                <div className="overflow-y-auto flex-1 px-5 py-4 flex flex-col gap-5">
+
+                  {/* AI Instructions */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium text-ink-muted uppercase tracking-wide">AI Instructions</label>
+                    <p className="text-xs text-ink-faint">Default formatting rules used by the word-list agent and language syncing when no custom prompt is provided.</p>
+                    <textarea
+                      className="input w-full text-sm resize-none"
+                      rows={4}
+                      maxLength={2000}
+                      placeholder="e.g. Use infinitive form for verbs."
+                      value={pairInstructions}
+                      onChange={e => setPairInstructions(e.target.value)}
+                    />
+                    <span className="text-xs text-ink-faint text-right">{pairInstructions.length} / 2000</span>
+                  </div>
+
+                  <div className="border-t border-surface-border" />
+
+                  {/* SRS section */}
+                  <div className="flex flex-col gap-3">
+                    <label className="text-xs font-medium text-ink-muted uppercase tracking-wide">SRS Calibration</label>
+
+                    {srsParamsLoading ? (
+                      <p className="text-xs text-ink-faint">Loading…</p>
+                    ) : (
+                      <>
+                        {/* Review track toggles */}
+                        <div className="flex flex-col gap-1.5">
+                          <p className="text-xs text-ink-faint mb-0.5">Enable review tracks for this language pair:</p>
+                          {BUCKETS.map(b => (
+                            <label key={b.field} className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={b.row?.[b.toggleKey] ?? true}
+                                onChange={e => handleSrsToggle(b.field, b.dbToggle, e.target.checked).catch(() => {})}
+                                className="accent-accent"
+                              />
+                              <span className="text-sm text-ink">{b.label}</span>
+                            </label>
+                          ))}
+                        </div>
+
+                        {/* Max interval */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-ink-muted whitespace-nowrap">Max interval:</span>
+                          <select
+                            className="input text-sm flex-1"
+                            value={MAX_PRESETS.find(p => p.days === maxDays)?.days ?? ''}
+                            onChange={e => handleSrsMaxInterval(Number(e.target.value)).catch(() => {})}
+                          >
+                            {MAX_PRESETS.map(p => (
+                              <option key={p.days} value={p.days}>{p.label}</option>
+                            ))}
+                            {!MAX_PRESETS.find(p => p.days === maxDays) && (
+                              <option value={maxDays}>{maxDays} days (custom)</option>
+                            )}
+                          </select>
+                        </div>
+
+                        {/* Constants table */}
+                        <div className="flex flex-col gap-1">
+                          <p className="text-xs text-ink-faint">Current calibration constants (highlighted = adjusted from default):</p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs border-collapse">
+                              <thead>
+                                <tr className="text-ink-muted">
+                                  <th className="text-left py-1 pr-2 font-medium">Constant</th>
+                                  {BUCKETS.map(b => (
+                                    <th key={b.field} className="text-right py-1 px-1 font-medium">{b.label.split(' ')[0]}</th>
+                                  ))}
+                                  <th className="text-right py-1 pl-1 font-medium text-ink-faint">Default</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {CONST_KEYS.map(({ key, label }) => (
+                                  <tr key={key} className="border-t border-surface-border/50">
+                                    <td className="py-1 pr-2 text-ink-muted">{label}</td>
+                                    {BUCKETS.map(b => {
+                                      const val = b.row?.[key as keyof SchedulerParamsRow] as number | undefined
+                                      const def = DEFAULT_SCHEDULER_PARAMS[key]
+                                      const changed = val !== undefined && val !== def
+                                      return (
+                                        <td key={b.field} className={`text-right py-1 px-1 ${changed ? 'text-accent font-medium' : 'text-ink'}`}>
+                                          {val?.toFixed(2) ?? '—'}
+                                        </td>
+                                      )
+                                    })}
+                                    <td className="text-right py-1 pl-1 text-ink-faint">{(DEFAULT_SCHEDULER_PARAMS[key] as number).toFixed(2)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Version history */}
+                        <div>
+                          <button
+                            className="text-xs text-ink-muted hover:text-ink flex items-center gap-1"
+                            onClick={() => {
+                              if (!srsHistoryOpen) {
+                                handleLoadSrsHistory().catch(() => {})
+                              }
+                              setSrsHistoryOpen(v => !v)
+                            }}
+                          >
+                            <span>{srsHistoryOpen ? '▾' : '▸'}</span>
+                            Calibration history
+                          </button>
+                          {srsHistoryOpen && (
+                            <div className="mt-2 flex flex-col gap-2">
+                              {srsHistoryLoading && <p className="text-xs text-ink-faint">Loading…</p>}
+                              {!srsHistoryLoading && BUCKETS.map(b => {
+                                const rows = srsHistory[b.field] ?? []
+                                if (rows.length === 0) return null
+                                return (
+                                  <div key={b.field}>
+                                    <p className="text-xs font-medium text-ink-muted mb-1">{b.label}</p>
+                                    <div className="flex flex-col gap-0.5">
+                                      {rows.slice(0, 10).map(r => (
+                                        <div key={r.id} className="text-xs text-ink-faint flex justify-between gap-2">
+                                          <span>{new Date(r.snapshottedAt).toLocaleDateString()}</span>
+                                          <span>good×{r.snapshot.goodIdeal?.toFixed(2)} easy×{r.snapshot.easyIdeal?.toFixed(2)}</span>
+                                          <span>{r.totalDueReviews} reviews</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                              {!srsHistoryLoading && BUCKETS.every(b => (srsHistory[b.field] ?? []).length === 0) && (
+                                <p className="text-xs text-ink-faint italic">No calibration history yet.</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="flex justify-end gap-3">
+
+                {/* Footer */}
+                <div className="flex justify-end gap-3 px-5 py-4 border-t border-surface-border">
                   <button onClick={() => setPairSettingsFor(null)} className="text-sm text-ink-muted hover:text-ink transition-colors">Cancel</button>
                   <button
                     onClick={handleSaveInstructions}
