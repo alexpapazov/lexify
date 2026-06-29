@@ -25,6 +25,24 @@ function containsHangul(s: string): boolean {
   return /[가-힣]/.test(s)
 }
 
+type ScriptFamily = 'latin' | 'hangul' | 'cjk' | 'cyrillic' | 'arabic' | 'hebrew' | 'devanagari' | 'thai'
+
+/**
+ * Infers the dominant script family from a string.
+ * Used to select the right "almost" thresholds for each language.
+ * Checked in priority order so mixed-script strings resolve sensibly.
+ */
+function detectScript(s: string): ScriptFamily {
+  if (/[가-힣]/.test(s))                         return 'hangul'
+  if (/[一-鿿぀-ヿ]/.test(s))   return 'cjk'       // CJK + kana
+  if (/[؀-ۿ]/.test(s))                 return 'arabic'
+  if (/[֐-׿]/.test(s))                 return 'hebrew'
+  if (/[ऀ-ॿ]/.test(s))                 return 'devanagari' // Hindi
+  if (/[฀-๿]/.test(s))                 return 'thai'
+  if (/[Ѐ-ԯ]/.test(s))                 return 'cyrillic'
+  return 'latin'
+}
+
 /**
  * Decomposes Hangul syllable blocks into constituent jamo (consonants + vowels).
  * 당 (ㄷ+ㅏ+ㅇ) becomes 3 jamo characters, giving accurate Levenshtein distance
@@ -249,19 +267,42 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
     }
   }
 
-  // Minor typo (edit distance ≤ 1 or ratio ≤ 15%)
+  // Minor typo — threshold varies by script family so each language's "close enough"
+  // reflects its actual phonology and orthography.
+  //
+  // Latin / Korean (jamo): dist=1, or dist>0 and ratio≤25%  (more forgiving)
+  // Cyrillic:              dist=1, or dist>0 and ratio≤20%
+  // CJK (Chinese/Japanese): dist=1 only, and word must be ≥3 chars (a wrong character
+  //   in a 2-char Chinese/Japanese word is usually an entirely different word)
+  // Arabic / Hebrew:       dist=1 only (diacritics already handled by accent check above)
+  // Devanagari / Thai / default: dist=1 only
+  //
   // Korean syllable blocks are decomposed to jamo before measuring distance so
-  // a 1-block difference (e.g. 당 vs 악) isn't incorrectly treated as a minor typo.
+  // 텔레비전 vs 테리비전 (2 jamo off out of 10 → 20%) correctly falls under "almost".
+  // CJK strings are NOT decomposed — character-level distance is what matters there.
   // When ignoreMinorTypos=true the typo is forgiven and returns 'correct';
   // when false it returns 'almost' so the learner is notified.
   {
-    const jamo = (c: string) => containsHangul(c) ? decomposeHangul(c) : c
-    const dUser = jamo(normUser)
-    const dists  = candidates.map(c => levenshtein(dUser, jamo(c)))
+    const script = detectScript(normExp)
+    const expand = (c: string) => script === 'hangul' ? decomposeHangul(c) : c
+    const dUser   = expand(normUser)
+    const dists   = candidates.map(c => levenshtein(dUser, expand(c)))
     const minDist = Math.min(...dists)
     const closestIdx = dists.indexOf(minDist)
-    const maxLen  = Math.max(dUser.length, jamo(candidates[closestIdx] ?? '').length, 1)
-    if (minDist === 1 || (minDist > 0 && minDist / maxLen <= 0.15)) {
+    const maxLen  = Math.max(dUser.length, expand(candidates[closestIdx] ?? '').length, 1)
+    const ratio   = minDist / maxLen
+
+    const isAlmostTypo = minDist > 0 && (() => {
+      switch (script) {
+        case 'latin':
+        case 'hangul':    return minDist === 1 || ratio <= 0.25
+        case 'cyrillic':  return minDist === 1 || ratio <= 0.20
+        case 'cjk':       return minDist === 1 && maxLen >= 3
+        default:          return minDist === 1
+      }
+    })()
+
+    if (isAlmostTypo) {
       if (settings.ignoreMinorTypos) {
         return makeResult('correct', 'none', '',
           userAnswer, expected, normUser, normExp, candidates[closestIdx])
