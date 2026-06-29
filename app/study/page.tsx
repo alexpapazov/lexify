@@ -105,10 +105,7 @@ export default function StudyPage() {
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,
         learning:  forwardStates.filter(s => !s.graduated).length,
         graduated: forwardStates.filter(s => s.graduated).length,
-        dueNow:    states.filter(s =>
-          s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
-          (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
-        ).length,
+        dueNow:    forwardStates.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length,
       }
     }))
 
@@ -126,12 +123,8 @@ export default function StudyPage() {
     // the detail panel (both exclude orphaned states for cards not in any deck).
     const deckCounts = new Map<string, number>()
     for (const { states } of stats) {
-      const fwdMap = new Map(
-        states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s])
-      )
       for (const s of states) {
-        if (!s.graduated || !s.dueAt) continue
-        if (s.reviewDirection === 'reverse' && fwdMap.get(s.cardId)?.graduated !== true) continue
+        if (!s.graduated || !s.dueAt || s.reviewDirection === 'reverse') continue
         const day = s.dueAt.slice(0, 10)
         deckCounts.set(day, (deckCounts.get(day) ?? 0) + 1)
       }
@@ -168,13 +161,8 @@ export default function StudyPage() {
       const movable: Movable[] = []
 
       for (const { states } of deckStats) {
-        const fwdStateMap = new Map(
-          states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s])
-        )
         for (const s of states) {
-          if (!s.graduated || !s.dueAt) continue
-          // Skip orphaned reverse states
-          if (s.reviewDirection === 'reverse' && fwdStateMap.get(s.cardId)?.graduated !== true) continue
+          if (!s.graduated || !s.dueAt || s.reviewDirection === 'reverse') continue
           // Only process cards on the selected date
           const isOnSelected = isToday
             ? new Date(s.dueAt) <= new Date()
