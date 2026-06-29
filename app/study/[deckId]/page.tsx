@@ -3093,8 +3093,11 @@ export default function DeckDetailPage() {
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
   if (!deck)   return null
 
-  const stateMap  = new Map(states.map(s => [s.cardId, s]))
-  const now       = new Date()
+  // Forward states are authoritative for card-level status and filtering.
+  // Reverse states only count toward dueNow when their forward counterpart is also graduated.
+  const forwardStates  = states.filter(s => s.reviewDirection !== 'reverse')
+  const stateMap       = new Map(forwardStates.map(s => [s.cardId, s]))
+  const now            = new Date()
 
   const synonymCandidates: SynonymCandidate[] = cards
     .filter(c => !c.synonymGroupId)
@@ -3102,12 +3105,16 @@ export default function DeckDetailPage() {
       const segs = detectSynonymSplit(c.front)
       return segs ? [{ card: c, segments: segs, split: true }] : []
     })
-  const activeCardIds  = new Set(cards.map(c => c.id))
-  const activeStates   = states.filter(s => activeCardIds.has(s.cardId))
+  const activeCardIds       = new Set(cards.map(c => c.id))
+  const activeForwardStates = forwardStates.filter(s => activeCardIds.has(s.cardId))
   const unlearned = cards.filter(c => !stateMap.has(c.id)).length
-  const learning  = activeStates.filter(s => !s.graduated).length
-  const graduated = activeStates.filter(s => s.graduated).length
-  const dueNow    = activeStates.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length
+  const learning  = activeForwardStates.filter(s => !s.graduated).length
+  const graduated = activeForwardStates.filter(s => s.graduated).length
+  const dueNow    = states.filter(s =>
+    activeCardIds.has(s.cardId) &&
+    s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
+    (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
+  ).length
 
   const visibleCards = cards.filter(card => {
     if (!activeFilter) return true
