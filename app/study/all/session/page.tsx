@@ -194,7 +194,7 @@ function AllDueSessionInner() {
             cardRepo.listByDeck(deck.id),
             stateRepo.listByDeck(session.user.id, deck.id),
           ])
-          const stateMap = new Map(states.map(s => [s.cardId, s]))
+          const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
           const common = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
           for (const card of cards) {
             const state = stateMap.get(card.id)
@@ -204,8 +204,13 @@ function AllDueSessionInner() {
               categoryCards.push({ ...common, card, state, productionMode: null })
             } else if (category === 'graduated' && state?.graduated) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
-            } else if (category === 'due' && state?.graduated && state.dueAt && new Date(state.dueAt) <= now) {
-              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+            } else if (category === 'due' && state?.graduated) {
+              const isLegacyDue = !state.typedDueAt && !!state.dueAt && new Date(state.dueAt) <= now
+              const isTypedDue  = !!state.typedDueAt  && new Date(state.typedDueAt)  <= now
+              const isRecallDue = !!state.recallDueAt && new Date(state.recallDueAt) <= now
+              if (isLegacyDue || isTypedDue || isRecallDue) {
+                categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+              }
             }
           }
         }

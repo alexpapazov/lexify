@@ -388,7 +388,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             categoryQueue = shuffle(
               cards.filter(c => {
                 const s = stateMap.get(c.id)
-                return !!s && s.graduated && !!s.dueAt && new Date(s.dueAt) <= now
+                if (!s?.graduated) return false
+                const isLegacyDue = !s.typedDueAt && !!s.dueAt && new Date(s.dueAt) <= now
+                const isTypedDue  = !!s.typedDueAt  && new Date(s.typedDueAt)  <= now
+                const isRecallDue = !!s.recallDueAt && new Date(s.recallDueAt) <= now
+                return isLegacyDue || isTypedDue || isRecallDue
               }).map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
             )
             break
