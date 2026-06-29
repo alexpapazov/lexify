@@ -280,7 +280,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
       let graduated: CardState
       if (graduateAccelerated) {
         const [dueAt] = await batchFastTrackDueDates(userId, 1, now, stateRepo)
-        graduated = fastTrackCardState(userId, card.id, pipelineId, dueAt ?? nowIso, 14, now)
+        graduated = fastTrackCardState(userId, card.id, pipelineId, dueAt ?? nowIso, now)
       } else {
         const dueAt = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString()
         const base  = state ?? initialCardState(userId, card.id, pipelineId)
@@ -2998,7 +2998,7 @@ export default function DeckDetailPage() {
         updates = await Promise.all(
           cardIds.map(async (cardId, i) => {
             const dueAt = dueDates[i] ?? (nowIso)
-            return stateRepo.upsert(fastTrackCardState(userId, cardId, defaultPipeline.id, dueAt, 14, now))
+            return stateRepo.upsert(fastTrackCardState(userId, cardId, defaultPipeline.id, dueAt, now))
           })
         )
       } else {

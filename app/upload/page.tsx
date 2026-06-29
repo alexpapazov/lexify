@@ -567,7 +567,7 @@ export default function UploadPage() {
         const now      = new Date()
         const dueDates = await batchFastTrackDueDates(session.user.id, fastTrackedCards.length, now, stateRepo)
         const states   = fastTrackedCards.map((c, i) =>
-          fastTrackCardState(session.user.id, c.id, pipeline.id, dueDates[i]!, 30, now)
+          fastTrackCardState(session.user.id, c.id, pipeline.id, dueDates[i]!, now)
         )
         await stateRepo.upsertBatch(states)
       }

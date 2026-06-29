@@ -553,7 +553,7 @@ export async function createAllStubs(payload: SyncPayload): Promise<{ pendingCou
         const now      = new Date()
         const dueDates = await batchFastTrackDueDatesServer(db, userId, cardsToFastTrack.length, now)
         const states   = cardsToFastTrack.map((c, i) =>
-          fastTrackCardState(userId, c.id, DEFAULT_PIPELINE_ID, dueDates[i]!, 30, now)
+          fastTrackCardState(userId, c.id, DEFAULT_PIPELINE_ID, dueDates[i]!, now)
         )
         const rows = states.map(s => ({
           user_id: s.userId, card_id: s.cardId, pipeline_id: s.pipelineId,

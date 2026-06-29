@@ -78,26 +78,28 @@ export function initialCardState(
 /**
  * Creates a CardState for an import-known fast-tracked card.
  * The card is already graduated; its first review lands at `dueAt` (spread
- * across the fast-track window by the caller). `intervalDays` is always 30 —
- * a stable baseline the accelerated multipliers apply to at the first review,
- * regardless of which day in the spread window the card lands on. Setting
- * `lastReviewedAt` to now ensures the scheduler treats this as a normal
- * graduated review (not a first-ever graduation) at review time.
+ * across the fast-track window by the caller). `intervalDays` is 14 — the
+ * intended baseline so that an on-time first review produces ~14 days × accel
+ * multiplier as the next interval, regardless of which spread day the card
+ * lands on. `scheduledIntervalDays` is derived from the actual gap between
+ * now and `dueAt` so the scheduler's timing classification is accurate per
+ * card. Setting `lastReviewedAt` to now ensures the scheduler treats this as
+ * a normal graduated review (not a first-ever graduation) at review time.
  */
 export function fastTrackCardState(
-  userId:                string,
-  cardId:                string,
-  pipelineId:            string,
-  dueAt:                 string,
-  scheduledIntervalDays: number,
-  now:                   Date = new Date(),
+  userId:     string,
+  cardId:     string,
+  pipelineId: string,
+  dueAt:      string,
+  now:        Date = new Date(),
 ): CardState {
-  const nowIso = now.toISOString()
+  const nowIso     = now.toISOString()
+  const spreadDays = Math.max(1, Math.round((new Date(dueAt).getTime() - now.getTime()) / 86_400_000))
   return {
     ...initialCardState(userId, cardId, pipelineId),
     graduated:             true,
-    intervalDays:          30,
-    scheduledIntervalDays,
+    intervalDays:          14,
+    scheduledIntervalDays: spreadDays,
     dueAt,
     lastReviewedAt:        nowIso,
     graduatedAt:           nowIso,
