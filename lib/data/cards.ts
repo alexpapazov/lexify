@@ -176,6 +176,11 @@ export class SupabaseCardRepository implements CardRepository {
     if (error) throw new Error(error.message)
   }
 
+  async undelete(cardId: CardId): Promise<void> {
+    const { error } = await this.db.from('cards').update({ deleted_at: null }).eq('id', cardId)
+    if (error) throw new Error(error.message)
+  }
+
   async forkInDeck(deckId: DeckId, cardId: CardId, ownerId: UserId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints'>>): Promise<{ card: Card; forked: boolean }> {
     const { count, error: countError } = await this.db.from('deck_cards')
       .select('*', { count: 'exact', head: true })

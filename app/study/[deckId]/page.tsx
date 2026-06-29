@@ -2771,6 +2771,7 @@ export default function DeckDetailPage() {
   const [renamingDeck,     setRenamingDeck]     = useState(false)
   const [deckNameValue,    setDeckNameValue]    = useState('')
   const [editingCard,      setEditingCard]      = useState<Card | null>(null)
+  const [deletedCardUndo,  setDeletedCardUndo]  = useState<{ card: Card; state: CardState | null } | null>(null)
   const [syncingCard,      setSyncingCard]      = useState<Card | null>(null)
   const [addingCard,       setAddingCard]       = useState(false)
   const [showSynonymScan,  setShowSynonymScan]  = useState(false)
@@ -2831,6 +2832,40 @@ export default function DeckDetailPage() {
     if (target) setEditingCard(target)
   }, [cardParam, cards]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Auto-dismiss the undo toast after 8 seconds
+  useEffect(() => {
+    if (!deletedCardUndo) return
+    const t = setTimeout(() => setDeletedCardUndo(null), 8000)
+    return () => clearTimeout(t)
+  }, [deletedCardUndo])
+
+  // Cmd+Z restores the most recently deleted card
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!deletedCardUndo) return
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        const tag = (e.target as HTMLElement).tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return
+        e.preventDefault()
+        const { card, state } = deletedCardUndo
+        setDeletedCardUndo(null)
+        const cardRepo  = new SupabaseCardRepository()
+        const stateRepo = new SupabaseCardStateRepository()
+        cardRepo.undelete(card.id)
+          .then(() => {
+            setCards(prev => prev.some(c => c.id === card.id) ? prev : [...prev, card])
+            if (state) {
+              stateRepo.upsert(state).catch(console.error)
+              setStates(prev => prev.some(s => s.cardId === state.cardId) ? prev : [...prev, state])
+            }
+          })
+          .catch(console.error)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [deletedCardUndo])
+
   async function handleCardSave(cardId: string, front: string, back: string) {
     const cardRepo  = new SupabaseCardRepository()
     const stateRepo = new SupabaseCardStateRepository()
@@ -2860,6 +2895,9 @@ export default function DeckDetailPage() {
   }
 
   function handleCardDelete(cardId: string) {
+    const card  = cards.find(c => c.id === cardId) ?? null
+    const state = states.find(s => s.cardId === cardId) ?? null
+    if (card) setDeletedCardUndo({ card, state })
     setCards(prev => prev.filter(c => c.id !== cardId))
     setStates(prev => prev.filter(s => s.cardId !== cardId))
     setEditingCard(null)
@@ -3135,6 +3173,34 @@ export default function DeckDetailPage() {
 
   return (
     <div className="space-y-8">
+      {deletedCardUndo && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-surface-raised border border-white/10 rounded-card shadow-lg px-4 py-3 text-sm">
+          <span className="text-ink-muted">Card deleted.</span>
+          <button
+            onClick={() => {
+              const { card, state } = deletedCardUndo
+              setDeletedCardUndo(null)
+              const cardRepo  = new SupabaseCardRepository()
+              const stateRepo = new SupabaseCardStateRepository()
+              cardRepo.undelete(card.id)
+                .then(() => {
+                  setCards(prev => prev.some(c => c.id === card.id) ? prev : [...prev, card])
+                  if (state) {
+                    stateRepo.upsert(state).catch(console.error)
+                    setStates(prev => prev.some(s => s.cardId === state.cardId) ? prev : [...prev, state])
+                  }
+                })
+                .catch(console.error)
+            }}
+            className="text-accent font-medium hover:text-accent/80 transition-colors"
+          >
+            Undo
+          </button>
+          <span className="text-ink-faint text-xs">(⌘Z)</span>
+          <button onClick={() => setDeletedCardUndo(null)} className="text-ink-faint hover:text-ink transition-colors ml-1">✕</button>
+        </div>
+      )}
+
       {addingCard && (
         <NewCardModal
           existingFronts={cards.map(c => c.front)}
