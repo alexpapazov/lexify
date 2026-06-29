@@ -23,7 +23,7 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams, GradingIssueType } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
@@ -94,6 +94,8 @@ function AllDueSessionInner() {
   const [answerError,     setAnswerError]     = useState<string | null>(null)
   const [submitting,      setSubmitting]      = useState(false)
   const [schedulerParams, setSchedulerParams] = useState<SchedulerParams>(DEFAULT_SCHEDULER_PARAMS)
+  const [forwardTypedEnabled, setForwardTypedEnabled] = useState(true)
+  const [forwardRecallEnabled, setForwardRecallEnabled] = useState(true)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
   /** Graduated cards in the 10-minute relearn loop — held out of the main queue until their dueAt passes (or the queue runs out). */
@@ -166,6 +168,8 @@ function AllDueSessionInner() {
             session.user.id, sourceLang, targetLang, 'forward_typed',
           )
           setSchedulerParams(paramsRow)
+          setForwardTypedEnabled(paramsRow.forwardTypedEnabled ?? true)
+          setForwardRecallEnabled(paramsRow.forwardRecallEnabled ?? true)
         } catch { /* fall back to defaults */ }
       } else if (decks.length > 0) {
         try {
@@ -174,6 +178,8 @@ function AllDueSessionInner() {
             session.user.id, firstDeck.sourceLanguage, firstDeck.targetLanguage, 'forward_typed',
           )
           setSchedulerParams(paramsRow)
+          setForwardTypedEnabled(paramsRow.forwardTypedEnabled ?? true)
+          setForwardRecallEnabled(paramsRow.forwardRecallEnabled ?? true)
         } catch { /* fall back to defaults */ }
       }
 
@@ -375,7 +381,7 @@ function AllDueSessionInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showIPA, queue[index]?.card.id])
 
-  const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
+  const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '', _issueType?: GradingIssueType, softWrongRecallRating?: Rating) => {
     const current = queue[index]
     if (!current) return
     if (submitting) return
@@ -544,6 +550,17 @@ function AllDueSessionInner() {
             newState = { ...newState, recallIntervalDays: newRecallInt, recallDueAt: new Date(nowDate.getTime() + newRecallInt * 86_400_000).toISOString() }
           }
         }
+      }
+
+      // Soft-wrong split: update recall track with the user's recall rating (typed track already got 'again').
+      if (softWrongRecallRating && newState.graduated && !isRecallReview && reviewTrack === 'typed' && state.recallDueAt) {
+        const recallIntervalBase = state.recallIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
+        const recallBase = { ...state, intervalDays: recallIntervalBase, scheduledIntervalDays: recallIntervalBase }
+        const recallSched = scheduleNext(recallBase, softWrongRecallRating, { now: nowDate, wrongSeverity: undefined, params: schedulerParams })
+        const newRecallDueAt = recallSched.dueAt
+          ? snapDueAtToStartOfDay(recallSched.dueAt, tzRef.current, turnoverRef.current)
+          : state.recallDueAt
+        newState = { ...newState, recallIntervalDays: recallSched.intervalDays, recallDueAt: newRecallDueAt }
       }
 
       // Legacy track: check Phase 1 completion when review was typed.
@@ -902,6 +919,9 @@ function AllDueSessionInner() {
   const currentIpaText = showIPA && promptShowsSource
     ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
     : undefined
+  const softWrongEnabled = state.graduated && !currentIsReverse &&
+    current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled &&
+    !!state.recallDueAt
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
@@ -974,11 +994,12 @@ function AllDueSessionInner() {
           deckSiblings={deckSiblings(card, reviewAnswerSide, deckCards)}
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
-          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onRate={(rating, wasCorrect, userAnswer, issueType, softWrongRecallRating) => handleAnswer(rating, wasCorrect, userAnswer, issueType, softWrongRecallRating)}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onResetCard={handleResetCard}
+          softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} />
       )}
     </div>

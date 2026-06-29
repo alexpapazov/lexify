@@ -113,6 +113,8 @@ export default function SessionPage() {
   const [targetLanguage,  setTargetLanguage]  = useState('en')
   const [gradingSettings,  setGradingSettings]  = useState<GradingSettings | null>(null)
   const [schedulerParams,  setSchedulerParams]  = useState<SchedulerParams>(DEFAULT_SCHEDULER_PARAMS)
+  const [forwardTypedEnabled, setForwardTypedEnabled] = useState(true)
+  const [forwardRecallEnabled, setForwardRecallEnabled] = useState(true)
   const [done,            setDone]            = useState(false)
   const [emptySession,    setEmptySession]    = useState(false)
   const [electiveSession, setElectiveSession] = useState(false)
@@ -324,6 +326,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           session.user.id, deck.sourceLanguage, deck.targetLanguage, 'forward_typed',
         )
         setSchedulerParams(paramsRow)
+        setForwardTypedEnabled(paramsRow.forwardTypedEnabled ?? true)
+        setForwardRecallEnabled(paramsRow.forwardRecallEnabled ?? true)
       } catch { /* fall back to defaults */ }
 
       const today = getToday(tz, turnoverHour)
@@ -616,7 +620,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setQueue(prev => prev.map(it => it.card.id === cardId ? { ...it, card: updated } : it))
   }, [allCards, sourceLanguage, targetLanguage, handleChoicesCached])
 
-  const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '') => {
+  const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '', _issueType?: GradingIssueType, softWrongRecallRating?: Rating) => {
     const current = queue[index]
     if (!current) return
     if (submitting) return
@@ -799,6 +803,17 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             newState = { ...newState, recallIntervalDays: newRecallInt, recallDueAt: new Date(nowDate.getTime() + newRecallInt * 86_400_000).toISOString() }
           }
         }
+      }
+
+      // Soft-wrong split: update recall track with the user's recall rating (typed track already got 'again').
+      if (softWrongRecallRating && newState.graduated && !isRecallReview && reviewTrack === 'typed' && state.recallDueAt) {
+        const recallIntervalBase = state.recallIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
+        const recallBase = { ...state, intervalDays: recallIntervalBase, scheduledIntervalDays: recallIntervalBase }
+        const recallSched = scheduleNext(recallBase, softWrongRecallRating, { now: nowDate, wrongSeverity: undefined, params: schedulerParams })
+        const newRecallDueAt = recallSched.dueAt
+          ? snapDueAtToStartOfDay(recallSched.dueAt, tzRef.current, turnoverRef.current)
+          : state.recallDueAt
+        newState = { ...newState, recallIntervalDays: recallSched.intervalDays, recallDueAt: newRecallDueAt }
       }
 
       // Legacy track: check Phase 1 completion when review was typed.
@@ -1359,6 +1374,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   const currentIpaText = showIPA && promptShowsSource
     ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
     : undefined
+  const softWrongEnabled = state.graduated && !currentIsReverse &&
+    current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled &&
+    !!state.recallDueAt
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
@@ -1489,11 +1507,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           deckSiblings={deckSiblings(card, reviewAnswerSide, allCards)}
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
-          onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
+          onRate={(rating, wasCorrect, userAnswer, issueType, softWrongRecallRating) => handleAnswer(rating, wasCorrect, userAnswer, issueType, softWrongRecallRating)}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onResetCard={handleResetCard}
+          softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       )}
     </div>

@@ -23,7 +23,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -36,7 +36,7 @@ export function TypingMode({
   /** Same-deck cards that map to the same meaning — triggers a two-phase flow where the sibling gets credit and the canonical answer is still required. */
   deckSiblings?:    { id: string; answer: string }[]
   onOverrideAnswer?: (normalizedAnswer: string, accept: boolean) => void
-  onRate: (r: Rating, wasCorrect: boolean, userAnswer: string, issueType?: GradingIssueType) => void
+  onRate: (r: Rating, wasCorrect: boolean, userAnswer: string, issueType?: GradingIssueType, softWrongRecallRating?: Rating) => void
   onRepeat?: () => void
   onIDontKnow?: () => void
   onAdvance?: () => void
@@ -50,6 +50,8 @@ export function TypingMode({
   ipaText?: string
   /** Toggles IPA on/off; when provided a faint "IPA" button appears in the prompt card corner. */
   onToggleIPA?: () => void
+  /** When true, an accent/article/typo near-miss splits into recall (rated) + typed ('again') tracks. */
+  softWrongEnabled?: boolean
 }) {
   type LocalResult = {
     status:        GradingStatus
@@ -78,6 +80,8 @@ export function TypingMode({
   const [synonymPhaseText, setSynonymPhaseText] = useState('')
   // How many times a synonym/sibling was typed in the canonical input before the canonical itself
   const [canonicalLoopCount, setCanonicalLoopCount] = useState(0)
+  const [softWrongRecallRating, setSoftWrongRecallRating] = useState<Rating | null>(null)
+  const [softWrongOverrideAtRating, setSoftWrongOverrideAtRating] = useState(false)
   const [resetConfirm, setResetConfirm] = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
   const retypeRef   = useRef<HTMLInputElement>(null)
@@ -97,6 +101,8 @@ export function TypingMode({
     setSynonymPhase(false)
     setSynonymPhaseText('')
     setCanonicalLoopCount(0)
+    setSoftWrongRecallRating(null)
+    setSoftWrongOverrideAtRating(false)
   }, [card.id])
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
@@ -111,7 +117,19 @@ export function TypingMode({
 
   const finalCorrect = override ?? result?.correct ?? false
 
-  const needsRetype = !!result && !finalCorrect
+  // Soft-wrong: accent/article/typo near-miss with both dual tracks active.
+  // override !== false: if user explicitly marks wrong, fall through to normal wrong flow.
+  const isSoftWrong = !!(
+    softWrongEnabled && result &&
+    result.status === 'almost' && !result.correct && !result.viaOverride &&
+    override !== false
+  )
+
+  const needsRetype = !!result && !finalCorrect && !isSoftWrong
+
+  const softWrongNeedsRetype  = isSoftWrong && softWrongRecallRating !== null
+  const softWrongRetypeCorrect = softWrongNeedsRetype &&
+    gradeTyping(retype, expected, gradingSettings).status === 'correct'
 
   const retypeCorrect = needsRetype &&
     gradeTyping(retype, expected, gradingSettings).status === 'correct'
@@ -132,10 +150,10 @@ export function TypingMode({
   }, [!!result, needsRetype])
 
   useEffect(() => {
-    if (!needsRetype) return
+    if (!needsRetype && !softWrongNeedsRetype) return
     const t = setTimeout(() => retypeRef.current?.focus(), 80)
     return () => clearTimeout(t)
-  }, [needsRetype])
+  }, [needsRetype, softWrongNeedsRetype])
 
   useEffect(() => {
     if (!revealed) return
@@ -254,6 +272,18 @@ export function TypingMode({
   function advanceRetype() {
     if (!retypeCorrect) return
     onRate('again', false, inCanonicalPhase ? canonInput : input, result?.issueType)
+  }
+
+  function advanceSoftWrong() {
+    if (!softWrongRetypeCorrect || !softWrongRecallRating) return
+    const userAns = inCanonicalPhase ? canonInput : input
+    if (softWrongOverrideAtRating) {
+      // Override was active: both tracks get the recall rating
+      onRate(softWrongRecallRating, true, userAns, result?.issueType, undefined)
+    } else {
+      // Normal split: typed gets 'again', recall gets the user's rating
+      onRate('again', false, userAns, result?.issueType, softWrongRecallRating)
+    }
   }
 
   function tryAdvance(rating: Rating) {
@@ -489,7 +519,19 @@ export function TypingMode({
           <div className="space-y-4">
             {/* Result panel */}
             <div className={`panel text-center py-3 ${feedbackClass}`}>
-              {finalCorrect ? (
+              {isSoftWrong ? (
+                <div className="space-y-1">
+                  <p className="text-warning font-medium">
+                    {result.issueType === 'accent' ? 'Accent error' :
+                     result.issueType === 'article' ? 'Article error' :
+                     'Minor spelling error'}
+                    {override === true && <span className="text-ink-faint font-normal"> (override applied)</span>}
+                  </p>
+                  <p className="text-ink-muted text-sm">
+                    Answer: <span className="text-ink font-mono">{displayExpected}</span>
+                  </p>
+                </div>
+              ) : finalCorrect ? (
                 <div className="space-y-1">
                   <p className="text-success font-medium">
                     Correct!
@@ -530,82 +572,134 @@ export function TypingMode({
               )}
             </div>
 
-            {/* Override controls */}
-            <div className="flex items-center justify-center gap-3">
-              {result.correct && override !== false && (
-                <button onClick={() => setOverrideAndPersist(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
-                  Override as incorrect
-                </button>
-              )}
-              {!result.correct && override !== true && (
-                <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
-                  Override as correct
-                </button>
-              )}
-              {override !== null && (
-                <button onClick={() => setOverrideAndPersist(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
-                  Undo override
-                </button>
-              )}
-            </div>
-
-            {/* Retype (for incorrect, and for "almost" in pre-grad mode) */}
-            {needsRetype && (
-              <div className="space-y-2">
-                <p className="text-xs text-ink-muted text-center">Type the correct answer to continue:</p>
-                <input
-                  ref={retypeRef}
-                  className={`input text-center text-lg font-mono ${retypeCorrect ? 'border-success/60 bg-success/5' : ''}`}
-                  placeholder="Retype the answer…"
-                  value={retype}
-                  onChange={e => setRetype(e.target.value)}
-                  onCompositionStart={() => setComposing(true)}
-                  onCompositionEnd={() => setComposing(false)}
-                  onKeyDown={e => { if (e.key === 'Enter' && !composing) advanceRetype() }}
-                />
-                {retypeCorrect && (
-                  <div className="flex justify-center">
-                    <button onClick={advanceRetype} className="btn-primary px-10">Continue</button>
+            {isSoftWrong ? (
+              <>
+                {/* Soft-wrong: override controls (only before recall rating is selected) */}
+                {!softWrongRecallRating && (
+                  <div className="flex items-center justify-center gap-3">
+                    {override !== true && (
+                      <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
+                        Override as correct
+                      </button>
+                    )}
+                    {override !== null && (
+                      <button onClick={() => setOverrideAndPersist(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
+                        Undo override
+                      </button>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {/* Rating buttons / Continue (shown when no retype needed) */}
-            {!needsRetype && (
-              gradedReview ? (
-                finalCorrect ? (
-                  <RatingButtons onRate={tryAdvance} suggestedRating={suggestedRating} />
-                ) : (
-                  <div className="flex justify-center">
-                    <button
-                      ref={continueRef}
-                      onClick={() => tryAdvance('again')}
-                      className="btn-primary px-10"
-                    >
-                      Continue
-                    </button>
+                {/* Soft-wrong step 1: rate recall before retyping */}
+                {!softWrongRecallRating && (
+                  <RatingButtons
+                    onRate={r => { setSoftWrongRecallRating(r); setSoftWrongOverrideAtRating(override === true) }}
+                    suggestedRating="good"
+                  />
+                )}
+
+                {/* Soft-wrong step 2: retype to confirm */}
+                {softWrongNeedsRetype && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-ink-muted text-center">Type the correct answer to continue:</p>
+                    <input
+                      ref={retypeRef}
+                      className={`input text-center text-lg font-mono ${softWrongRetypeCorrect ? 'border-success/60 bg-success/5' : ''}`}
+                      placeholder="Retype the answer…"
+                      value={retype}
+                      onChange={e => setRetype(e.target.value)}
+                      onCompositionStart={() => setComposing(true)}
+                      onCompositionEnd={() => setComposing(false)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !composing) advanceSoftWrong() }}
+                    />
+                    {softWrongRetypeCorrect && (
+                      <div className="flex justify-center">
+                        <button onClick={advanceSoftWrong} className="btn-primary px-10">Continue</button>
+                      </div>
+                    )}
                   </div>
-                )
-              ) : (
-                <div className="flex justify-center gap-3">
-                  {onRepeat && finalCorrect && (
-                    <button
-                      onClick={() => { setResult(null); setInput(''); setSynonymPhase(false); setSynonymPhaseText(''); setCanonInput(''); onRepeat() }}
-                      className="btn-ghost px-6"
-                    >
-                      Repeat
+                )}
+              </>
+            ) : (
+              <>
+                {/* Override controls */}
+                <div className="flex items-center justify-center gap-3">
+                  {result.correct && override !== false && (
+                    <button onClick={() => setOverrideAndPersist(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
+                      Override as incorrect
                     </button>
                   )}
-                  <button
-                    ref={continueRef}
-                    onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')}
-                    className="btn-primary px-10"
-                  >
-                    Continue
-                  </button>
+                  {!result.correct && override !== true && (
+                    <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
+                      Override as correct
+                    </button>
+                  )}
+                  {override !== null && (
+                    <button onClick={() => setOverrideAndPersist(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
+                      Undo override
+                    </button>
+                  )}
                 </div>
-              )
+
+                {/* Retype (for incorrect, and for "almost" in pre-grad mode) */}
+                {needsRetype && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-ink-muted text-center">Type the correct answer to continue:</p>
+                    <input
+                      ref={retypeRef}
+                      className={`input text-center text-lg font-mono ${retypeCorrect ? 'border-success/60 bg-success/5' : ''}`}
+                      placeholder="Retype the answer…"
+                      value={retype}
+                      onChange={e => setRetype(e.target.value)}
+                      onCompositionStart={() => setComposing(true)}
+                      onCompositionEnd={() => setComposing(false)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !composing) advanceRetype() }}
+                    />
+                    {retypeCorrect && (
+                      <div className="flex justify-center">
+                        <button onClick={advanceRetype} className="btn-primary px-10">Continue</button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Rating buttons / Continue (shown when no retype needed) */}
+                {!needsRetype && (
+                  gradedReview ? (
+                    finalCorrect ? (
+                      <RatingButtons onRate={tryAdvance} suggestedRating={suggestedRating} />
+                    ) : (
+                      <div className="flex justify-center">
+                        <button
+                          ref={continueRef}
+                          onClick={() => tryAdvance('again')}
+                          className="btn-primary px-10"
+                        >
+                          Continue
+                        </button>
+                      </div>
+                    )
+                  ) : (
+                    <div className="flex justify-center gap-3">
+                      {onRepeat && finalCorrect && (
+                        <button
+                          onClick={() => { setResult(null); setInput(''); setSynonymPhase(false); setSynonymPhaseText(''); setCanonInput(''); onRepeat() }}
+                          className="btn-ghost px-6"
+                        >
+                          Repeat
+                        </button>
+                      )}
+                      <button
+                        ref={continueRef}
+                        onClick={() => tryAdvance(finalCorrect ? 'good' : 'again')}
+                        className="btn-primary px-10"
+                      >
+                        Continue
+                      </button>
+                    </div>
+                  )
+                )}
+              </>
             )}
           </div>
         ) : null}
