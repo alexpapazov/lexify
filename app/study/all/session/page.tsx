@@ -9,6 +9,7 @@ import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { langName } from '@/lib/languages'
 import { SupabaseDeckRepository }        from '@/lib/data/decks'
 import { SupabaseCardRepository }        from '@/lib/data/cards'
 import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
@@ -902,13 +903,15 @@ function AllDueSessionInner() {
 
   if (done) {
     const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now' }
+    const pairLabel = sourceLang && targetLang ? `${langName(sourceLang)} / ${langName(targetLang)}` : null
+    const backLabel = pairLabel ? `Back to ${pairLabel}` : 'Back to study'
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
         <div className="text-5xl">🎉</div>
         <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
-        <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''} across all decks.</p>
+        <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}{pairLabel ? ` in ${pairLabel}` : ' across all decks'}.</p>
         <div className="flex gap-3 justify-center flex-wrap">
-          <Link href={backHref} className="btn-primary">Back to study</Link>
+          <Link href={backHref} className="btn-primary">{backLabel}</Link>
           {electiveSession && category && category !== 'due' && (
             <button
               onClick={() => router.push(

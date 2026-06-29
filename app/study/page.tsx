@@ -442,7 +442,7 @@ export default function StudyPage() {
                 <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
               ) : (
                 <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
-                  {filteredCards.map(({ card, deckName, deckId, status }) => (
+                  {filteredCards.map(({ card, deckName, deckId, status, sourceLanguage, targetLanguage }) => (
                     <Link
                       key={card.id}
                       href={`/study/${deckId}?filter=${activeFilter}`}
@@ -453,7 +453,7 @@ export default function StudyPage() {
                         <span className="text-ink-muted truncate">{card.back}</span>
                       </div>
                       <div className="flex items-center gap-3 shrink-0 ml-2">
-                        <span className="text-xs text-ink-faint hidden sm:block">{deckName}</span>
+                        <span className="text-xs text-ink-faint hidden sm:block">{langName(targetLanguage)} → {langName(sourceLanguage)} · {deckName}</span>
                         <span className="chip">{status}</span>
                       </div>
                     </Link>
@@ -589,7 +589,7 @@ export default function StudyPage() {
                           <span className="text-ink-muted truncate">{card.back}</span>
                         </div>
                         <span className="text-xs text-ink-faint hidden sm:block shrink-0 ml-2">
-                          {langName(sourceLanguage)} / {langName(targetLanguage)} · {deckName}
+                          {langName(targetLanguage)} → {langName(sourceLanguage)} · {deckName}
                         </span>
                       </Link>
                     ))}
