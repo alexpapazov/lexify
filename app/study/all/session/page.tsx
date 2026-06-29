@@ -794,6 +794,7 @@ function AllDueSessionInner() {
     const stateRepo = new SupabaseCardStateRepository()
     const fresh = initialCardState(userId, current.card.id, current.pipeline.id)
     stateRepo.upsert(fresh).catch(console.error)
+    stateRepo.delete(userId, current.card.id, 'reverse').catch(console.error)
     setIndex(i => i + 1)
   }, [queue, index, userId])
 

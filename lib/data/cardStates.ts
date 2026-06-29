@@ -155,6 +155,13 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     if (error) throw new Error(error.message)
   }
 
+  async delete(userId: UserId, cardId: CardId, reviewDirection: 'forward' | 'reverse' = 'forward'): Promise<void> {
+    const { error } = await this.db.from('card_states')
+      .delete()
+      .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', reviewDirection)
+    if (error) throw new Error(error.message)
+  }
+
   async copy(userId: UserId, fromCardId: CardId, toCardId: CardId): Promise<CardState | null> {
     const existing = await this.get(userId, fromCardId)
     if (!existing) return null

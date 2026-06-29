@@ -1275,6 +1275,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     const stateRepo = new SupabaseCardStateRepository()
     const fresh = initialCardState(userId, current.card.id, current.pipeline.id)
     stateRepo.upsert(fresh).catch(console.error)
+    // Remove the reverse-direction row so it no longer appears as due; a new one
+    // will be created when this card re-graduates through the pipeline.
+    stateRepo.delete(userId, current.card.id, 'reverse').catch(console.error)
     setIndex(i => i + 1)
   }, [queue, index, userId])
 
