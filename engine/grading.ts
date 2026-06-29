@@ -257,13 +257,44 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
     }
   }
 
-  // Article-only difference
+  // Article-only difference, or article omission combined with a minor typo.
+  // e.g. "pengüino" vs "el pingüino": strip "el" → compare "pengüino" / "pingüino"
+  // → dist 1, within typo threshold → 'almost' (article).
   if (!settings.ignoreDefiniteArticles) {
     const userNoArticle = stripLeadingArticle(normUser)
-    if (candidates.some(c => stripLeadingArticle(c) === userNoArticle)) {
+    const candidatesNoArticle = candidates.map(c => stripLeadingArticle(c))
+
+    // Pure article match
+    if (candidatesNoArticle.some(c => c === userNoArticle)) {
       return makeResult('almost', 'article',
         'Your answer is missing or has a different definite article.',
         userAnswer, expected, normUser, normExp)
+    }
+
+    // Article omission + minor typo: only check candidates that actually had an article
+    const script = detectScript(normExp)
+    const expand = (c: string) => script === 'hangul' ? decomposeHangul(c) : c
+    const dUser = expand(userNoArticle)
+    for (let i = 0; i < candidates.length; i++) {
+      if (candidatesNoArticle[i] === candidates[i]) continue  // no article was stripped; skip
+      const dExp  = expand(candidatesNoArticle[i]!)
+      const dist  = levenshtein(dUser, dExp)
+      const maxLen = Math.max(dUser.length, dExp.length, 1)
+      const ratio = dist / maxLen
+      const withinThreshold = dist > 0 && (() => {
+        switch (script) {
+          case 'latin':
+          case 'hangul':    return dist === 1 || ratio <= 0.25
+          case 'cyrillic':  return dist === 1 || ratio <= 0.20
+          case 'cjk':       return dist === 1 && maxLen >= 3
+          default:          return dist === 1
+        }
+      })()
+      if (withinThreshold) {
+        return makeResult('almost', 'article',
+          'Your answer is missing or has a different definite article.',
+          userAnswer, expected, normUser, normExp)
+      }
     }
   }
 
