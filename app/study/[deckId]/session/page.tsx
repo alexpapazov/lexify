@@ -19,8 +19,9 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SynonymGroup, SynonymAnswerField, SynonymProductionPrompt, GradingIssueType } from '@/domain'
-import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SynonymGroup, SynonymAnswerField, SynonymProductionPrompt, GradingIssueType, SchedulerParams } from '@/domain'
+import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
@@ -106,7 +107,8 @@ export default function SessionPage() {
   const [deckName,        setDeckName]        = useState('')
   const [sourceLanguage,  setSourceLanguage]  = useState('es')
   const [targetLanguage,  setTargetLanguage]  = useState('en')
-  const [gradingSettings, setGradingSettings] = useState<GradingSettings | null>(null)
+  const [gradingSettings,  setGradingSettings]  = useState<GradingSettings | null>(null)
+  const [schedulerParams,  setSchedulerParams]  = useState<SchedulerParams>(DEFAULT_SCHEDULER_PARAMS)
   const [done,            setDone]            = useState(false)
   const [emptySession,    setEmptySession]    = useState(false)
   const [electiveSession, setElectiveSession] = useState(false)
@@ -313,6 +315,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       setTargetLanguage(deck.targetLanguage)
       setAllCards(cards)
 
+      try {
+        const paramsRow = await new SupabaseUserSchedulerParamsRepository().getOrCreate(
+          session.user.id, deck.sourceLanguage, deck.targetLanguage, 'forward_typed',
+        )
+        setSchedulerParams(paramsRow)
+      } catch { /* fall back to defaults */ }
+
       const today = getToday(tz, turnoverHour)
       setStudyDayKey(today)
       purgeStaleSynonymPrefill(session.user.id, today)
@@ -362,7 +371,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           case 'graduated':
             categoryQueue = shuffle(
               cards.filter(c => stateMap.get(c.id)?.graduated)
-                .map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now) } })
+                .map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
             )
             break
           case 'due':
@@ -370,7 +379,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
               cards.filter(c => {
                 const s = stateMap.get(c.id)
                 return !!s && s.graduated && !!s.dueAt && new Date(s.dueAt) <= now
-              }).map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now) } })
+              }).map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
             )
             break
         }
@@ -430,9 +439,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         } else if (!state.graduated) {
           inPipeline.push({ card, state, pipeline, productionMode: null })
         } else if (state.dueAt && new Date(state.dueAt) <= now) {
-          dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now) })
+          dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
         } else {
-          electiveCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now) })
+          electiveCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
         }
       }
 
@@ -622,6 +631,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         expected:    reviewAnswerSide === 'front' ? card.front : card.back,
         userAnswer, wasCorrect, rating, responseMs: null,
         reviewMode, wasTyped,
+        wasAccelerated:     state.acceleratedMode === 'import_known',
+        acceleratedPenalty: state.acceleratedPenalty,
+        reviewDirection:    (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
@@ -635,7 +647,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
-      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity }) : null
+      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams }) : null
 
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
 
@@ -653,7 +665,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // typing steps the learner got wrong during this pipeline run.
       if (!state.graduated && newState.graduated && newState.dueAt) {
         const errors    = pipelineTypingErrorsRef.current.get(card.id) ?? 0
-        const [minDays, maxDays] = graduationIntervalRange(errors)
+        const [minDays, maxDays] = graduationIntervalRange(errors, schedulerParams)
         const idealDays = Math.floor((minDays + maxDays) / 2)
         const idealDueAt = new Date(nowDate.getTime() + idealDays * 24 * 60 * 60 * 1000).toISOString()
         const smoothed = (maxDays - minDays >= 1)

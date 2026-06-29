@@ -90,6 +90,45 @@ export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
   autoPlayAudio:               true,
 }
 
+// ─── Scheduler params ─────────────────────────────────────────────────────────
+
+export interface SchedulerParams {
+  // Normal track multipliers
+  goodMin: number; goodIdeal: number; goodMax: number; goodFloor: number
+  hardMin: number; hardIdeal: number; hardMax: number; hardFloor: number
+  easyMin: number; easyIdeal: number; easyMax: number; easyFloor: number
+  // Accelerated track multipliers
+  accelGoodMin: number; accelGoodIdeal: number; accelGoodMax: number
+  accelHardMin: number; accelHardIdeal: number; accelHardMax: number
+  accelEasyMin: number; accelEasyIdeal: number; accelEasyMax: number
+  // Typing probability thresholds
+  typedProbBelow70: number; typedProb70to84: number
+  typedProb85to94: number; typedProb95plus: number
+  // Shared scheduling constants
+  decayConstantDays: number; againReduction: number; maxIntervalDays: number
+  // Graduation intervals by struggle count
+  gradInterval0errMin: number; gradInterval0errMax: number
+  gradInterval1errMin: number; gradInterval1errMax: number
+  gradInterval2errMin: number; gradInterval2errMax: number
+  gradInterval3errMin: number; gradInterval3errMax: number
+}
+
+export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
+  goodMin: 2.00, goodIdeal: 2.25, goodMax: 2.50, goodFloor: 1.15,
+  hardMin: 1.10, hardIdeal: 1.20, hardMax: 1.30, hardFloor: 1.00,
+  easyMin: 3.00, easyIdeal: 3.50, easyMax: 4.00, easyFloor: 1.25,
+  accelGoodMin: 2.50, accelGoodIdeal: 3.00, accelGoodMax: 3.50,
+  accelHardMin: 1.30, accelHardIdeal: 1.50, accelHardMax: 1.70,
+  accelEasyMin: 4.00, accelEasyIdeal: 5.00, accelEasyMax: 6.00,
+  typedProbBelow70: 1.00, typedProb70to84: 0.70,
+  typedProb85to94: 0.35, typedProb95plus: 0.15,
+  decayConstantDays: 90, againReduction: 0.60, maxIntervalDays: 1460,
+  gradInterval0errMin: 4, gradInterval0errMax: 6,
+  gradInterval1errMin: 3, gradInterval1errMax: 4,
+  gradInterval2errMin: 2, gradInterval2errMax: 3,
+  gradInterval3errMin: 1, gradInterval3errMax: 2,
+}
+
 /** Defaults when converting an existing deck to flexible mode. */
 export const DEFAULT_FLEXIBLE_SETTINGS: Omit<GradingSettings, 'gradingMode'> = {
   ignoreAccents:               false,
@@ -473,6 +512,25 @@ export interface CardState {
   acceleratedWrongStreak: number
   /** Permanent wrong-answer count. Each wrong linearly reduces the acceleration boost. */
   acceleratedPenalty:     number
+  // ── Dual-interval tracks (Phase 1 / Phase 2) ──────────────────────────────
+  /**
+   * When non-null, the card has entered Phase 2 (recall track active).
+   * This is the "ideal" interval for the typed-production track specifically.
+   * null = Phase 2 not yet unlocked (card still on single-interval legacy track).
+   */
+  typedIntervalDays:   number | null
+  /** ISO timestamp when the typed-production track is next due. Null until Phase 2. */
+  typedDueAt:          string | null
+  /** Ideal interval for the self-graded recall track. Null until Phase 2 unlocked. */
+  recallIntervalDays:  number | null
+  /** ISO timestamp when the recall track is next due. Null until Phase 2. */
+  recallDueAt:         string | null
+  /**
+   * 'forward' = English→Spanish (typed + recall).
+   * 'reverse' = Spanish→English (recall only, never typed).
+   * Separate CardState rows per direction share the same cardId.
+   */
+  reviewDirection:     'forward' | 'reverse'
 }
 
 // ─── Ratings ──────────────────────────────────────────────────────────────────
@@ -504,6 +562,12 @@ export interface ReviewEvent {
   reviewMode:  'elective' | 'due' | null
   /** Whether this (post-graduation) review used typed production. Null pre-graduation / legacy rows. */
   wasTyped:    boolean | null
+  /** True when this review was on the accelerated (import-known) track. Null for legacy rows. */
+  wasAccelerated:      boolean | null
+  /** Value of CardState.acceleratedPenalty at the time of this review. Null for legacy rows. */
+  acceleratedPenalty:  number | null
+  /** Which review direction triggered this event. Null for legacy rows. */
+  reviewDirection:     'forward' | 'reverse' | null
 }
 
 // ─── Deck preferences ─────────────────────────────────────────────────────────

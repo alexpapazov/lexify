@@ -43,6 +43,11 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     acceleratedLocked:      Boolean(row.accelerated_locked ?? false),
     acceleratedWrongStreak: Number(row.accelerated_wrong_streak ?? 0),
     acceleratedPenalty:     Number(row.accelerated_penalty      ?? 0),
+    typedIntervalDays:   row.typed_interval_days  != null ? Number(row.typed_interval_days)  : null,
+    typedDueAt:          (row.typed_due_at         as string | null) ?? null,
+    recallIntervalDays:  row.recall_interval_days != null ? Number(row.recall_interval_days) : null,
+    recallDueAt:         (row.recall_due_at        as string | null) ?? null,
+    reviewDirection:     ((row.review_direction as string) === 'reverse' ? 'reverse' : 'forward') as 'forward' | 'reverse',
   }
 }
 
@@ -101,7 +106,12 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       accelerated_locked:       state.acceleratedLocked,
       accelerated_wrong_streak: state.acceleratedWrongStreak,
       accelerated_penalty:      state.acceleratedPenalty,
-    }, { onConflict: 'user_id,card_id' }).select().single()
+      typed_interval_days:      state.typedIntervalDays,
+      typed_due_at:             state.typedDueAt,
+      recall_interval_days:     state.recallIntervalDays,
+      recall_due_at:            state.recallDueAt,
+      review_direction:         state.reviewDirection,
+    }, { onConflict: 'user_id,card_id,review_direction' }).select().single()
     if (error) throw new Error(error.message)
     return rowToCardState(data)
   }
@@ -130,8 +140,13 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       semantic_mistake_count: s.semanticMistakeCount, wrong_synonym_count: s.wrongSynonymCount,
       accelerated_mode: s.acceleratedMode, accelerated_locked: s.acceleratedLocked,
       accelerated_wrong_streak: s.acceleratedWrongStreak, accelerated_penalty: s.acceleratedPenalty,
+      typed_interval_days:  s.typedIntervalDays,
+      typed_due_at:         s.typedDueAt,
+      recall_interval_days: s.recallIntervalDays,
+      recall_due_at:        s.recallDueAt,
+      review_direction:     s.reviewDirection,
     }))
-    const { error } = await this.db.from('card_states').upsert(rows, { onConflict: 'user_id,card_id' })
+    const { error } = await this.db.from('card_states').upsert(rows, { onConflict: 'user_id,card_id,review_direction' })
     if (error) throw new Error(error.message)
   }
 

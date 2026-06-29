@@ -86,8 +86,11 @@ export interface CreateReviewEventInput {
   wasCorrect:  boolean
   rating:      ReviewEvent['rating']
   responseMs:  number | null
-  reviewMode:  ReviewEvent['reviewMode']
-  wasTyped:    ReviewEvent['wasTyped']
+  reviewMode:          ReviewEvent['reviewMode']
+  wasTyped:            ReviewEvent['wasTyped']
+  wasAccelerated?:     boolean | null
+  acceleratedPenalty?: number | null
+  reviewDirection?:    'forward' | 'reverse' | null
 }
 
 export interface ReviewEventRepository {

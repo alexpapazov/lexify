@@ -4,7 +4,8 @@
  * Pure function: no database calls, no side effects.
  */
 
-import type { CardState, Pipeline, ReviewInput, Rating } from '@/domain'
+import type { CardState, Pipeline, ReviewInput, Rating, SchedulerParams } from '@/domain'
+import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { scheduleNext } from './scheduler'
 import {
   TYPED_ACCURACY_WINDOW_SIZE,
@@ -72,6 +73,11 @@ export function initialCardState(
     acceleratedLocked:      false,
     acceleratedWrongStreak: 0,
     acceleratedPenalty:     0,
+    typedIntervalDays:   null,
+    typedDueAt:          null,
+    recallIntervalDays:  null,
+    recallDueAt:         null,
+    reviewDirection:     'forward',
   }
 }
 

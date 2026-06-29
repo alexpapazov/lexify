@@ -23,8 +23,9 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion } from '@/domain'
-import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams } from '@/domain'
+import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
@@ -88,6 +89,7 @@ function AllDueSessionInner() {
   const [studyModeAutoplay, setStudyModeAutoplay] = useState(true)
   const [answerError,     setAnswerError]     = useState<string | null>(null)
   const [submitting,      setSubmitting]      = useState(false)
+  const [schedulerParams, setSchedulerParams] = useState<SchedulerParams>(DEFAULT_SCHEDULER_PARAMS)
   /** Persisted typed-answer overrides, keyed by `${cardId}:${answerSide}` -> set of accepted normalized answers. */
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
   /** Graduated cards in the 10-minute relearn loop — held out of the main queue until their dueAt passes (or the queue runs out). */
@@ -153,6 +155,24 @@ function AllDueSessionInner() {
       const now   = new Date()
       const today = getToday(tz, turnoverHour)
 
+      // Load scheduler params for the primary language pair (URL params if provided, else first deck)
+      if (sourceLang && targetLang) {
+        try {
+          const paramsRow = await new SupabaseUserSchedulerParamsRepository().getOrCreate(
+            session.user.id, sourceLang, targetLang, 'forward_typed',
+          )
+          setSchedulerParams(paramsRow)
+        } catch { /* fall back to defaults */ }
+      } else if (decks.length > 0) {
+        try {
+          const firstDeck = decks[0]!
+          const paramsRow = await new SupabaseUserSchedulerParamsRepository().getOrCreate(
+            session.user.id, firstDeck.sourceLanguage, firstDeck.targetLanguage, 'forward_typed',
+          )
+          setSchedulerParams(paramsRow)
+        } catch { /* fall back to defaults */ }
+      }
+
       // ?category= elective study: build queue from only that category across
       // all decks. Due sessions with a language pair are not capped.
       if (category) {
@@ -173,9 +193,9 @@ function AllDueSessionInner() {
             } else if (category === 'learning' && state && !state.graduated) {
               categoryCards.push({ ...common, card, state, productionMode: null })
             } else if (category === 'graduated' && state?.graduated) {
-              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now) })
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated && state.dueAt && new Date(state.dueAt) <= now) {
-              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now) })
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
           }
         }
@@ -243,7 +263,7 @@ function AllDueSessionInner() {
             allCards.push({ ...common, state, productionMode: null })
           } else if (state.dueAt && new Date(state.dueAt) <= now) {
             // Graduated and due
-            allCards.push({ ...common, state, productionMode: decideProductionMode(state, now) })
+            allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
           }
         }
       }
@@ -384,6 +404,9 @@ function AllDueSessionInner() {
         expected:    reviewAnswerSide === 'front' ? card.front : card.back,
         userAnswer, wasCorrect, rating, responseMs: null,
         reviewMode, wasTyped,
+        wasAccelerated:     state.acceleratedMode === 'import_known',
+        acceleratedPenalty: state.acceleratedPenalty,
+        reviewDirection:    (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
@@ -396,7 +419,7 @@ function AllDueSessionInner() {
 
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
-      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity }) : null
+      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams }) : null
 
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
 
@@ -412,7 +435,7 @@ function AllDueSessionInner() {
 
       if (!state.graduated && newState.graduated && newState.dueAt) {
         const errors    = pipelineTypingErrorsRef.current.get(card.id) ?? 0
-        const [minDays, maxDays] = graduationIntervalRange(errors)
+        const [minDays, maxDays] = graduationIntervalRange(errors, schedulerParams)
         const idealDays = Math.floor((minDays + maxDays) / 2)
         const idealDueAt = new Date(nowDate.getTime() + idealDays * 24 * 60 * 60 * 1000).toISOString()
         const smoothed = (maxDays - minDays >= 1)

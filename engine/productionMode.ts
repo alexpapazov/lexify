@@ -31,7 +31,8 @@
  * Pure function — no I/O. `rng` is injectable for deterministic tests.
  */
 
-import type { CardState } from '@/domain'
+import type { CardState, SchedulerParams } from '@/domain'
+import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 
 export type ProductionMode = 'typed' | 'self-graded'
 
@@ -66,6 +67,7 @@ export function decideProductionMode(
   state: CardState,
   now: Date = new Date(),
   rng: () => number = Math.random,
+  params: SchedulerParams = DEFAULT_SCHEDULER_PARAMS,
 ): ProductionMode {
   // ── Forced typing (highest priority) ────────────────────────────────────
   if (state.forcedTypedRemaining > 0) return 'typed'
@@ -90,10 +92,10 @@ export function decideProductionMode(
 
   // ── Probabilistic typed production based on recent typed accuracy ───────
   let typedProbability: number
-  if (accuracy < 0.70)      typedProbability = 1.00
-  else if (accuracy < 0.85) typedProbability = 0.70
-  else if (accuracy < 0.95) typedProbability = 0.35
-  else                       typedProbability = 0.15
+  if (accuracy < 0.70)      typedProbability = params.typedProbBelow70
+  else if (accuracy < 0.85) typedProbability = params.typedProb70to84
+  else if (accuracy < 0.95) typedProbability = params.typedProb85to94
+  else                       typedProbability = params.typedProb95plus
 
   return rng() < typedProbability ? 'typed' : 'self-graded'
 }

@@ -26,8 +26,9 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, Folder, CardConfusion } from '@/domain'
-import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, Folder, CardConfusion, SchedulerParams } from '@/domain'
+import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
@@ -102,6 +103,7 @@ function FolderSessionInner() {
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
   const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
   const [redoStack, setRedoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
+  const [schedulerParams, setSchedulerParams] = useState<SchedulerParams>(DEFAULT_SCHEDULER_PARAMS)
 
   const tzRef       = useRef('UTC')
   const turnoverRef = useRef(0)
@@ -163,6 +165,16 @@ function FolderSessionInner() {
       const deckIds = new Set(descendantDeckIds(folderId, allFolders, allDecks))
       const decks   = allDecks.filter(d => deckIds.has(d.id))
 
+      const firstDeck = decks[0]
+      if (firstDeck) {
+        try {
+          const paramsRow = await new SupabaseUserSchedulerParamsRepository().getOrCreate(
+            session.user.id, firstDeck.sourceLanguage, firstDeck.targetLanguage, 'forward_typed',
+          )
+          setSchedulerParams(paramsRow)
+        } catch { /* fall back to defaults */ }
+      }
+
       const now   = new Date()
       const today = getToday(tz, turnoverHour)
 
@@ -184,9 +196,9 @@ function FolderSessionInner() {
             } else if (category === 'learning' && state && !state.graduated) {
               categoryCards.push({ ...common, card, state, productionMode: null })
             } else if (category === 'graduated' && state?.graduated) {
-              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now) })
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated && state.dueAt && new Date(state.dueAt) <= now) {
-              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now) })
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
           }
         }
@@ -255,7 +267,7 @@ function FolderSessionInner() {
             allCards.push({ ...common, state, productionMode: null })
           } else if (state.dueAt && new Date(state.dueAt) <= now) {
             // Graduated and due
-            allCards.push({ ...common, state, productionMode: decideProductionMode(state, now) })
+            allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
           }
         }
       }
@@ -395,6 +407,9 @@ function FolderSessionInner() {
         expected:    reviewAnswerSide === 'front' ? card.front : card.back,
         userAnswer, wasCorrect, rating, responseMs: null,
         reviewMode, wasTyped,
+        wasAccelerated:    state.acceleratedMode === 'import_known',
+        acceleratedPenalty: state.acceleratedPenalty,
+        reviewDirection:   (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
@@ -407,7 +422,7 @@ function FolderSessionInner() {
 
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
-      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity }) : null
+      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams }) : null
 
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
 
@@ -423,7 +438,7 @@ function FolderSessionInner() {
 
       if (!state.graduated && newState.graduated && newState.dueAt) {
         const errors    = pipelineTypingErrorsRef.current.get(card.id) ?? 0
-        const [minDays, maxDays] = graduationIntervalRange(errors)
+        const [minDays, maxDays] = graduationIntervalRange(errors, schedulerParams)
         const idealDays = Math.floor((minDays + maxDays) / 2)
         const idealDueAt = new Date(nowDate.getTime() + idealDays * 24 * 60 * 60 * 1000).toISOString()
         const smoothed = (maxDays - minDays >= 1)
@@ -449,7 +464,7 @@ function FolderSessionInner() {
       // its dueAt passes. The pool-injection useEffect above reintroduces it
       // once the main queue runs out, ordered by elapsed percentage.
       if (newState.graduated && newState.relearningStep > 0) {
-        const requeued: SessionCard = { ...current, state: newState, productionMode: decideProductionMode(newState, nowDate) }
+        const requeued: SessionCard = { ...current, state: newState, productionMode: decideProductionMode(newState, nowDate, Math.random, schedulerParams) }
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
         setRelearnPool(prev => [...prev, requeued])
         setIndex(i => i + 1)

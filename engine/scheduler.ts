@@ -31,7 +31,8 @@
  * nothing else changes.
  */
 
-import type { CardState, Rating } from '@/domain'
+import type { CardState, Rating, SchedulerParams } from '@/domain'
+import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 
 export interface ScheduleResult {
   dueAt:             string
@@ -81,6 +82,8 @@ export interface ScheduleContext {
    * Defaults to 0.5 (moderate) when omitted.
    */
   wrongSeverity?: number
+  /** Per-user calibrated scheduler params. Falls back to DEFAULT_SCHEDULER_PARAMS when omitted. */
+  params?: SchedulerParams
 }
 
 export interface Scheduler {
@@ -132,11 +135,14 @@ const INITIAL_INTERVAL: Record<Rating, number> = { again: 1, hard: 1, good: 3, e
  *   3 errors  → 1–2 days  (ideal 1)
  *   4+ errors → 1 day     (ideal 1)
  */
-export function graduationIntervalRange(typingErrors: number): [number, number] {
-  if (typingErrors === 0) return [4, 6]
-  if (typingErrors === 1) return [3, 4]
-  if (typingErrors === 2) return [2, 3]
-  if (typingErrors === 3) return [1, 2]
+export function graduationIntervalRange(
+  typingErrors: number,
+  params: SchedulerParams = DEFAULT_SCHEDULER_PARAMS,
+): [number, number] {
+  if (typingErrors === 0) return [params.gradInterval0errMin, params.gradInterval0errMax]
+  if (typingErrors === 1) return [params.gradInterval1errMin, params.gradInterval1errMax]
+  if (typingErrors === 2) return [params.gradInterval2errMin, params.gradInterval2errMax]
+  if (typingErrors === 3) return [params.gradInterval3errMin, params.gradInterval3errMax]
   return [1, 1]
 }
 
@@ -209,13 +215,19 @@ export interface EffectiveMultiplierRange {
 export function effectiveMultiplierRange(
   rating: 'hard' | 'good' | 'easy',
   currentIntervalDays: number,
+  params: SchedulerParams = DEFAULT_SCHEDULER_PARAMS,
 ): EffectiveMultiplierRange {
-  const range = MULTIPLIER_RANGE[rating]
-  const floor = MIN_EFFECTIVE_MULTIPLIER[rating]
+  const range = {
+    hard: { min: params.hardMin, ideal: params.hardIdeal, max: params.hardMax },
+    good: { min: params.goodMin, ideal: params.goodIdeal, max: params.goodMax },
+    easy: { min: params.easyMin, ideal: params.easyIdeal, max: params.easyMax },
+  }[rating]
+  const floor = { hard: params.hardFloor, good: params.goodFloor, easy: params.easyFloor }[rating]
+  const decay = params.decayConstantDays
   return {
-    min:   Math.max(applyMultiplierDecay(range.min,   currentIntervalDays), floor),
-    ideal: Math.max(applyMultiplierDecay(range.ideal, currentIntervalDays), floor),
-    max:   Math.max(applyMultiplierDecay(range.max,   currentIntervalDays), floor),
+    min:   Math.max(applyMultiplierDecay(range.min,   currentIntervalDays, decay), floor),
+    ideal: Math.max(applyMultiplierDecay(range.ideal, currentIntervalDays, decay), floor),
+    max:   Math.max(applyMultiplierDecay(range.max,   currentIntervalDays, decay), floor),
   }
 }
 
@@ -228,10 +240,20 @@ export function acceleratedEffectiveMultiplierRange(
   rating:              'hard' | 'good' | 'easy',
   currentIntervalDays: number,
   penalty:             number,
+  params:              SchedulerParams = DEFAULT_SCHEDULER_PARAMS,
 ): EffectiveMultiplierRange {
-  const accel  = ACCEL_MULTIPLIER_RANGE[rating]
-  const normal = MULTIPLIER_RANGE[rating]
-  const blend  = Math.min(penalty / 3, 1)   // 0 = full accel, 1 = full normal
+  const accel = {
+    hard: { min: params.accelHardMin, ideal: params.accelHardIdeal, max: params.accelHardMax },
+    good: { min: params.accelGoodMin, ideal: params.accelGoodIdeal, max: params.accelGoodMax },
+    easy: { min: params.accelEasyMin, ideal: params.accelEasyIdeal, max: params.accelEasyMax },
+  }[rating]
+  const normal = {
+    hard: { min: params.hardMin, ideal: params.hardIdeal, max: params.hardMax },
+    good: { min: params.goodMin, ideal: params.goodIdeal, max: params.goodMax },
+    easy: { min: params.easyMin, ideal: params.easyIdeal, max: params.easyMax },
+  }[rating]
+  const floor = { hard: params.hardFloor, good: params.goodFloor, easy: params.easyFloor }[rating]
+  const blend = Math.min(penalty / 3, 1)
 
   const blended = {
     min:   normal.min   + (accel.min   - normal.min)   * (1 - blend),
@@ -239,11 +261,11 @@ export function acceleratedEffectiveMultiplierRange(
     max:   normal.max   + (accel.max   - normal.max)   * (1 - blend),
   }
 
-  const floor = MIN_EFFECTIVE_MULTIPLIER[rating]
+  const decay = params.decayConstantDays
   return {
-    min:   Math.max(applyMultiplierDecay(blended.min,   currentIntervalDays), floor),
-    ideal: Math.max(applyMultiplierDecay(blended.ideal, currentIntervalDays), floor),
-    max:   Math.max(applyMultiplierDecay(blended.max,   currentIntervalDays), floor),
+    min:   Math.max(applyMultiplierDecay(blended.min,   currentIntervalDays, decay), floor),
+    ideal: Math.max(applyMultiplierDecay(blended.ideal, currentIntervalDays, decay), floor),
+    max:   Math.max(applyMultiplierDecay(blended.max,   currentIntervalDays, decay), floor),
   }
 }
 
@@ -298,6 +320,9 @@ export function classifyReviewMode(state: CardState, now: Date = new Date()): 'e
 class AdaptiveScheduler implements Scheduler {
   schedule(state: CardState, rating: Rating, ctx: ScheduleContext = {}): ScheduleResult {
     const now = ctx.now ?? new Date()
+    const params = ctx.params ?? DEFAULT_SCHEDULER_PARAMS
+    const AGAIN_REDUCTION_P   = params.againReduction
+    const MAX_INTERVAL_DAYS_P = params.maxIntervalDays
 
     // ── Graduation / first long-term review ────────────────────────────────
     // No prior interval to base the adaptive formula on — use a flat
@@ -342,7 +367,7 @@ class AdaptiveScheduler implements Scheduler {
         // Failed the retry again — shrink the pending interval further and
         // schedule another 10-minute retry.
         const basePending = state.pendingIntervalDays ?? currentInterval
-        const pending      = round3(basePending * AGAIN_REDUCTION)
+        const pending      = round3(basePending * AGAIN_REDUCTION_P)
         return {
           dueAt: addDays(now, RELEARN_RETRY_DAYS), intervalDays: currentInterval,
           scheduledIntervalDays: RELEARN_RETRY_DAYS, ease: state.ease,
@@ -353,9 +378,9 @@ class AdaptiveScheduler implements Scheduler {
 
       // Recovered — apply the multiplier to the pending interval.
       const pendingInterval = state.pendingIntervalDays ?? currentInterval
-      const recoverRange    = effectiveMultiplierRange(rating as 'hard' | 'good' | 'easy', pendingInterval)
+      const recoverRange    = effectiveMultiplierRange(rating as 'hard' | 'good' | 'easy', pendingInterval, params)
       const outputFloorR    = rating === 'easy' ? EASY_MIN_DAYS : HARD_GOOD_MIN_DAYS
-      const interval        = clamp(Math.max(outputFloorR, round3(pendingInterval * recoverRange.ideal)), outputFloorR, MAX_INTERVAL_DAYS)
+      const interval        = clamp(Math.max(outputFloorR, round3(pendingInterval * recoverRange.ideal)), outputFloorR, MAX_INTERVAL_DAYS_P)
       return {
         dueAt: addDays(now, interval), intervalDays: interval, scheduledIntervalDays: interval,
         ease: newEaseFor(rating, state.ease), lapseClusterCount: 0, lastLapseAt: state.lastLapseAt,
@@ -396,10 +421,10 @@ class AdaptiveScheduler implements Scheduler {
         }
       }
 
-      // Reduce the current interval by AGAIN_REDUCTION — applied to the
+      // Reduce the current interval by againReduction — applied to the
       // pending interval once the learner recovers, not the card's stored
       // interval (so the multiplier has something to work with on recovery).
-      const pending = round3(currentInterval * AGAIN_REDUCTION)
+      const pending = round3(currentInterval * AGAIN_REDUCTION_P)
 
       return {
         dueAt: addDays(now, RELEARN_RETRY_DAYS), intervalDays: currentInterval,
@@ -413,8 +438,8 @@ class AdaptiveScheduler implements Scheduler {
     const isAccelerated = state.acceleratedMode === 'import_known'
                        && state.acceleratedWrongStreak < 2
     const range = isAccelerated
-      ? acceleratedEffectiveMultiplierRange(rating, currentInterval, state.acceleratedPenalty)
-      : effectiveMultiplierRange(rating, currentInterval)
+      ? acceleratedEffectiveMultiplierRange(rating, currentInterval, state.acceleratedPenalty, params)
+      : effectiveMultiplierRange(rating, currentInterval, params)
     let newInterval: number
     let smoothMinDays: number
     let smoothMaxDays: number
@@ -433,9 +458,9 @@ class AdaptiveScheduler implements Scheduler {
       smoothMaxDays = baseInterval * range.max
     }
     const outputFloor = rating === 'easy' ? EASY_MIN_DAYS : HARD_GOOD_MIN_DAYS
-    newInterval   = clamp(Math.max(outputFloor, round3(newInterval)),   outputFloor, MAX_INTERVAL_DAYS)
-    smoothMinDays = clamp(Math.max(outputFloor, round3(smoothMinDays)), outputFloor, MAX_INTERVAL_DAYS)
-    smoothMaxDays = clamp(Math.max(outputFloor, round3(smoothMaxDays)), outputFloor, MAX_INTERVAL_DAYS)
+    newInterval   = clamp(Math.max(outputFloor, round3(newInterval)),   outputFloor, MAX_INTERVAL_DAYS_P)
+    smoothMinDays = clamp(Math.max(outputFloor, round3(smoothMinDays)), outputFloor, MAX_INTERVAL_DAYS_P)
+    smoothMaxDays = clamp(Math.max(outputFloor, round3(smoothMaxDays)), outputFloor, MAX_INTERVAL_DAYS_P)
 
     return {
       dueAt:                 addDays(now, newInterval),
