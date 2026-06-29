@@ -204,12 +204,16 @@ function FolderPageInner() {
 
     const now = new Date()
     setCounts(stats.reduce((acc, { cards, states }) => {
-      const stateMap = new Map(states.map(s => [s.cardId, s]))
+      const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
+      const fwdMap = new Map(forwardStates.map(s => [s.cardId, s]))
       return {
-        unlearned: acc.unlearned + cards.filter(c => !stateMap.has(c.id)).length,
-        learning:  acc.learning  + states.filter(s => !s.graduated).length,
-        graduated: acc.graduated + states.filter(s => s.graduated).length,
-        dueNow:    acc.dueNow    + states.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length,
+        unlearned: acc.unlearned + cards.filter(c => !fwdMap.has(c.id)).length,
+        learning:  acc.learning  + forwardStates.filter(s => !s.graduated).length,
+        graduated: acc.graduated + forwardStates.filter(s => s.graduated).length,
+        dueNow:    acc.dueNow    + states.filter(s =>
+          s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
+          (s.reviewDirection !== 'reverse' || fwdMap.get(s.cardId)?.graduated === true)
+        ).length,
       }
     }, { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }))
   }
@@ -228,7 +232,7 @@ function FolderPageInner() {
   // Build the filtered card list across all decks in this folder (incl. subfolders)
   const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? deckStats.flatMap(({ deck, cards, states }) => {
-    const stateMap = new Map(states.map(s => [s.cardId, s]))
+    const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)

@@ -271,10 +271,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       // so each unique card is only counted once across the whole pairing.
       const uniqueCards = new Map<string, { card: Card; state: CardState | undefined }>()
       for (const { cards, states } of stats) {
-        const stateMap = new Map(states.map(s => [s.cardId, s]))
+        const fwdMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
         for (const card of cards) {
           if (!uniqueCards.has(card.id)) {
-            uniqueCards.set(card.id, { card, state: stateMap.get(card.id) })
+            uniqueCards.set(card.id, { card, state: fwdMap.get(card.id) })
           }
         }
       }
@@ -1111,7 +1111,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   // Build the filtered card list across the whole pairing
   const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? pairDeckStats.flatMap(({ deck, cards, states }) => {
-    const stateMap = new Map(states.map(s => [s.cardId, s]))
+    const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)
