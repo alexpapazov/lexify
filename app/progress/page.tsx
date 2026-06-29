@@ -119,9 +119,14 @@ export default function AnalyticsPage() {
       allDays.map(d => [d, { date: d, graduated: [], reviewed: 0, newCards: [] }])
     )
 
-    // Over-fetch by 1 day each side so turnover boundaries are always covered.
+    // Over-fetch by 1 day on the start side and 2 days on the end side so
+    // turnover boundaries and negative-UTC offsets are always covered.
+    // A UTC-12 user's local midnight falls 12 h into the next UTC day, so
+    // +1 day would silently drop evening graduations — +2 days is safe for
+    // any timezone.  localDateWithTurnover buckets each row into the correct
+    // study day, so extra rows from "tomorrow" are simply skipped.
     const queryStart = new Date(new Date(startIso + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10)
-    const queryEnd   = new Date(new Date(endIso   + 'T00:00:00Z').getTime() + 86400000).toISOString()
+    const queryEnd   = new Date(new Date(endIso   + 'T00:00:00Z').getTime() + 2 * 86400000).toISOString()
 
     // Graduated cards — join cards table to get language pair.
     // Skip cards with null language fields (deleted or incomplete cards).
