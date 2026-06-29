@@ -96,13 +96,19 @@ export default function StudyPage() {
         cardRepo.listByDeck(deck.id),
         stateRepo.listByDeck(session.user.id, deck.id),
       ])
-      const stateMap = new Map(states.map(s => [s.cardId, s]))
+      // Forward states are the authoritative source for card-level counts.
+      // Reverse states are only valid when their forward counterpart is also graduated.
+      const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
+      const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
       return {
         deck, cards, states,
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,
-        learning:  states.filter(s => !s.graduated).length,
-        graduated: states.filter(s => s.graduated).length,
-        dueNow:    states.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length,
+        learning:  forwardStates.filter(s => !s.graduated).length,
+        graduated: forwardStates.filter(s => s.graduated).length,
+        dueNow:    states.filter(s =>
+          s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
+          (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
+        ).length,
       }
     }))
 
@@ -120,8 +126,12 @@ export default function StudyPage() {
     // the detail panel (both exclude orphaned states for cards not in any deck).
     const deckCounts = new Map<string, number>()
     for (const { states } of stats) {
+      const fwdMap = new Map(
+        states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s])
+      )
       for (const s of states) {
         if (!s.graduated || !s.dueAt) continue
+        if (s.reviewDirection === 'reverse' && fwdMap.get(s.cardId)?.graduated !== true) continue
         const day = s.dueAt.slice(0, 10)
         deckCounts.set(day, (deckCounts.get(day) ?? 0) + 1)
       }
@@ -158,8 +168,13 @@ export default function StudyPage() {
       const movable: Movable[] = []
 
       for (const { states } of deckStats) {
+        const fwdStateMap = new Map(
+          states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s])
+        )
         for (const s of states) {
           if (!s.graduated || !s.dueAt) continue
+          // Skip orphaned reverse states
+          if (s.reviewDirection === 'reverse' && fwdStateMap.get(s.cardId)?.graduated !== true) continue
           // Only process cards on the selected date
           const isOnSelected = isToday
             ? new Date(s.dueAt) <= new Date()
@@ -328,7 +343,7 @@ export default function StudyPage() {
   // Build the filtered card list across all decks
   const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? deckStats.flatMap(({ deck, cards, states }) => {
-    const stateMap = new Map(states.map(s => [s.cardId, s]))
+    const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)
@@ -361,7 +376,8 @@ export default function StudyPage() {
 
   // Cards due on the selected forecast date (for the click-to-expand panel)
   const forecastCards: FilteredCard[] = selectedForecastDate ? deckStats.flatMap(({ deck, cards, states }) => {
-    const stateMap = new Map(states.map(s => [s.cardId, s]))
+    // Use forward states only so orphaned reverse states don't appear in the list
+    const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)
