@@ -478,7 +478,7 @@ export default function StudyPage() {
                         router.push(`/study/all/session?category=due&source=${pair.sourceLanguage}&target=${pair.targetLanguage}`)
                       }}
                     >
-                      <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
+                      <span className="text-ink">{langName(pair.targetLanguage)} → {langName(pair.sourceLanguage)}</span>
                       <span className="chip text-xs ml-3">{pair.dueNow}</span>
                     </button>
                   ))}
