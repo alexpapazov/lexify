@@ -1069,7 +1069,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
       setQueue(prev => {
         const next = [...prev]
-        next.splice(insertAt, 0, { ...current })
+        next.splice(insertAt, 0, { ...current, state: { ...current.state, correctInStep: 0 } })
         next.pop()
         return next
       })
