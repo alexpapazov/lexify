@@ -83,6 +83,7 @@ function AllDueSessionInner() {
       ? categoryParam : null
   const sourceLang = searchParams.get('source')
   const targetLang = searchParams.get('target')
+  const backHref = sourceLang && targetLang ? `/library?source=${sourceLang}&target=${targetLang}` : '/study'
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [index,           setIndex]           = useState(0)
@@ -907,10 +908,14 @@ function AllDueSessionInner() {
         <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''} across all decks.</p>
         <div className="flex gap-3 justify-center flex-wrap">
-          <Link href="/study" className="btn-primary">Back to study</Link>
+          <Link href={backHref} className="btn-primary">Back to study</Link>
           {electiveSession && category && category !== 'due' && (
             <button
-              onClick={() => router.push(`/study/all/session?category=${category}`)}
+              onClick={() => router.push(
+                sourceLang && targetLang
+                  ? `/study/all/session?category=${category}&source=${sourceLang}&target=${targetLang}`
+                  : `/study/all/session?category=${category}`
+              )}
               className="btn-ghost"
             >
               Study ahead ({CATEGORY_LABELS[category]})
@@ -941,7 +946,7 @@ function AllDueSessionInner() {
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="flex items-center justify-between">
-        <Link href="/study" className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
+        <Link href={backHref} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
           <div className="text-xs text-ink-muted">{state.graduated ? (currentIsReverse ? 'Reverse recall' : current.reviewTrack === 'recall' ? 'Recall' : 'Review') : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
