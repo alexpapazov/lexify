@@ -192,6 +192,14 @@ export default function AnalyticsPage() {
 
   useEffect(() => { void load(range) }, [range, load])
 
+  // Re-fetch when the tab becomes visible so studying in another tab/window
+  // is reflected without requiring a manual page refresh.
+  useEffect(() => {
+    function onVisible() { if (document.visibilityState === 'visible') void load(range) }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [range, load])
+
   // Build stable language-pair → color mapping from all data
   const langColorMap = useMemo(() => {
     const keys = [...new Set(
