@@ -21,12 +21,14 @@ const DISTRACTORS_PER_SIDE = 6
 const SYNONYMS_PER_SIDE = 4
 
 interface RequestBody {
-  front:          string
-  back:           string
-  sourceLanguage: string
-  targetLanguage: string
-  deckFronts?:    string[]
-  deckBacks?:     string[]
+  front:             string
+  back:              string
+  sourceLanguage:    string
+  targetLanguage:    string
+  deckFronts?:       string[]
+  deckBacks?:        string[]
+  avoidFrontExtra?:  string[]
+  avoidBackExtra?:   string[]
 }
 
 function extractJson(text: string): unknown {
@@ -59,8 +61,8 @@ export async function POST(req: NextRequest) {
 
   const deckFronts = (body.deckFronts ?? []).filter(Boolean).slice(0, 30)
   const deckBacks  = (body.deckBacks  ?? []).filter(Boolean).slice(0, 30)
-  const avoidFront = [...new Set([...deckFronts, front])]
-  const avoidBack  = [...new Set([...deckBacks, back])]
+  const avoidFront = [...new Set([...deckFronts, front, ...(body.avoidFrontExtra ?? [])])]
+  const avoidBack  = [...new Set([...deckBacks,  back,  ...(body.avoidBackExtra  ?? [])])]
 
   const srcLang = sourceLanguage || 'the source language'
   const tgtLang = targetLanguage || 'the target language'

@@ -135,6 +135,8 @@ async function fetchAiChoices(
   deckCards: Card[],
   sourceLanguage: string,
   targetLanguage: string,
+  avoidFrontExtra?: string[],
+  avoidBackExtra?: string[],
 ): Promise<CardChoices | null> {
   try {
     const res = await fetch('/api/distractors', {
@@ -147,6 +149,8 @@ async function fetchAiChoices(
         targetLanguage: langName(targetLanguage),
         deckFronts: deckCards.filter(c => c.id !== card.id).map(c => c.front),
         deckBacks:  deckCards.filter(c => c.id !== card.id).map(c => c.back),
+        ...(avoidFrontExtra?.length ? { avoidFrontExtra } : {}),
+        ...(avoidBackExtra?.length  ? { avoidBackExtra  } : {}),
       }),
     })
     const data = await res.json()
@@ -221,6 +225,34 @@ export async function ensureChoicesGenerated(
   const aiChoices = await fetchAiChoices(card, deckCards, sourceLanguage, targetLanguage)
   if (!aiChoices) return null
 
+  try {
+    const cardRepo = new SupabaseCardRepository()
+    await cardRepo.update(card.id, { choices: aiChoices })
+  } catch {
+    // Caching is best-effort — the caller still gets the freshly generated choices.
+  }
+  return aiChoices
+}
+
+/**
+ * Clears all cached distractors for one side of a card and regenerates them,
+ * explicitly excluding the old (bad) distractors from the AI prompt.
+ *
+ * Used when the learner deletes every distractor on one side — a signal that
+ * the entire set was poor quality and should not be reused.
+ *
+ * Saves the fresh result to the DB (best-effort) and returns it, or null on failure.
+ */
+export async function regenerateChoicesExcluding(
+  card: Card,
+  deckCards: Card[],
+  sourceLanguage: string,
+  targetLanguage: string,
+  excludedFront: string[],
+  excludedBack: string[],
+): Promise<CardChoices | null> {
+  const aiChoices = await fetchAiChoices(card, deckCards, sourceLanguage, targetLanguage, excludedFront, excludedBack)
+  if (!aiChoices) return null
   try {
     const cardRepo = new SupabaseCardRepository()
     await cardRepo.update(card.id, { choices: aiChoices })

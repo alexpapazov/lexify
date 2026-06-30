@@ -22,7 +22,7 @@ import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymL
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import type { Deck, Card, CardState, CardChoices, CardConfusion, CardConfusionLink, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
-import { prefetchChoices, needsChoices, ensureChoicesGenerated, type PrefetchItem } from '@/lib/distractors'
+import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { speak } from '@/lib/speak'
@@ -113,6 +113,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [editingDistractor,  setEditingDistractor]  = useState<['front'|'back', string] | null>(null)
   const [distractorEditText, setDistractorEditText] = useState('')
   const [distractorAddText,  setDistractorAddText]  = useState<{front: string; back: string}>({front: '', back: ''})
+  const [deletedDistractors, setDeletedDistractors] = useState<{front: string[]; back: string[]}>({front: [], back: []})
   // Synonym editing state
   const [sourceSynonymInput, setSourceSynonymInput] = useState('')
   const [targetSynonymInput, setTargetSynonymInput] = useState('')
@@ -358,8 +359,25 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   }
 
   async function handleDistractorDelete(side: 'front' | 'back', text: string) {
-    const pool = card.choices?.[side] ?? []
-    await updateDistractorPool(side, pool.filter(d => d !== text))
+    const pool    = card.choices?.[side] ?? []
+    const newPool = pool.filter(d => d !== text)
+
+    // Track which distractors have been deleted from this side so we can
+    // exclude them from the regeneration prompt if the pool empties.
+    const nowDeleted = [...deletedDistractors[side], text]
+    setDeletedDistractors(prev => ({ ...prev, [side]: nowDeleted }))
+
+    await updateDistractorPool(side, newPool)
+
+    if (newPool.length === 0) {
+      // All distractors on this side were deleted — regenerate, explicitly
+      // excluding every deleted option so the AI doesn't reuse them.
+      setDeletedDistractors(prev => ({ ...prev, [side]: [] }))
+      const excludedFront = side === 'front' ? nowDeleted : deletedDistractors.front
+      const excludedBack  = side === 'back'  ? nowDeleted : deletedDistractors.back
+      void regenerateChoicesExcluding(card, deckCards, sourceLanguage, targetLanguage, excludedFront, excludedBack)
+        .then(fresh => { if (fresh) onCardChange({ ...card, choices: fresh }) })
+    }
   }
 
   async function handleDistractorSaveEdit(side: 'front' | 'back', original: string) {
