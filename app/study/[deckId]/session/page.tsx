@@ -168,6 +168,20 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     op.catch(err => console.error('Failed to save typed-answer override:', err))
   }, [userId])
 
+  const handleAddSynonym = useCallback((cardId: string, answerSide: CardSide, normalizedText: string) => {
+    setQueue(prev => {
+      const card = prev.find(i => i.card.id === cardId)?.card
+      if (!card) return prev
+      const choices = card.choices ?? { front: [], back: [] }
+      const updatedChoices = answerSide === 'front'
+        ? { ...choices, frontSynonyms: [...(choices.frontSynonyms ?? []), normalizedText] }
+        : { ...choices, backSynonyms:  [...(choices.backSynonyms  ?? []), normalizedText] }
+      new SupabaseCardRepository().update(cardId, { choices: updatedChoices })
+        .catch(err => console.error('Failed to save synonym:', err))
+      return prev.map(i => i.card.id === cardId ? { ...i, card: { ...i.card, choices: updatedChoices } } : i)
+    })
+  }, [])
+
   const handleChoicesCached = useCallback((cardId: string, choices: Card['choices']) => {
     setAllCards(prev => prev.map(c => c.id === cardId ? { ...c, choices } : c))
     setQueue(prev => prev.map(item => item.card.id === cardId ? { ...item, card: { ...item.card, choices } } : item))
@@ -1523,6 +1537,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           deckSiblings={deckSiblings(card, step.answerSide, allCards)}
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
+          onAddSynonym={step.answerSide === 'front' ? (normalizedText) => handleAddSynonym(card.id, step.answerSide, normalizedText) : undefined}
           onRepeat={handleRepeat}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
@@ -1558,6 +1573,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           deckSiblings={deckSiblings(card, reviewAnswerSide, allCards)}
           onSiblingAnswered={handleSiblingAnswered}
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, reviewAnswerSide, answerText, accept)}
+          onAddSynonym={reviewAnswerSide === 'front' ? (normalizedText) => handleAddSynonym(card.id, reviewAnswerSide, normalizedText) : undefined}
           onRate={(rating, wasCorrect, userAnswer, issueType, softWrongRecallRating) => handleAnswer(rating, wasCorrect, userAnswer, issueType, softWrongRecallRating)}
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}

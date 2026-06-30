@@ -23,7 +23,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -44,6 +44,8 @@ export function TypingMode({
   /** Called when a deck-sibling answer is detected; the parent should credit that card. */
   onSiblingAnswered?: (siblingCardId: string) => void
   onResetCard?: () => void
+  /** Called when the user clicks "Add as synonym" on a wrong answer; receives the normalized typed text. */
+  onAddSynonym?: (normalizedText: string) => void
   answerLanguage?: string
   autoPlayAudio?: boolean
   /** IPA transcription for the prompt (source language). Shown inside the prompt card when provided. */
@@ -80,6 +82,8 @@ export function TypingMode({
   const [synonymPhaseText, setSynonymPhaseText] = useState('')
   // Extra synonyms typed in the canonical box before the canonical itself
   const [extraSynonyms,      setExtraSynonyms]      = useState<string[]>([])
+  // Synonyms added via "Add as synonym" button — augments the synonyms prop immediately
+  const [addedSynonyms,      setAddedSynonyms]      = useState<string[]>([])
   // How many times a sibling was typed in the canonical input before the canonical itself
   const [canonicalLoopCount, setCanonicalLoopCount] = useState(0)
   const [softWrongRecallRating, setSoftWrongRecallRating] = useState<Rating | null>(null)
@@ -104,11 +108,15 @@ export function TypingMode({
     setSynonymPhase(false)
     setSynonymPhaseText('')
     setExtraSynonyms([])
+    setAddedSynonyms([])
     setCanonicalLoopCount(0)
     setSoftWrongRecallRating(null)
     setSoftWrongOverrideAtRating(false)
     setOverrideAsAlmost(false)
   }, [card.id])
+
+  // Combines prop synonyms with any added this session so new additions take effect immediately.
+  const effectiveSynonyms = [...(synonyms ?? []), ...addedSynonyms]
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
   useEffect(() => {
@@ -196,7 +204,7 @@ export function TypingMode({
     const viaOverride = base.status !== 'correct' &&
       (overrideAnswers ?? []).includes(base.normalizedUser)
     const viaSynonym  = !skipSynonymCheck && base.status !== 'correct' && !viaOverride &&
-      (synonyms ?? []).some(s => gradeTyping(typedInput, s, gradingSettings).status === 'correct')
+      effectiveSynonyms.some(s => gradeTyping(typedInput, s, gradingSettings).status === 'correct')
     const effectivelyCorrect = base.correct || viaOverride || viaSynonym
     setResult({
       status:         effectivelyCorrect ? 'correct' : base.status,
@@ -238,8 +246,8 @@ export function TypingMode({
     // (promptSide='back' = native language shown, type target/Korean).
     // When typing the native language (promptSide='front'), accept synonyms directly
     // via gradeAndSetResult's viaSynonym path — no need to also type the canonical.
-    if (synonyms?.length && promptSide === 'back') {
-      const matchedSynonym = synonyms.find(
+    if (effectiveSynonyms.length > 0 && promptSide === 'back') {
+      const matchedSynonym = effectiveSynonyms.find(
         s => gradeTyping(input, s, gradingSettings).status === 'correct'
       )
       if (matchedSynonym) {
@@ -268,7 +276,7 @@ export function TypingMode({
       return
     }
     // Another synonym string → show it as an extra box and keep asking for the canonical
-    if (synonyms?.some(s => gradeTyping(canonInput, s, gradingSettings).status === 'correct')) {
+    if (effectiveSynonyms.some(s => gradeTyping(canonInput, s, gradingSettings).status === 'correct')) {
       setExtraSynonyms(prev => [...prev, canonInput])
       setCanonInput('')
       return
@@ -660,6 +668,21 @@ export function TypingMode({
                   {!result.correct && override !== true && (
                     <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
                       Override as correct
+                    </button>
+                  )}
+                  {!result.correct && override !== true && promptSide === 'back' && onAddSynonym && (
+                    <button
+                      onClick={() => {
+                        onAddSynonym(result.normalizedUser)
+                        setAddedSynonyms(prev => [...prev, result.normalizedUser])
+                        setSynonymPhase(true)
+                        setSynonymPhaseText(input)
+                        setResult(null)
+                        setCanonInput('')
+                      }}
+                      className="text-xs text-ink-faint hover:text-warning transition-colors"
+                    >
+                      Add as synonym
                     </button>
                   )}
                   {override !== null && (
