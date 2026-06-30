@@ -2351,8 +2351,9 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   const [onlyToday,         setOnlyToday]         = useState(false)
   const [todayOverride,     setTodayOverride]     = useState(initialPrefs?.dailyOverride ?? defaultLimit)
   const [spillover,         setSpillover]         = useState(initialPrefs?.spilloverDue  ?? defaultSpillover)
-  const [cardsPerSessionOn, setCardsPerSessionOn] = useState((initialPrefs?.cardsPerSession ?? 0) > 0)
-  const [cardsPerSession,   setCardsPerSession]   = useState(initialPrefs?.cardsPerSession || 20)
+  const [cardsPerSessionOn,  setCardsPerSessionOn]  = useState((initialPrefs?.cardsPerSession ?? 0) > 0)
+  const [cardsPerSession,    setCardsPerSession]    = useState(initialPrefs?.cardsPerSession || 12)
+  const [learningBatchMode,  setLearningBatchMode]  = useState(initialPrefs?.learningBatchMode ?? false)
   const [saving,            setSaving]            = useState(false)
   const [saved,             setSaved]             = useState(false)
   const [saveError,         setSaveError]         = useState<string | null>(null)
@@ -2390,6 +2391,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
           spilloverDue:      spillover,
           cardsPerSession:      cardsPerSessionOn ? cardsPerSession : null,
           electiveSessionLimit: cardsPerSessionOn ? cardsPerSession : 0,
+          learningBatchMode:    cardsPerSessionOn ? learningBatchMode : false,
         }),
         new SupabaseDeckRepository().update(deckId, { gradingSettings: newGradingSettings }),
       ])
@@ -2562,23 +2564,30 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
               </p>
             </div>
 
-            {/* Cards per session (batch mode) — also controls elective/study-ahead cap */}
+            {/* Learning pipeline cap — also controls elective/study-ahead cap */}
             <div className="space-y-2 border-t border-white/10 pt-3">
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input type="checkbox" checked={cardsPerSessionOn} onChange={e => setCardsPerSessionOn(e.target.checked)} className="accent-accent w-4 h-4" />
-                <span className="text-sm text-ink">Study in fixed-size batches</span>
+                <span className="text-sm text-ink">Limit cards in learning</span>
               </label>
               {cardsPerSessionOn && (
-                <div className="space-y-1.5 pl-6">
-                  <label className="text-sm text-ink-muted">Cards per session</label>
-                  <input type="number" min={1} max={500} className="input"
-                    value={cardsPerSession}
-                    onChange={e => setCardsPerSession(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
+                <div className="space-y-2 pl-6">
+                  <div className="space-y-1">
+                    <label className="text-sm text-ink-muted">Max cards in pipeline</label>
+                    <input type="number" min={1} max={500} className="input"
+                      value={cardsPerSession}
+                      onChange={e => setCardsPerSession(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={learningBatchMode} onChange={e => setLearningBatchMode(e.target.checked)} className="accent-accent w-4 h-4" />
+                    <span className="text-sm text-ink">Wait for full batch to graduate</span>
+                  </label>
                   <p className="text-xs text-ink-faint">
-                    Keeps {cardsPerSession} new card{cardsPerSession !== 1 ? 's' : ''} in the learning pipeline at a time.
-                    Once a card graduates, the next session introduces another to take its place.
-                    Also caps study-ahead and elective sessions to {cardsPerSession} cards per batch.
-                    Overrides the daily limit above.
+                    {learningBatchMode
+                      ? `Cards are learned in groups of ${cardsPerSession}. All ${cardsPerSession} must graduate before the next group unlocks.`
+                      : `Keeps at most ${cardsPerSession} card${cardsPerSession !== 1 ? 's' : ''} in the learning pipeline. New cards enter as others graduate.`
+                    }
+                    {' '}Also caps study-ahead sessions to {cardsPerSession} cards per batch. Overrides the daily limit above.
                   </p>
                 </div>
               )}

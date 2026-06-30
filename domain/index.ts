@@ -612,6 +612,13 @@ export interface DeckPreferences {
    * Null = use app default (20). 0 = no cap. Positive integer = cap at that value.
    */
   electiveSessionLimit: number | null
+  /**
+   * When true (and cardsPerSession is set): cards are studied in strict groups
+   * of cardsPerSession — ALL cards in the current group must graduate before
+   * the next group unlocks. When false (default): rolling — as each card
+   * graduates a new one enters immediately to keep the pipeline full.
+   */
+  learningBatchMode:    boolean
 }
 
 export const DEFAULT_DAILY_NEW_CARDS = 20

@@ -406,21 +406,40 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         return
       }
 
-      const cardsPerSession = prefs?.cardsPerSession ?? null
+      const cardsPerSession   = prefs?.cardsPerSession   ?? null
+      const learningBatchMode = prefs?.learningBatchMode ?? false
 
       // Exclude states for soft-deleted cards so they don't skew budget math.
       const activeCardIdSet   = new Set(cards.map(c => c.id))
       const activeStates      = existingStates.filter(s => activeCardIdSet.has(s.cardId))
 
       let newCardBudget: number
+      let eligibleNewCardIds: Set<string> | null = null  // null = all cards eligible
 
       if (cardsPerSession && cardsPerSession > 0) {
-        // Batch mode: keep at most `cardsPerSession` cards actively in the
-        // pipeline (introduced but not yet graduated) at once, regardless of
-        // calendar day. Once a card graduates, the next session introduces
-        // another to refill the batch.
         const inPipelineTotal = activeStates.filter(s => !s.graduated).length
-        newCardBudget = Math.max(0, Math.min(cardsPerSession, cards.length) - inPipelineTotal)
+
+        if (learningBatchMode) {
+          // Batch mode: cards are grouped by position into groups of cardsPerSession.
+          // All cards in a group must graduate before the next group unlocks.
+          const sortedCards = [...cards].sort((a, b) => a.position - b.position)
+          let batchStart = 0
+          while (batchStart < sortedCards.length) {
+            const batchEnd  = Math.min(batchStart + cardsPerSession, sortedCards.length)
+            const allGraduated = sortedCards.slice(batchStart, batchEnd)
+              .every(c => stateMap.get(c.id)?.graduated === true)
+            if (!allGraduated) break
+            batchStart += cardsPerSession
+          }
+          eligibleNewCardIds = new Set(
+            sortedCards.slice(batchStart, batchStart + cardsPerSession).map(c => c.id)
+          )
+          newCardBudget = Math.max(0, cardsPerSession - inPipelineTotal)
+        } else {
+          // Rolling mode: keep at most cardsPerSession cards in the pipeline.
+          // As each card graduates, the next unlearned card enters immediately.
+          newCardBudget = Math.max(0, Math.min(cardsPerSession, cards.length) - inPipelineTotal)
+        }
       } else {
         const dailyLimit  = Math.min(
           prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
@@ -447,6 +466,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       for (const card of cards) {
         const state = stateMap.get(card.id)
         if (!state) {
+          if (eligibleNewCardIds && !eligibleNewCardIds.has(card.id)) continue
           if (newCardBudget <= 0) continue
           newCardBudget--
           newCards.push({ card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline, productionMode: null })
