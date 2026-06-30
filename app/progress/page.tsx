@@ -57,6 +57,16 @@ function totalGrad(day: DayData) {
   return day.graduated.reduce((s, g) => s + g.count, 0)
 }
 
+// 12 preset swatches for the color picker popover
+const PRESET_COLORS = [
+  '#ef4444', '#f97316', '#f59e0b', '#eab308',
+  '#84cc16', '#22c55e', '#10b981', '#06b6d4',
+  '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899',
+]
+
+const DEFAULT_REVIEWS_COLOR = '#7c6af7'
+const DEFAULT_LAPSES_COLOR  = '#ef4444'
+
 // Palette for up to 10 language pairs — stable order, works on dark bg
 const LANG_PALETTE = [
   '#6366f1', // indigo
@@ -87,6 +97,16 @@ export default function AnalyticsPage() {
       return stored ? new Map(JSON.parse(stored) as [string, string][]) : new Map()
     } catch { return new Map() }
   })
+  const [pickerOpen, setPickerOpen] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!pickerOpen) return
+    function handleMouseDown(e: MouseEvent) {
+      if (!(e.target as HTMLElement).closest('[data-color-picker]')) setPickerOpen(null)
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    return () => document.removeEventListener('mousedown', handleMouseDown)
+  }, [pickerOpen])
 
   const load = useCallback(async (days: RangeDays) => {
     setLoading(true)
@@ -227,13 +247,60 @@ export default function AnalyticsPage() {
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [range, load])
 
-  function setLangColor(key: string, color: string) {
+  function setColor(key: string, color: string) {
     setCustomColors(prev => {
       const next = new Map(prev)
       next.set(key, color)
       try { localStorage.setItem('lexify-lang-colors', JSON.stringify([...next])) } catch {}
       return next
     })
+  }
+
+  const reviewsColor = customColors.get('__reviews__') ?? DEFAULT_REVIEWS_COLOR
+  const lapsesColor  = customColors.get('__lapses__')  ?? DEFAULT_LAPSES_COLOR
+
+  function renderSwatch(colorKey: string, displayColor: string, label: string) {
+    const isOpen = pickerOpen === colorKey
+    return (
+      <span key={colorKey} className="flex items-center gap-1.5 relative" data-color-picker>
+        <button
+          type="button"
+          onClick={e => { e.stopPropagation(); setPickerOpen(isOpen ? null : colorKey) }}
+          className="w-3 h-3 rounded-sm flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-white/40 transition-shadow"
+          style={{ background: displayColor }}
+          title="Click to change color"
+        />
+        <span className="text-xs text-ink-muted select-none">{label}</span>
+        {isOpen && (
+          <div className="absolute bottom-full left-0 mb-2 bg-surface-raised border border-white/10 rounded-card p-2 z-50 shadow-lg">
+            <div className="grid grid-cols-6 gap-1 mb-2">
+              {PRESET_COLORS.map(c => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => { setColor(colorKey, c); setPickerOpen(null) }}
+                  className="w-4 h-4 rounded-sm cursor-pointer hover:scale-110 transition-transform"
+                  style={{
+                    background: c,
+                    outline: c === displayColor ? '2px solid white' : 'none',
+                    outlineOffset: '1px',
+                  }}
+                />
+              ))}
+            </div>
+            <label className="flex items-center gap-1.5 text-xs text-ink-muted cursor-pointer pt-1 border-t border-white/10">
+              <input
+                type="color"
+                value={/^#[0-9a-fA-F]{6}$/.test(displayColor) ? displayColor : '#6366f1'}
+                onChange={e => setColor(colorKey, e.target.value)}
+                className="w-4 h-4 cursor-pointer rounded-sm border-0 p-0"
+              />
+              Custom
+            </label>
+          </div>
+        )}
+      </span>
+    )
   }
 
   // Build stable language-pair → color mapping from all data, with custom overrides
@@ -277,36 +344,14 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {/* Legend — per language pair + reviews */}
-      <div className="flex items-center gap-4 text-xs text-ink-muted flex-wrap">
+      {/* Legend — per language pair + reviews + lapses, all color-pickable */}
+      <div className="flex items-center gap-4 flex-wrap">
         {[...langColorMap.entries()].map(([key, color]) => {
           const [src, tgt] = key.split('|') as [string, string]
-          return (
-            <span key={key} className="flex items-center gap-1.5">
-              <label className="relative cursor-pointer group" title="Click to change color">
-                <span
-                  className="w-3 h-3 rounded-sm inline-block ring-offset-1 ring-offset-surface group-hover:ring-2 group-hover:ring-white/40 transition-shadow"
-                  style={{ background: color }}
-                />
-                <input
-                  type="color"
-                  value={color}
-                  onChange={e => setLangColor(key, e.target.value)}
-                  className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
-                />
-              </label>
-              {langPairLabel(src, tgt)}
-            </span>
-          )
+          return renderSwatch(key, color, langPairLabel(src, tgt))
         })}
-        <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm bg-accent/70 inline-block" />
-          Reviews due
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded-sm inline-block" style={{ background: '#ef4444b3' }} />
-          Lapsed (back to learning)
-        </span>
+        {renderSwatch('__reviews__', reviewsColor, 'Reviews due')}
+        {renderSwatch('__lapses__', lapsesColor, 'Lapsed (back to learning)')}
       </div>
 
       {/* Chart */}
@@ -348,13 +393,13 @@ export default function AnalyticsPage() {
                     <div className="w-full flex flex-col" style={{ height: totalH || (isEmpty ? 2 : 0) }}>
                       {/* Reviews due — top segment */}
                       {day.reviewed > 0 && (
-                        <div className="w-full bg-accent/70 rounded-t-sm shrink-0" style={{ height: revH }} />
+                        <div className="w-full rounded-t-sm shrink-0" style={{ height: revH, background: reviewsColor + 'b3' }} />
                       )}
                       {/* Lapses — sent back to learning pipeline */}
                       {day.lapses > 0 && (
                         <div
                           className={`w-full shrink-0 ${day.reviewed === 0 ? 'rounded-t-sm' : ''}`}
-                          style={{ height: lapseH, background: '#ef4444b3' }}
+                          style={{ height: lapseH, background: lapsesColor + 'b3' }}
                         />
                       )}
                       {/* Graduated — stacked language segments */}
