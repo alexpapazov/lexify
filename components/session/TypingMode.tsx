@@ -120,10 +120,13 @@ export function TypingMode({
   const finalCorrect = override ?? result?.correct ?? false
 
   // Soft-wrong: accent/article/typo near-miss with both dual tracks active.
-  // override !== false: if user explicitly marks wrong, fall through to normal wrong flow.
-  // overrideAsAlmost: user manually triggered soft-wrong even though engine said correct.
+  // override === null: only when user hasn't overridden at all.
+  //   override=true  → user said "correct" → no split, treat as fully correct.
+  //   override=false → user said "incorrect" → normal wrong flow.
+  // overrideAsAlmost: user manually triggered soft-wrong on a correct answer.
+  //   In that case override stays null, so this path works correctly.
   const isSoftWrong = !!(
-    softWrongEnabled && result && override !== false && (
+    softWrongEnabled && result && override === null && (
       (result.status === 'almost' && !result.correct && !result.viaOverride) ||
       overrideAsAlmost
     )
@@ -529,7 +532,6 @@ export function TypingMode({
                     {result.issueType === 'accent' ? 'Accent error' :
                      result.issueType === 'article' ? 'Article error' :
                      'Minor spelling error'}
-                    {override === true && <span className="text-ink-faint font-normal"> (override applied)</span>}
                   </p>
                   <p className="text-ink-muted text-sm">
                     Answer: <span className="text-ink font-mono">{displayExpected}</span>
