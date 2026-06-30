@@ -245,7 +245,7 @@ export default function StudyPage() {
       const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
       if (!r.graduated_at || !r.cards) continue
       if (localDateWithTurnover(r.graduated_at, tz, turnoverHour) !== todayStr) continue
-      if (r.accelerated_mode === 'import_known') continue
+      if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
       const key = `${r.cards.source_language}|${r.cards.target_language}`
       gradCounts.set(key, (gradCounts.get(key) ?? 0) + 1)
     }

@@ -3043,6 +3043,7 @@ export default function DeckDetailPage() {
               pendingIntervalDays:   null,
               lapseClusterCount:     0,
               lastLapseAt:           null,
+              acceleratedMode:       'bulk_known',
             }
             return stateRepo.upsert(graduated)
           })
