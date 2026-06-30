@@ -184,15 +184,22 @@ export default function StudyPage() {
       // Reverse states are only valid when their forward counterpart is also graduated.
       const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
       const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
+      const isDueByDate = (dateStr: string | null | undefined) =>
+        !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
       return {
         deck, cards, states,
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,
         learning:  forwardStates.filter(s => !s.graduated).length,
         graduated: forwardStates.filter(s => s.graduated).length,
-        dueNow:    states.filter(s =>
-          s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
-          (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
-        ).length,
+        dueNow:    states.filter(s => {
+          if (!s.graduated) return false
+          if (s.reviewDirection === 'reverse') {
+            return stateMap.get(s.cardId)?.graduated === true &&
+              (isDueByDate(s.recallDueAt) || isDueByDate(s.dueAt))
+          }
+          const dueTrack = s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt)
+          return dueTrack || isDueByDate(s.recallDueAt)
+        }).length,
       }
     }))
 

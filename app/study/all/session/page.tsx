@@ -163,6 +163,14 @@ function AllDueSessionInner() {
       const now   = new Date()
       const today = getToday(tz, turnoverHour)
 
+      // Compare by local calendar date rather than UTC timestamp so any card
+      // whose due date falls on today (or earlier) is available all day,
+      // regardless of what time-of-day it was snapped to.
+      const isDueByDate = (dateStr: string | null | undefined): boolean => {
+        if (!dateStr) return false
+        return new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= today
+      }
+
       // Load scheduler params for the primary language pair (URL params if provided, else first deck)
       if (sourceLang && targetLang) {
         try {
@@ -197,8 +205,10 @@ function AllDueSessionInner() {
             cardRepo.listByDeck(deck.id),
             stateRepo.listByDeck(session.user.id, deck.id),
           ])
-          const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
-          const common = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+          const stateMap          = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
+          const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
+          const common     = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+          const deckCommon = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
           for (const card of cards) {
             const state = stateMap.get(card.id)
             if (category === 'new' && !state) {
@@ -208,12 +218,19 @@ function AllDueSessionInner() {
             } else if (category === 'graduated' && state?.graduated) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated) {
-              const isLegacyDue = !state.typedDueAt && !!state.dueAt && new Date(state.dueAt) <= now
-              const isTypedDue  = !!state.typedDueAt  && new Date(state.typedDueAt)  <= now
-              const isRecallDue = !!state.recallDueAt && new Date(state.recallDueAt) <= now
+              const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
+              const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
+              const isRecallDue = isDueByDate(state.recallDueAt)
               if (isLegacyDue || isTypedDue || isRecallDue) {
                 categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
               }
+            }
+          }
+          if (category === 'due') {
+            for (const reverseState of reverseStatesList) {
+              if (!isDueByDate(reverseState.recallDueAt) && !isDueByDate(reverseState.dueAt)) continue
+              const revCard = cards.find(c => c.id === reverseState.cardId)
+              if (revCard) categoryCards.push({ ...deckCommon, card: revCard, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
             }
           }
         }
@@ -282,9 +299,9 @@ function AllDueSessionInner() {
             // In pipeline — always include
             allCards.push({ ...common, state, productionMode: null })
           } else if (state.graduated) {
-            const isLegacyDue = !state.typedDueAt && !!state.dueAt && new Date(state.dueAt) <= now
-            const isTypedDue  = !!state.typedDueAt  && new Date(state.typedDueAt)  <= now
-            const isRecallDue = !!state.recallDueAt && new Date(state.recallDueAt) <= now
+            const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
+            const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
+            const isRecallDue = isDueByDate(state.recallDueAt)
             if (isTypedDue)  allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
             if (isRecallDue) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
             if (isLegacyDue) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
@@ -294,7 +311,7 @@ function AllDueSessionInner() {
         // Add due reverse-direction rows for this deck
         const deckCommon = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
         for (const reverseState of reverseStatesList) {
-          if (!reverseState.recallDueAt || new Date(reverseState.recallDueAt) > now) continue
+          if (!isDueByDate(reverseState.recallDueAt) && !isDueByDate(reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) allCards.push({ ...deckCommon, card, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
         }
