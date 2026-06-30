@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -56,21 +56,61 @@ function addDays(dateStr: string, n: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+interface ForecastFilters {
+  langPairs:  string[]  // 'src|tgt'; empty = all
+  directions: string[]  // 'forward' | 'reverse'; empty = all
+  modes:      string[]  // 'typed' | 'recall'; empty = all
+  accel:      string[]  // 'accelerated' | 'normal'; empty = all
+}
+
 function buildForecastDays(
   stats: DeckWithStats[],
   startDate: string,
   endDate: string,
   todayStr: string,
-  dueNow: number,
+  filters: ForecastFilters,
+  now: Date,
 ): ForecastDay[] {
   if (!startDate || !endDate || startDate > endDate) return []
-  const deckCounts = new Map<string, number>()
-  for (const { states } of stats) {
+
+  const showTyped  = filters.modes.length === 0 || filters.modes.includes('typed')
+  const showRecall = filters.modes.length === 0 || filters.modes.includes('recall')
+
+  const dayCounts = new Map<string, number>()
+  const bump = (dateStr: string) =>
+    dayCounts.set(dateStr, (dayCounts.get(dateStr) ?? 0) + 1)
+
+  for (const { deck, states } of stats) {
+    const pairKey = `${deck.sourceLanguage}|${deck.targetLanguage}`
+    if (filters.langPairs.length > 0 && !filters.langPairs.includes(pairKey)) continue
+
     for (const s of states) {
-      if (!s.graduated || !s.dueAt || s.reviewDirection === 'reverse') continue
-      deckCounts.set(s.dueAt.slice(0, 10), (deckCounts.get(s.dueAt.slice(0, 10)) ?? 0) + 1)
+      if (!s.graduated) continue
+
+      const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
+      if (filters.directions.length > 0 && !filters.directions.includes(dir)) continue
+
+      const isAccel = s.acceleratedMode === 'import_known'
+      if (filters.accel.length > 0) {
+        if (isAccel && !filters.accel.includes('accelerated')) continue
+        if (!isAccel && !filters.accel.includes('normal')) continue
+      }
+
+      if (showTyped && s.dueAt) {
+        const d = s.dueAt.slice(0, 10) === todayStr
+          ? (new Date(s.dueAt) <= now ? todayStr : null)
+          : s.dueAt.slice(0, 10)
+        if (d) bump(d)
+      }
+      if (showRecall && s.recallDueAt) {
+        const rd = s.recallDueAt.slice(0, 10) === todayStr
+          ? (new Date(s.recallDueAt) <= now ? todayStr : null)
+          : s.recallDueAt.slice(0, 10)
+        if (rd && rd !== s.dueAt?.slice(0, 10)) bump(rd)
+      }
     }
   }
+
   const days: ForecastDay[] = []
   const startMs = new Date(startDate + 'T00:00:00.000Z').getTime()
   const endMs   = new Date(endDate   + 'T00:00:00.000Z').getTime()
@@ -82,7 +122,7 @@ function buildForecastDays(
       date:   dateStr,
       label:  isToday ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
       dayNum: d.getUTCDate(),
-      count:  isToday ? dueNow : (deckCounts.get(dateStr) ?? 0),
+      count:  dayCounts.get(dateStr) ?? 0,
     })
   }
   return days
@@ -100,10 +140,15 @@ export default function StudyPage() {
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null)
   const [forecastStartDate,    setForecastStartDate]    = useState('')
   const [forecastEndDate,      setForecastEndDate]      = useState('')
+  const [forecastFilters, setForecastFilters] = useState<ForecastFilters>({
+    langPairs: [], directions: [], modes: [], accel: [],
+  })
+  const [showForecastSettings, setShowForecastSettings] = useState(false)
   const [redistributing, setRedistributing] = useState(false)
   const [redistributeMsg, setRedistributeMsg] = useState<string | null>(null)
   const [showDuePicker, setShowDuePicker] = useState(false)
   const duePickerRef = useRef<HTMLDivElement>(null)
+  const forecastSettingsRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
   const supabase = createClient()
 
@@ -164,7 +209,7 @@ export default function StudyPage() {
     const initEnd   = addDays(todayStr, 13)
     setForecastStartDate(initStart)
     setForecastEndDate(initEnd)
-    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, globalCounts.dueNow))
+    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, now))
 
     setLoading(false)
   }
@@ -341,10 +386,10 @@ export default function StudyPage() {
 
   useEffect(() => {
     if (!todayStr || !forecastStartDate || !forecastEndDate) return
-    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, global.dueNow))
+    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, new Date()))
     setSelectedForecastDate(prev => prev && prev >= forecastStartDate && prev <= forecastEndDate ? prev : null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forecastStartDate, forecastEndDate])
+  }, [forecastStartDate, forecastEndDate, forecastFilters])
 
   useEffect(() => {
     if (!showDuePicker) return
@@ -356,6 +401,17 @@ export default function StudyPage() {
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showDuePicker])
+
+  useEffect(() => {
+    if (!showForecastSettings) return
+    function handleClick(e: MouseEvent) {
+      if (forecastSettingsRef.current && !forecastSettingsRef.current.contains(e.target as Node)) {
+        setShowForecastSettings(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showForecastSettings])
 
   // Build the filtered card list across all decks
   const now = new Date()
@@ -379,6 +435,23 @@ export default function StudyPage() {
 
   const totalDue = global.dueNow
   const maxForecast = Math.max(1, ...forecast.map(d => d.count))
+
+  const availableLangPairs = useMemo(() => {
+    const seen = new Set<string>()
+    return deckStats
+      .map(({ deck }) => ({ key: `${deck.sourceLanguage}|${deck.targetLanguage}`, src: deck.sourceLanguage, tgt: deck.targetLanguage }))
+      .filter(p => { if (seen.has(p.key)) return false; seen.add(p.key); return true })
+  }, [deckStats])
+
+  const activeFilterCount = forecastFilters.langPairs.length + forecastFilters.directions.length + forecastFilters.modes.length + forecastFilters.accel.length
+
+  function toggleFilter<K extends keyof ForecastFilters>(key: K, value: string) {
+    setForecastFilters(prev => {
+      const arr = prev[key] as string[]
+      const next = arr.includes(value) ? arr.filter(v => v !== value) : [...arr, value]
+      return { ...prev, [key]: next }
+    })
+  }
 
   // Group due counts by language pair for the "Study all due" popover
   interface LangPairDue { sourceLanguage: string; targetLanguage: string; dueNow: number }
@@ -522,24 +595,136 @@ export default function StudyPage() {
 
           {/* ── Upcoming reviews ─────────────────────────────────────────── */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center justify-between gap-3">
               <h2 className="text-base font-medium text-ink">Coming up</h2>
-              <div className="flex items-center gap-1.5 text-xs text-ink-faint">
-                <input
-                  type="date"
-                  value={forecastStartDate}
-                  max={forecastEndDate || undefined}
-                  onChange={e => setForecastStartDate(e.target.value)}
-                  className="bg-surface-raised border border-white/10 rounded px-1.5 py-0.5 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
-                />
-                <span>→</span>
-                <input
-                  type="date"
-                  value={forecastEndDate}
-                  min={forecastStartDate || undefined}
-                  onChange={e => setForecastEndDate(e.target.value)}
-                  className="bg-surface-raised border border-white/10 rounded px-1.5 py-0.5 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
-                />
+              <div className="relative" ref={forecastSettingsRef}>
+                <button
+                  onClick={() => setShowForecastSettings(v => !v)}
+                  className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${
+                    showForecastSettings || activeFilterCount > 0
+                      ? 'text-accent bg-accent/10 border border-accent/30'
+                      : 'text-ink-faint hover:text-ink border border-transparent'
+                  }`}
+                  title="Chart settings"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  {activeFilterCount > 0 && <span className="font-medium">{activeFilterCount}</span>}
+                </button>
+
+                {showForecastSettings && (
+                  <div className="absolute right-0 top-full mt-1.5 z-20 bg-surface-raised border border-white/10 rounded-card shadow-xl p-4 space-y-4 w-72">
+
+                    {/* Date range */}
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-medium text-ink-muted uppercase tracking-wider">Date range</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="date"
+                          value={forecastStartDate}
+                          max={forecastEndDate || undefined}
+                          onChange={e => setForecastStartDate(e.target.value)}
+                          className="flex-1 bg-surface border border-white/10 rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
+                        />
+                        <span className="text-ink-faint text-xs">→</span>
+                        <input
+                          type="date"
+                          value={forecastEndDate}
+                          min={forecastStartDate || undefined}
+                          onChange={e => setForecastEndDate(e.target.value)}
+                          className="flex-1 bg-surface border border-white/10 rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Language pair */}
+                    {availableLangPairs.length > 1 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] font-medium text-ink-muted uppercase tracking-wider">Language pair</p>
+                        <div className="space-y-1">
+                          {availableLangPairs.map(p => (
+                            <label key={p.key} className="flex items-center gap-2 cursor-pointer group">
+                              <input
+                                type="checkbox"
+                                checked={forecastFilters.langPairs.includes(p.key)}
+                                onChange={() => toggleFilter('langPairs', p.key)}
+                                className="accent-accent"
+                              />
+                              <span className="text-xs text-ink group-hover:text-accent transition-colors">
+                                {langName(p.src)} / {langName(p.tgt)}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Direction */}
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-medium text-ink-muted uppercase tracking-wider">Direction</p>
+                      <div className="space-y-1">
+                        {([['forward', 'Native → Target (typed production)'], ['reverse', 'Target → Native (recall)']] as const).map(([val, label]) => (
+                          <label key={val} className="flex items-center gap-2 cursor-pointer group">
+                            <input
+                              type="checkbox"
+                              checked={forecastFilters.directions.includes(val)}
+                              onChange={() => toggleFilter('directions', val)}
+                              className="accent-accent"
+                            />
+                            <span className="text-xs text-ink group-hover:text-accent transition-colors">{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Review mode */}
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-medium text-ink-muted uppercase tracking-wider">Review type</p>
+                      <div className="space-y-1">
+                        {([['typed', 'Typed production'], ['recall', 'Recall / self-graded']] as const).map(([val, label]) => (
+                          <label key={val} className="flex items-center gap-2 cursor-pointer group">
+                            <input
+                              type="checkbox"
+                              checked={forecastFilters.modes.includes(val)}
+                              onChange={() => toggleFilter('modes', val)}
+                              className="accent-accent"
+                            />
+                            <span className="text-xs text-ink group-hover:text-accent transition-colors">{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Accelerated */}
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-medium text-ink-muted uppercase tracking-wider">Track</p>
+                      <div className="space-y-1">
+                        {([['normal', 'Regular schedule'], ['accelerated', 'Accelerated (import-known)']] as const).map(([val, label]) => (
+                          <label key={val} className="flex items-center gap-2 cursor-pointer group">
+                            <input
+                              type="checkbox"
+                              checked={forecastFilters.accel.includes(val)}
+                              onChange={() => toggleFilter('accel', val)}
+                              className="accent-accent"
+                            />
+                            <span className="text-xs text-ink group-hover:text-accent transition-colors">{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {activeFilterCount > 0 && (
+                      <button
+                        onClick={() => setForecastFilters({ langPairs: [], directions: [], modes: [], accel: [] })}
+                        className="text-xs text-ink-faint hover:text-red-400 transition-colors"
+                      >
+                        Clear all filters
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
