@@ -75,6 +75,9 @@ export interface GradingSettings {
   // ── Audio ─────────────────────────────────────────────────────────────────
   /** When true (default), source-language audio plays automatically on card load and on correct answer. */
   autoPlayAudio:               boolean
+  // ── Language context (runtime-only, not persisted) ────────────────────────
+  /** BCP-47 language tag of the answer language (e.g. 'es', 'fr', 'it'). Used to restrict article detection to language-appropriate articles. */
+  answerLanguage?:             string
 }
 
 /** Default for new decks — strict mode, case-insensitive only. */

@@ -692,12 +692,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // up a possible "confused with" card on that same side. A
       // multiple-choice pick is always a real word; a typed answer only
       // counts as a word-level mix-up if it's not just a close typo.
+      const gsWithLang = { ...(gradingSettings ?? DEFAULT_GRADING_SETTINGS), answerLanguage: reviewAnswerSide === 'front' ? targetLanguage : sourceLanguage }
       if (!wasCorrect && userAnswer.trim()) {
         const confusedWithCardId = reviewAnswerSide === 'front'
           ? allCards.find(c => c.front.trim().toLowerCase() === userAnswer.trim().toLowerCase())?.id ?? null
           : allCards.find(c => c.back.trim().toLowerCase()  === userAnswer.trim().toLowerCase())?.id ?? null
         const isWordMixup = step.stepType !== 'typing'
-          || isDifferentWordMistake(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
+          || isDifferentWordMistake(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gsWithLang)
         new SupabaseCardConfusionRepository().record(card.id, userAnswer.trim(), reviewAnswerSide, isWordMixup, confusedWithCardId)
           .catch(err => console.error('Failed to record card confusion:', err))
         if (confusedWithCardId) {
@@ -725,7 +726,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
-        ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gradingSettings ?? DEFAULT_GRADING_SETTINGS)
+        ? classifyWrongAnswer(userAnswer, reviewAnswerSide === 'front' ? card.front : card.back, gsWithLang)
         : undefined
 
       // Lazy reverse-row creation for existing graduated cards that predate Phase 2.

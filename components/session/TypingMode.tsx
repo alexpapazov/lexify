@@ -118,6 +118,11 @@ export function TypingMode({
   // Combines prop synonyms with any added this session so new additions take effect immediately.
   const effectiveSynonyms = [...(synonyms ?? []), ...addedSynonyms]
 
+  // Merge answerLanguage into gradingSettings so article detection is language-aware.
+  const effectiveGradingSettings: GradingSettings = answerLanguage
+    ? { ...gradingSettings, answerLanguage }
+    : gradingSettings
+
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
   useEffect(() => {
     if (autoPlayAudio && promptLanguage) speak(card.front, promptLanguage, card.audioData)
@@ -146,14 +151,16 @@ export function TypingMode({
   const needsRetype = !!result && !finalCorrect && !isSoftWrong
 
   const softWrongNeedsRetype  = isSoftWrong && softWrongRecallRating !== null
+  // Retype checks use accent-lenient grading: the point is to type the word, not to nail accents again.
+  const retypeGradingSettings: GradingSettings = { ...effectiveGradingSettings, ignoreAccents: true }
   const softWrongRetypeCorrect = softWrongNeedsRetype &&
-    gradeTyping(retype, expected, gradingSettings).status === 'correct'
+    gradeTyping(retype, expected, retypeGradingSettings).status === 'correct'
 
   const retypeCorrect = needsRetype &&
-    gradeTyping(retype, expected, gradingSettings).status === 'correct'
+    gradeTyping(retype, expected, retypeGradingSettings).status === 'correct'
 
   const revealedRetypeCorrect = revealed &&
-    gradeTyping(retype, expected, gradingSettings).status === 'correct'
+    gradeTyping(retype, expected, retypeGradingSettings).status === 'correct'
 
   const suggestedRating: Rating =
     finalCorrect              ? 'good' :
@@ -200,11 +207,11 @@ export function TypingMode({
   }, [canonicalLoopCount])
 
   function gradeAndSetResult(typedInput: string, skipSynonymCheck = false) {
-    const base = gradeTyping(typedInput, expected, gradingSettings)
+    const base = gradeTyping(typedInput, expected, effectiveGradingSettings)
     const viaOverride = base.status !== 'correct' &&
       (overrideAnswers ?? []).includes(base.normalizedUser)
     const viaSynonym  = !skipSynonymCheck && base.status !== 'correct' && !viaOverride &&
-      effectiveSynonyms.some(s => gradeTyping(typedInput, s, gradingSettings).status === 'correct')
+      effectiveSynonyms.some(s => gradeTyping(typedInput, s, effectiveGradingSettings).status === 'correct')
     const effectivelyCorrect = base.correct || viaOverride || viaSynonym
     setResult({
       status:         effectivelyCorrect ? 'correct' : base.status,
@@ -226,7 +233,7 @@ export function TypingMode({
   function check() {
     // If the input already matches the expected answer directly, grade it as canonical
     // and skip sibling/synonym phases — prevents the word being its own "synonym".
-    const directMatch = gradeTyping(input, expected, gradingSettings)
+    const directMatch = gradeTyping(input, expected, effectiveGradingSettings)
     if (directMatch.status === 'correct') {
       gradeAndSetResult(input)
       return
@@ -234,7 +241,7 @@ export function TypingMode({
 
     // Check deck siblings first — they require a two-phase flow.
     const matchedSibling = deckSiblings?.find(
-      s => gradeTyping(input, s.answer, gradingSettings).status === 'correct'
+      s => gradeTyping(input, s.answer, effectiveGradingSettings).status === 'correct'
     )
     if (matchedSibling) {
       setSiblingId(matchedSibling.id)
@@ -248,7 +255,7 @@ export function TypingMode({
     // via gradeAndSetResult's viaSynonym path — no need to also type the canonical.
     if (effectiveSynonyms.length > 0 && promptSide === 'back') {
       const matchedSynonym = effectiveSynonyms.find(
-        s => gradeTyping(input, s, gradingSettings).status === 'correct'
+        s => gradeTyping(input, s, effectiveGradingSettings).status === 'correct'
       )
       if (matchedSynonym) {
         setSynonymPhase(true)
@@ -261,13 +268,13 @@ export function TypingMode({
 
   function checkCanonical() {
     // Exact canonical → success
-    if (gradeTyping(canonInput, expected, gradingSettings).status === 'correct') {
+    if (gradeTyping(canonInput, expected, effectiveGradingSettings).status === 'correct') {
       gradeAndSetResult(canonInput, true)
       return
     }
     // Another sibling card → credit the sibling and keep asking for the canonical
     const matchedSibling = deckSiblings?.find(
-      s => gradeTyping(canonInput, s.answer, gradingSettings).status === 'correct'
+      s => gradeTyping(canonInput, s.answer, effectiveGradingSettings).status === 'correct'
     )
     if (matchedSibling) {
       onSiblingAnswered?.(matchedSibling.id)
@@ -276,7 +283,7 @@ export function TypingMode({
       return
     }
     // Another synonym string → show it as an extra box and keep asking for the canonical
-    if (effectiveSynonyms.some(s => gradeTyping(canonInput, s, gradingSettings).status === 'correct')) {
+    if (effectiveSynonyms.some(s => gradeTyping(canonInput, s, effectiveGradingSettings).status === 'correct')) {
       setExtraSynonyms(prev => [...prev, canonInput])
       setCanonInput('')
       return

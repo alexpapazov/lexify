@@ -98,14 +98,29 @@ function expandParentheticals(s: string): string[] {
   return [withContent, withoutContent]
 }
 
-const ALL_ARTICLES = new Set([
-  'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
-  "l'", 'le', 'les', 'des',
-])
+const ARTICLES_BY_LANG: Record<string, string[]> = {
+  es: ['el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas'],
+  fr: ["l'", 'le', 'la', 'les', 'un', 'une', 'des', 'du'],
+  it: ["l'", 'lo', 'il', 'la', 'i', 'gli', 'le', 'un', 'uno', 'una'],
+  pt: ['o', 'a', 'os', 'as', 'um', 'uma'],
+  de: ['der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'einen', 'einer', 'eines'],
+}
+// Fallback when language is unknown — all articles from all supported languages
+const ALL_ARTICLES = new Set(Object.values(ARTICLES_BY_LANG).flat())
 
-function stripLeadingArticle(s: string): string {
+function getArticleSet(lang?: string): Set<string> {
+  if (lang) {
+    const base = lang.toLowerCase().split(/[-_]/)[0]!
+    const specific = ARTICLES_BY_LANG[base]
+    if (specific) return new Set(specific)
+  }
+  return ALL_ARTICLES
+}
+
+function stripLeadingArticle(s: string, lang?: string): string {
+  const articles = getArticleSet(lang)
   const parts = s.split(/\s+/)
-  if (parts.length > 1 && ALL_ARTICLES.has(parts[0]!.toLowerCase())) {
+  if (parts.length > 1 && articles.has(parts[0]!.toLowerCase())) {
     return parts.slice(1).join(' ')
   }
   return s
@@ -118,7 +133,7 @@ function normalizeFlexible(raw: string, settings: GradingSettings): string {
   let s = raw.normalize('NFC').trim().replace(/\s+/g, ' ')
   if (settings.ignoreCapitalization !== false) s = s.toLowerCase()
   if (settings.ignoreAccents)                  s = stripAccents(s)
-  if (settings.ignoreDefiniteArticles)         s = stripLeadingArticle(s)
+  if (settings.ignoreDefiniteArticles)         s = stripLeadingArticle(s, settings.answerLanguage)
   return s
 }
 
@@ -160,10 +175,13 @@ function makeResult(
 
 // ─── Issue-type detection (for diagnostic info even on incorrect results) ──────
 
-function detectIssueType(normUser: string, normExpected: string): GradingIssueType {
+function detectIssueType(normUser: string, normExpected: string, lang?: string): GradingIssueType {
   if (!normUser) return 'none'
   if (stripAccents(normUser) === stripAccents(normExpected)) return 'accent'
-  if (stripLeadingArticle(normUser) === stripLeadingArticle(normExpected)) return 'article'
+  const userNoArticle = stripLeadingArticle(normUser, lang)
+  const expNoArticle  = stripLeadingArticle(normExpected, lang)
+  // Only classify as 'article' when the articles actually differ (not just the stems)
+  if (userNoArticle === expNoArticle && userNoArticle !== normUser) return 'article'
   const dist   = levenshtein(normUser, normExpected)
   const maxLen = Math.max(normUser.length, normExpected.length, 1)
   if (dist / maxLen <= 0.34) return 'typo'
@@ -189,7 +207,7 @@ function gradeStrict(userAnswer: string, expected: string, settings?: GradingSet
   }
 
   // No "almost" in strict mode — just report the issue type for diagnostic display.
-  const issueType = detectIssueType(userNorm, normExp)
+  const issueType = detectIssueType(userNorm, normExp, settings?.answerLanguage)
   return makeResult('incorrect', issueType, '', userAnswer, expected, userNorm, normExp)
 }
 
@@ -261,22 +279,30 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
   // e.g. "pengüino" vs "el pingüino": strip "el" → compare "pengüino" / "pingüino"
   // → dist 1, within typo threshold → 'almost' (article).
   if (!settings.ignoreDefiniteArticles) {
-    const userNoArticle = stripLeadingArticle(normUser)
-    const candidatesNoArticle = candidates.map(c => stripLeadingArticle(c))
+    const lang = settings.answerLanguage
+    const userNoArticle = stripLeadingArticle(normUser, lang)
+    const candidatesNoArticle = candidates.map(c => stripLeadingArticle(c, lang))
+    const articles = getArticleSet(lang)
+    const userLeadingWord = normUser.split(/\s+/)[0]!.toLowerCase()
+    const userArticle = articles.has(userLeadingWord) ? userLeadingWord : ''
 
-    // Pure article match
+    // Pure article match — stems are identical, only article differs
     if (candidatesNoArticle.some(c => c === userNoArticle)) {
       return makeResult('almost', 'article',
         'Your answer is missing or has a different definite article.',
         userAnswer, expected, normUser, normExp)
     }
 
-    // Article omission + minor typo: only check candidates that actually had an article
+    // Article omission + minor typo: only check candidates that actually had an article,
+    // and only when the user's article is absent or different from the expected article.
     const script = detectScript(normExp)
     const expand = (c: string) => script === 'hangul' ? decomposeHangul(c) : c
     const dUser = expand(userNoArticle)
     for (let i = 0; i < candidates.length; i++) {
       if (candidatesNoArticle[i] === candidates[i]) continue  // no article was stripped; skip
+      const expectedArticle = candidates[i]!.split(/\s+/)[0]!.toLowerCase()
+      // If user has the same article as expected, the stem is just a typo — not an article error
+      if (userArticle === expectedArticle) continue
       const dExp  = expand(candidatesNoArticle[i]!)
       const dist  = levenshtein(dUser, dExp)
       const maxLen = Math.max(dUser.length, dExp.length, 1)
@@ -345,7 +371,7 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
   }
 
   // ── Incorrect ──────────────────────────────────────────────────────────────
-  return makeResult('incorrect', detectIssueType(normUser, normExp), '',
+  return makeResult('incorrect', detectIssueType(normUser, normExp, settings.answerLanguage), '',
     userAnswer, expected, normUser, normExp)
 }
 
@@ -491,8 +517,8 @@ export function classifyWrongAnswer(
 
   if (normalizedUser.length === 0) return 1.0
 
-  const userNoArticle     = stripLeadingArticle(normalizedUser)
-  const expectedNoArticle = stripLeadingArticle(normalizedExpected)
+  const userNoArticle     = stripLeadingArticle(normalizedUser, settings.answerLanguage)
+  const expectedNoArticle = stripLeadingArticle(normalizedExpected, settings.answerLanguage)
   if (userNoArticle === expectedNoArticle && normalizedUser !== normalizedExpected) {
     return 0.3
   }
