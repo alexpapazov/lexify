@@ -359,6 +359,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       setElectiveBatchLimit(batchLimit)
 
       const now   = new Date()
+      const isDueByDate = (dateStr: string | null | undefined): boolean => {
+        if (!dateStr) return false
+        return new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= today
+      }
 
       // ?category= elective study: build a queue from exactly that category
       // (matching the deck-detail page's stat counts) and skip the normal
@@ -386,14 +390,18 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             break
           case 'due':
             categoryQueue = shuffle(
-              cards.filter(c => {
-                const s = stateMap.get(c.id)
-                if (!s?.graduated) return false
-                const isLegacyDue = !s.typedDueAt && !!s.dueAt && new Date(s.dueAt) <= now
-                const isTypedDue  = !!s.typedDueAt  && new Date(s.typedDueAt)  <= now
-                const isRecallDue = !!s.recallDueAt && new Date(s.recallDueAt) <= now
-                return isLegacyDue || isTypedDue || isRecallDue
-              }).map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
+              cards.flatMap(card => {
+                const state = stateMap.get(card.id)
+                if (!state?.graduated) return []
+                const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
+                const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
+                const isRecallDue = isDueByDate(state.recallDueAt)
+                const items: (typeof categoryQueue)[number][] = []
+                if (isTypedDue)  items.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
+                if (isRecallDue) items.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
+                if (isLegacyDue) items.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
+                return items
+              })
             )
             break
         }
@@ -473,9 +481,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         } else if (!state.graduated) {
           inPipeline.push({ card, state, pipeline, productionMode: null })
         } else if (state.graduated) {
-          const isLegacyDue = !state.typedDueAt && !!state.dueAt && new Date(state.dueAt) <= now
-          const isTypedDue  = !!state.typedDueAt  && new Date(state.typedDueAt)  <= now
-          const isRecallDue = !!state.recallDueAt && new Date(state.recallDueAt) <= now
+          const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
+          const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
+          const isRecallDue = isDueByDate(state.recallDueAt)
           if (isTypedDue) {
             dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
           }
@@ -834,7 +842,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       }
 
       // Soft-wrong split: update recall track with the user's recall rating (typed track already got 'again').
-      if (softWrongRecallRating && newState.graduated && !isRecallReview && reviewTrack === 'typed' && state.recallDueAt) {
+      // Works even when recallDueAt is null (card predates dual-track) — initialises recall from the typed interval.
+      if (softWrongRecallRating && newState.graduated && !isRecallReview && (reviewTrack === 'typed' || reviewTrack === 'legacy')) {
         const recallIntervalBase = state.recallIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
         const recallBase = { ...state, intervalDays: recallIntervalBase, scheduledIntervalDays: recallIntervalBase }
         const recallSched = scheduleNext(recallBase, softWrongRecallRating, { now: nowDate, wrongSeverity: undefined, params: schedulerParams })
@@ -1410,8 +1419,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
     : undefined
   const softWrongEnabled = state.graduated && !currentIsReverse &&
-    current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled &&
-    !!state.recallDueAt
+    current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">

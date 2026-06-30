@@ -221,9 +221,9 @@ function AllDueSessionInner() {
               const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
               const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
               const isRecallDue = isDueByDate(state.recallDueAt)
-              if (isLegacyDue || isTypedDue || isRecallDue) {
-                categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
-              }
+              if (isTypedDue)  categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+              if (isRecallDue) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
+              if (isLegacyDue) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
           }
           if (category === 'due') {
@@ -582,7 +582,8 @@ function AllDueSessionInner() {
       }
 
       // Soft-wrong split: update recall track with the user's recall rating (typed track already got 'again').
-      if (softWrongRecallRating && newState.graduated && !isRecallReview && reviewTrack === 'typed' && state.recallDueAt) {
+      // Works even when recallDueAt is null (card predates dual-track) — initialises recall from the typed interval.
+      if (softWrongRecallRating && newState.graduated && !isRecallReview && (reviewTrack === 'typed' || reviewTrack === 'legacy')) {
         const recallIntervalBase = state.recallIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
         const recallBase = { ...state, intervalDays: recallIntervalBase, scheduledIntervalDays: recallIntervalBase }
         const recallSched = scheduleNext(recallBase, softWrongRecallRating, { now: nowDate, wrongSeverity: undefined, params: schedulerParams })
@@ -960,8 +961,7 @@ function AllDueSessionInner() {
     ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
     : undefined
   const softWrongEnabled = state.graduated && !currentIsReverse &&
-    current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled &&
-    !!state.recallDueAt
+    current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">

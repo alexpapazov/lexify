@@ -185,6 +185,10 @@ function FolderSessionInner() {
 
       const now   = new Date()
       const today = getToday(tz, turnoverHour)
+      const isDueByDate = (dateStr: string | null | undefined): boolean => {
+        if (!dateStr) return false
+        return new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= today
+      }
 
       // ?category= elective study: build queue from only that category across
       // all decks in the folder, capped at FOLDER_ELECTIVE_LIMIT cards.
@@ -206,12 +210,12 @@ function FolderSessionInner() {
             } else if (category === 'graduated' && state?.graduated) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated) {
-              const isLegacyDue = !state.typedDueAt && !!state.dueAt && new Date(state.dueAt) <= now
-              const isTypedDue  = !!state.typedDueAt  && new Date(state.typedDueAt)  <= now
-              const isRecallDue = !!state.recallDueAt && new Date(state.recallDueAt) <= now
-              if (isLegacyDue || isTypedDue || isRecallDue) {
-                categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
-              }
+              const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
+              const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
+              const isRecallDue = isDueByDate(state.recallDueAt)
+              if (isTypedDue)  categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+              if (isRecallDue) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
+              if (isLegacyDue) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
           }
         }
@@ -281,9 +285,9 @@ function FolderSessionInner() {
             // In pipeline — always include
             allCards.push({ ...common, state, productionMode: null })
           } else if (state.graduated) {
-            const isLegacyDue = !state.typedDueAt && !!state.dueAt && new Date(state.dueAt) <= now
-            const isTypedDue  = !!state.typedDueAt  && new Date(state.typedDueAt)  <= now
-            const isRecallDue = !!state.recallDueAt && new Date(state.recallDueAt) <= now
+            const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
+            const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
+            const isRecallDue = isDueByDate(state.recallDueAt)
             if (isTypedDue)  allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
             if (isRecallDue) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
             if (isLegacyDue) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
@@ -292,7 +296,7 @@ function FolderSessionInner() {
 
         // Add due reverse-direction rows for this deck
         for (const reverseState of reverseStatesList) {
-          if (!reverseState.recallDueAt || new Date(reverseState.recallDueAt) > now) continue
+          if (!isDueByDate(reverseState.recallDueAt) && !isDueByDate(reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) {
             const common = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
@@ -565,7 +569,8 @@ function FolderSessionInner() {
       }
 
       // Soft-wrong split: update recall track with the user's recall rating (typed track already got 'again').
-      if (softWrongRecallRating && newState.graduated && !isRecallReview && reviewTrack === 'typed' && state.recallDueAt) {
+      // Works even when recallDueAt is null (card predates dual-track) — initialises recall from the typed interval.
+      if (softWrongRecallRating && newState.graduated && !isRecallReview && (reviewTrack === 'typed' || reviewTrack === 'legacy')) {
         const recallIntervalBase = state.recallIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
         const recallBase = { ...state, intervalDays: recallIntervalBase, scheduledIntervalDays: recallIntervalBase }
         const recallSched = scheduleNext(recallBase, softWrongRecallRating, { now: nowDate, wrongSeverity: undefined, params: schedulerParams })
@@ -940,8 +945,7 @@ function FolderSessionInner() {
     ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
     : undefined
   const softWrongEnabled = state.graduated && !currentIsReverse &&
-    current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled &&
-    !!state.recallDueAt
+    current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
