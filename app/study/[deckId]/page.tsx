@@ -1047,9 +1047,6 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                   )}
 
                   {(() => {
-                    // Review window: the [min, max] interval range the scheduler
-                    // may place the next due date within, based on last rating.
-                    // prevInterval ≈ scheduledIntervalDays / idealMultiplier.
                     const reviewWindow = (() => {
                       if (!state.graduated || !state.lastReviewedAt || !state.dueAt) return '—'
                       const rating = state.lastRating
@@ -1063,23 +1060,35 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                       const maxDate = new Date(base + prevInterval * r.max * 86400_000)
                       return `${formatDate(minDate.toISOString())} → ${formatDate(maxDate.toISOString())}`
                     })()
-                    // Graduation interval: first entry in intervalHistory (corrected at graduation to idealDays)
                     const gradIntervalDays = state.graduated && state.intervalHistory.length > 0
-                      ? state.intervalHistory[0]!
-                      : null
+                      ? state.intervalHistory[0]! : null
                     const gradStruggleLabel = gradIntervalDays != null
-                      ? gradIntervalDays >= 5 ? '0'
-                        : gradIntervalDays >= 3 ? '1'
-                        : gradIntervalDays >= 2 ? '2'
-                        : '3+'
+                      ? gradIntervalDays >= 5 ? '0' : gradIntervalDays >= 3 ? '1' : gradIntervalDays >= 2 ? '2' : '3+'
                       : null
-                    return (
-                      <StatGroup title="Scheduling" rows={[
-                        ['Interval (ideal)',    formatIntervalDays(state.intervalDays)],
+                    const isDualTrack = state.graduated && state.typedDueAt != null
+                    const hasRecallTrack = state.graduated && (state.recallDueAt != null || state.recallIntervalDays != null)
+                    const prodInterval = state.typedIntervalDays ?? state.intervalDays
+                    const prodDue = state.typedDueAt ?? state.dueAt
+                    return (<>
+                      {/* Production track (typed + self-graded forward reviews) */}
+                      <StatGroup title={isDualTrack ? 'Production track (typed / self-graded)' : 'Scheduling'} rows={[
+                        ['Interval (ideal)',    formatIntervalDays(prodInterval)],
                         ['Scheduled interval',  formatIntervalDays(state.scheduledIntervalDays)],
                         ['Review window',       reviewWindow],
-                        ['Next due',            state.graduated ? formatDate(state.dueAt) : '—'],
+                        ['Next due',            state.graduated ? formatDate(prodDue) : '—'],
                         ['Last reviewed',       formatDate(state.lastReviewedAt, 'Never')],
+                      ]} />
+
+                      {/* Recall track (created by soft-wrong dual-track splits) */}
+                      {hasRecallTrack && (
+                        <StatGroup title="Recall track" rows={[
+                          ['Interval',  formatIntervalDays(state.recallIntervalDays)],
+                          ['Next due',  formatDate(state.recallDueAt)],
+                        ]} />
+                      )}
+
+                      {/* Milestones */}
+                      <StatGroup title="Milestones" rows={[
                         ['Introduced',          formatDate(state.introducedDate, 'Not yet')],
                         ['Graduated at',        formatDate(state.graduatedAt, '—')],
                         ...(gradIntervalDays != null ? [
@@ -1087,7 +1096,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                           ['Pipeline struggles',  gradStruggleLabel!] as [string, string],
                         ] : []),
                       ]} />
-                    )
+                    </>)
                   })()}
 
                   <StatGroup title="Lapses & relearning" rows={[
