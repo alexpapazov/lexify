@@ -281,6 +281,7 @@ export function TypingMode({
     )
     if (matchedSibling) {
       onSiblingAnswered?.(matchedSibling.id)
+      setExtraSynonyms(prev => [...prev, canonInput])
       setCanonicalLoopCount(c => c + 1)
       setCanonInput('')
       return
@@ -459,15 +460,26 @@ export function TypingMode({
           autoFocus={!revealed && !siblingId && !synonymPhase}
         />
 
+        {/* Extra synonym/sibling boxes (shown as stacked disabled amber inputs) */}
+        {(synonymPhase || siblingId) && !result && extraSynonyms.map((s, i) => (
+          <input
+            key={i}
+            className="input text-center text-lg font-mono border-warning/60 bg-warning/5"
+            value={s}
+            readOnly
+            disabled
+          />
+        ))}
+
         {/* Sibling phase: success note + canonical input */}
         {siblingId && !result && (
           <div className="space-y-3">
             <div className="panel border-success/30 bg-success/5 text-center py-3 space-y-1">
               <p className="text-success font-medium">
-                {canonicalLoopCount > 0 ? 'That\'s another form!' : 'Correct! Also in your deck'}
+                {extraSynonyms.length > 0 ? 'That\'s another form!' : 'Correct! Also in your deck'}
               </p>
               <p className="text-xs text-ink-muted">
-                {canonicalLoopCount > 0 ? 'Now type the main answer for this card:' : 'Now type the answer for this specific card:'}
+                {extraSynonyms.length > 0 ? 'Now type the main answer for this card:' : 'Now type the answer for this specific card:'}
               </p>
             </div>
             <input
@@ -499,17 +511,6 @@ export function TypingMode({
             disabled
           />
         )}
-
-        {/* Extra synonym boxes (shown as stacked disabled amber inputs) */}
-        {synonymPhase && !result && extraSynonyms.map((s, i) => (
-          <input
-            key={i}
-            className="input text-center text-lg font-mono border-warning/60 bg-warning/5"
-            value={s}
-            readOnly
-            disabled
-          />
-        ))}
 
         {/* Synonym phase: accepted note + canonical input */}
         {synonymPhase && !result && (
