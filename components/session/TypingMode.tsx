@@ -122,9 +122,15 @@ export function TypingMode({
   const effectiveSynonyms = [...(synonyms ?? []), ...addedSynonyms]
 
   // Merge answerLanguage into gradingSettings so article detection is language-aware.
-  const effectiveGradingSettings: GradingSettings = answerLanguage
-    ? { ...gradingSettings, answerLanguage }
-    : gradingSettings
+  // The answer side is native when the prompt is front (card.front = learned
+  // language, card.back = the learner's native language) — minor spelling
+  // slips in the native language aren't the skill being tested, so they're
+  // graded leniently rather than flagged as "almost".
+  const effectiveGradingSettings: GradingSettings = {
+    ...gradingSettings,
+    ...(answerLanguage ? { answerLanguage } : {}),
+    isNativeAnswer: promptSide === 'front',
+  }
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
   useEffect(() => {

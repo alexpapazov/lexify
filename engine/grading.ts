@@ -360,7 +360,7 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
     })()
 
     if (isAlmostTypo) {
-      if (settings.ignoreMinorTypos) {
+      if (settings.ignoreMinorTypos || settings.isNativeAnswer) {
         return makeResult('correct', 'none', '',
           userAnswer, expected, normUser, normExp, candidates[closestIdx])
       }

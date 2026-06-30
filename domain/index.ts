@@ -78,6 +78,8 @@ export interface GradingSettings {
   // ── Language context (runtime-only, not persisted) ────────────────────────
   /** BCP-47 language tag of the answer language (e.g. 'es', 'fr', 'it'). Used to restrict article detection to language-appropriate articles. */
   answerLanguage?:             string
+  /** True when the learner is typing in their native/basis language (card.back). Minor spelling slips are graded leniently since spelling the native language isn't the skill being tested. */
+  isNativeAnswer?:             boolean
 }
 
 /** Default for new decks — strict mode, case-insensitive only. */
