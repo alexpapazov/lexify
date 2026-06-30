@@ -84,6 +84,7 @@ function AllDueSessionInner() {
       ? categoryParam : null
   const sourceLang = searchParams.get('source')
   const targetLang = searchParams.get('target')
+  const dirParam   = searchParams.get('dir') as 'forward' | 'reverse' | null
   const backHref = sourceLang && targetLang ? `/library?source=${sourceLang}&target=${targetLang}` : '/study'
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
@@ -217,7 +218,7 @@ function AllDueSessionInner() {
               categoryCards.push({ ...common, card, state, productionMode: null })
             } else if (category === 'graduated' && state?.graduated) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
-            } else if (category === 'due' && state?.graduated) {
+            } else if (category === 'due' && state?.graduated && dirParam !== 'reverse') {
               const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
               const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
               const isRecallDue = isDueByDate(state.recallDueAt)
@@ -226,7 +227,7 @@ function AllDueSessionInner() {
               if (isLegacyDue) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
           }
-          if (category === 'due') {
+          if (category === 'due' && dirParam !== 'forward') {
             for (const reverseState of reverseStatesList) {
               if (!isDueByDate(reverseState.recallDueAt) && !isDueByDate(reverseState.dueAt)) continue
               const revCard = cards.find(c => c.id === reverseState.cardId)

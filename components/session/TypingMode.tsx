@@ -82,6 +82,7 @@ export function TypingMode({
   const [canonicalLoopCount, setCanonicalLoopCount] = useState(0)
   const [softWrongRecallRating, setSoftWrongRecallRating] = useState<Rating | null>(null)
   const [softWrongOverrideAtRating, setSoftWrongOverrideAtRating] = useState(false)
+  const [overrideAsAlmost, setOverrideAsAlmost] = useState(false)
   const [resetConfirm, setResetConfirm] = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
   const retypeRef   = useRef<HTMLInputElement>(null)
@@ -103,6 +104,7 @@ export function TypingMode({
     setCanonicalLoopCount(0)
     setSoftWrongRecallRating(null)
     setSoftWrongOverrideAtRating(false)
+    setOverrideAsAlmost(false)
   }, [card.id])
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
@@ -119,10 +121,12 @@ export function TypingMode({
 
   // Soft-wrong: accent/article/typo near-miss with both dual tracks active.
   // override !== false: if user explicitly marks wrong, fall through to normal wrong flow.
+  // overrideAsAlmost: user manually triggered soft-wrong even though engine said correct.
   const isSoftWrong = !!(
-    softWrongEnabled && result &&
-    result.status === 'almost' && !result.correct && !result.viaOverride &&
-    override !== false
+    softWrongEnabled && result && override !== false && (
+      (result.status === 'almost' && !result.correct && !result.viaOverride) ||
+      overrideAsAlmost
+    )
   )
 
   const needsRetype = !!result && !finalCorrect && !isSoftWrong
@@ -582,9 +586,12 @@ export function TypingMode({
                         Override as correct
                       </button>
                     )}
-                    {override !== null && (
-                      <button onClick={() => setOverrideAndPersist(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
-                        Undo override
+                    <button onClick={() => { setOverrideAsAlmost(false); setOverride(false) }} className="text-xs text-ink-faint hover:text-danger transition-colors">
+                      Override as incorrect
+                    </button>
+                    {(overrideAsAlmost || override !== null) && (
+                      <button onClick={() => { setOverrideAsAlmost(false); setOverrideAndPersist(null) }} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
+                        Undo
                       </button>
                     )}
                   </div>
@@ -627,6 +634,11 @@ export function TypingMode({
                   {result.correct && override !== false && (
                     <button onClick={() => setOverrideAndPersist(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
                       Override as incorrect
+                    </button>
+                  )}
+                  {result.correct && override !== false && softWrongEnabled && (
+                    <button onClick={() => setOverrideAsAlmost(true)} className="text-xs text-ink-faint hover:text-warning transition-colors">
+                      Override as almost
                     </button>
                   )}
                   {!result.correct && override !== true && (

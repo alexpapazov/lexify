@@ -15,13 +15,15 @@ import { effectiveMultiplierRange, acceleratedEffectiveMultiplierRange } from '@
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
 
 interface DeckWithStats {
-  deck:      Deck
-  cards:     Card[]
-  states:    CardState[]
-  unlearned: number
-  learning:  number
-  graduated: number
-  dueNow:    number
+  deck:          Deck
+  cards:         Card[]
+  states:        CardState[]
+  unlearned:     number
+  learning:      number
+  graduated:     number
+  dueNow:        number
+  dueNowForward: number
+  dueNowReverse: number
 }
 
 interface GlobalCounts {
@@ -190,7 +192,7 @@ export default function StudyPage() {
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,
         learning:  forwardStates.filter(s => !s.graduated).length,
         graduated: forwardStates.filter(s => s.graduated).length,
-        dueNow:    states.filter(s => {
+        dueNow:        states.filter(s => {
           if (!s.graduated) return false
           if (s.reviewDirection === 'reverse') {
             return stateMap.get(s.cardId)?.graduated === true &&
@@ -198,6 +200,16 @@ export default function StudyPage() {
           }
           const dueTrack = s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt)
           return dueTrack || isDueByDate(s.recallDueAt)
+        }).length,
+        dueNowForward: forwardStates.filter(s => {
+          if (!s.graduated) return false
+          const dueTrack = s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt)
+          return dueTrack || isDueByDate(s.recallDueAt)
+        }).length,
+        dueNowReverse: states.filter(s => {
+          if (!s.graduated || s.reviewDirection !== 'reverse') return false
+          return stateMap.get(s.cardId)?.graduated === true &&
+            (isDueByDate(s.recallDueAt) || isDueByDate(s.dueAt))
         }).length,
       }
     }))
@@ -460,13 +472,18 @@ export default function StudyPage() {
     })
   }
 
-  // Group due counts by language pair for the "Study all due" popover
-  interface LangPairDue { sourceLanguage: string; targetLanguage: string; dueNow: number }
+  // Group due counts by language pair + direction for the "Study all due" popover
+  interface LangPairDue { sourceLanguage: string; targetLanguage: string; direction: 'forward' | 'reverse'; dueNow: number }
   const langPairDue: LangPairDue[] = Object.values(
-    deckStats.reduce<Record<string, LangPairDue>>((acc, { deck, dueNow }) => {
-      const key = `${deck.sourceLanguage}|${deck.targetLanguage}`
-      if (!acc[key]) acc[key] = { sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, dueNow: 0 }
-      acc[key]!.dueNow += dueNow
+    deckStats.reduce<Record<string, LangPairDue>>((acc, { deck, dueNowForward, dueNowReverse }) => {
+      const fwdKey = `${deck.sourceLanguage}|${deck.targetLanguage}|forward`
+      if (!acc[fwdKey]) acc[fwdKey] = { sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, direction: 'forward', dueNow: 0 }
+      acc[fwdKey]!.dueNow += dueNowForward
+      if (dueNowReverse > 0) {
+        const revKey = `${deck.sourceLanguage}|${deck.targetLanguage}|reverse`
+        if (!acc[revKey]) acc[revKey] = { sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, direction: 'reverse', dueNow: 0 }
+        acc[revKey]!.dueNow += dueNowReverse
+      }
       return acc
     }, {})
   ).filter(p => p.dueNow > 0)
@@ -614,19 +631,24 @@ export default function StudyPage() {
               {showDuePicker && langPairDue.length > 0 && (
                 <div className="absolute left-0 top-full mt-2 z-20 min-w-[220px] rounded-card border border-white/10 bg-surface-deep shadow-xl overflow-hidden">
                   <p className="px-4 py-2.5 text-xs text-ink-faint border-b border-white/10">Choose a language to study</p>
-                  {langPairDue.map(pair => (
-                    <button
-                      key={`${pair.sourceLanguage}|${pair.targetLanguage}`}
-                      className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
-                      onClick={() => {
-                        setShowDuePicker(false)
-                        router.push(`/study/all/session?category=due&source=${pair.sourceLanguage}&target=${pair.targetLanguage}`)
-                      }}
-                    >
-                      <span className="text-ink">{langName(pair.targetLanguage)} → {langName(pair.sourceLanguage)}</span>
-                      <span className="chip text-xs ml-3">{pair.dueNow}</span>
-                    </button>
-                  ))}
+                  {langPairDue.map(pair => {
+                    const label = pair.direction === 'forward'
+                      ? `${langName(pair.targetLanguage)} → ${langName(pair.sourceLanguage)}`
+                      : `${langName(pair.sourceLanguage)} → ${langName(pair.targetLanguage)}`
+                    return (
+                      <button
+                        key={`${pair.sourceLanguage}|${pair.targetLanguage}|${pair.direction}`}
+                        className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
+                        onClick={() => {
+                          setShowDuePicker(false)
+                          router.push(`/study/all/session?category=due&source=${pair.sourceLanguage}&target=${pair.targetLanguage}&dir=${pair.direction}`)
+                        }}
+                      >
+                        <span className="text-ink">{label}</span>
+                        <span className="chip text-xs ml-3">{pair.dueNow}</span>
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </div>
