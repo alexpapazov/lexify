@@ -322,7 +322,6 @@ export default function SettingsPage() {
   const [redistributing,    setRedistributing]    = useState(false)
   const [redistributeMsg,   setRedistributeMsg]   = useState<string | null>(null)
   const [langPairs,              setLangPairs]              = useState<LanguagePair[]>([])
-  const [goalsCountAccelerated,  setGoalsCountAccelerated]  = useState(false)
   const [goalDrafts,             setGoalDrafts]             = useState<Record<string, Record<string, string>>>({})
   const [goalSavingKey,          setGoalSavingKey]          = useState<string | null>(null)
 
@@ -344,7 +343,7 @@ export default function SettingsPage() {
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, goals_count_accelerated')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -358,7 +357,6 @@ export default function SettingsPage() {
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
-        setGoalsCountAccelerated((profile.goals_count_accelerated as boolean | null) ?? false)
       } else {
         setTimezone(detectBrowserTimezone())
       }
@@ -389,7 +387,6 @@ export default function SettingsPage() {
       timezone:                  timezone || null,
       day_turnover_hour:         turnoverHour,
       study_mode_autoplay:       studyModeAutoplay,
-      goals_count_accelerated:   goalsCountAccelerated,
     }).eq('user_id', session.user.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -686,15 +683,6 @@ export default function SettingsPage() {
               <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily Goals</h2>
               <p className="text-xs text-ink-faint mt-1">
                 Target number of words to graduate per language, per day of the week. Leave a day blank for no goal.
-              </p>
-            </div>
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input type="checkbox" checked={goalsCountAccelerated} onChange={e => setGoalsCountAccelerated(e.target.checked)} className="accent-accent w-4 h-4" />
-                <span className="text-sm text-ink">Count fast-tracked cards toward goals</span>
-              </label>
-              <p className="text-xs text-ink-faint pl-6">
-                When off, only cards that went through the full learning pipeline count. Saved with the main Save button below.
               </p>
             </div>
             <div className="space-y-5">

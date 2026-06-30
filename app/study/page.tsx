@@ -149,7 +149,6 @@ export default function StudyPage() {
   const [redistributing, setRedistributing] = useState(false)
   const [redistributeMsg, setRedistributeMsg] = useState<string | null>(null)
   const [langPairs,         setLangPairs]         = useState<LanguagePair[]>([])
-  const [goalsCountAccel,   setGoalsCountAccel]   = useState(false)
   const [todayGradCounts,   setTodayGradCounts]   = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
   const duePickerRef = useRef<HTMLDivElement>(null)
@@ -169,7 +168,7 @@ export default function StudyPage() {
 
     const [decks, profileRes] = await Promise.all([
       deckRepo.list(session.user.id),
-      supabase.from('profiles').select('timezone, day_turnover_hour, goals_count_accelerated').eq('user_id', session.user.id).single(),
+      supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
     ])
 
     const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'
@@ -228,9 +227,6 @@ export default function StudyPage() {
     setGlobal(globalCounts)
 
     // ── Goal progress ───────────────────────────────────────────────────
-    const goalsCountAccelValue = (profileRes.data?.goals_count_accelerated as boolean | null) ?? false
-    setGoalsCountAccel(goalsCountAccelValue)
-
     const [pairs, recentGradsRes] = await Promise.all([
       new SupabaseLanguagePairRepository().list(session.user.id),
       supabase
@@ -249,7 +245,7 @@ export default function StudyPage() {
       const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
       if (!r.graduated_at || !r.cards) continue
       if (localDateWithTurnover(r.graduated_at, tz, turnoverHour) !== todayStr) continue
-      if (!goalsCountAccelValue && r.accelerated_mode === 'import_known') continue
+      if (r.accelerated_mode === 'import_known') continue
       const key = `${r.cards.source_language}|${r.cards.target_language}`
       gradCounts.set(key, (gradCounts.get(key) ?? 0) + 1)
     }
