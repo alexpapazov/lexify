@@ -97,17 +97,14 @@ function buildForecastDays(
         if (!isAccel && !filters.accel.includes('normal')) continue
       }
 
-      if (showTyped && s.dueAt) {
-        const d = s.dueAt.slice(0, 10) === todayStr
-          ? (new Date(s.dueAt) <= now ? todayStr : null)
-          : s.dueAt.slice(0, 10)
-        if (d) bump(d)
+      const typedRef = s.typedDueAt ?? s.dueAt
+      if (showTyped && typedRef) {
+        const d = typedRef.slice(0, 10) <= todayStr ? todayStr : typedRef.slice(0, 10)
+        if (d >= startDate && d <= endDate) bump(d)
       }
       if (showRecall && s.recallDueAt) {
-        const rd = s.recallDueAt.slice(0, 10) === todayStr
-          ? (new Date(s.recallDueAt) <= now ? todayStr : null)
-          : s.recallDueAt.slice(0, 10)
-        if (rd && rd !== s.dueAt?.slice(0, 10)) bump(rd)
+        const rd = s.recallDueAt.slice(0, 10) <= todayStr ? todayStr : s.recallDueAt.slice(0, 10)
+        if (rd >= startDate && rd <= endDate && rd !== typedRef?.slice(0, 10)) bump(rd)
       }
     }
   }
@@ -503,12 +500,15 @@ export default function StudyPage() {
           if (!isAccel && !forecastFilters.accel.includes('normal'))      continue
         }
 
+        const typedRef = s.typedDueAt ?? s.dueAt
         let due = false
-        if (showTyped && s.dueAt) {
-          due = isToday ? new Date(s.dueAt) <= now : s.dueAt.slice(0, 10) === selectedForecastDate
+        if (showTyped && typedRef) {
+          const d = typedRef.slice(0, 10) <= selectedForecastDate ? selectedForecastDate : typedRef.slice(0, 10)
+          due = d === selectedForecastDate
         }
         if (!due && showRecall && s.recallDueAt) {
-          due = isToday ? new Date(s.recallDueAt) <= now : s.recallDueAt.slice(0, 10) === selectedForecastDate
+          const rd = s.recallDueAt.slice(0, 10) <= selectedForecastDate ? selectedForecastDate : s.recallDueAt.slice(0, 10)
+          due = rd === selectedForecastDate && s.recallDueAt.slice(0, 10) !== typedRef?.slice(0, 10)
         }
         if (!due) continue
 
