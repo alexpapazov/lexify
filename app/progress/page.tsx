@@ -81,6 +81,12 @@ export default function AnalyticsPage() {
   const [expanded,     setExpanded]     = useState<Set<string>>(new Set())
   const [todayStr,     setTodayStr]     = useState(() => isoDate(new Date()))
   const [yesterdayStr, setYesterdayStr] = useState(() => isoDate(new Date(Date.now() - 86400000)))
+  const [customColors, setCustomColors] = useState<Map<string, string>>(() => {
+    try {
+      const stored = localStorage.getItem('lexify-lang-colors')
+      return stored ? new Map(JSON.parse(stored) as [string, string][]) : new Map()
+    } catch { return new Map() }
+  })
 
   const load = useCallback(async (days: RangeDays) => {
     setLoading(true)
@@ -221,13 +227,22 @@ export default function AnalyticsPage() {
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [range, load])
 
-  // Build stable language-pair → color mapping from all data
+  function setLangColor(key: string, color: string) {
+    setCustomColors(prev => {
+      const next = new Map(prev)
+      next.set(key, color)
+      try { localStorage.setItem('lexify-lang-colors', JSON.stringify([...next])) } catch {}
+      return next
+    })
+  }
+
+  // Build stable language-pair → color mapping from all data, with custom overrides
   const langColorMap = useMemo(() => {
     const keys = [...new Set(
       data.flatMap(d => d.graduated.map(g => `${g.sourceLanguage}|${g.targetLanguage}`))
     )]
-    return new Map(keys.map((k, i) => [k, LANG_PALETTE[i % LANG_PALETTE.length]!]))
-  }, [data])
+    return new Map(keys.map((k, i) => [k, customColors.get(k) ?? LANG_PALETTE[i % LANG_PALETTE.length]!]))
+  }, [data, customColors])
 
   const chartH  = 160
   const maxVal  = Math.max(...data.map(d => totalGrad(d) + d.reviewed + d.lapses), 1)
@@ -268,7 +283,18 @@ export default function AnalyticsPage() {
           const [src, tgt] = key.split('|') as [string, string]
           return (
             <span key={key} className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-sm inline-block" style={{ background: color }} />
+              <label className="relative cursor-pointer group" title="Click to change color">
+                <span
+                  className="w-3 h-3 rounded-sm inline-block ring-offset-1 ring-offset-surface group-hover:ring-2 group-hover:ring-white/40 transition-shadow"
+                  style={{ background: color }}
+                />
+                <input
+                  type="color"
+                  value={color}
+                  onChange={e => setLangColor(key, e.target.value)}
+                  className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                />
+              </label>
               {langPairLabel(src, tgt)}
             </span>
           )
