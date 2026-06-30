@@ -50,7 +50,43 @@ interface ForecastDay {
   count:  number
 }
 
-const FORECAST_DAYS = 14
+function addDays(dateStr: string, n: number): string {
+  const d = new Date(dateStr + 'T00:00:00.000Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+function buildForecastDays(
+  stats: DeckWithStats[],
+  startDate: string,
+  endDate: string,
+  todayStr: string,
+  dueNow: number,
+): ForecastDay[] {
+  if (!startDate || !endDate || startDate > endDate) return []
+  const deckCounts = new Map<string, number>()
+  for (const { states } of stats) {
+    for (const s of states) {
+      if (!s.graduated || !s.dueAt || s.reviewDirection === 'reverse') continue
+      deckCounts.set(s.dueAt.slice(0, 10), (deckCounts.get(s.dueAt.slice(0, 10)) ?? 0) + 1)
+    }
+  }
+  const days: ForecastDay[] = []
+  const startMs = new Date(startDate + 'T00:00:00.000Z').getTime()
+  const endMs   = new Date(endDate   + 'T00:00:00.000Z').getTime()
+  for (let ms = startMs; ms <= endMs; ms += 86400000) {
+    const d       = new Date(ms)
+    const dateStr = d.toISOString().slice(0, 10)
+    const isToday = dateStr === todayStr
+    days.push({
+      date:   dateStr,
+      label:  isToday ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
+      dayNum: d.getUTCDate(),
+      count:  isToday ? dueNow : (deckCounts.get(dateStr) ?? 0),
+    })
+  }
+  return days
+}
 
 export default function StudyPage() {
   const [deckStats,    setDeckStats]    = useState<DeckWithStats[]>([])
@@ -62,6 +98,8 @@ export default function StudyPage() {
   const [todayStr,     setTodayStr]     = useState('')
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null)
+  const [forecastStartDate,    setForecastStartDate]    = useState('')
+  const [forecastEndDate,      setForecastEndDate]      = useState('')
   const [redistributing, setRedistributing] = useState(false)
   const [redistributeMsg, setRedistributeMsg] = useState<string | null>(null)
   const [showDuePicker, setShowDuePicker] = useState(false)
@@ -122,30 +160,11 @@ export default function StudyPage() {
     setGlobal(globalCounts)
 
     // ── Upcoming review forecast ────────────────────────────────────────
-    // Build counts from the already-loaded deckStats so the bars always match
-    // the detail panel (both exclude orphaned states for cards not in any deck).
-    const deckCounts = new Map<string, number>()
-    for (const { states } of stats) {
-      for (const s of states) {
-        if (!s.graduated || !s.dueAt || s.reviewDirection === 'reverse') continue
-        const day = s.dueAt.slice(0, 10)
-        deckCounts.set(day, (deckCounts.get(day) ?? 0) + 1)
-      }
-    }
-
-    const days: ForecastDay[] = []
-    for (let i = 0; i < FORECAST_DAYS; i++) {
-      const d = new Date(todayDate)
-      d.setUTCDate(d.getUTCDate() + i)
-      const dateStr = d.toISOString().slice(0, 10)
-      days.push({
-        date:   dateStr,
-        label:  i === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
-        dayNum: d.getUTCDate(),
-        count:  i === 0 ? globalCounts.dueNow : (deckCounts.get(dateStr) ?? 0),
-      })
-    }
-    setForecast(days)
+    const initStart = todayStr
+    const initEnd   = addDays(todayStr, 13)
+    setForecastStartDate(initStart)
+    setForecastEndDate(initEnd)
+    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, globalCounts.dueNow))
 
     setLoading(false)
   }
@@ -319,6 +338,13 @@ export default function StudyPage() {
   }
 
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!todayStr || !forecastStartDate || !forecastEndDate) return
+    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, global.dueNow))
+    setSelectedForecastDate(prev => prev && prev >= forecastStartDate && prev <= forecastEndDate ? prev : null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forecastStartDate, forecastEndDate])
 
   useEffect(() => {
     if (!showDuePicker) return
@@ -496,9 +522,25 @@ export default function StudyPage() {
 
           {/* ── Upcoming reviews ─────────────────────────────────────────── */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
               <h2 className="text-base font-medium text-ink">Coming up</h2>
-              <span className="text-xs text-ink-faint">Cards due over the next {FORECAST_DAYS} days</span>
+              <div className="flex items-center gap-1.5 text-xs text-ink-faint">
+                <input
+                  type="date"
+                  value={forecastStartDate}
+                  max={forecastEndDate || undefined}
+                  onChange={e => setForecastStartDate(e.target.value)}
+                  className="bg-surface-raised border border-white/10 rounded px-1.5 py-0.5 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
+                />
+                <span>→</span>
+                <input
+                  type="date"
+                  value={forecastEndDate}
+                  min={forecastStartDate || undefined}
+                  onChange={e => setForecastEndDate(e.target.value)}
+                  className="bg-surface-raised border border-white/10 rounded px-1.5 py-0.5 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
+                />
+              </div>
             </div>
 
             {forecast.every(d => d.count === 0) ? (
@@ -506,8 +548,8 @@ export default function StudyPage() {
                 Nothing scheduled yet — keep studying to build up your review queue.
               </div>
             ) : (
-              <div className="panel">
-                <div className="flex items-end gap-1 sm:gap-2 h-40">
+              <div className="panel overflow-x-auto">
+                <div className="flex items-end gap-1 h-40" style={{ minWidth: `${forecast.length * 36}px` }}>
                   {forecast.map(day => {
                     const isSelected = selectedForecastDate === day.date
                     return (
