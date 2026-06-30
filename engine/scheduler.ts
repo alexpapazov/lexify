@@ -308,6 +308,14 @@ function lapseClusterCountFor(state: CardState, now: Date): number {
  */
 export function classifyReviewMode(state: CardState, now: Date = new Date()): 'elective' | 'due' {
   if (!state.graduated || !state.lastReviewedAt || state.relearningStep > 0) return 'due'
+  // Prefer direct due-date comparison to interval math. Interval math can
+  // use the wrong track's scheduledIntervalDays on split typed/recall cards
+  // (e.g. the recall interval is longer, making a genuinely-due typed review
+  // look elective). If any known due date is in the past, the review is due.
+  const dueDates = [state.typedDueAt, state.recallDueAt, state.dueAt].filter(Boolean) as string[]
+  if (dueDates.length > 0) {
+    return dueDates.some(d => new Date(d) <= now) ? 'due' : 'elective'
+  }
   const scheduledInterval = state.scheduledIntervalDays > 0 ? state.scheduledIntervalDays : state.intervalDays
   if (scheduledInterval <= 0) return 'due'
   const elapsed  = daysSince(state.lastReviewedAt, now)
