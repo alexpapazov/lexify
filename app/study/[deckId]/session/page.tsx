@@ -1544,6 +1544,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
+          onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
@@ -1579,6 +1580,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />

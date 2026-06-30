@@ -8,6 +8,7 @@ import { langNativeName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
+import { EditableAnswerText } from './EditableAnswerText'
 
 /**
  * Type-the-answer recall component.
@@ -23,7 +24,7 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -41,6 +42,8 @@ export function TypingMode({
   onIDontKnow?: () => void
   onAdvance?: () => void
   onPromptEdit?: (newText: string) => void
+  /** Called when the user double-clicks the displayed answer text to edit the other side of the card. */
+  onAnswerEdit?: (newText: string) => void
   /** Called when a deck-sibling answer is detected; the parent should credit that card. */
   onSiblingAnswered?: (siblingCardId: string) => void
   onResetCard?: () => void
@@ -414,7 +417,7 @@ export function TypingMode({
         {revealed ? (
           <>
             <p className="text-center text-sm text-ink-muted">
-              Answer: <span className="font-mono text-ink">{displayExpected}</span>
+              Answer: <EditableAnswerText text={displayExpected} onEdit={t => onAnswerEdit?.(t)} />
             </p>
             <input
               ref={retypeRef}
@@ -563,7 +566,7 @@ export function TypingMode({
                      'Minor spelling error'}
                   </p>
                   <p className="text-ink-muted text-sm">
-                    Answer: <span className="text-ink font-mono">{displayExpected}</span>
+                    Answer: <EditableAnswerText text={displayExpected} onEdit={t => onAnswerEdit?.(t)} />
                   </p>
                 </div>
               ) : finalCorrect ? (
@@ -582,7 +585,7 @@ export function TypingMode({
                   {!result.viaSynonym &&
                     (synonymPhase ? canonInput : input).trim() !== displayExpected.trim() && (
                     <p className="text-xs text-ink-muted">
-                      Card says: <span className="font-mono text-ink">{displayExpected}</span>
+                      Card says: <EditableAnswerText text={displayExpected} onEdit={t => onAnswerEdit?.(t)} />
                     </p>
                   )}
                 </div>
@@ -591,7 +594,7 @@ export function TypingMode({
                   <p className="text-warning font-medium">Almost!</p>
                   {result.reason && <p className="text-ink-muted text-sm">{result.reason}</p>}
                   <p className="text-ink-muted text-sm">
-                    Answer: <span className="text-ink font-mono">{displayExpected}</span>
+                    Answer: <EditableAnswerText text={displayExpected} onEdit={t => onAnswerEdit?.(t)} />
                   </p>
                 </div>
               ) : (
@@ -601,7 +604,7 @@ export function TypingMode({
                     {override === false && <span className="text-ink-faint font-normal"> (marked wrong)</span>}
                   </p>
                   <p className="text-ink-muted text-sm">
-                    Answer: <span className="text-ink font-mono">{displayExpected}</span>
+                    Answer: <EditableAnswerText text={displayExpected} onEdit={t => onAnswerEdit?.(t)} />
                   </p>
                 </div>
               )}

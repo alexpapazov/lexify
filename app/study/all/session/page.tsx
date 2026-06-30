@@ -1044,6 +1044,7 @@ function AllDueSessionInner() {
           onAdvance={() => setIndex(i => i + 1)}
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
+          onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
           ipaText={currentIpaText} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
@@ -1064,6 +1065,7 @@ function AllDueSessionInner() {
           onIDontKnow={handleIDontKnow}
           onAdvance={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} />
