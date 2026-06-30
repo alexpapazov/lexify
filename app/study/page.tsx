@@ -520,7 +520,9 @@ export default function StudyPage() {
         }
 
         const localDate = (d: string): string => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
-        const effDate   = (raw: string): string => { const d = localDate(raw); return d <= selectedForecastDate ? selectedForecastDate : d }
+        // Snap overdue cards to today (same as buildForecastDays), NOT to the clicked date —
+        // otherwise clicking a future bar pulls in all past-due cards too.
+        const effDate   = (raw: string): string => { const d = localDate(raw); return d <= todayStr ? todayStr : d }
         const typedRef  = s.typedDueAt ?? s.dueAt
         const typedEff: string | null  = typedRef      ? effDate(typedRef)      : null
         const recallEff: string | null = s.recallDueAt ? effDate(s.recallDueAt) : null
