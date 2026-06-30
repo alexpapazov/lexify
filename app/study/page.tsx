@@ -33,13 +33,14 @@ interface GlobalCounts {
 
 // A flat card entry for the cross-deck filtered view
 interface FilteredCard {
-  card:           Card
-  state:          CardState | undefined
-  deckName:       string
-  deckId:         string
-  status:         string
-  sourceLanguage: string
-  targetLanguage: string
+  card:            Card
+  state:           CardState | undefined
+  deckName:        string
+  deckId:          string
+  status:          string
+  sourceLanguage:  string
+  targetLanguage:  string
+  reviewDirection: string
 }
 
 // One day's worth of upcoming-review forecast data
@@ -429,7 +430,7 @@ export default function StudyPage() {
       .map(card => {
         const s = stateMap.get(card.id)
         const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
-        return { card, state: s, deckName: deck.name, deckId: deck.id, status, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+        return { card, state: s, deckName: deck.name, deckId: deck.id, status, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, reviewDirection: 'forward' }
       })
   }) : []
 
@@ -465,22 +466,53 @@ export default function StudyPage() {
   ).filter(p => p.dueNow > 0)
 
   // Cards due on the selected forecast date (for the click-to-expand panel)
+  // Mirrors the same filter logic as buildForecastDays so what's counted = what's listed
   const forecastCards: FilteredCard[] = selectedForecastDate ? deckStats.flatMap(({ deck, cards, states }) => {
-    // Use forward states only so orphaned reverse states don't appear in the list
-    const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
-    return cards
-      .filter(card => {
-        const s = stateMap.get(card.id)
-        if (!s?.graduated || !s.dueAt) return false
-        // "Today" date means due now; future date means exact date match
-        const isToday = selectedForecastDate === forecast[0]?.date
-        if (isToday) return new Date(s.dueAt) <= now
-        return s.dueAt.slice(0, 10) === selectedForecastDate
-      })
-      .map(card => {
-        const s = stateMap.get(card.id)
-        return { card, state: s, deckName: deck.name, deckId: deck.id, status: 'Graduated', sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
-      })
+    const pairKey = `${deck.sourceLanguage}|${deck.targetLanguage}`
+    if (forecastFilters.langPairs.length > 0 && !forecastFilters.langPairs.includes(pairKey)) return []
+
+    const isToday    = selectedForecastDate === forecast[0]?.date
+    const showTyped  = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('typed')
+    const showRecall = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('recall')
+
+    const statesByCard = new Map<string, CardState[]>()
+    for (const s of states) {
+      const arr = statesByCard.get(s.cardId) ?? []
+      arr.push(s)
+      statesByCard.set(s.cardId, arr)
+    }
+
+    const results: FilteredCard[] = []
+    for (const card of cards) {
+      for (const s of statesByCard.get(card.id) ?? []) {
+        if (!s.graduated) continue
+
+        const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
+        if (forecastFilters.directions.length > 0 && !forecastFilters.directions.includes(dir)) continue
+
+        const isAccel = s.acceleratedMode === 'import_known'
+        if (forecastFilters.accel.length > 0) {
+          if (isAccel  && !forecastFilters.accel.includes('accelerated')) continue
+          if (!isAccel && !forecastFilters.accel.includes('normal'))      continue
+        }
+
+        let due = false
+        if (showTyped && s.dueAt) {
+          due = isToday ? new Date(s.dueAt) <= now : s.dueAt.slice(0, 10) === selectedForecastDate
+        }
+        if (!due && showRecall && s.recallDueAt) {
+          due = isToday ? new Date(s.recallDueAt) <= now : s.recallDueAt.slice(0, 10) === selectedForecastDate
+        }
+        if (!due) continue
+
+        results.push({
+          card, state: s, deckName: deck.name, deckId: deck.id, status: 'Graduated',
+          sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage,
+          reviewDirection: s.reviewDirection ?? 'forward',
+        })
+      }
+    }
+    return results
   }) : []
 
   const COUNTER_CONFIG = [
@@ -805,9 +837,9 @@ export default function StudyPage() {
                   <div className="panel text-ink-muted text-sm text-center py-6">No cards found.</div>
                 ) : (
                   <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
-                    {forecastCards.map(({ card, deckName, deckId, sourceLanguage, targetLanguage }) => (
+                    {forecastCards.map(({ card, deckName, deckId, sourceLanguage, targetLanguage, reviewDirection }) => (
                       <Link
-                        key={card.id}
+                        key={`${card.id}-${reviewDirection}`}
                         href={`/study/${deckId}?card=${card.id}`}
                         className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
                       >
@@ -816,7 +848,10 @@ export default function StudyPage() {
                           <span className="text-ink-muted truncate">{card.back}</span>
                         </div>
                         <span className="text-xs text-ink-faint hidden sm:block shrink-0 ml-2">
-                          {langName(targetLanguage)} → {langName(sourceLanguage)} · {deckName}
+                          {reviewDirection === 'reverse'
+                            ? `${langName(sourceLanguage)} → ${langName(targetLanguage)}`
+                            : `${langName(targetLanguage)} → ${langName(sourceLanguage)}`
+                          } · {deckName}
                         </span>
                       </Link>
                     ))}
