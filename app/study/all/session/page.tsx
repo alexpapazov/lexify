@@ -466,25 +466,11 @@ function AllDueSessionInner() {
         : undefined
 
       // Lazy reverse-row creation for existing graduated cards that predate Phase 2.
+      // Actual upsert is deferred below after newState is computed, so we can base
+      // the reverse due date on the forward card's NEXT review date (Option A).
+      let reverseExistsForLazyInit: boolean | null = null
       if (state.graduated && state.reviewDirection !== 'reverse' && !isRecallReview) {
-        const reverseExists = await stateRepo.get(userId, card.id, 'reverse')
-        if (!reverseExists) {
-          const revInterval = Math.max(1, Math.round((state.typedIntervalDays ?? state.intervalDays) / 2))
-          const revDueAt    = new Date(nowDate.getTime() + revInterval * 86_400_000).toISOString()
-          await stateRepo.upsert({
-            ...initialCardState(userId, card.id, pipeline.id),
-            graduated:             true,
-            reviewDirection:       'reverse',
-            intervalDays:          revInterval,
-            scheduledIntervalDays: revInterval,
-            recallIntervalDays:    revInterval,
-            recallDueAt:           revDueAt,
-            dueAt:                 revDueAt,
-            lastReviewedAt:        nowDate.toISOString(),
-            graduatedAt:           state.graduatedAt ?? nowDate.toISOString(),
-            introducedDate:        state.introducedDate,
-          })
-        }
+        reverseExistsForLazyInit = !!(await stateRepo.get(userId, card.id, 'reverse'))
       }
 
       // Recall/reverse review: update only the recall track then return early.
@@ -622,10 +608,32 @@ function AllDueSessionInner() {
 
       await stateRepo.upsert(newState)
 
+      // Lazy reverse-row creation (deferred from above — uses newState's forward due date).
+      if (reverseExistsForLazyInit === false) {
+        const fwdNextDue  = newState.typedDueAt ?? newState.dueAt ?? nowDate.toISOString()
+        const fwdInterval = newState.typedIntervalDays ?? newState.intervalDays
+        const revInterval = Math.max(1, Math.round(fwdInterval / 2))
+        const revDueAt    = new Date(new Date(fwdNextDue).getTime() + revInterval * 86_400_000).toISOString()
+        await stateRepo.upsert({
+          ...initialCardState(userId, card.id, pipeline.id),
+          graduated:             true,
+          reviewDirection:       'reverse',
+          intervalDays:          revInterval,
+          scheduledIntervalDays: revInterval,
+          recallIntervalDays:    revInterval,
+          recallDueAt:           revDueAt,
+          dueAt:                 revDueAt,
+          lastReviewedAt:        nowDate.toISOString(),
+          graduatedAt:           state.graduatedAt ?? nowDate.toISOString(),
+          introducedDate:        state.introducedDate,
+        })
+      }
+
       // Create reverse-direction row when a card just graduated.
       if (!state.graduated && newState.graduated) {
+        const fwdNextDue  = newState.typedDueAt ?? newState.dueAt ?? nowDate.toISOString()
         const revInterval = Math.max(1, Math.round(newState.intervalDays / 2))
-        const revDueAt    = new Date(nowDate.getTime() + revInterval * 86_400_000).toISOString()
+        const revDueAt    = new Date(new Date(fwdNextDue).getTime() + revInterval * 86_400_000).toISOString()
         await stateRepo.upsert({
           ...initialCardState(userId, card.id, pipeline.id),
           graduated:             true,
