@@ -1174,10 +1174,10 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                           : 'Active'}
                     </span>
                   </div>
-                  {state.acceleratedLocked && (
+                  {state.acceleratedLocked && state.acceleratedMode !== 'none' && (
                     <div className="flex items-start justify-between gap-2">
                       <span className="text-xs text-ink-faint">Locked</span>
-                      <span className="text-xs text-ink-muted text-right">Accelerated multipliers are permanent for this card</span>
+                      <span className="text-xs text-ink-muted text-right">Accumulated interval won&apos;t reset if fast-track turns off</span>
                     </div>
                   )}
                 </div>
