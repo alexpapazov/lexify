@@ -78,7 +78,9 @@ export function TypingMode({
   // Synonym phase: user typed a synonym; canonical answer still required
   const [synonymPhase,     setSynonymPhase]     = useState(false)
   const [synonymPhaseText, setSynonymPhaseText] = useState('')
-  // How many times a synonym/sibling was typed in the canonical input before the canonical itself
+  // Extra synonyms typed in the canonical box before the canonical itself
+  const [extraSynonyms,      setExtraSynonyms]      = useState<string[]>([])
+  // How many times a sibling was typed in the canonical input before the canonical itself
   const [canonicalLoopCount, setCanonicalLoopCount] = useState(0)
   const [softWrongRecallRating, setSoftWrongRecallRating] = useState<Rating | null>(null)
   const [softWrongOverrideAtRating, setSoftWrongOverrideAtRating] = useState(false)
@@ -101,6 +103,7 @@ export function TypingMode({
     setComposingCanon(false)
     setSynonymPhase(false)
     setSynonymPhaseText('')
+    setExtraSynonyms([])
     setCanonicalLoopCount(0)
     setSoftWrongRecallRating(null)
     setSoftWrongOverrideAtRating(false)
@@ -264,9 +267,9 @@ export function TypingMode({
       setCanonInput('')
       return
     }
-    // Another synonym string → keep asking (don't accept as final answer)
+    // Another synonym string → show it as an extra box and keep asking for the canonical
     if (synonyms?.some(s => gradeTyping(canonInput, s, gradingSettings).status === 'correct')) {
-      setCanonicalLoopCount(c => c + 1)
+      setExtraSynonyms(prev => [...prev, canonInput])
       setCanonInput('')
       return
     }
@@ -479,12 +482,23 @@ export function TypingMode({
           />
         )}
 
+        {/* Extra synonym boxes (shown as stacked disabled amber inputs) */}
+        {synonymPhase && !result && extraSynonyms.map((s, i) => (
+          <input
+            key={i}
+            className="input text-center text-lg font-mono border-warning/60 bg-warning/5"
+            value={s}
+            readOnly
+            disabled
+          />
+        ))}
+
         {/* Synonym phase: accepted note + canonical input */}
         {synonymPhase && !result && (
           <div className="space-y-3">
             <div className="panel border-warning/30 bg-warning/5 text-center py-3 space-y-1">
               <p className="text-warning font-medium">
-                {canonicalLoopCount > 0 ? 'That\'s another synonym!' : 'Synonym accepted!'}
+                {extraSynonyms.length > 0 ? 'That\'s another synonym!' : 'Synonym accepted!'}
               </p>
               <p className="text-xs text-ink-muted">Now type the main term to continue:</p>
             </div>
