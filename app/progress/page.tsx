@@ -136,6 +136,7 @@ export default function AnalyticsPage() {
       .select('graduated_at, cards(source_language, target_language)')
       .eq('user_id', uid)
       .eq('graduated', true)
+      .neq('review_direction', 'reverse')
       .gte('graduated_at', queryStart)
       .lte('graduated_at', queryEnd)
 
@@ -188,6 +189,7 @@ export default function AnalyticsPage() {
       .from('card_states')
       .select('card_id, introduced_date')
       .eq('user_id', uid)
+      .neq('review_direction', 'reverse')
       .not('introduced_date', 'is', null)
       .gte('introduced_date', startIso)
       .lte('introduced_date', endIso)
