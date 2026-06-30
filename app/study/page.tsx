@@ -70,12 +70,15 @@ function buildForecastDays(
   endDate: string,
   todayStr: string,
   filters: ForecastFilters,
-  now: Date,
+  tz: string,
 ): ForecastDay[] {
   if (!startDate || !endDate || startDate > endDate) return []
 
   const showTyped  = filters.modes.length === 0 || filters.modes.includes('typed')
   const showRecall = filters.modes.length === 0 || filters.modes.includes('recall')
+
+  const localDate = (d: string) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
+  const effDate   = (raw: string) => { const d = localDate(raw); return d <= todayStr ? todayStr : d }
 
   const dayCounts = new Map<string, number>()
   const bump = (dateStr: string) =>
@@ -97,15 +100,12 @@ function buildForecastDays(
         if (!isAccel && !filters.accel.includes('normal')) continue
       }
 
-      const typedRef = s.typedDueAt ?? s.dueAt
-      if (showTyped && typedRef) {
-        const d = typedRef.slice(0, 10) <= todayStr ? todayStr : typedRef.slice(0, 10)
-        if (d >= startDate && d <= endDate) bump(d)
-      }
-      if (showRecall && s.recallDueAt) {
-        const rd = s.recallDueAt.slice(0, 10) <= todayStr ? todayStr : s.recallDueAt.slice(0, 10)
-        if (rd >= startDate && rd <= endDate && rd !== typedRef?.slice(0, 10)) bump(rd)
-      }
+      const typedRef  = s.typedDueAt ?? s.dueAt
+      const typedEff  = typedRef     ? effDate(typedRef)     : null
+      const recallEff = s.recallDueAt ? effDate(s.recallDueAt) : null
+
+      if (showTyped && typedEff && typedEff >= startDate && typedEff <= endDate) bump(typedEff)
+      if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== typedEff) bump(recallEff)
     }
   }
 
@@ -134,6 +134,7 @@ export default function StudyPage() {
   const [authed,       setAuthed]       = useState(false)
   const [userId,       setUserId]       = useState('')
   const [todayStr,     setTodayStr]     = useState('')
+  const [tz,           setTz]           = useState('UTC')
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
   const [selectedForecastDate, setSelectedForecastDate] = useState<string | null>(null)
   const [forecastStartDate,    setForecastStartDate]    = useState('')
@@ -169,6 +170,7 @@ export default function StudyPage() {
     const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
     const todayStr     = getToday(tz, turnoverHour)
     setTodayStr(todayStr)
+    setTz(tz)
     const todayDate    = new Date(todayStr + 'T00:00:00.000Z')
     const now          = new Date()
 
@@ -214,7 +216,7 @@ export default function StudyPage() {
     const initEnd   = addDays(todayStr, 13)
     setForecastStartDate(initStart)
     setForecastEndDate(initEnd)
-    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, now))
+    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, tz))
 
     setLoading(false)
   }
@@ -391,7 +393,7 @@ export default function StudyPage() {
 
   useEffect(() => {
     if (!todayStr || !forecastStartDate || !forecastEndDate) return
-    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, new Date()))
+    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, tz))
     setSelectedForecastDate(prev => prev && prev >= forecastStartDate && prev <= forecastEndDate ? prev : null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forecastStartDate, forecastEndDate, forecastFilters])
@@ -500,16 +502,14 @@ export default function StudyPage() {
           if (!isAccel && !forecastFilters.accel.includes('normal'))      continue
         }
 
-        const typedRef = s.typedDueAt ?? s.dueAt
+        const localDate = (d: string): string => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
+        const effDate   = (raw: string): string => { const d = localDate(raw); return d <= selectedForecastDate ? selectedForecastDate : d }
+        const typedRef  = s.typedDueAt ?? s.dueAt
+        const typedEff: string | null  = typedRef      ? effDate(typedRef)      : null
+        const recallEff: string | null = s.recallDueAt ? effDate(s.recallDueAt) : null
         let due = false
-        if (showTyped && typedRef) {
-          const d = typedRef.slice(0, 10) <= selectedForecastDate ? selectedForecastDate : typedRef.slice(0, 10)
-          due = d === selectedForecastDate
-        }
-        if (!due && showRecall && s.recallDueAt) {
-          const rd = s.recallDueAt.slice(0, 10) <= selectedForecastDate ? selectedForecastDate : s.recallDueAt.slice(0, 10)
-          due = rd === selectedForecastDate && s.recallDueAt.slice(0, 10) !== typedRef?.slice(0, 10)
-        }
+        if (showTyped  && typedEff  === selectedForecastDate) due = true
+        if (!due && showRecall && recallEff === selectedForecastDate && recallEff !== typedEff) due = true
         if (!due) continue
 
         results.push({
