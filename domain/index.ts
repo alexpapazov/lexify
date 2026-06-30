@@ -183,6 +183,8 @@ export interface LanguagePair {
   flag:           string | null
   instructions:   string | null
   createdAt:      string
+  /** Weekday goals: keys "0"–"6" (JS day-of-week, 0=Sun), value = target grad count or null = no goal. */
+  goals:          Record<string, number | null> | null
 }
 
 // ─── Deck ─────────────────────────────────────────────────────────────────────

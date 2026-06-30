@@ -34,6 +34,21 @@ export function snapDueAtToStartOfDay(
 }
 
 /**
+ * Converts an ISO timestamp to the local calendar date (YYYY-MM-DD) in the
+ * given timezone, respecting the day turnover hour. Timestamps before
+ * `turnoverHour` in local time are bucketed into the previous calendar day.
+ */
+export function localDateWithTurnover(isoTs: string, tz: string, turnoverHour: number): string {
+  const date  = new Date(isoTs)
+  const local = new Date(date.toLocaleString('en-US', { timeZone: tz }))
+  if (local.getHours() < turnoverHour) local.setDate(local.getDate() - 1)
+  const y = local.getFullYear()
+  const m = String(local.getMonth() + 1).padStart(2, '0')
+  const d = String(local.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+/**
  * Returns the current calendar date (YYYY-MM-DD) in the given IANA timezone,
  * adjusted for a configurable day-turnover hour.
  *

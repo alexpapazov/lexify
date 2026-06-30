@@ -4,12 +4,13 @@ import { useEffect, useState, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { SupabaseDeckRepository }      from '@/lib/data/decks'
-import { SupabaseCardRepository }      from '@/lib/data/cards'
-import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import { getToday } from '@/lib/dates'
+import { SupabaseDeckRepository }        from '@/lib/data/decks'
+import { SupabaseCardRepository }        from '@/lib/data/cards'
+import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
+import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
+import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
-import type { Deck, Card, CardState } from '@/domain'
+import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { effectiveMultiplierRange, acceleratedEffectiveMultiplierRange } from '@/engine/scheduler'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
@@ -147,6 +148,9 @@ export default function StudyPage() {
   const [showForecastSettings, setShowForecastSettings] = useState(false)
   const [redistributing, setRedistributing] = useState(false)
   const [redistributeMsg, setRedistributeMsg] = useState<string | null>(null)
+  const [langPairs,         setLangPairs]         = useState<LanguagePair[]>([])
+  const [goalsCountAccel,   setGoalsCountAccel]   = useState(false)
+  const [todayGradCounts,   setTodayGradCounts]   = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
   const duePickerRef = useRef<HTMLDivElement>(null)
   const forecastSettingsRef = useRef<HTMLDivElement>(null)
@@ -165,7 +169,7 @@ export default function StudyPage() {
 
     const [decks, profileRes] = await Promise.all([
       deckRepo.list(session.user.id),
-      supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
+      supabase.from('profiles').select('timezone, day_turnover_hour, goals_count_accelerated').eq('user_id', session.user.id).single(),
     ])
 
     const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'
@@ -222,6 +226,34 @@ export default function StudyPage() {
     }), { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 })
     setDeckStats(stats)
     setGlobal(globalCounts)
+
+    // ── Goal progress ───────────────────────────────────────────────────
+    const goalsCountAccelValue = (profileRes.data?.goals_count_accelerated as boolean | null) ?? false
+    setGoalsCountAccel(goalsCountAccelValue)
+
+    const [pairs, recentGradsRes] = await Promise.all([
+      new SupabaseLanguagePairRepository().list(session.user.id),
+      supabase
+        .from('card_states')
+        .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
+        .eq('user_id', session.user.id)
+        .eq('graduated', true)
+        .neq('review_direction', 'reverse')
+        .not('graduated_at', 'is', null)
+        .gte('graduated_at', new Date(Date.now() - 48 * 3600 * 1000).toISOString()),
+    ])
+    setLangPairs(pairs)
+
+    const gradCounts = new Map<string, number>()
+    for (const row of (recentGradsRes.data ?? [])) {
+      const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
+      if (!r.graduated_at || !r.cards) continue
+      if (localDateWithTurnover(r.graduated_at, tz, turnoverHour) !== todayStr) continue
+      if (!goalsCountAccelValue && r.accelerated_mode === 'import_known') continue
+      const key = `${r.cards.source_language}|${r.cards.target_language}`
+      gradCounts.set(key, (gradCounts.get(key) ?? 0) + 1)
+    }
+    setTodayGradCounts(gradCounts)
 
     // ── Upcoming review forecast ────────────────────────────────────────
     const initStart = todayStr
@@ -541,6 +573,15 @@ export default function StudyPage() {
     return results
   }) : []
 
+  const todayWeekday = todayStr ? new Date(todayStr + 'T12:00:00Z').getUTCDay() : -1
+  const pairsWithGoalsToday = useMemo(() => {
+    if (todayWeekday < 0) return []
+    return langPairs.filter(p => {
+      const goal = p.goals?.[String(todayWeekday)]
+      return typeof goal === 'number' && goal > 0
+    })
+  }, [langPairs, todayWeekday])
+
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: global.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'     },
@@ -582,6 +623,36 @@ export default function StudyPage() {
               )
             })}
           </div>
+
+          {/* ── Today's goals ───────────────────────────────────────────── */}
+          {pairsWithGoalsToday.length > 0 && (
+            <div className="panel space-y-3">
+              <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Today&apos;s goals</h2>
+              {pairsWithGoalsToday.map(pair => {
+                const key   = `${pair.sourceLanguage}|${pair.targetLanguage}`
+                const goal  = pair.goals![String(todayWeekday)] as number
+                const count = todayGradCounts.get(key) ?? 0
+                const pct   = Math.min(100, Math.round((count / goal) * 100))
+                const done  = count >= goal
+                return (
+                  <div key={key} className="space-y-1.5">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
+                      <span className={done ? 'text-success font-medium' : 'text-ink-muted'}>
+                        {count}/{goal}{done ? ' ✓' : ''}
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${done ? 'bg-success' : 'bg-accent'}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
           {/* ── Filtered card list (cross-deck) ─────────────────────────── */}
           {activeFilter && (

@@ -321,6 +321,10 @@ export default function SettingsPage() {
   const [tzList,            setTzList]            = useState<string[]>([])
   const [redistributing,    setRedistributing]    = useState(false)
   const [redistributeMsg,   setRedistributeMsg]   = useState<string | null>(null)
+  const [langPairs,              setLangPairs]              = useState<LanguagePair[]>([])
+  const [goalsCountAccelerated,  setGoalsCountAccelerated]  = useState(false)
+  const [goalDrafts,             setGoalDrafts]             = useState<Record<string, Record<string, string>>>({})
+  const [goalSavingKey,          setGoalSavingKey]          = useState<string | null>(null)
 
   const router   = useRouter()
   const supabase = createClient()
@@ -337,11 +341,14 @@ export default function SettingsPage() {
       if (!uid) { router.push('/auth'); return }
       setUserId(uid)
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay')
-        .eq('user_id', uid)
-        .single()
+      const [{ data: profile }, pairs] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, goals_count_accelerated')
+          .eq('user_id', uid)
+          .single(),
+        new SupabaseLanguagePairRepository().list(uid),
+      ])
 
       if (profile) {
         setDisplayName(profile.display_name ?? '')
@@ -351,9 +358,22 @@ export default function SettingsPage() {
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
+        setGoalsCountAccelerated((profile.goals_count_accelerated as boolean | null) ?? false)
       } else {
         setTimezone(detectBrowserTimezone())
       }
+
+      setLangPairs(pairs)
+      const drafts: Record<string, Record<string, string>> = {}
+      for (const pair of pairs) {
+        const key = `${pair.sourceLanguage}|${pair.targetLanguage}`
+        drafts[key] = {}
+        for (let d = 0; d <= 6; d++) {
+          const val = pair.goals?.[String(d)]
+          drafts[key][String(d)] = typeof val === 'number' ? String(val) : ''
+        }
+      }
+      setGoalDrafts(drafts)
       setLoading(false)
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -362,13 +382,14 @@ export default function SettingsPage() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
     await supabase.from('profiles').update({
-      display_name:            displayName,
-      default_daily_new_cards: dailyNewCards,
-      spillover_due:           spilloverDue,
-      learning_languages:      selectedLangs,
-      timezone:                timezone || null,
-      day_turnover_hour:       turnoverHour,
-      study_mode_autoplay:     studyModeAutoplay,
+      display_name:              displayName,
+      default_daily_new_cards:   dailyNewCards,
+      spillover_due:             spilloverDue,
+      learning_languages:        selectedLangs,
+      timezone:                  timezone || null,
+      day_turnover_hour:         turnoverHour,
+      study_mode_autoplay:       studyModeAutoplay,
+      goals_count_accelerated:   goalsCountAccelerated,
     }).eq('user_id', session.user.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -504,6 +525,22 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleGoalBlur(sourceLanguage: string, targetLanguage: string) {
+    const key    = `${sourceLanguage}|${targetLanguage}`
+    const drafts = goalDrafts[key] ?? {}
+    const goals: Record<string, number | null> = {}
+    for (let d = 0; d <= 6; d++) {
+      const raw = drafts[String(d)]?.trim()
+      goals[String(d)] = raw ? (parseInt(raw, 10) || null) : null
+    }
+    setGoalSavingKey(key)
+    try {
+      await new SupabaseLanguagePairRepository().updateGoals(sourceLanguage, targetLanguage, goals)
+    } finally {
+      setGoalSavingKey(null)
+    }
+  }
+
   function toggle(code: string) {
     setSelectedLangs(prev => prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code])
   }
@@ -636,6 +673,67 @@ export default function SettingsPage() {
           })}
         </div>
       </div>
+
+      {/* Daily Goals */}
+      {langPairs.length > 0 && (() => {
+        const WEEKDAYS: { day: number; label: string }[] = [
+          { day: 1, label: 'M' }, { day: 2, label: 'T' }, { day: 3, label: 'W' },
+          { day: 4, label: 'T' }, { day: 5, label: 'F' }, { day: 6, label: 'S' }, { day: 0, label: 'S' },
+        ]
+        return (
+          <div className="panel space-y-4">
+            <div>
+              <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily Goals</h2>
+              <p className="text-xs text-ink-faint mt-1">
+                Target number of words to graduate per language, per day of the week. Leave a day blank for no goal.
+              </p>
+            </div>
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={goalsCountAccelerated} onChange={e => setGoalsCountAccelerated(e.target.checked)} className="accent-accent w-4 h-4" />
+                <span className="text-sm text-ink">Count fast-tracked cards toward goals</span>
+              </label>
+              <p className="text-xs text-ink-faint pl-6">
+                When off, only cards that went through the full learning pipeline count. Saved with the main Save button below.
+              </p>
+            </div>
+            <div className="space-y-5">
+              {langPairs.map(pair => {
+                const pairKey = `${pair.sourceLanguage}|${pair.targetLanguage}`
+                const drafts  = goalDrafts[pairKey] ?? {}
+                return (
+                  <div key={pairKey} className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-ink">{pairLabel(pair)}</span>
+                      {goalSavingKey === pairKey && <span className="text-xs text-ink-faint">Saving…</span>}
+                    </div>
+                    <div className="grid grid-cols-7 gap-1.5">
+                      {WEEKDAYS.map(({ day, label }) => (
+                        <div key={day} className="flex flex-col items-center gap-1">
+                          <span className="text-xs text-ink-faint select-none">{label}</span>
+                          <input
+                            type="number"
+                            min={1}
+                            max={999}
+                            className="input text-center text-sm px-1 py-1.5 w-full"
+                            placeholder="—"
+                            value={drafts[String(day)] ?? ''}
+                            onChange={e => setGoalDrafts(prev => ({
+                              ...prev,
+                              [pairKey]: { ...(prev[pairKey] ?? {}), [String(day)]: e.target.value }
+                            }))}
+                            onBlur={() => handleGoalBlur(pair.sourceLanguage, pair.targetLanguage)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })()}
 
       <div className="flex gap-3">
         <button className="btn-primary" onClick={handleSave}>
