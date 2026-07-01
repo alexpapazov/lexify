@@ -30,7 +30,7 @@ export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit
       {!revealed ? (
         <div className="flex flex-col items-center gap-3">
           <button onClick={() => setRevealed(true)} className="btn-primary px-10">Show answer</button>
-          <button onClick={() => onRate('again')} className="text-xs text-ink-faint hover:text-ink-muted">Don&apos;t know</button>
+          <button onClick={() => setRevealed(true)} className="text-xs text-ink-faint hover:text-ink-muted">Don&apos;t know</button>
         </div>
       ) : (
         <div className="space-y-4">
