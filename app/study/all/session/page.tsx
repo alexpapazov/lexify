@@ -517,6 +517,8 @@ function AllDueSessionInner() {
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
         if (recallSched.relearningStep > 0) {
           setRelearnPool(prev => [...prev, { ...current, state: recallNewState }])
+          setIndex(i => i + 1)
+          return
         }
         if (index + 1 < queue.length || relearnPool.length > 0) { setIndex(i => i + 1) } else { setDone(true) }
         return

@@ -771,8 +771,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
         // Re-queue "again" in the relearn pool (same 10-min loop as forward reviews).
+        // Must advance index unconditionally — relearnPool state hasn't updated yet
+        // in this closure, so checking relearnPool.length here would read the old value.
+        // The relearnPool useEffect handles re-injection once the main queue is exhausted.
         if (recallSched.relearningStep > 0) {
           setRelearnPool(prev => [...prev, { ...current, state: recallNewState }])
+          setIndex(i => i + 1)
+          return
         }
         if (index + 1 < queue.length || relearnPool.length > 0) { setIndex(i => i + 1) } else { setDone(true) }
         return
