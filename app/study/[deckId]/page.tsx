@@ -118,6 +118,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [reviewHistory,      setReviewHistory]      = useState<ReviewEvent[] | null>(null)
   const [reviewsLoading,     setReviewsLoading]     = useState(false)
   const [historyTrack,       setHistoryTrack]       = useState<'typed' | 'recall' | 'recognition'>('typed')
+  const [reverseCardState,   setReverseCardState]   = useState<CardState | null | undefined>(undefined) // undefined = not yet loaded
   // Synonym editing state
   const [sourceSynonymInput, setSourceSynonymInput] = useState('')
   const [targetSynonymInput, setTargetSynonymInput] = useState('')
@@ -172,13 +173,18 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   useEffect(() => {
     if (!showStats || reviewHistory !== null || reviewsLoading) return
     setReviewsLoading(true)
-    new SupabaseReviewEventRepository().listForCard(userId, card.id)
-      .then(events => {
+    Promise.all([
+      new SupabaseReviewEventRepository().listForCard(userId, card.id),
+      new SupabaseCardStateRepository().get(userId, card.id, 'reverse'),
+    ])
+      .then(([events, revState]) => {
         setReviewHistory(events)
-        // Default to whichever track has the most events, preferring typed
+        setReverseCardState(revState)
         const counts = { typed: 0, recall: 0, recognition: 0 }
         for (const e of events) {
-          const t = e.wasTyped === true ? 'typed' : e.wasTyped === false ? 'recall' : e.mode === 'typing' ? 'typed' : 'recognition'
+          const t = e.wasTyped === true ? 'typed'
+            : e.wasTyped === false ? (e.reviewDirection === 'reverse' ? 'recognition' : 'recall')
+            : e.mode === 'typing' ? 'typed' : 'recognition'
           counts[t]++
         }
         if (counts.typed > 0) setHistoryTrack('typed')
@@ -1508,7 +1514,7 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
               // Classify each event into a track
               function eventTrack(e: ReviewEvent): 'typed' | 'recall' | 'recognition' {
                 if (e.wasTyped === true)  return 'typed'
-                if (e.wasTyped === false) return 'recall'
+                if (e.wasTyped === false) return e.reviewDirection === 'reverse' ? 'recognition' : 'recall'
                 if (e.mode === 'typing')  return 'typed'
                 return 'recognition'
               }
@@ -1544,6 +1550,31 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 easy:  'bg-accent/20 text-accent border-accent/30',
               }
 
+              // Per-track scheduling info
+              function trackSchedule(key: 'typed' | 'recall' | 'recognition') {
+                if (key === 'typed')   return state ? { interval: state.typedIntervalDays ?? state.intervalDays, due: state.typedDueAt ?? state.dueAt } : null
+                if (key === 'recall')  return state ? { interval: state.recallIntervalDays, due: state.recallDueAt } : null
+                const rs = reverseCardState
+                return rs ? { interval: rs.recallIntervalDays, due: rs.recallDueAt } : null
+              }
+              function fmtInterval(d: number | null | undefined) {
+                if (!d) return null
+                if (d < 1) return `${Math.round(d * 24)}h`
+                return `${Math.round(d)}d`
+              }
+              function fmtDue(iso: string | null | undefined) {
+                if (!iso) return null
+                const d = new Date(iso)
+                const now = new Date()
+                const diffMs = d.getTime() - now.getTime()
+                const diffDays = Math.round(diffMs / 86_400_000)
+                if (diffDays < 0)  return 'overdue'
+                if (diffDays === 0) return 'today'
+                if (diffDays === 1) return 'tomorrow'
+                return `in ${diffDays}d`
+              }
+              const activeSched = activeTrack ? trackSchedule(activeTrack.key) : null
+
               return (
                 <div className="space-y-2">
                   <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
@@ -1565,6 +1596,17 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                           {t.label} <span className="opacity-60">({trackCounts[t.key]})</span>
                         </button>
                       ))}
+                    </div>
+                  )}
+                  {/* Per-track scheduling info */}
+                  {activeSched && (activeSched.interval || activeSched.due) && (
+                    <div className="flex gap-3 text-[11px] text-ink-faint">
+                      {activeSched.interval != null && (
+                        <span>Interval: <span className="text-ink-muted">{fmtInterval(activeSched.interval)}</span></span>
+                      )}
+                      {activeSched.due && (
+                        <span>Due: <span className="text-ink-muted">{fmtDue(activeSched.due)}</span></span>
+                      )}
                     </div>
                   )}
                   {/* Event list */}

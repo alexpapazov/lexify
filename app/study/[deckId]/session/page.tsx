@@ -754,8 +754,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           reps:               rating !== 'hard' ? state.reps + 1 : state.reps,
           lapseClusterCount:  recallSched.lapseClusterCount,
           lastLapseAt:        recallSched.lastLapseAt,
+          relearningStep:     recallSched.relearningStep ?? 0,
+          pendingIntervalDays: recallSched.pendingIntervalDays ?? null,
           recallIntervalDays: recallSched.intervalDays,
           recallDueAt:        newRecallDueAt,
+          // Keep dueAt in sync for reverse-direction rows so the dashboard
+          // doesn't see the original (past) dueAt and treat the card as still due.
+          ...(isReverse ? { dueAt: newRecallDueAt } : {}),
         }
         await stateRepo.upsert(recallNewState)
         setCardStates(prev => {
@@ -765,6 +770,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState }])
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
+        // Re-queue "again" in the relearn pool (same 10-min loop as forward reviews).
+        if (recallSched.relearningStep > 0) {
+          setRelearnPool(prev => [...prev, { ...current, state: recallNewState }])
+        }
         if (index + 1 < queue.length || relearnPool.length > 0) { setIndex(i => i + 1) } else { setDone(true) }
         return
       }
