@@ -20,7 +20,8 @@ import { triggerSyncFill }                   from '@/lib/triggerSyncFill'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymLinks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
-import type { Deck, Card, CardState, CardChoices, CardConfusion, CardConfusionLink, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride } from '@/domain'
+import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
+import type { Deck, Card, CardState, CardChoices, CardConfusion, CardConfusionLink, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink, Pipeline, TypedAnswerOverride, ReviewEvent } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding, type PrefetchItem } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
@@ -114,6 +115,9 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
   const [distractorEditText, setDistractorEditText] = useState('')
   const [distractorAddText,  setDistractorAddText]  = useState<{front: string; back: string}>({front: '', back: ''})
   const [deletedDistractors, setDeletedDistractors] = useState<{front: string[]; back: string[]}>({front: [], back: []})
+  const [reviewHistory,      setReviewHistory]      = useState<ReviewEvent[] | null>(null)
+  const [reviewsLoading,     setReviewsLoading]     = useState(false)
+  const [historyTrack,       setHistoryTrack]       = useState<'typed' | 'recall' | 'recognition'>('typed')
   // Synonym editing state
   const [sourceSynonymInput, setSourceSynonymInput] = useState('')
   const [targetSynonymInput, setTargetSynonymInput] = useState('')
@@ -164,6 +168,26 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
     }).catch(err => console.error('Failed to load card stats:', err))
     return () => { cancelled = true }
   }, [userId, card.id])
+
+  useEffect(() => {
+    if (!showStats || reviewHistory !== null || reviewsLoading) return
+    setReviewsLoading(true)
+    new SupabaseReviewEventRepository().listForCard(userId, card.id)
+      .then(events => {
+        setReviewHistory(events)
+        // Default to whichever track has the most events, preferring typed
+        const counts = { typed: 0, recall: 0, recognition: 0 }
+        for (const e of events) {
+          const t = e.wasTyped === true ? 'typed' : e.wasTyped === false ? 'recall' : e.mode === 'typing' ? 'typed' : 'recognition'
+          counts[t]++
+        }
+        if (counts.typed > 0) setHistoryTrack('typed')
+        else if (counts.recall > 0) setHistoryTrack('recall')
+        else setHistoryTrack('recognition')
+      })
+      .catch(err => console.error('Failed to load review history:', err))
+      .finally(() => setReviewsLoading(false))
+  }, [showStats, userId, card.id, reviewHistory, reviewsLoading])
 
   async function handleSave() {
     if (!front.trim()) { setValidErr('Front cannot be empty.'); return }
@@ -1464,6 +1488,113 @@ function CardEditModal({ card, state, userId, deckId, deckCards, sourceLanguage,
                 </div>
               )}
             </div>
+
+            {/* ── Review history ──────────────────────────────────────── */}
+            {(() => {
+              if (reviewsLoading) return (
+                <div className="space-y-2">
+                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">Review History</div>
+                  <p className="text-xs text-ink-faint">Loading…</p>
+                </div>
+              )
+              const events = reviewHistory ?? []
+              if (events.length === 0 && !reviewsLoading) return (
+                <div className="space-y-2">
+                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">Review History</div>
+                  <p className="text-xs text-ink-faint italic">No reviews yet.</p>
+                </div>
+              )
+
+              // Classify each event into a track
+              function eventTrack(e: ReviewEvent): 'typed' | 'recall' | 'recognition' {
+                if (e.wasTyped === true)  return 'typed'
+                if (e.wasTyped === false) return 'recall'
+                if (e.mode === 'typing')  return 'typed'
+                return 'recognition'
+              }
+
+              const trackCounts = events.reduce<Record<string, number>>((acc, e) => {
+                const t = eventTrack(e); acc[t] = (acc[t] ?? 0) + 1; return acc
+              }, {})
+
+              const TRACKS: { key: 'typed' | 'recall' | 'recognition'; label: string }[] = [
+                { key: 'typed',       label: 'Typed production'      },
+                { key: 'recall',      label: 'Self-graded production' },
+                { key: 'recognition', label: 'Recognition'            },
+              ]
+              const availableTracks = TRACKS.filter(t => (trackCounts[t.key] ?? 0) > 0)
+              const activeTrack = availableTracks.find(t => t.key === historyTrack) ?? availableTracks[0]
+
+              // Compute wrong-before counts per event within each track (oldest-first pass)
+              const wrongBefore = new Map<string, number>()
+              const streaks: Record<string, number> = { typed: 0, recall: 0, recognition: 0 }
+              for (const e of [...events].reverse()) {
+                const t = eventTrack(e)
+                wrongBefore.set(e.id, streaks[t] ?? 0)
+                if (e.wasCorrect) streaks[t] = 0
+                else streaks[t] = (streaks[t] ?? 0) + 1
+              }
+
+              const filtered = activeTrack ? events.filter(e => eventTrack(e) === activeTrack.key) : []
+
+              const RATING_STYLE: Record<string, string> = {
+                again: 'bg-danger/20 text-danger border-danger/30',
+                hard:  'bg-warning/20 text-warning border-warning/30',
+                good:  'bg-success/20 text-success border-success/30',
+                easy:  'bg-accent/20 text-accent border-accent/30',
+              }
+
+              return (
+                <div className="space-y-2">
+                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                    Review History
+                  </div>
+                  {/* Track tabs */}
+                  {availableTracks.length > 1 && (
+                    <div className="flex gap-1 flex-wrap">
+                      {availableTracks.map(t => (
+                        <button
+                          key={t.key}
+                          onClick={() => setHistoryTrack(t.key)}
+                          className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                            historyTrack === t.key
+                              ? 'bg-accent/20 border-accent/40 text-accent'
+                              : 'border-white/10 text-ink-faint hover:text-ink hover:border-white/20'
+                          }`}
+                        >
+                          {t.label} <span className="opacity-60">({trackCounts[t.key]})</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {/* Event list */}
+                  <div className="space-y-1">
+                    {filtered.slice(0, 50).map(e => {
+                      const wb        = wrongBefore.get(e.id) ?? 0
+                      const rating    = e.rating ?? (e.wasCorrect ? 'good' : 'again')
+                      const ratingLbl = rating.charAt(0).toUpperCase() + rating.slice(1)
+                      const ratingCls = RATING_STYLE[rating] ?? RATING_STYLE.again
+                      const dateStr   = new Date(e.reviewedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                      const timeStr   = new Date(e.reviewedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+                      return (
+                        <div key={e.id} className="flex items-center justify-between gap-2 py-0.5">
+                          <span className="text-[11px] text-ink-faint tabular-nums shrink-0">{dateStr} · {timeStr}</span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {wb > 0 && (
+                              <span className="text-[10px] text-ink-faint">{wb} wrong before ·</span>
+                            )}
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${ratingCls}`}>{ratingLbl}</span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {filtered.length > 50 && (
+                      <p className="text-[10px] text-ink-faint">Showing 50 most recent of {filtered.length}</p>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         )}
 

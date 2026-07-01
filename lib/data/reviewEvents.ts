@@ -47,6 +47,18 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
     return rowToEvent(data)
   }
 
+  async listForCard(userId: UserId, cardId: CardId, limit = 200): Promise<ReviewEvent[]> {
+    const { data, error } = await this.db
+      .from('review_events')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('card_id', cardId)
+      .order('reviewed_at', { ascending: false })
+      .limit(limit)
+    if (error) throw new Error(error.message)
+    return (data ?? []).map(rowToEvent)
+  }
+
   async countByCard(userId: UserId, cardId: CardId): Promise<number> {
     const { count, error } = await this.db.from('review_events')
       .select('*', { count: 'exact', head: true })
