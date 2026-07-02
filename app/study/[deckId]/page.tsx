@@ -2919,6 +2919,7 @@ export default function DeckDetailPage() {
   const [loading,          setLoading]          = useState(true)
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
   const [bulkGraduating,      setBulkGraduating]      = useState(false)
+  const [bulkGraduateError,   setBulkGraduateError]   = useState<string | null>(null)
   const [bulkAccelerated,     setBulkAccelerated]     = useState(false)
   const [bulkMovingToLearning,setBulkMovingToLearning]= useState(false)
   const [bulkDeleting,        setBulkDeleting]        = useState(false)
@@ -3192,13 +3193,19 @@ export default function DeckDetailPage() {
   async function handleBulkGraduate() {
     if (selectedCardIds.size === 0 || bulkGraduating) return
     setBulkGraduating(true)
+    setBulkGraduateError(null)
     try {
       const stateRepo    = new SupabaseCardStateRepository()
       const pipelineRepo = new SupabasePipelineRepository()
       const defaultPipeline = await pipelineRepo.getDefault()
       const now    = new Date()
       const nowIso = now.toISOString()
-      const cardIds = [...selectedCardIds]
+      // Filter to card IDs still present in the deck — ghost IDs (selected
+      // then deleted) would violate the card_states → cards FK and fail the
+      // whole batch.
+      const existingCardIds = new Set(cards.map(c => c.id))
+      const cardIds = [...selectedCardIds].filter(id => existingCardIds.has(id))
+      if (cardIds.length === 0) { setBulkGraduateError('No valid cards to graduate.'); return }
 
       // Both paths spread due dates across a 14-day window so a large batch
       // doesn't pile up on one day. The accelerated path puts cards on the
@@ -3227,6 +3234,7 @@ export default function DeckDetailPage() {
       setSelectedCardIds(new Set())
     } catch (err) {
       console.error('Bulk graduate failed:', err)
+      setBulkGraduateError(err instanceof Error ? err.message : String(err))
     } finally {
       setBulkGraduating(false)
     }
@@ -3632,6 +3640,9 @@ export default function DeckDetailPage() {
                 />
                 <span className="text-xs text-ink-muted">Accelerated track — spread due dates across 14 days</span>
               </label>
+            )}
+            {bulkGraduateError && (
+              <p className="text-xs text-danger break-words">Graduation failed: {bulkGraduateError}</p>
             )}
           </div>
         )}
