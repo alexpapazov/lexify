@@ -1050,13 +1050,6 @@ function AllDueSessionInner() {
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
           <div className="text-xs text-ink-muted">{state.graduated ? (currentIsReverse ? 'Reverse recall' : current.reviewTrack === 'recall' ? 'Recall' : 'Review') : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
-          <button
-            onClick={() => setInfoOpen(true)}
-            title="Card info & edit"
-            className="text-ink-faint hover:text-ink transition-colors w-6 h-6 flex items-center justify-center rounded-full border border-white/10 hover:border-white/20 text-xs font-semibold italic leading-none"
-          >
-            i
-          </button>
         </div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
@@ -1090,6 +1083,7 @@ function AllDueSessionInner() {
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
+          onInfo={() => setInfoOpen(true)}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
@@ -1108,11 +1102,13 @@ function AllDueSessionInner() {
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
+          onInfo={() => setInfoOpen(true)}
           ipaText={currentIpaText} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
-          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onInfo={() => setInfoOpen(true)} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
@@ -1130,6 +1126,7 @@ function AllDueSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
+          onInfo={() => setInfoOpen(true)}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} />
       )}

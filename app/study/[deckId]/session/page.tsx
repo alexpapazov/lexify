@@ -1511,13 +1511,6 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
               ? (currentIsReverse ? 'Reverse recall' : current.reviewTrack === 'recall' ? 'Recall' : 'Review')
               : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}
           </div>
-          <button
-            onClick={() => setInfoOpen(true)}
-            title="Card info & edit"
-            className="text-ink-faint hover:text-ink transition-colors w-6 h-6 flex items-center justify-center rounded-full border border-white/10 hover:border-white/20 text-xs font-semibold italic leading-none"
-          >
-            i
-          </button>
         </div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
@@ -1561,6 +1554,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onOverrideAnswer={(answerText, accept) => handleOverrideAnswer(card.id, step.answerSide, answerText, accept)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
+          onInfo={() => setInfoOpen(true)}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
@@ -1608,12 +1602,14 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
+          onInfo={() => setInfoOpen(true)}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
-          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)} />
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onInfo={() => setInfoOpen(true)} />
       ) : synMemberCards.length > 0 ? (
         // ── Post-graduation typed recall with synonym chain ──────────────────
         <SynonymDueNowMode
@@ -1626,6 +1622,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onRate={(rating, wasCorrect, userAnswer) => handleAnswer(rating, wasCorrect, userAnswer)}
           onSynonymTyped={handleSynonymDueNowTyped}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onInfo={() => setInfoOpen(true)}
         />
       ) : (
         // ── Post-graduation typed recall (no synonym group) ───────────────────
@@ -1645,6 +1642,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
+          onInfo={() => setInfoOpen(true)}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       )}

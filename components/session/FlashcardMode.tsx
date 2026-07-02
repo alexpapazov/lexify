@@ -5,15 +5,17 @@ import type { Card, Rating } from '@/domain'
 import { displayText } from '@/lib/cardText'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
+import { CardInfoButton } from './CardInfoButton'
 
 /**
  * Flip-card recall, used for post-graduation "recognition" reviews
  * (rare — only if a custom pipeline ends on a recognition step).
  * Shows Again/Hard/Good/Easy once the answer is revealed.
  */
-export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit }: {
+export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit, onInfo }: {
   card: Card; promptSide: 'front' | 'back'; deckName?: string; onRate: (r: Rating) => void
   onPromptEdit?: (newText: string) => void
+  onInfo?: () => void
 }) {
   const [revealed, setRevealed] = useState(false)
   useEffect(() => setRevealed(false), [card.id])
@@ -22,7 +24,8 @@ export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit
   return (
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
-      <div className="panel min-h-[160px] flex items-center justify-center text-center">
+      <div className="panel relative min-h-[160px] flex items-center justify-center text-center">
+        {onInfo && <CardInfoButton onClick={onInfo} />}
         {onPromptEdit
           ? <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit(t)} />
           : <p className="text-2xl font-medium text-ink">{prompt}</p>}

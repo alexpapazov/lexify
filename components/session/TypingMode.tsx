@@ -9,6 +9,7 @@ import { displayText } from '@/lib/cardText'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
 import { EditableAnswerText } from './EditableAnswerText'
+import { CardInfoButton } from './CardInfoButton'
 
 /**
  * Type-the-answer recall component.
@@ -24,7 +25,7 @@ import { EditableAnswerText } from './EditableAnswerText'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -47,6 +48,8 @@ export function TypingMode({
   /** Called when a deck-sibling answer is detected; the parent should credit that card. */
   onSiblingAnswered?: (siblingCardId: string) => void
   onResetCard?: () => void
+  /** Opens the full card info/edit modal from the prompt-card corner. */
+  onInfo?: () => void
   /** Called when the user clicks "Add as synonym" on a wrong answer; receives the normalized typed text. */
   onAddSynonym?: (normalizedText: string) => void
   answerLanguage?: string
@@ -395,11 +398,12 @@ export function TypingMode({
                 ?
               </button>
             )}
+            {onInfo && <CardInfoButton onClick={onInfo} />}
             {!result && !revealed && gradedReview && onResetCard && (
               <button
                 onClick={() => setResetConfirm(true)}
                 title="Reset card to learning pipeline"
-                className="absolute top-3 right-3 text-xs text-ink-faint hover:text-ink-muted transition-colors leading-none w-5 h-5 flex items-center justify-center rounded-full border border-white/10 hover:border-white/20"
+                className={`absolute top-3 text-xs text-ink-faint hover:text-ink-muted transition-colors leading-none w-5 h-5 flex items-center justify-center rounded-full border border-white/10 hover:border-white/20 ${onInfo ? 'right-10' : 'right-3'}`}
               >
                 ↺
               </button>
