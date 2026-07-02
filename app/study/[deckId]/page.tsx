@@ -1266,8 +1266,11 @@ export default function DeckDetailPage() {
 
   function handleStateUpdate(updated: CardState) {
     setStates(prev => {
-      const exists = prev.some(s => s.cardId === updated.cardId)
-      return exists ? prev.map(s => s.cardId === updated.cardId ? updated : s) : [...prev, updated]
+      // Match on (cardId, reviewDirection) so updating a card's forward state
+      // doesn't overwrite its reverse-direction row (and vice versa).
+      const dir = updated.reviewDirection ?? 'forward'
+      const matches = (s: CardState) => s.cardId === updated.cardId && (s.reviewDirection ?? 'forward') === dir
+      return prev.some(matches) ? prev.map(s => matches(s) ? updated : s) : [...prev, updated]
     })
   }
 
@@ -1396,8 +1399,9 @@ export default function DeckDetailPage() {
         })
       )
       setStates(prev => {
-        const map = new Map(prev.map(s => [s.cardId, s]))
-        for (const s of updates) map.set(s.cardId, s)
+        const keyOf = (s: CardState) => `${s.cardId}:${s.reviewDirection ?? 'forward'}`
+        const map = new Map(prev.map(s => [keyOf(s), s]))
+        for (const s of updates) map.set(keyOf(s), s)
         return [...map.values()]
       })
       setSelectedCardIds(new Set())
@@ -1445,8 +1449,12 @@ export default function DeckDetailPage() {
       })
       await stateRepo.upsertBatch(updates)
       setStates(prev => {
-        const map = new Map(prev.map(s => [s.cardId, s]))
-        for (const s of updates) map.set(s.cardId, s)
+        // Key by (cardId, reviewDirection) so a card's reverse-direction row
+        // isn't collapsed into its forward row (which would drop the forward
+        // state and make the card look unlearned until refresh).
+        const keyOf = (s: CardState) => `${s.cardId}:${s.reviewDirection ?? 'forward'}`
+        const map = new Map(prev.map(s => [keyOf(s), s]))
+        for (const s of updates) map.set(keyOf(s), s)
         return [...map.values()]
       })
       setSelectedCardIds(new Set())
