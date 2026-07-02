@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
-import type { SynonymGroup } from '@/domain'
+import type { SynonymGroup, Card } from '@/domain'
 
 function rowToSynonymGroup(row: Record<string, unknown>): SynonymGroup {
   return {
@@ -98,5 +98,66 @@ export class SupabaseSynonymGroupRepository {
       .update({ synonym_group_id: null })
       .eq('id', cardId)
     if (error) throw new Error(error.message)
+  }
+
+  /**
+   * Auto-groups newly created cards with any owned card in the same language
+   * pair that shares the exact same native gloss (`card.back`, case- and
+   * whitespace-insensitive). For each distinct native text touched by a
+   * `candidate` that ends up with ≥2 cards, links them all into one synonym
+   * group — reusing an existing group if any member already belongs to one,
+   * otherwise creating a new group.
+   *
+   * `itemLanguage` = language of `card.front` (the words that are synonyms of
+   * one another). `glossLanguage` = language of `card.back` (the shared
+   * meaning). Best-effort: individual failures are logged, not thrown.
+   */
+  async autoGroupByGloss(
+    ownerId:       string,
+    candidates:    Card[],
+    libraryCards:  Card[],
+    itemLanguage:  string,
+    glossLanguage: string,
+  ): Promise<void> {
+    if (candidates.length === 0) return
+    const norm = (s: string) => s.trim().toLowerCase()
+
+    // All owned cards in this pair keyed by id (candidates may or may not
+    // already appear in libraryCards depending on read timing — merge both).
+    const allById = new Map<string, Card>()
+    for (const c of [...libraryCards, ...candidates]) allById.set(c.id, c)
+
+    // Bucket every owned card by its normalized native text.
+    const byBack = new Map<string, Card[]>()
+    for (const c of allById.values()) {
+      const key = norm(c.back)
+      if (!key) continue
+      const arr = byBack.get(key) ?? []
+      arr.push(c)
+      byBack.set(key, arr)
+    }
+
+    // Only process native texts that at least one just-uploaded card carries.
+    const candidateBacks = new Set(candidates.map(c => norm(c.back)).filter(Boolean))
+
+    for (const key of candidateBacks) {
+      const members = byBack.get(key) ?? []
+      if (members.length < 2) continue
+      try {
+        // Reuse an existing group if any member already belongs to one.
+        let groupId = members.find(c => c.synonymGroupId)?.synonymGroupId ?? null
+        if (!groupId) {
+          const gloss = (candidates.find(c => norm(c.back) === key)?.back ?? members[0]!.back).trim()
+          const group = await this.create({ gloss, glossLanguage, itemLanguage }, ownerId)
+          groupId = group.id
+        }
+        for (const c of members) {
+          if (c.synonymGroupId === groupId) continue
+          await this.addMember(groupId, c.id)
+        }
+      } catch (err) {
+        console.error('autoGroupByGloss: failed to group native text', key, err)
+      }
+    }
   }
 }

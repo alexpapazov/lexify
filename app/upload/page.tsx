@@ -11,6 +11,7 @@ import { SupabaseDismissedPairRepository }     from '@/lib/data/dismissedPairs'
 import { SupabaseFolderRepository }            from '@/lib/data/folders'
 import { SupabaseLanguageSyncRuleRepository }  from '@/lib/data/languageSyncRules'
 import { SupabaseLanguagePairRepository }      from '@/lib/data/languagePairs'
+import { SupabaseSynonymGroupRepository }       from '@/lib/data/synonymGroups'
 import { fastTrackCardState }                  from '@/engine/pipeline'
 import { batchFastTrackDueDates }              from '@/engine/density'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
@@ -570,6 +571,20 @@ export default function UploadPage() {
           fastTrackCardState(session.user.id, c.id, pipeline.id, dueDates[i]!, now)
         )
         await stateRepo.upsertBatch(states)
+      }
+
+      // Auto-group cards that share the exact same native meaning (back) into
+      // synonym groups — matching both other cards in this upload and any card
+      // already in this language pair's library. Best-effort; never blocks save.
+      if (created.length > 0) {
+        try {
+          const libraryCards = await cardRepo.listOwned(session.user.id, targetLang, basisLang)
+          await new SupabaseSynonymGroupRepository().autoGroupByGloss(
+            session.user.id, created, libraryCards, targetLang, basisLang,
+          )
+        } catch (groupErr) {
+          console.error('Auto synonym grouping failed (non-fatal):', groupErr)
+        }
       }
 
       // Trigger language sync server-side (survives tab switching / browser close).

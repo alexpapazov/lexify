@@ -298,6 +298,18 @@ export default function AddCardsPage() {
             specIdx++
           }
         }
+
+        // Auto-group newly created cards that share the exact same native
+        // meaning (back) with each other or with any card already in this
+        // language pair's library. Best-effort; never blocks the save.
+        try {
+          const libraryCards = await cardRepo.listOwned(userId, deck.sourceLanguage, deck.targetLanguage)
+          await synonymRepo.autoGroupByGloss(
+            userId, created, libraryCards, deck.sourceLanguage, deck.targetLanguage,
+          )
+        } catch (groupErr) {
+          console.error('Auto synonym grouping failed (non-fatal):', groupErr)
+        }
       }
 
       router.push(`/study/${deckId}`)
