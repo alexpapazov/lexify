@@ -30,6 +30,7 @@ import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { computeActiveLearningSet } from '@/lib/sessionLimits'
+import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
 import { triggerSyncFill } from '@/lib/triggerSyncFill'
@@ -122,6 +123,9 @@ export default function SessionPage() {
   const [cardStates,      setCardStates]      = useState<Map<string, CardState>>(new Map())
   const [answerError,     setAnswerError]     = useState<string | null>(null)
   const [submitting,      setSubmitting]      = useState(false)
+  // Card info/edit modal ("i" button) — lets the learner inspect and edit the
+  // current card mid-session.
+  const [infoOpen,        setInfoOpen]        = useState(false)
   // When the normal new/due queue is empty (and no ?category= was given),
   // offer a picker to elect into studying unlearned and/or not-yet-due
   // graduated ("early review") cards instead of auto-starting.
@@ -192,6 +196,47 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setAllCards(prev => prev.map(c => c.id === cardId ? { ...c, audioGenerated: true, audioData } : c))
     setQueue(prev => prev.map(item => item.card.id === cardId ? { ...item, card: { ...item.card, audioGenerated: true, audioData } } : item))
   }, [])
+
+  // ── Card info/edit modal wiring ─────────────────────────────────────────────
+  // Reflect edits made in the mid-session "i" modal back into the live queue.
+  const applyInfoCardChange = useCallback((updated: Card, prevId?: string) => {
+    const oldId = prevId ?? updated.id
+    setAllCards(prev => prev.map(c => c.id === oldId ? updated : c))
+    setQueue(prev => prev.map(item => item.card.id === oldId ? { ...item, card: updated } : item))
+  }, [])
+
+  const applyInfoStateChange = useCallback((updated: CardState, prevId?: string) => {
+    setCardStates(prev => {
+      const n = new Map(prev)
+      if (prevId && prevId !== updated.cardId) n.delete(prevId)
+      n.set(updated.cardId, updated)
+      return n
+    })
+    const oldId = prevId ?? updated.cardId
+    setQueue(prev => prev.map(item => item.card.id === oldId ? { ...item, state: updated } : item))
+  }, [])
+
+  async function handleInfoSave(cardId: string, front: string, back: string) {
+    const cardRepo  = new SupabaseCardRepository()
+    const stateRepo = new SupabaseCardStateRepository()
+    // forkInDeck edits in place if the card is only in this deck, otherwise
+    // creates a deck-local fork (new id) and re-points this deck's link.
+    const { card: updated, forked } = await cardRepo.forkInDeck(deckId, cardId, userId, { front, back })
+    if (forked) {
+      await stateRepo.copy(userId, cardId, updated.id)
+      const oldState = cardStates.get(cardId)
+      if (oldState) applyInfoStateChange({ ...oldState, cardId: updated.id }, cardId)
+    }
+    applyInfoCardChange(updated, cardId)
+  }
+
+  function handleInfoDelete(cardId: string) {
+    setInfoOpen(false)
+    setAllCards(prev => prev.filter(c => c.id !== cardId))
+    // Dropping the current card leaves `index` pointing at the next one; if it
+    // was the last card, the done/pool logic takes over.
+    setQueue(prev => prev.filter(item => item.card.id !== cardId))
+  }
 
   /**
    * Commits a built queue (from the normal new/due flow, a ?category=
@@ -1466,6 +1511,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
               ? (currentIsReverse ? 'Reverse recall' : current.reviewTrack === 'recall' ? 'Recall' : 'Review')
               : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}
           </div>
+          <button
+            onClick={() => setInfoOpen(true)}
+            title="Card info & edit"
+            className="text-ink-faint hover:text-ink transition-colors w-6 h-6 flex items-center justify-center rounded-full border border-white/10 hover:border-white/20 text-xs font-semibold italic leading-none"
+          >
+            i
+          </button>
         </div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
@@ -1595,6 +1647,24 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onResetCard={handleResetCard}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
+      )}
+
+      {infoOpen && (
+        <CardEditModal
+          card={card}
+          state={cardStates.get(card.id)}
+          userId={userId}
+          deckId={deckId}
+          deckCards={allCards}
+          sourceLanguage={sourceLanguage}
+          targetLanguage={targetLanguage}
+          onSave={handleInfoSave}
+          onCardChange={applyInfoCardChange}
+          onStateChange={applyInfoStateChange}
+          onDelete={handleInfoDelete}
+          onClose={() => setInfoOpen(false)}
+          initialShowStats
+        />
       )}
     </div>
   )

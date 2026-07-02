@@ -33,6 +33,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { computeActiveLearningSet } from '@/lib/sessionLimits'
+import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
@@ -42,6 +43,7 @@ interface SessionCard {
   state:           CardState
   pipeline:        Pipeline
   gradingSettings: GradingSettings
+  deckId:          string
   deckName:        string
   deckCards:       Card[]
   sourceLanguage:  string
@@ -97,6 +99,7 @@ function AllDueSessionInner() {
   const [studyModeAutoplay, setStudyModeAutoplay] = useState(true)
   const [answerError,     setAnswerError]     = useState<string | null>(null)
   const [submitting,      setSubmitting]      = useState(false)
+  const [infoOpen,        setInfoOpen]        = useState(false)
   const [schedulerParams, setSchedulerParams] = useState<SchedulerParams>(DEFAULT_SCHEDULER_PARAMS)
   const [forwardTypedEnabled, setForwardTypedEnabled] = useState(true)
   const [forwardRecallEnabled, setForwardRecallEnabled] = useState(true)
@@ -223,8 +226,8 @@ function AllDueSessionInner() {
           ])
           const stateMap          = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
           const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
-          const common     = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
-          const deckCommon = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+          const common     = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+          const deckCommon = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
           for (const card of cards) {
             const state = stateMap.get(card.id)
             if (category === 'new' && !state) {
@@ -306,6 +309,7 @@ function AllDueSessionInner() {
             card,
             pipeline,
             gradingSettings: deck.gradingSettings,
+            deckId:          deck.id,
             deckName:        deck.name,
             deckCards:       cards,
             sourceLanguage:  deck.sourceLanguage,
@@ -335,7 +339,7 @@ function AllDueSessionInner() {
         }
 
         // Add due reverse-direction rows for this deck
-        const deckCommon = { pipeline, gradingSettings: deck.gradingSettings, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+        const deckCommon = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
         for (const reverseState of reverseStatesList) {
           if (!isDueByDate(reverseState.recallDueAt) && !isDueByDate(reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
@@ -885,6 +889,39 @@ function AllDueSessionInner() {
     }))
   }, [])
 
+  // ── Card info/edit modal wiring ─────────────────────────────────────────────
+  const applyInfoCardChange = useCallback((updated: Card, prevId?: string) => {
+    const oldId = prevId ?? updated.id
+    setQueue(prev => prev.map(item => ({
+      ...item,
+      card:      item.card.id === oldId ? updated : item.card,
+      deckCards: item.deckCards.map(c => c.id === oldId ? updated : c),
+    })))
+  }, [])
+
+  const applyInfoStateChange = useCallback((updated: CardState, prevId?: string) => {
+    const oldId = prevId ?? updated.cardId
+    setQueue(prev => prev.map(item => item.card.id === oldId ? { ...item, state: updated } : item))
+  }, [])
+
+  const handleInfoSave = useCallback(async (cardId: string, front: string, back: string) => {
+    const item = queue.find(i => i.card.id === cardId)
+    if (!item) return
+    const cardRepo  = new SupabaseCardRepository()
+    const stateRepo = new SupabaseCardStateRepository()
+    const { card: updated, forked } = await cardRepo.forkInDeck(item.deckId, cardId, userId, { front, back })
+    if (forked) {
+      await stateRepo.copy(userId, cardId, updated.id)
+      applyInfoStateChange({ ...item.state, cardId: updated.id }, cardId)
+    }
+    applyInfoCardChange(updated, cardId)
+  }, [queue, userId, applyInfoCardChange, applyInfoStateChange])
+
+  const handleInfoDelete = useCallback((cardId: string) => {
+    setInfoOpen(false)
+    setQueue(prev => prev.filter(item => item.card.id !== cardId))
+  }, [])
+
   const handleAudioCached = useCallback((cardId: string, audioData: string) => {
     setQueue(prev => prev.map(item => {
       if (item.card.id !== cardId) return item
@@ -992,7 +1029,7 @@ function AllDueSessionInner() {
 
   const current = queue[index]
   if (!current) return null // pool-injection useEffect will add a card momentarily
-  const { card, state, pipeline, gradingSettings, deckName, deckCards, sourceLanguage, targetLanguage, isReverse: currentIsReverse } = current
+  const { card, state, pipeline, gradingSettings, deckId, deckName, deckCards, sourceLanguage, targetLanguage, isReverse: currentIsReverse } = current
   const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!
   const reviewPromptSide: CardSide = state.graduated ? (currentIsReverse ? 'front' : 'back') : step.promptSide
@@ -1013,6 +1050,13 @@ function AllDueSessionInner() {
         <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
           <div className="text-xs text-ink-muted">{state.graduated ? (currentIsReverse ? 'Reverse recall' : current.reviewTrack === 'recall' ? 'Recall' : 'Review') : `Step ${state.currentStepOrder + 1} · ${step.stepType}`}</div>
+          <button
+            onClick={() => setInfoOpen(true)}
+            title="Card info & edit"
+            className="text-ink-faint hover:text-ink transition-colors w-6 h-6 flex items-center justify-center rounded-full border border-white/10 hover:border-white/20 text-xs font-semibold italic leading-none"
+          >
+            i
+          </button>
         </div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
@@ -1088,6 +1132,24 @@ function AllDueSessionInner() {
           onResetCard={handleResetCard}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} />
+      )}
+
+      {infoOpen && (
+        <CardEditModal
+          card={card}
+          state={state}
+          userId={userId}
+          deckId={deckId}
+          deckCards={deckCards}
+          sourceLanguage={sourceLanguage}
+          targetLanguage={targetLanguage}
+          onSave={handleInfoSave}
+          onCardChange={applyInfoCardChange}
+          onStateChange={applyInfoStateChange}
+          onDelete={handleInfoDelete}
+          onClose={() => setInfoOpen(false)}
+          initialShowStats
+        />
       )}
     </div>
   )
