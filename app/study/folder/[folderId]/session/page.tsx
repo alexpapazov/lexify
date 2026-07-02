@@ -34,6 +34,7 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
+import { computeActiveLearningSet } from '@/lib/sessionLimits'
 
 const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
@@ -262,12 +263,18 @@ function FolderSessionInner() {
         const forwardStates     = states.filter(s => s.reviewDirection !== 'reverse')
         const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
         const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
-        const cardsPerSession = prefs?.cardsPerSession ?? null
+        const cardsPerSession   = prefs?.cardsPerSession   ?? null
+        const learningBatchMode = prefs?.learningBatchMode ?? false
 
-        let newCardBudget: number
+        // When a per-session limit is set, cap BOTH new intros and the
+        // in-pipeline backlog to the active learning set; otherwise use the
+        // daily new-card budget.
+        let limitedLearningSet: Set<string> | null = null
+        let newCardBudget = 0
         if (cardsPerSession && cardsPerSession > 0) {
-          const inPipelineTotal = forwardStates.filter(s => !s.graduated).length
-          newCardBudget = Math.max(0, Math.min(cardsPerSession, cards.length) - inPipelineTotal)
+          limitedLearningSet = computeActiveLearningSet(
+            cards, id => stateMap.get(id), cardsPerSession, learningBatchMode,
+          )
         } else {
           const dailyLimit = Math.min(
             prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
@@ -291,12 +298,16 @@ function FolderSessionInner() {
           }
 
           if (!state) {
-            // New card — only include if under daily limit
-            if (newCardBudget <= 0) continue
-            newCardBudget--
+            if (limitedLearningSet) {
+              if (!limitedLearningSet.has(card.id)) continue
+            } else {
+              if (newCardBudget <= 0) continue
+              newCardBudget--
+            }
             allCards.push({ ...common, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
           } else if (!state.graduated) {
-            // In pipeline — always include
+            // In pipeline — include only if within the active learning set.
+            if (limitedLearningSet && !limitedLearningSet.has(card.id)) continue
             allCards.push({ ...common, state, productionMode: null })
           } else if (state.graduated) {
             const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)

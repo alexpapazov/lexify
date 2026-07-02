@@ -29,6 +29,7 @@ import { SynonymTypingMode } from '@/components/session/SynonymTypingMode'
 import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
+import { computeActiveLearningSet } from '@/lib/sessionLimits'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
 import { triggerSyncFill } from '@/lib/triggerSyncFill'
@@ -420,8 +421,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             break
         }
         // Slice to the elective batch limit; store the rest for "Study ahead".
-        const batch = batchLimit != null ? categoryQueue.slice(0, batchLimit) : categoryQueue
-        const rest  = batchLimit != null ? categoryQueue.slice(batchLimit)    : []
+        // Exception: when the learner explicitly picks the "learning" category,
+        // run through every in-pipeline card (no cap) and never pull in
+        // unlearned cards — they asked to clear what's already in learning.
+        const capThisCategory = batchLimit != null && category !== 'learning'
+        const batch = capThisCategory ? categoryQueue.slice(0, batchLimit!) : categoryQueue
+        const rest  = capThisCategory ? categoryQueue.slice(batchLimit!)    : []
         setRemainingElective(rest)
         setElectiveSession(true)
         await finalizeQueue(batch, { deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, userId: session.user.id })
@@ -435,33 +440,19 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const activeCardIdSet   = new Set(cards.map(c => c.id))
       const activeStates      = existingStates.filter(s => activeCardIdSet.has(s.cardId))
 
-      let newCardBudget: number
-      let eligibleNewCardIds: Set<string> | null = null  // null = all cards eligible
+      // When a per-session pipeline limit is set, `limitedLearningSet` is the
+      // exact set of non-graduated card IDs allowed into this session. It caps
+      // BOTH new-card introduction AND the existing in-pipeline backlog, so the
+      // learner only ever works ~N cards at a time (previously the limit capped
+      // new intros only, and every in-pipeline card was dumped in each session).
+      // `null` = no such cap; the daily-limit path governs new intros instead.
+      let limitedLearningSet: Set<string> | null = null
+      let newCardBudget = 0
 
       if (cardsPerSession && cardsPerSession > 0) {
-        const inPipelineTotal = activeStates.filter(s => !s.graduated).length
-
-        if (learningBatchMode) {
-          // Batch mode: cards are grouped by position into groups of cardsPerSession.
-          // All cards in a group must graduate before the next group unlocks.
-          const sortedCards = [...cards].sort((a, b) => a.position - b.position)
-          let batchStart = 0
-          while (batchStart < sortedCards.length) {
-            const batchEnd  = Math.min(batchStart + cardsPerSession, sortedCards.length)
-            const allGraduated = sortedCards.slice(batchStart, batchEnd)
-              .every(c => stateMap.get(c.id)?.graduated === true)
-            if (!allGraduated) break
-            batchStart += cardsPerSession
-          }
-          eligibleNewCardIds = new Set(
-            sortedCards.slice(batchStart, batchStart + cardsPerSession).map(c => c.id)
-          )
-          newCardBudget = Math.max(0, cardsPerSession - inPipelineTotal)
-        } else {
-          // Rolling mode: keep at most cardsPerSession cards in the pipeline.
-          // As each card graduates, the next unlearned card enters immediately.
-          newCardBudget = Math.max(0, Math.min(cardsPerSession, cards.length) - inPipelineTotal)
-        }
+        limitedLearningSet = computeActiveLearningSet(
+          cards, id => stateMap.get(id), cardsPerSession, learningBatchMode,
+        )
       } else {
         const dailyLimit  = Math.min(
           prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
@@ -488,11 +479,17 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       for (const card of cards) {
         const state = stateMap.get(card.id)
         if (!state) {
-          if (eligibleNewCardIds && !eligibleNewCardIds.has(card.id)) continue
-          if (newCardBudget <= 0) continue
-          newCardBudget--
+          if (limitedLearningSet) {
+            if (!limitedLearningSet.has(card.id)) continue
+          } else {
+            if (newCardBudget <= 0) continue
+            newCardBudget--
+          }
           newCards.push({ card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline, productionMode: null })
         } else if (!state.graduated) {
+          // With a per-session limit, only the active set's in-pipeline cards
+          // are studied — the rest of the learning backlog waits its turn.
+          if (limitedLearningSet && !limitedLearningSet.has(card.id)) continue
           inPipeline.push({ card, state, pipeline, productionMode: null })
         } else if (state.graduated) {
           const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)

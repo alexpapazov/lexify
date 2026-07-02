@@ -142,6 +142,37 @@ Before the session starts, the session page builds a queue of cards to study tod
 
 Cards in the learning pipeline are always included in the regular queue regardless of `dueAt` — they don't have a due date until they graduate.
 
+### "Limit cards in learning" (per-session pipeline cap)
+
+Deck preference `cardsPerSession` (+ `learningBatchMode`) caps how many cards
+are actively being learned at once. When set, `computeActiveLearningSet()` in
+`lib/sessionLimits.ts` returns the exact set of non-graduated card IDs a session
+may study — this caps **both** new-card introduction **and** the existing
+in-pipeline backlog (previously the cap applied to new intros only, so every
+in-pipeline card was dumped into every session — the "too many at once" bug).
+All three session pages (`study/[deckId]`, `study/all`, `study/folder/[folderId]`)
+use this helper.
+
+- **Rolling mode** (`learningBatchMode = false`): keep at most N non-graduated
+  cards active. Cards already in learning are kept first (oldest `introducedDate`
+  first), then unlearned cards are pulled in deck order to top up to N. As cards
+  graduate, the next session refills the freed slots — learning first, then
+  unlearned — until the deck is exhausted.
+- **Batch mode** (`learningBatchMode = true`): cards are grouped by deck
+  `position` into fixed groups of N. The active batch is the first group not yet
+  fully graduated; only that group's non-graduated cards are eligible. All N must
+  graduate before the next group unlocks.
+
+Note: refill happens at **session boundaries**, not mid-session — a card that
+graduates part-way through a session frees its slot for the *next* session.
+
+When `cardsPerSession` is unset, the daily new-card budget governs new intros and
+in-pipeline cards are all included (unchanged legacy behavior).
+
+The `?category=learning` session is an exception: it studies **every** in-pipeline
+card (no cap) and never pulls in unlearned cards — the learner explicitly asked to
+clear what's already in learning.
+
 ### Elective and category sessions
 
 In addition to the regular new+due queue, learners can study outside the daily schedule:
