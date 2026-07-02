@@ -3200,46 +3200,25 @@ export default function DeckDetailPage() {
       const nowIso = now.toISOString()
       const cardIds = [...selectedCardIds]
 
-      let updates: CardState[]
-      if (bulkAccelerated) {
-        // Spread due dates across a 14-day window, using the existing schedule as a guide
-        const dueDates = await batchFastTrackDueDates(userId, cardIds.length, now, stateRepo)
-        updates = await Promise.all(
-          cardIds.map(async (cardId, i) => {
-            const dueAt = dueDates[i] ?? (nowIso)
-            return stateRepo.upsert(fastTrackCardState(userId, cardId, defaultPipeline.id, dueAt, now))
-          })
-        )
-      } else {
-        const dueAt = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString()
-        updates = await Promise.all(
-          cardIds.map(async cardId => {
-            const existing = states.find(s => s.cardId === cardId)
-            const base     = existing ?? initialCardState(userId, cardId, defaultPipeline.id)
-            const graduated: CardState = {
-              ...base,
-              graduated:             true,
-              currentStepOrder:      0,
-              correctInStep:         0,
-              dueAt,
-              intervalDays:          3,
-              scheduledIntervalDays: 3,
-              ease:                  base.graduated ? base.ease : 2.5,
-              reps:                  Math.max(base.reps, 1),
-              lapses:                base.lapses,
-              lastRating:            'good',
-              lastReviewedAt:        nowIso,
-              graduatedAt:           base.graduatedAt ?? nowIso,
-              relearningStep:        0,
-              pendingIntervalDays:   null,
-              lapseClusterCount:     0,
-              lastLapseAt:           null,
-              acceleratedMode:       'bulk_known',
-            }
-            return stateRepo.upsert(graduated)
-          })
-        )
-      }
+      // Both paths spread due dates across a 14-day window so a large batch
+      // doesn't pile up on one day. The accelerated path puts cards on the
+      // accelerated-multiplier track (import_known); the default path marks
+      // them bulk_known — "I already knew these" — so they use normal
+      // scheduling and never count toward daily goals.
+      const dueDates = await batchFastTrackDueDates(userId, cardIds.length, now, stateRepo)
+      const updates: CardState[] = cardIds.map((cardId, i) => {
+        const dueAt = dueDates[i] ?? nowIso
+        const base  = fastTrackCardState(userId, cardId, defaultPipeline.id, dueAt, now)
+        if (bulkAccelerated) return base
+        return {
+          ...base,
+          acceleratedMode:        'bulk_known',
+          acceleratedLocked:      false,
+          acceleratedWrongStreak: 0,
+          acceleratedPenalty:     0,
+        }
+      })
+      await stateRepo.upsertBatch(updates)
       setStates(prev => {
         const map = new Map(prev.map(s => [s.cardId, s]))
         for (const s of updates) map.set(s.cardId, s)
