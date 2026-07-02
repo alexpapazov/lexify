@@ -25,6 +25,37 @@ export interface LimitState {
   introducedDate: string | null
 }
 
+/**
+ * Collapses duplicate due-review entries for the same card and direction.
+ *
+ * A graduated card can be due on several tracks at once — the typed-production
+ * track (`typedDueAt`), the self-graded recall track (`recallDueAt`), and the
+ * legacy `dueAt` — all in the SAME forward direction, plus a separate reverse
+ * row. Enqueuing all of them shows the learner the identical prompt two or
+ * three times in one session ("the same card twice, even though I didn't miss
+ * it"). This keeps at most one review per (cardId, direction): forward tracks
+ * collapse into a single forward review, while forward and reverse stay
+ * separate (they're genuinely different exercises — produce target vs. produce
+ * native, the standard Anki bidirectional model).
+ *
+ * When several tracks are due for the same direction, the most "primary" one
+ * wins: typed > legacy > recall. The deferred track keeps its past-due date
+ * and simply surfaces in a later session. Order is otherwise preserved.
+ */
+export function dedupeDueReviews<
+  T extends { card: { id: string }; reviewTrack?: string; isReverse?: boolean },
+>(items: T[]): T[] {
+  const rank = (t?: string) => (t === 'typed' ? 0 : t === 'legacy' ? 1 : t === 'recall' ? 2 : 3)
+  const best = new Map<string, T>()
+  for (const it of items) {
+    const key = `${it.card.id}:${it.isReverse ? 'reverse' : 'forward'}`
+    const cur = best.get(key)
+    if (!cur || rank(it.reviewTrack) < rank(cur.reviewTrack)) best.set(key, it)
+  }
+  const keep = new Set(best.values())
+  return items.filter(it => keep.has(it))
+}
+
 export function computeActiveLearningSet(
   cards:           LimitCard[],
   getState:        (id: string) => LimitState | undefined,

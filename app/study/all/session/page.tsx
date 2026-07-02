@@ -32,7 +32,7 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
-import { computeActiveLearningSet } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -253,7 +253,8 @@ function AllDueSessionInner() {
             }
           }
         }
-        const finalQueue = hasLangFilter ? shuffle(categoryCards) : shuffle(categoryCards).slice(0, ALL_ELECTIVE_LIMIT)
+        const dedupedCards = dedupeDueReviews(categoryCards)
+        const finalQueue = hasLangFilter ? shuffle(dedupedCards) : shuffle(dedupedCards).slice(0, ALL_ELECTIVE_LIMIT)
         if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
         setElectiveSession(true)
         setQueue(finalQueue)
@@ -349,9 +350,12 @@ function AllDueSessionInner() {
 
       if (allCards.length === 0) { setDone(true); setLoading(false); return }
 
+      // Collapse multiple due tracks for the same card+direction into one review.
+      const dedupedAll = dedupeDueReviews(allCards)
+
       // Shuffle all seen cards; keep new cards in order at the start
-      const newCards  = allCards.filter(c => !c.state.lastReviewedAt)
-      const seenCards = shuffle(allCards.filter(c => c.state.lastReviewedAt))
+      const newCards  = dedupedAll.filter(c => !c.state.lastReviewedAt)
+      const seenCards = shuffle(dedupedAll.filter(c => c.state.lastReviewedAt))
       const finalQueue = [...newCards, ...seenCards]
       setQueue(finalQueue)
       setLoading(false)

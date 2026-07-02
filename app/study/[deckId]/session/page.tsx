@@ -29,7 +29,7 @@ import { SynonymTypingMode } from '@/components/session/SynonymTypingMode'
 import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
-import { computeActiveLearningSet } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
@@ -465,6 +465,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             )
             break
         }
+        // Collapse multiple due tracks for the same card+direction into one review.
+        categoryQueue = dedupeDueReviews(categoryQueue)
         // Slice to the elective batch limit; store the rest for "Study ahead".
         // Exception: when the learner explicitly picks the "learning" category,
         // run through every in-pipeline card (no cap) and never pull in
@@ -562,9 +564,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         if (card) dueCards.push({ card, state: reverseState, pipeline, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
       }
 
+      // Collapse multiple due tracks for the same card+direction into one review.
+      const dedupedDue = dedupeDueReviews(dueCards)
+
       // New cards: keep in deck order (first session = ordered introduction)
       // In-pipeline + due: shuffle so session feels varied
-      const finalQueue = [...newCards, ...shuffle(inPipeline), ...shuffle(dueCards)]
+      const finalQueue = [...newCards, ...shuffle(inPipeline), ...shuffle(dedupedDue)]
 
       if (finalQueue.length === 0) {
         // Nothing new/due. Offer a picker to elect into studying unlearned
