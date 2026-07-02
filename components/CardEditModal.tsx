@@ -1518,16 +1518,6 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
               const availableTracks = TRACKS.filter(t => (trackCounts[t.key] ?? 0) > 0)
               const activeTrack = availableTracks.find(t => t.key === historyTrack) ?? availableTracks[0]
 
-              // Compute wrong-before counts per event within each track (oldest-first pass)
-              const wrongBefore = new Map<string, number>()
-              const streaks: Record<string, number> = { typed: 0, recall: 0, recognition: 0 }
-              for (const e of [...events].reverse()) {
-                const t = eventTrack(e)
-                wrongBefore.set(e.id, streaks[t] ?? 0)
-                if (e.wasCorrect) streaks[t] = 0
-                else streaks[t] = (streaks[t] ?? 0) + 1
-              }
-
               const filtered = activeTrack ? events.filter(e => eventTrack(e) === activeTrack.key) : []
 
               const RATING_STYLE: Record<string, string> = {
@@ -1599,7 +1589,6 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   {/* Event list */}
                   <div className="space-y-1">
                     {filtered.slice(0, 50).map(e => {
-                      const wb        = wrongBefore.get(e.id) ?? 0
                       const rating    = e.rating ?? (e.wasCorrect ? 'good' : 'again')
                       const ratingLbl = rating.charAt(0).toUpperCase() + rating.slice(1)
                       const ratingCls = RATING_STYLE[rating] ?? RATING_STYLE.again
@@ -1608,12 +1597,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                       return (
                         <div key={e.id} className="flex items-center justify-between gap-2 py-0.5">
                           <span className="text-[11px] text-ink-faint tabular-nums shrink-0">{dateStr} · {timeStr}</span>
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            {wb > 0 && (
-                              <span className="text-[10px] text-ink-faint">{wb} wrong before ·</span>
-                            )}
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${ratingCls}`}>{ratingLbl}</span>
-                          </div>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium shrink-0 ${ratingCls}`}>{ratingLbl}</span>
                         </div>
                       )
                     })}
