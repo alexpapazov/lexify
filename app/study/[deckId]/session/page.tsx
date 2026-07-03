@@ -32,7 +32,7 @@ import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { computeActiveLearningSet, dedupeDueReviews } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
-import { markSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
+import { markSynonymAnswered, unmarkSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
 import { triggerSyncFill } from '@/lib/triggerSyncFill'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -616,12 +616,27 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, queue.length, done, loading, showElectivePicker])
 
-  // Auto-advance past any synonym-group card that was already answered in
-  // this session via a multi-field prompt (to avoid showing it again).
+  // Auto-advance past a synonym-group representative only when EVERY member of
+  // its group is already answered for the current round (nothing left to type).
+  // Skipping merely because the representative itself was answered would hide a
+  // group that still has a due partner form.
   const currentCardId = !loading && !done ? queue[index]?.card.id : undefined
   useEffect(() => {
     if (!currentCardId) return
-    if (sessionAnsweredSynonyms.has(currentCardId)) {
+    const item = queue[index]
+    const gid  = item?.card.synonymGroupId
+    if (gid) {
+      // Pipeline synonym groups are gated only by SESSION-scoped answers (the
+      // day-persistent store applies to Due Now reviews). This lets a group
+      // finish its required-correct reps within one session instead of going
+      // dormant for the rest of the day.
+      const graduated = item?.state.graduated
+      const members = synonymGroups.get(gid)?.itemIds ?? []
+      const allAnswered = members.length > 0 && members.every(id =>
+        sessionAnsweredSynonyms.has(id) || (graduated && wasSynonymAnswered(userId, id, studyDayKey)),
+      )
+      if (allAnswered) setIndex(i => i + 1)
+    } else if (sessionAnsweredSynonyms.has(currentCardId)) {
       setIndex(i => i + 1)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1157,10 +1172,14 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         newStates.set(lexicalItemId, newState)
       }
 
-      // Members that advanced to a new step must NOT be marked as answered
-      // today — they need to appear fresh at the new step (step 3 asks a
-      // different direction than step 2).  Members that stayed at the same
-      // step are done for today and should be pre-filled on re-entry.
+      setCardStates(prev => {
+        const next = new Map(prev)
+        for (const [id, state] of newStates) next.set(id, state)
+        return next
+      })
+
+      // ── Grey-out (answered) marks + same-session re-queue ────────────────
+      // Members that advanced to a new step completed their step obligation.
       const advancingIds = new Set<string>()
       for (const { lexicalItemId } of results) {
         const prev = cardStates.get(lexicalItemId)
@@ -1169,41 +1188,56 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           advancingIds.add(lexicalItemId)
         }
       }
-      for (const { lexicalItemId, wasCorrect } of results) {
-        if (wasCorrect && !advancingIds.has(lexicalItemId)) {
-          markSynonymAnswered(userId, lexicalItemId, studyDayKey)
-        }
+
+      const gid            = queue[index]?.card.synonymGroupId ?? null
+      const groupMemberIds = gid ? (synonymGroups.get(gid)?.itemIds ?? []) : []
+      const correctNow     = new Set(results.filter(r => r.wasCorrect).map(r => r.lexicalItemId))
+      const roundFailed    = results.some(r => !r.wasCorrect)
+      // Pipeline grey-out is session-scoped only (day-store is for Due Now).
+      const priorAnswered  = (id: string) => sessionAnsweredSynonyms.has(id)
+
+      // Did every member of the group get answered correctly across this cycle?
+      const groupFullyAnswered = groupMemberIds.length > 0 && groupMemberIds.every(id =>
+        correctNow.has(id) || priorAnswered(id) || newStates.get(id)?.graduated,
+      )
+
+      const clearGroupMarks = () => {
+        for (const id of groupMemberIds) unmarkSynonymAnswered(userId, id, studyDayKey)
+        setSessionAnsweredSynonyms(prev => {
+          const next = new Set(prev)
+          for (const id of groupMemberIds) next.delete(id)
+          return next
+        })
       }
 
-      setCardStates(prev => {
-        const next = new Map(prev)
-        for (const [id, state] of newStates) next.set(id, state)
-        return next
-      })
-      // Only add to sessionAnsweredSynonyms for members that stayed at the
-      // same step — advancing members need to be shown at the new step.
-      setSessionAnsweredSynonyms(prev => {
-        const next = new Set(prev)
-        for (const { lexicalItemId } of results) {
-          if (!advancingIds.has(lexicalItemId)) next.add(lexicalItemId)
-        }
-        return next
-      })
-      // If any member advanced to a new step, re-insert the group into the
-      // queue so the next step runs in the same session.  This keeps synonym
-      // groups from spanning multiple sessions and triggering same-day-window
-      // resets.
-      if (advancingIds.size > 0) {
-        const repId       = queue[index]?.card.id
-        const repNewState = repId ? newStates.get(repId) : undefined
-        if (repNewState && !repNewState.graduated) {
-          const currentItem = queue[index]!
-          setQueue(prev => {
-            const next = [...prev]
-            next.splice(index + 1, 0, { ...currentItem, state: repNewState })
-            return next
-          })
-        }
+      if (roundFailed && !groupFullyAnswered) {
+        // Partial round — grey (session-scoped) the forms just answered
+        // correctly so the retry only asks the missed ones. The group is
+        // re-queued below to retry now, this session.
+        setSessionAnsweredSynonyms(prev => {
+          const next = new Set(prev)
+          for (const id of correctNow) if (!advancingIds.has(id)) next.add(id)
+          return next
+        })
+      } else {
+        // A full "all forms correct" milestone (or a step advance): reset the
+        // grey-out so the next required-correct round re-prompts every form.
+        clearGroupMarks()
+      }
+
+      // Re-queue the group so the remaining reps/steps happen in THIS session,
+      // rather than the group going dormant until a later session. Use the
+      // representative's latest state (unchanged this round if it was already
+      // greyed). Stops once the representative graduates.
+      const repId       = queue[index]?.card.id
+      const repNewState = repId ? (newStates.get(repId) ?? cardStates.get(repId)) : undefined
+      if (repNewState && !repNewState.graduated) {
+        const currentItem = queue[index]!
+        setQueue(prev => {
+          const next = [...prev]
+          next.splice(index + 1, 0, { ...currentItem, state: repNewState })
+          return next
+        })
       }
       setIndex(i => i + 1)
     } catch (err: unknown) {
@@ -1212,7 +1246,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     } finally {
       setSubmitting(false)
     }
-  }, [queue, index, userId, allCards, cardStates, submitting, studyDayKey])
+  }, [queue, index, userId, allCards, cardStates, submitting, studyDayKey, synonymGroups, sessionAnsweredSynonyms])
 
   /**
    * Called by SynonymDueNowMode when the learner types a synonym word during
@@ -1572,7 +1606,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
               : synAllMembers.map(m => m.front).join(', ')
             const fields: SynonymAnswerField[] = synAllMembers.map(m => {
               const expected   = synTypingExpected(m)
-              const isPrefilled = wasSynonymAnswered(userId, m.id, studyDayKey)
+              // Pipeline grey-out is session-scoped (see auto-advance effect).
+              const isPrefilled = sessionAnsweredSynonyms.has(m.id)
               return {
                 lexicalItemId:  m.id,
                 expectedAnswer: expected,

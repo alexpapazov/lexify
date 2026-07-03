@@ -48,6 +48,28 @@ export function wasSynonymAnswered(
   }
 }
 
+/**
+ * Removes a card from today's "answered" set. Used when a synonym group
+ * completes a full round (every form typed correctly) but the pipeline step
+ * still needs more correct repetitions — the grey-out must reset so the next
+ * round re-prompts every form.
+ */
+export function unmarkSynonymAnswered(
+  userId: string,
+  cardId: string,
+  studyDayKey: string,
+): void {
+  if (typeof window === 'undefined') return
+  const key = storageKey(userId, studyDayKey)
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return
+    const ids = (JSON.parse(raw) as string[]).filter(id => id !== cardId)
+    if (ids.length > 0) localStorage.setItem(key, JSON.stringify(ids))
+    else localStorage.removeItem(key)
+  } catch { /* ignore */ }
+}
+
 /** Removes localStorage keys for past study days to prevent unbounded growth. */
 export function purgeStaleSynonymPrefill(
   userId: string,
