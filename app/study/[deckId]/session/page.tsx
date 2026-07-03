@@ -1541,9 +1541,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
-      <div className="flex items-center justify-between">
+      <div className="relative flex items-center justify-between">
         <Link href={deckUrl} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
-        <div className="text-xs text-ink-muted">{index + 1} / {queue.length}</div>
+        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>
         <div className="flex items-center gap-3">
           <div className="text-xs text-ink-muted">
             {state.graduated
