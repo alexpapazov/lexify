@@ -114,6 +114,11 @@ function AllDueSessionInner() {
 
   const tzRef       = useRef('UTC')
   const turnoverRef = useRef(0)
+  // Hint usage for the current card's review — consumed once in handleAnswer.
+  const hintRef     = useRef<{ level: number; growthFactor: number } | null>(null)
+  const handleHint  = useCallback((level: number, growthFactor: number) => {
+    hintRef.current = { level, growthFactor }
+  }, [])
   /** Wrong typing-step answers per card during the current pipeline run. */
   const pipelineTypingErrorsRef = useRef<Map<string, number>>(new Map())
 
@@ -482,6 +487,11 @@ function AllDueSessionInner() {
       const isRecallReview = reviewTrack === 'recall' || !!isReverse
       const wasTyped   = state.graduated ? (isRecallReview ? false : productionMode === 'typed') : null
 
+      // Hint (Due Now only): dampens interval growth on a correct answer; ignored on `again`.
+      const hint = state.graduated ? hintRef.current : null
+      hintRef.current = null
+      const hintGrowthFactor = wasCorrect ? hint?.growthFactor : undefined
+
       const reviewEvent = await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
         promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
@@ -493,6 +503,7 @@ function AllDueSessionInner() {
         acceleratedPenalty: state.acceleratedPenalty,
         reviewDirection:    (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
         reps:               state.reps,
+        hintLevel:          hint?.level ?? 0,
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
@@ -512,7 +523,7 @@ function AllDueSessionInner() {
         const recallBase = state.recallIntervalDays != null
           ? { ...state, intervalDays: state.recallIntervalDays, scheduledIntervalDays: state.recallIntervalDays }
           : state
-        const recallSched = scheduleNext(recallBase, rating, { now: nowDate, wrongSeverity, params: schedulerParams })
+        const recallSched = scheduleNext(recallBase, rating, { now: nowDate, wrongSeverity, params: schedulerParams, hintGrowthFactor })
         const newRecallDueAt = recallSched.dueAt
           ? snapDueAtToStartOfDay(recallSched.dueAt, tzRef.current, turnoverRef.current)
           : state.recallDueAt
@@ -549,7 +560,7 @@ function AllDueSessionInner() {
 
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
-      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams }) : null
+      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams, hintGrowthFactor }) : null
 
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
 
@@ -1046,6 +1057,7 @@ function AllDueSessionInner() {
     : undefined
   const softWrongEnabled = state.graduated && !currentIsReverse &&
     current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled
+  const hintable = state.graduated && classifyReviewMode(state, new Date()) === 'due'
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
@@ -1112,7 +1124,9 @@ function AllDueSessionInner() {
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
-          onInfo={() => setInfoOpen(true)} />
+          onInfo={() => setInfoOpen(true)}
+          hintable={hintable} onHint={handleHint}
+          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
@@ -1131,6 +1145,7 @@ function AllDueSessionInner() {
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
           onInfo={() => setInfoOpen(true)}
+          hintable={hintable} onHint={handleHint}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} />
       )}

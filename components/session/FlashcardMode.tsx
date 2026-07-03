@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Card, Rating } from '@/domain'
 import { displayText } from '@/lib/cardText'
+import { hintPlan, hintGrowthFactor } from '@/lib/hints'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
 import { CardInfoButton } from './CardInfoButton'
@@ -12,15 +13,30 @@ import { CardInfoButton } from './CardInfoButton'
  * (rare — only if a custom pipeline ends on a recognition step).
  * Shows Again/Hard/Good/Easy once the answer is revealed.
  */
-export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit, onInfo }: {
+export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit, onInfo, hintable, onHint, answerLanguage }: {
   card: Card; promptSide: 'front' | 'back'; deckName?: string; onRate: (r: Rating) => void
   onPromptEdit?: (newText: string) => void
   onInfo?: () => void
+  /** Whether the "Hint" button is offered (Due Now reviews only). */
+  hintable?: boolean
+  onHint?: (level: number, growthFactor: number) => void
+  answerLanguage?: string
 }) {
   const [revealed, setRevealed] = useState(false)
-  useEffect(() => setRevealed(false), [card.id])
+  const [hintLevel, setHintLevel] = useState(0)
+  useEffect(() => { setRevealed(false); setHintLevel(0) }, [card.id])
   const prompt = displayText(promptSide === 'front' ? card.front : card.back)
   const answer = displayText(promptSide === 'front' ? card.back  : card.front)
+  const rawAnswer = promptSide === 'front' ? card.back : card.front
+
+  const plan = useMemo(() => hintPlan(rawAnswer, answerLanguage), [rawAnswer, answerLanguage])
+  const canHint = !!hintable && plan.maxLevel > 0 && hintLevel < plan.maxLevel
+  function useHintPress() {
+    const next = hintLevel + 1
+    if (next > plan.maxLevel) return
+    setHintLevel(next)
+    onHint?.(next, hintGrowthFactor(next, plan.isShortWord))
+  }
   return (
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
@@ -32,7 +48,15 @@ export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit
       </div>
       {!revealed ? (
         <div className="flex flex-col items-center gap-3">
-          <button onClick={() => setRevealed(true)} className="btn-primary px-10">Show answer</button>
+          {hintLevel > 0 && (
+            <p className="text-xl font-mono text-ink-muted">{plan.levelText[hintLevel - 1]}<span className="text-ink-faint">…</span></p>
+          )}
+          <div className="flex items-center gap-3">
+            {canHint && (
+              <button onClick={useHintPress} className="btn-ghost" title="Reveal the start of the answer (reduces interval growth)">Hint</button>
+            )}
+            <button onClick={() => setRevealed(true)} className="btn-primary px-10">Show answer</button>
+          </div>
           <button onClick={() => setRevealed(true)} className="text-xs text-ink-faint hover:text-ink-muted">Don&apos;t know</button>
         </div>
       ) : (

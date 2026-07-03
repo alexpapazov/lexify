@@ -82,6 +82,13 @@ export interface ScheduleContext {
    * Defaults to 0.5 (moderate) when omitted.
    */
   wrongSeverity?: number
+  /**
+   * Fraction of interval GROWTH retained when the learner used a "Hint" on this
+   * (correct) due review — applied as `1 + (multiplier - 1) * hintGrowthFactor`
+   * to min/ideal/max. 1 (or omitted) = no dampening. Only affects
+   * hard/good/easy; `again` is unaffected (no automatic penalty for hinting).
+   */
+  hintGrowthFactor?: number
   /** Per-user calibrated scheduler params. Falls back to DEFAULT_SCHEDULER_PARAMS when omitted. */
   params?: SchedulerParams
 }
@@ -445,9 +452,18 @@ class AdaptiveScheduler implements Scheduler {
     // ── Correct answer (hard / good / easy) ─────────────────────────────────
     const isAccelerated = state.acceleratedMode === 'import_known'
                        && state.acceleratedWrongStreak < 2
-    const range = isAccelerated
+    const baseRange = isAccelerated
       ? acceleratedEffectiveMultiplierRange(rating, currentInterval, state.acceleratedPenalty, params)
       : effectiveMultiplierRange(rating, currentInterval, params)
+    // A hint on a correct review dampens the interval growth toward "no change"
+    // (never below 1×, so the interval never shrinks). Deliberately NOT applied
+    // to `again` above — hinting then failing carries only the normal wrong cost.
+    const hf = ctx.hintGrowthFactor
+    const range = (hf != null && hf < 1)
+      ? { min:   1 + (baseRange.min   - 1) * hf,
+          ideal: 1 + (baseRange.ideal - 1) * hf,
+          max:   1 + (baseRange.max   - 1) * hf }
+      : baseRange
     let newInterval: number
     let smoothMinDays: number
     let smoothMaxDays: number

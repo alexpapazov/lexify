@@ -587,6 +587,8 @@ export interface ReviewEvent {
   reps:                number
   /** True when this review caused the card to be ungraduated (sent back to the learning pipeline). */
   lapsed:              boolean
+  /** How much of a "Hint" was used on this Due Now review: 0 = none, 1 = first letter / syllable core, 2 = two letters / full first syllable. */
+  hintLevel:           number
 }
 
 // ─── Deck preferences ─────────────────────────────────────────────────────────

@@ -1597,7 +1597,15 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                       return (
                         <div key={e.id} className="flex items-center justify-between gap-2 py-0.5">
                           <span className="text-[11px] text-ink-faint tabular-nums shrink-0">{dateStr} · {timeStr}</span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium shrink-0 ${ratingCls}`}>{ratingLbl}</span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {e.hintLevel > 0 && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-accent/15 text-accent border-accent/30"
+                                title={`Used a hint (level ${e.hintLevel})`}>
+                                Hint{e.hintLevel > 1 ? ` ×${e.hintLevel}` : ''}
+                              </span>
+                            )}
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${ratingCls}`}>{ratingLbl}</span>
+                          </div>
                         </div>
                       )
                     })}

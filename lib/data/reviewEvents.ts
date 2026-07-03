@@ -24,6 +24,7 @@ function rowToEvent(row: Record<string, unknown>): ReviewEvent {
     reviewDirection:   (row.review_direction as 'forward' | 'reverse' | null) ?? null,
     reps:              Number(row.reps ?? 0),
     lapsed:            (row.lapsed as boolean | null) ?? false,
+    hintLevel:         Number(row.hint_level ?? 0),
   }
 }
 
@@ -42,6 +43,7 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
       accelerated_penalty: input.acceleratedPenalty,
       review_direction:    input.reviewDirection,
       reps:                input.reps ?? 0,
+      hint_level:          input.hintLevel ?? 0,
     }).select().single()
     if (error) throw new Error(error.message)
     return rowToEvent(data)

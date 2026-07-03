@@ -190,6 +190,17 @@ From the scheduler's perspective, a fast-tracked card is identical to a normally
 
 ---
 
+## Hint button (Due Now only)
+
+On a **genuinely-due graduated review** (not the pipeline, not early/elective — gated by `state.graduated && classifyReviewMode(state) === 'due'`), a **Hint** button appears next to Check (typed) / Show answer (self-graded). It reveals the start of the answer and dampens the interval growth on a *correct* rating — but never auto-penalizes: pressing Again after a hint schedules exactly like a normal Again.
+
+- **Reveal** (`lib/hints.ts: hintPlan`): alphabetic (Latin/Cyrillic/Greek) → first letter, then first two letters; Korean (Hangul) → first syllable's initial+medial (안→아), then the full first syllable (안→안). Letters count from the first *content* word (a leading article like "el codo" is kept in the autopopulated text so grading matches, but the revealed letter is the content word's). Typed mode autopopulates the input; self-graded shows the prefix as text. Never reveals the whole answer (1-char words / single-syllable-no-final Korean get no hint).
+- **Penalty** (`lib/hints.ts: hintGrowthFactor`, applied in `engine/scheduler.ts` via `ScheduleContext.hintGrowthFactor` as `1 + (multiplier − 1) × k`): press 1 → k=0.65, press 2 → k=0.40; a "short word" where only one press is possible (single-syllable Korean, ≤2-char word) → k=0.35. `again` is unaffected. Applies on top of the normal or accelerated range.
+- **Tracking**: `review_events.hint_level` (migration 064; `ReviewEvent.hintLevel`) records 0/1/2; shown as a "Hint" badge in the card info (ℹ) menu's review history.
+- Not offered on synonym-chain Due Now cards (`SynonymDueNowMode`) or any pipeline step.
+
+---
+
 ## Error log
 
 | Date | Error | Fix |

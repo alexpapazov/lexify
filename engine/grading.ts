@@ -117,7 +117,7 @@ function getArticleSet(lang?: string): Set<string> {
   return ALL_ARTICLES
 }
 
-function stripLeadingArticle(s: string, lang?: string): string {
+export function stripLeadingArticle(s: string, lang?: string): string {
   const articles = getArticleSet(lang)
   const parts = s.split(/\s+/)
   if (parts.length > 1 && articles.has(parts[0]!.toLowerCase())) {

@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { hintPlan, hintGrowthFactor } from '@/lib/hints'
 import type { Card, GradingSettings, GradingIssueType, GradingStatus, Rating } from '@/domain'
 import { gradeTyping, normalizeAnswer } from '@/engine/grading'
 import { speak } from '@/lib/speak'
@@ -25,7 +26,7 @@ import { CardInfoButton } from './CardInfoButton'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -50,6 +51,10 @@ export function TypingMode({
   onResetCard?: () => void
   /** Opens the full card info/edit modal from the prompt-card corner. */
   onInfo?: () => void
+  /** Whether the "Hint" button is offered (Due Now reviews only, not the pipeline). */
+  hintable?: boolean
+  /** Called when a hint is revealed, with the cumulative level and the interval-growth dampening factor. */
+  onHint?: (level: number, growthFactor: number) => void
   /** Called when the user clicks "Add as synonym" on a wrong answer; receives the normalized typed text. */
   onAddSynonym?: (normalizedText: string) => void
   answerLanguage?: string
@@ -73,6 +78,8 @@ export function TypingMode({
   }
 
   const [input,      setInput]      = useState('')
+  const [hintLevel,  setHintLevel]  = useState(0)
+  const mainInputRef = useRef<HTMLInputElement>(null)
   const [result,     setResult]     = useState<LocalResult | null>(null)
   const [override,        setOverride]        = useState<boolean | null>(null)
   const [retype,          setRetype]          = useState('')
@@ -143,6 +150,21 @@ export function TypingMode({
 
   const prompt   = displayText(promptSide === 'front' ? card.front : card.back)
   const expected = promptSide === 'front' ? card.back  : card.front   // raw — gradeTyping strips quotes internally
+
+  // ── Hint (Due Now only) ────────────────────────────────────────────────────
+  const plan = useMemo(() => hintPlan(expected, answerLanguage), [expected, answerLanguage])
+  const canHint = !!hintable && plan.maxLevel > 0 && hintLevel < plan.maxLevel
+  function useHintPress() {
+    const next = hintLevel + 1
+    if (next > plan.maxLevel) return
+    setInput(plan.levelText[next - 1] ?? '')
+    setHintLevel(next)
+    onHint?.(next, hintGrowthFactor(next, plan.isShortWord))
+    setTimeout(() => {
+      const el = mainInputRef.current
+      if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n) }
+    }, 0)
+  }
   const displayExpected = displayText(expected)                        // for showing to the learner
 
   const finalCorrect = override ?? result?.correct ?? false
@@ -458,6 +480,7 @@ export function TypingMode({
             result.status === 'almost' && override !== false ? 'border-warning/60 bg-warning/5' :
             'border-danger/60 bg-danger/5'
           }`}
+          ref={mainInputRef}
           placeholder={answerLanguage ? `Type ${langNativeName(answerLanguage)} answer…` : 'Type your answer…'}
           value={siblingId ? siblingText : synonymPhase ? synonymPhaseText : input}
           onChange={e => { if (!result && !siblingId && !synonymPhase) setInput(e.target.value) }}
@@ -563,6 +586,9 @@ export function TypingMode({
 
         {!siblingId && !synonymPhase && !result ? (
           <div className="flex gap-3 justify-center">
+            {canHint && (
+              <button onClick={useHintPress} className="btn-ghost" title="Reveal the start of the answer (reduces interval growth)">Hint</button>
+            )}
             <button onClick={check} disabled={!input.trim()} className="btn-primary">Check</button>
           </div>
         ) : result ? (

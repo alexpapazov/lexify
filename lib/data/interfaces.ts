@@ -92,6 +92,7 @@ export interface CreateReviewEventInput {
   acceleratedPenalty?: number | null
   reviewDirection?:    'forward' | 'reverse' | null
   reps?:               number | null
+  hintLevel?:          number
 }
 
 export interface ReviewEventRepository {
