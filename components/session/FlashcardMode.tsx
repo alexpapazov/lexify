@@ -23,8 +23,11 @@ export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit
   answerLanguage?: string
 }) {
   const [revealed, setRevealed] = useState(false)
+  // Set when the learner revealed via "Don't know" (a self-declared miss):
+  // show the answer + Continue instead of the self-rating buttons.
+  const [dontKnow, setDontKnow] = useState(false)
   const [hintLevel, setHintLevel] = useState(0)
-  useEffect(() => { setRevealed(false); setHintLevel(0) }, [card.id])
+  useEffect(() => { setRevealed(false); setDontKnow(false); setHintLevel(0) }, [card.id])
   const prompt = displayText(promptSide === 'front' ? card.front : card.back)
   const answer = displayText(promptSide === 'front' ? card.back  : card.front)
   const rawAnswer = promptSide === 'front' ? card.back : card.front
@@ -57,14 +60,20 @@ export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit
             )}
             <button onClick={() => setRevealed(true)} className="btn-primary px-10">Show answer</button>
           </div>
-          <button onClick={() => setRevealed(true)} className="text-xs text-ink-faint hover:text-ink-muted">Don&apos;t know</button>
+          <button onClick={() => { setDontKnow(true); setRevealed(true) }} className="text-xs text-ink-faint hover:text-ink-muted">Don&apos;t know</button>
         </div>
       ) : (
         <div className="space-y-4">
           <div className="panel min-h-[100px] flex items-center justify-center text-center bg-surface-raised">
             <p className="text-xl text-ink">{answer}</p>
           </div>
-          <RatingButtons onRate={onRate} />
+          {dontKnow ? (
+            <div className="flex justify-center">
+              <button onClick={() => onRate('again')} className="btn-primary px-10">Continue</button>
+            </div>
+          ) : (
+            <RatingButtons onRate={onRate} />
+          )}
         </div>
       )}
     </div>
