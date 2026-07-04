@@ -22,6 +22,7 @@ export async function POST(req: Request) {
       await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField)
     }
 
+    await calibrateGradIntervals(userId, sourceLanguage, targetLanguage)
     await calibrateAccelBucket(userId, sourceLanguage, targetLanguage)
 
     return Response.json({ ok: true })
@@ -73,6 +74,16 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     gradInterval2errMax: row.grad_interval_2err_max as number,
     gradInterval3errMin: row.grad_interval_3err_min as number,
     gradInterval3errMax: row.grad_interval_3err_max as number,
+    gradInterval4errMin: (row.grad_interval_4err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval4errMin,
+    gradInterval4errMax: (row.grad_interval_4err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval4errMax,
+    gradInterval5errMin: (row.grad_interval_5err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval5errMin,
+    gradInterval5errMax: (row.grad_interval_5err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval5errMax,
+    gradInterval6errMin: (row.grad_interval_6err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval6errMin,
+    gradInterval6errMax: (row.grad_interval_6err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval6errMax,
+    gradInterval7errMin: (row.grad_interval_7err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval7errMin,
+    gradInterval7errMax: (row.grad_interval_7err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval7errMax,
+    gradInterval8errMin: (row.grad_interval_8err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval8errMin,
+    gradInterval8errMax: (row.grad_interval_8err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval8errMax,
     calibratedAt:        row.calibrated_at as string | null,
     totalDueReviews:     Number(row.total_due_reviews ?? 0),
     recentRetentionRate: row.recent_retention_rate as number | null,
@@ -146,7 +157,7 @@ async function calibrateBucket(
 
   const { data: events, error } = await db
     .from('review_events')
-    .select('was_correct')
+    .select('was_correct, near_miss')
     .eq('user_id', userId)
     .eq('review_mode', 'due')
     .eq('review_direction', reviewDir)
@@ -173,7 +184,11 @@ async function calibrateBucket(
     return
   }
 
-  const retentionRate = events.filter(e => e.was_correct).length / events.length
+  // Near-miss weighting: a clean correct = 1.0, an "almost" (accent/typo/article
+  // slip) = 0.8, a full miss = 0. So a near-miss counts as only 0.2 of an error.
+  const successWeight = (e: { was_correct: boolean; near_miss: boolean }) =>
+    e.was_correct ? 1 : e.near_miss ? 0.8 : 0
+  const retentionRate = events.reduce((sum, e) => sum + successWeight(e), 0) / events.length
 
   let newGoodIdeal = params.goodIdeal
   let newEasyIdeal = params.easyIdeal
@@ -186,36 +201,7 @@ async function calibrateBucket(
     newEasyIdeal = Math.min(6.00, params.easyIdeal + adjustmentStep)
   }
 
-  let gradUpdate: Record<string, number> = {}
-  if (answerField === 'forward_typed' || answerField === 'forward_recall') {
-    const ninetyDaysAgo = new Date(Date.now() - 90 * 86_400_000).toISOString()
-    const { data: firstReviews } = await db
-      .from('review_events')
-      .select('was_correct')
-      .eq('user_id', userId)
-      .eq('reps', 1)
-      .eq('review_direction', reviewDir)
-      .eq('was_typed', wasTyped)
-      .gte('reviewed_at', ninetyDaysAgo)
-
-    if (firstReviews && firstReviews.length >= 5) {
-      const failRate = firstReviews.filter(e => !e.was_correct).length / firstReviews.length
-      if (failRate > 0.20) {
-        gradUpdate = {
-          grad_interval_0err_min: Math.max(1, params.gradInterval0errMin - 1),
-          grad_interval_0err_max: Math.max(1, params.gradInterval0errMax - 1),
-        }
-      } else if (failRate < 0.05) {
-        gradUpdate = {
-          grad_interval_0err_min: Math.min(14, params.gradInterval0errMin + 1),
-          grad_interval_0err_max: Math.min(14, params.gradInterval0errMax + 1),
-        }
-      }
-    }
-  }
-
   const changed = newGoodIdeal !== params.goodIdeal || newEasyIdeal !== params.easyIdeal
-    || Object.keys(gradUpdate).length > 0
 
   if (changed) {
     await saveHistory({ ...params, totalDueReviews: newTotal })
@@ -227,8 +213,69 @@ async function calibrateBucket(
     calibrated_at:         new Date().toISOString(),
     total_due_reviews:     newTotal,
     recent_retention_rate: retentionRate,
-    ...gradUpdate,
   })
+}
+
+/**
+ * Calibrates the graduation-interval [min,max] for each exact pipeline-error
+ * bucket (0–7 individual, 8+ combined), using first-post-graduation reviews
+ * (reps=1) grouped by the card's graduationErrorCount. A near-miss counts as
+ * only 0.2 of a failure. Stored on the forward_typed row (the one the session
+ * reads at graduation).
+ */
+async function calibrateGradIntervals(userId: string, sourceLang: string, targetLang: string) {
+  const db     = createAdminClient()
+  const params = await getOrCreate(userId, sourceLang, targetLang, 'forward_typed')
+
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 86_400_000).toISOString()
+  const { data: firstReviews } = await db
+    .from('review_events')
+    .select('was_correct, near_miss, graduation_error_count')
+    .eq('user_id', userId)
+    .eq('reps', 1)
+    .eq('review_direction', 'forward')
+    .eq('was_accelerated', false)
+    .gte('reviewed_at', ninetyDaysAgo)
+
+  if (!firstReviews || firstReviews.length === 0) return
+
+  // Group into buckets 0–7 and 8 (= 8 or more).
+  const buckets = new Map<number, { was_correct: boolean; near_miss: boolean }[]>()
+  for (const e of firstReviews) {
+    const raw = Number(e.graduation_error_count ?? 0)
+    const bucket = Math.min(8, Math.max(0, raw))
+    const arr = buckets.get(bucket) ?? []
+    arr.push({ was_correct: !!e.was_correct, near_miss: !!e.near_miss })
+    buckets.set(bucket, arr)
+  }
+
+  const failWeight = (e: { was_correct: boolean; near_miss: boolean }) =>
+    e.was_correct ? 0 : e.near_miss ? 0.2 : 1
+
+  const updates: Record<string, number> = {}
+  let anyChange = false
+  for (const [bucket, evs] of buckets) {
+    if (evs.length < 5) continue
+    const failRate = evs.reduce((s, e) => s + failWeight(e), 0) / evs.length
+    const minKey = `gradInterval${bucket}errMin` as keyof typeof params
+    const maxKey = `gradInterval${bucket}errMax` as keyof typeof params
+    const curMin = params[minKey] as number
+    const curMax = params[maxKey] as number
+    let newMin = curMin
+    let newMax = curMax
+    if (failRate > 0.20) { newMin = Math.max(1, curMin - 1); newMax = Math.max(1, curMax - 1) }
+    else if (failRate < 0.05) { newMin = Math.min(14, curMin + 1); newMax = Math.min(14, curMax + 1) }
+    if (newMin !== curMin || newMax !== curMax) {
+      updates[`grad_interval_${bucket}err_min`] = newMin
+      updates[`grad_interval_${bucket}err_max`] = newMax
+      anyChange = true
+    }
+  }
+
+  if (anyChange) {
+    await saveHistory({ ...params })
+    await updateParams(userId, sourceLang, targetLang, 'forward_typed', updates)
+  }
 }
 
 async function calibrateAccelBucket(
@@ -245,7 +292,7 @@ async function calibrateAccelBucket(
 
   const { data: events } = await db
     .from('review_events')
-    .select('was_correct, accelerated_penalty')
+    .select('was_correct, near_miss, accelerated_penalty')
     .eq('user_id', userId)
     .eq('review_mode', 'due')
     .eq('was_accelerated', true)
@@ -257,9 +304,10 @@ async function calibrateAccelBucket(
   let weightedCorrect = 0
   let weightedTotal   = 0
   for (const e of events) {
-    const weight = Math.max(0, 1 - (e.accelerated_penalty ?? 0) / 5)
+    const weight  = Math.max(0, 1 - (e.accelerated_penalty ?? 0) / 5)
+    const success = e.was_correct ? 1 : e.near_miss ? 0.8 : 0  // near-miss = 0.2 error
     weightedTotal   += weight
-    if (e.was_correct) weightedCorrect += weight
+    weightedCorrect += weight * success
   }
 
   if (weightedTotal < 5) return

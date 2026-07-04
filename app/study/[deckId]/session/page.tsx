@@ -160,8 +160,9 @@ export default function SessionPage() {
   const handleHint     = useCallback((level: number, growthFactor: number) => {
     hintRef.current = { level, growthFactor }
   }, [])
-  /** Wrong typing-step answers per card during the current pipeline run. */
-  const pipelineTypingErrorsRef = useRef<Map<string, number>>(new Map())
+  // Whether the current typed answer was an "almost" (near-miss) — consumed in handleAnswer.
+  const nearMissRef    = useRef(false)
+  const handleNearMiss = useCallback((nearMiss: boolean) => { nearMissRef.current = nearMiss }, [])
 
 const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -784,6 +785,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const hint = state.graduated ? hintRef.current : null
       hintRef.current = null
       const hintGrowthFactor = wasCorrect ? hint?.growthFactor : undefined
+      const nearMiss = nearMissRef.current
+      nearMissRef.current = false
 
       const reviewEvent = await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
@@ -797,6 +800,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         reviewDirection:    (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
         reps:               state.reps,
         hintLevel:          hint?.level ?? 0,
+        nearMiss:           !wasCorrect && nearMiss,
+        graduationErrorCount: state.graduationErrorCount ?? 0,
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
@@ -857,10 +862,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         return
       }
 
-      // Count wrong typing answers during the pipeline so graduation can pick the right interval.
-      if (!state.graduated && step.stepType === 'typing' && !wasCorrect) {
-        pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
-      }
+      // A wrong typing answer during the pipeline is a "struggle" — it feeds the
+      // cumulative error count that buckets the card's graduation interval.
+      const pipelineErrorInc = (!state.graduated && step.stepType === 'typing' && !wasCorrect) ? 1 : 0
 
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
@@ -870,6 +874,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       if (state.graduated && !newState.graduated) {
         eventRepo.markLapsed(reviewEvent.id, userId).catch(() => {})
+      }
+
+      // While the card is (still) in the pipeline, accumulate the struggle count.
+      if (!newState.graduated) {
+        newState = { ...newState, pipelineErrorCount: (state.pipelineErrorCount ?? 0) + pipelineErrorInc }
       }
 
       if (
@@ -885,19 +894,21 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // Graduation: override the default interval with a range based on how many
       // typing steps the learner got wrong during this pipeline run.
       if (!state.graduated && newState.graduated && newState.dueAt) {
-        const errors    = pipelineTypingErrorsRef.current.get(card.id) ?? 0
+        // The graduating answer is correct, so the accumulated count is final.
+        const errors    = state.pipelineErrorCount ?? 0
         const [minDays, maxDays] = graduationIntervalRange(errors, schedulerParams)
         const idealDays = Math.floor((minDays + maxDays) / 2)
         const idealDueAt = new Date(nowDate.getTime() + idealDays * 24 * 60 * 60 * 1000).toISOString()
         const smoothed = (maxDays - minDays >= 1)
           ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, idealDays, stateRepo)
           : idealDueAt
-        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays, typedDueAt: smoothed, typedIntervalDays: idealDays }
+        // Snapshot the error count into graduationErrorCount (buckets calibration),
+        // then reset the running counter for any future pipeline relapse.
+        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays, typedDueAt: smoothed, typedIntervalDays: idealDays, graduationErrorCount: errors, pipelineErrorCount: 0 }
         // pipeline.ts appended INITIAL_INTERVAL['good']=3 before we knew idealDays; replace it
         if (newState.intervalHistory.length > 0) {
           newState = { ...newState, intervalHistory: [...newState.intervalHistory.slice(0, -1), idealDays] }
         }
-        pipelineTypingErrorsRef.current.delete(card.id)
       }
 
       // Snap to start of logical day so all cards due on the same day appear
@@ -1325,10 +1336,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const reviewMode = classifyReviewMode(state, nowDate)
       const prevState  = { ...state }
 
-      // Count "?" as one struggle regardless of step type.
-      if (!state.graduated) {
-        pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
-      }
+      // "?" counts as one pipeline struggle (added to the persisted state below).
+      const idkErrorInc = state.graduated ? 0 : 1
 
       let newState = state
       const penaltyCount = state.graduated ? 1 : 3
@@ -1340,6 +1349,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           expected:    reviewAnswerSide === 'front' ? card.front : card.back,
           userAnswer: '', wasCorrect: false, rating: 'again', responseMs: null,
           reviewMode, wasTyped: state.graduated ? productionMode === 'typed' : null,
+          graduationErrorCount: state.graduationErrorCount ?? 0,
         })
         const wasGraduated = newState.graduated
         newState = progressAfterReview(newState, pipeline, { wasCorrect: false, rating: 'again', wrongSeverity: undefined, wasTyped: false }, nowDate)
@@ -1348,7 +1358,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         }
       }
 
-      const counted = { ...newState, iDontKnowCount: (prevState.iDontKnowCount ?? 0) + 1 }
+      const counted = {
+        ...newState,
+        iDontKnowCount: (prevState.iDontKnowCount ?? 0) + 1,
+        pipelineErrorCount: newState.graduated ? newState.pipelineErrorCount : (prevState.pipelineErrorCount ?? 0) + idkErrorInc,
+      }
       await stateRepo.upsert(counted)
       setCardStates(prev => { const m = new Map(prev); m.set(card.id, counted); return m })
 
@@ -1425,9 +1439,6 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   const handleRepeat = useCallback(() => {
     const current = queue[index]
     if (!current) return
-    if (!current.state.graduated) {
-      pipelineTypingErrorsRef.current.set(current.card.id, (pipelineTypingErrorsRef.current.get(current.card.id) ?? 0) + 1)
-    }
     if (index + 1 < queue.length) {
       const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
       setQueue(prev => {
@@ -1700,7 +1711,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
           onInfo={() => setInfoOpen(true)}
-          hintable={hintable} onHint={handleHint}
+          hintable={hintable} onHint={handleHint} onNearMiss={handleNearMiss}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       )}

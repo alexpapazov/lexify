@@ -201,6 +201,34 @@ On a **genuinely-due graduated review** (not the pipeline, not early/elective �
 
 ---
 
+## Calibration (per-user scheduler params)
+
+`app/api/calibrate/route.ts` nightly-tunes each user's multipliers/intervals per
+language pair from their `review_events`. Two accuracy features:
+
+- **Near-miss lenience.** A typed "almost" (accent/typo/article slip that the
+  learner was still made to retype) is recorded on `review_events.near_miss`
+  (migration 065). In the retention math a near-miss counts as **0.8 of a
+  correct** (i.e. only 0.2 of an error), so spelling slips no longer shrink the
+  schedule as if the word was forgotten. Applied to both the normal and
+  accelerated retention calcs. `TypingMode` reports it via `onNearMiss`; the
+  session stashes it in `nearMissRef` and stamps the event.
+
+- **Per-error-count graduation intervals.** The first-review interval a card
+  gets at graduation is bucketed by how many pipeline struggles it had
+  (`graduationIntervalRange`, buckets 0–7 individual + `8` = 8-or-more). The
+  struggle count is now **cumulative across sessions**, persisted on
+  `card_states.pipeline_error_count` (typing mistakes + "?"; Repeat no longer
+  counts — it follows a *correct* answer), snapshotted to
+  `card_states.graduation_error_count` at graduation and stamped onto each
+  review's `review_events.graduation_error_count`. `calibrateGradIntervals()`
+  adjusts each bucket's `[min,max]` from the first-post-graduation (reps=1)
+  reviews of cards that graduated with that exact error count (near-misses
+  weighted 0.2). Stored on the `forward_typed` params row (the one the session
+  reads at graduation) and shown per-bucket in the pair settings constants view.
+
+---
+
 ## Error log
 
 | Date | Error | Fix |

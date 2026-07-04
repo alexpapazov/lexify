@@ -63,6 +63,8 @@ export function initialCardState(
     typingFailCycles:    0,
     stage3EnteredDate: null,
     iDontKnowCount:    0,
+    pipelineErrorCount:   0,
+    graduationErrorCount: 0,
     accentMistakeCount:   0,
     articleMistakeCount:  0,
     genderMistakeCount:   0,

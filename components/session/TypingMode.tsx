@@ -26,7 +26,7 @@ import { CardInfoButton } from './CardInfoButton'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, hintable, onHint, onNearMiss, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -55,6 +55,8 @@ export function TypingMode({
   hintable?: boolean
   /** Called when a hint is revealed, with the cumulative level and the interval-growth dampening factor. */
   onHint?: (level: number, growthFactor: number) => void
+  /** Reports whether the answer being submitted was an "almost" (near-miss) so the calibrator can weight it. */
+  onNearMiss?: (nearMiss: boolean) => void
   /** Called when the user clicks "Add as synonym" on a wrong answer; receives the normalized typed text. */
   onAddSynonym?: (normalizedText: string) => void
   answerLanguage?: string
@@ -329,14 +331,23 @@ export function TypingMode({
 
   const inCanonicalPhase = synonymPhase || !!siblingId
 
+  // A near-miss = the answer graded as "almost" (accent/typo/article slip) and
+  // wasn't overridden to correct. Reported before advancing so the calibrator
+  // can weight it as only 0.2 of an error.
+  function reportNearMiss() {
+    onNearMiss?.(!!result && result.status === 'almost' && override !== true)
+  }
+
   function advanceRetype() {
     if (!retypeCorrect) return
+    reportNearMiss()
     onRate('again', false, inCanonicalPhase ? canonInput : input, result?.issueType)
   }
 
   function advanceSoftWrong() {
     if (!softWrongRetypeCorrect || !softWrongRecallRating) return
     const userAns = inCanonicalPhase ? canonInput : input
+    reportNearMiss()
     if (softWrongOverrideAtRating) {
       // Override was active: both tracks get the recall rating
       onRate(softWrongRecallRating, true, userAns, result?.issueType, undefined)
@@ -347,6 +358,7 @@ export function TypingMode({
   }
 
   function tryAdvance(rating: Rating) {
+    reportNearMiss()
     onRate(rating, finalCorrect, inCanonicalPhase ? canonInput : input, result?.issueType)
   }
 

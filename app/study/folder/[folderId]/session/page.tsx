@@ -122,8 +122,8 @@ function FolderSessionInner() {
   const handleHint  = useCallback((level: number, growthFactor: number) => {
     hintRef.current = { level, growthFactor }
   }, [])
-  /** Wrong typing-step answers per card during the current pipeline run. */
-  const pipelineTypingErrorsRef = useRef<Map<string, number>>(new Map())
+  const nearMissRef = useRef(false)
+  const handleNearMiss = useCallback((nearMiss: boolean) => { nearMissRef.current = nearMiss }, [])
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -476,6 +476,8 @@ function FolderSessionInner() {
       const hint = state.graduated ? hintRef.current : null
       hintRef.current = null
       const hintGrowthFactor = wasCorrect ? hint?.growthFactor : undefined
+      const nearMiss = nearMissRef.current
+      nearMissRef.current = false
 
       const reviewEvent = await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
@@ -489,6 +491,8 @@ function FolderSessionInner() {
         reviewDirection:   (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
         reps:              state.reps,
         hintLevel:         hint?.level ?? 0,
+        nearMiss:          !wasCorrect && nearMiss,
+        graduationErrorCount: state.graduationErrorCount ?? 0,
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
@@ -539,9 +543,8 @@ function FolderSessionInner() {
         return
       }
 
-      if (!state.graduated && step.stepType === 'typing' && !wasCorrect) {
-        pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
-      }
+      // A wrong pipeline typing answer is a "struggle" feeding the cumulative error count.
+      const pipelineErrorInc = (!state.graduated && step.stepType === 'typing' && !wasCorrect) ? 1 : 0
 
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
@@ -551,6 +554,10 @@ function FolderSessionInner() {
 
       if (state.graduated && !newState.graduated) {
         eventRepo.markLapsed(reviewEvent.id, userId).catch(() => {})
+      }
+
+      if (!newState.graduated) {
+        newState = { ...newState, pipelineErrorCount: (state.pipelineErrorCount ?? 0) + pipelineErrorInc }
       }
 
       if (
@@ -564,18 +571,17 @@ function FolderSessionInner() {
       }
 
       if (!state.graduated && newState.graduated && newState.dueAt) {
-        const errors    = pipelineTypingErrorsRef.current.get(card.id) ?? 0
+        const errors    = state.pipelineErrorCount ?? 0
         const [minDays, maxDays] = graduationIntervalRange(errors, schedulerParams)
         const idealDays = Math.floor((minDays + maxDays) / 2)
         const idealDueAt = new Date(nowDate.getTime() + idealDays * 24 * 60 * 60 * 1000).toISOString()
         const smoothed = (maxDays - minDays >= 1)
           ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, idealDays, stateRepo)
           : idealDueAt
-        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays, typedDueAt: smoothed, typedIntervalDays: idealDays }
+        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays, typedDueAt: smoothed, typedIntervalDays: idealDays, graduationErrorCount: errors, pipelineErrorCount: 0 }
         if (newState.intervalHistory.length > 0) {
           newState = { ...newState, intervalHistory: [...newState.intervalHistory.slice(0, -1), idealDays] }
         }
-        pipelineTypingErrorsRef.current.delete(card.id)
       }
 
       if (newState.graduated && newState.dueAt && newState.relearningStep === 0) {
@@ -771,9 +777,7 @@ function FolderSessionInner() {
       const nowDate    = new Date()
       const reviewMode = classifyReviewMode(state, nowDate)
       const prevState  = { ...state }
-      if (!state.graduated) {
-        pipelineTypingErrorsRef.current.set(card.id, (pipelineTypingErrorsRef.current.get(card.id) ?? 0) + 1)
-      }
+      const idkErrorInc = state.graduated ? 0 : 1
 
       let newState = state
       const penaltyCount = state.graduated ? 1 : 3
@@ -785,6 +789,7 @@ function FolderSessionInner() {
           expected:    reviewAnswerSide === 'front' ? card.front : card.back,
           userAnswer: '', wasCorrect: false, rating: 'again', responseMs: null,
           reviewMode, wasTyped: state.graduated ? productionMode === 'typed' : null,
+          graduationErrorCount: state.graduationErrorCount ?? 0,
         })
         const wasGraduated = newState.graduated
         newState = progressAfterReview(newState, pipeline, { wasCorrect: false, rating: 'again', wrongSeverity: undefined, wasTyped: false }, nowDate)
@@ -792,7 +797,11 @@ function FolderSessionInner() {
           eventRepo.markLapsed(idkEvent.id, userId).catch(() => {})
         }
       }
-      const counted = { ...newState, iDontKnowCount: (prevState.iDontKnowCount ?? 0) + 1 }
+      const counted = {
+        ...newState,
+        iDontKnowCount: (prevState.iDontKnowCount ?? 0) + 1,
+        pipelineErrorCount: newState.graduated ? newState.pipelineErrorCount : (prevState.pipelineErrorCount ?? 0) + idkErrorInc,
+      }
       await stateRepo.upsert(counted)
       const requeued: SessionCard = { ...current, state: counted, idontknow: true }
       if (counted.graduated && counted.relearningStep > 0) {
@@ -863,9 +872,6 @@ function FolderSessionInner() {
   const handleRepeat = useCallback(() => {
     const current = queue[index]
     if (!current) return
-    if (!current.state.graduated) {
-      pipelineTypingErrorsRef.current.set(current.card.id, (pipelineTypingErrorsRef.current.get(current.card.id) ?? 0) + 1)
-    }
     if (index + 1 < queue.length) {
       const insertAt = Math.min(index + 1 + REPEAT_REQUEUE_OFFSET, queue.length)
       setQueue(prev => {
@@ -1127,7 +1133,7 @@ function FolderSessionInner() {
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
           onInfo={() => setInfoOpen(true)}
-          hintable={hintable} onHint={handleHint}
+          hintable={hintable} onHint={handleHint} onNearMiss={handleNearMiss}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       )}

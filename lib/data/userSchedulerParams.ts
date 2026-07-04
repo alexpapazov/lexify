@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/client'
 import type { SchedulerParams } from '@/domain'
+import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 
 export interface SchedulerParamsRow extends SchedulerParams {
   userId: string
@@ -67,6 +68,16 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     gradInterval2errMax: row.grad_interval_2err_max as number,
     gradInterval3errMin: row.grad_interval_3err_min as number,
     gradInterval3errMax: row.grad_interval_3err_max as number,
+    gradInterval4errMin: (row.grad_interval_4err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval4errMin,
+    gradInterval4errMax: (row.grad_interval_4err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval4errMax,
+    gradInterval5errMin: (row.grad_interval_5err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval5errMin,
+    gradInterval5errMax: (row.grad_interval_5err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval5errMax,
+    gradInterval6errMin: (row.grad_interval_6err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval6errMin,
+    gradInterval6errMax: (row.grad_interval_6err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval6errMax,
+    gradInterval7errMin: (row.grad_interval_7err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval7errMin,
+    gradInterval7errMax: (row.grad_interval_7err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval7errMax,
+    gradInterval8errMin: (row.grad_interval_8err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval8errMin,
+    gradInterval8errMax: (row.grad_interval_8err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval8errMax,
     calibratedAt:        row.calibrated_at as string | null,
     totalDueReviews:     row.total_due_reviews as number,
     recentRetentionRate: row.recent_retention_rate as number | null,

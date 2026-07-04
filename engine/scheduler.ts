@@ -146,11 +146,15 @@ export function graduationIntervalRange(
   typingErrors: number,
   params: SchedulerParams = DEFAULT_SCHEDULER_PARAMS,
 ): [number, number] {
-  if (typingErrors === 0) return [params.gradInterval0errMin, params.gradInterval0errMax]
+  if (typingErrors <= 0) return [params.gradInterval0errMin, params.gradInterval0errMax]
   if (typingErrors === 1) return [params.gradInterval1errMin, params.gradInterval1errMax]
   if (typingErrors === 2) return [params.gradInterval2errMin, params.gradInterval2errMax]
   if (typingErrors === 3) return [params.gradInterval3errMin, params.gradInterval3errMax]
-  return [1, 1]
+  if (typingErrors === 4) return [params.gradInterval4errMin, params.gradInterval4errMax]
+  if (typingErrors === 5) return [params.gradInterval5errMin, params.gradInterval5errMax]
+  if (typingErrors === 6) return [params.gradInterval6errMin, params.gradInterval6errMax]
+  if (typingErrors === 7) return [params.gradInterval7errMin, params.gradInterval7errMax]
+  return [params.gradInterval8errMin, params.gradInterval8errMax] // 8 or more
 }
 
 /** How quickly multipliers decay toward their floor as intervals grow. */

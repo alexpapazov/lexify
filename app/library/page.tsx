@@ -915,9 +915,24 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           const CONST_KEYS: { key: keyof typeof DEFAULT_SCHEDULER_PARAMS; label: string }[] = [
             { key: 'goodIdeal', label: 'Good ×' },
             { key: 'easyIdeal', label: 'Easy ×' },
-            { key: 'gradInterval0errMin', label: 'Grad interval min (0 err)' },
-            { key: 'gradInterval0errMax', label: 'Grad interval max (0 err)' },
           ]
+
+          // Graduation intervals are a single per-pair value (calibrated on the
+          // forward_typed row), bucketed by exact pipeline-error count. 8 = "8+".
+          const GRAD_BUCKETS = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(n => {
+            const minKey = `gradInterval${n}errMin` as keyof typeof DEFAULT_SCHEDULER_PARAMS
+            const maxKey = `gradInterval${n}errMax` as keyof typeof DEFAULT_SCHEDULER_PARAMS
+            const min = (ftRow?.[minKey] as number | undefined) ?? (DEFAULT_SCHEDULER_PARAMS[minKey] as number)
+            const max = (ftRow?.[maxKey] as number | undefined) ?? (DEFAULT_SCHEDULER_PARAMS[maxKey] as number)
+            const defMin = DEFAULT_SCHEDULER_PARAMS[minKey] as number
+            const defMax = DEFAULT_SCHEDULER_PARAMS[maxKey] as number
+            return {
+              label: n === 8 ? '8+ err' : `${n} err`,
+              value: min === max ? `${min}` : `${min}–${max}`,
+              def:   defMin === defMax ? `${defMin}` : `${defMin}–${defMax}`,
+              changed: min !== defMin || max !== defMax,
+            }
+          })
 
           return (
             <div
@@ -1021,6 +1036,31 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                                       )
                                     })}
                                     <td className="text-right py-1 pl-1 text-ink-faint">{(DEFAULT_SCHEDULER_PARAMS[key] as number).toFixed(2)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Graduation intervals by pipeline-error count (days). */}
+                        <div className="flex flex-col gap-1">
+                          <p className="text-xs text-ink-faint">Graduation interval (days) by how many errors a card made in the pipeline:</p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs border-collapse">
+                              <thead>
+                                <tr className="text-ink-muted">
+                                  <th className="text-left py-1 pr-2 font-medium">Errors</th>
+                                  <th className="text-right py-1 px-1 font-medium">Interval</th>
+                                  <th className="text-right py-1 pl-1 font-medium text-ink-faint">Default</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {GRAD_BUCKETS.map(b => (
+                                  <tr key={b.label} className="border-t border-surface-border/50">
+                                    <td className="py-1 pr-2 text-ink-muted">{b.label}</td>
+                                    <td className={`text-right py-1 px-1 ${b.changed ? 'text-accent font-medium' : 'text-ink'}`}>{b.value}</td>
+                                    <td className="text-right py-1 pl-1 text-ink-faint">{b.def}</td>
                                   </tr>
                                 ))}
                               </tbody>

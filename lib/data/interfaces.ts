@@ -93,6 +93,8 @@ export interface CreateReviewEventInput {
   reviewDirection?:    'forward' | 'reverse' | null
   reps?:               number | null
   hintLevel?:          number
+  nearMiss?:           boolean
+  graduationErrorCount?: number
 }
 
 export interface ReviewEventRepository {

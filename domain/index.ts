@@ -111,11 +111,16 @@ export interface SchedulerParams {
   typedProb85to94: number; typedProb95plus: number
   // Shared scheduling constants
   decayConstantDays: number; againReduction: number; maxIntervalDays: number
-  // Graduation intervals by struggle count
+  // Graduation intervals by exact pipeline-error count (8err = 8 or more)
   gradInterval0errMin: number; gradInterval0errMax: number
   gradInterval1errMin: number; gradInterval1errMax: number
   gradInterval2errMin: number; gradInterval2errMax: number
   gradInterval3errMin: number; gradInterval3errMax: number
+  gradInterval4errMin: number; gradInterval4errMax: number
+  gradInterval5errMin: number; gradInterval5errMax: number
+  gradInterval6errMin: number; gradInterval6errMax: number
+  gradInterval7errMin: number; gradInterval7errMax: number
+  gradInterval8errMin: number; gradInterval8errMax: number
 }
 
 export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
@@ -132,6 +137,11 @@ export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
   gradInterval1errMin: 3, gradInterval1errMax: 4,
   gradInterval2errMin: 2, gradInterval2errMax: 3,
   gradInterval3errMin: 1, gradInterval3errMax: 2,
+  gradInterval4errMin: 1, gradInterval4errMax: 2,
+  gradInterval5errMin: 1, gradInterval5errMax: 1,
+  gradInterval6errMin: 1, gradInterval6errMax: 1,
+  gradInterval7errMin: 1, gradInterval7errMax: 1,
+  gradInterval8errMin: 1, gradInterval8errMax: 1,
 }
 
 /** Defaults when converting an existing deck to flexible mode. */
@@ -503,6 +513,19 @@ export interface CardState {
   stage3EnteredDate: string | null
   /** Total number of times the learner pressed "I don't know" on this card (across all sessions). */
   iDontKnowCount: number
+  /**
+   * Cumulative pipeline struggle count (typing mistakes + "?" + Repeat) while
+   * the card is still learning — accumulates across sessions. Reset to 0 when
+   * the card graduates (snapshotted into graduationErrorCount) or re-enters the
+   * pipeline.
+   */
+  pipelineErrorCount:    number
+  /**
+   * The pipelineErrorCount at the moment the card most recently graduated.
+   * Determines which grad-interval bucket (0–7, 8+) its first post-graduation
+   * reviews calibrate. 0 for cards that graduated cleanly or pre-date this field.
+   */
+  graduationErrorCount:  number
   // ── Per-card error tracking (for adaptive strictness) ─────────────────────
   accentMistakeCount:   number
   articleMistakeCount:  number
@@ -589,6 +612,10 @@ export interface ReviewEvent {
   lapsed:              boolean
   /** How much of a "Hint" was used on this Due Now review: 0 = none, 1 = first letter / syllable core, 2 = two letters / full first syllable. */
   hintLevel:           number
+  /** True when the typed answer was an "almost" (accent/typo/article slip); the calibrator weights these as only 0.2 of an error. */
+  nearMiss:            boolean
+  /** The card's graduationErrorCount at review time — buckets first-post-graduation reviews for grad-interval calibration. */
+  graduationErrorCount: number
 }
 
 // ─── Deck preferences ─────────────────────────────────────────────────────────
