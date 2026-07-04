@@ -1097,9 +1097,6 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     })()
                     const gradIntervalDays = state.graduated && state.intervalHistory.length > 0
                       ? state.intervalHistory[0]! : null
-                    const gradStruggleLabel = gradIntervalDays != null
-                      ? gradIntervalDays >= 5 ? '0' : gradIntervalDays >= 3 ? '1' : gradIntervalDays >= 2 ? '2' : '3+'
-                      : null
                     const isDualTrack = state.graduated && state.typedDueAt != null
                     const hasRecallTrack = state.graduated && (state.recallDueAt != null || state.recallIntervalDays != null)
                     const prodInterval = state.typedIntervalDays ?? state.intervalDays
@@ -1128,7 +1125,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         ['Graduated at',        formatDate(state.graduatedAt, '—')],
                         ...(gradIntervalDays != null ? [
                           ['Graduation interval', formatIntervalDays(gradIntervalDays)] as [string, string],
-                          ['Pipeline struggles',  gradStruggleLabel!] as [string, string],
+                          ['Difficulty score',    String(state.graduationErrorCount ?? 0)] as [string, string],
                         ] : []),
                       ]} />
                     </>)
