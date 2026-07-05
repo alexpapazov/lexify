@@ -215,8 +215,11 @@ export default function StudyPage() {
       // Track-aware due checks — a disabled track never counts as due.
       const typedDueOn  = (s: CardState) => trackEnabled(en, 'typed', false)  && (s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt))
       const recallDueOn = (s: CardState) => trackEnabled(en, 'recall', false) && isDueByDate(s.recallDueAt)
+      // Reverse rows are scheduled by recall_due_at; their due_at is often stale in the
+      // past. Prefer recall_due_at (fall back to due_at only when recall is null) so a
+      // reverse card whose real schedule is in the future isn't counted as due.
       const reverseDueOn = (s: CardState) => trackEnabled(en, 'recall', true) &&
-        stateMap.get(s.cardId)?.graduated === true && (isDueByDate(s.recallDueAt) || isDueByDate(s.dueAt))
+        stateMap.get(s.cardId)?.graduated === true && isDueByDate(s.recallDueAt ?? s.dueAt)
       return {
         deck, cards, states,
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,

@@ -341,7 +341,7 @@ function FolderSessionInner() {
         const reverseEnabled = trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)
         for (const reverseState of reverseStatesList) {
           if (!reverseEnabled) break
-          if (!isDueByDate(reverseState.recallDueAt) && !isDueByDate(reverseState.dueAt)) continue
+          if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) {
             const common = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
