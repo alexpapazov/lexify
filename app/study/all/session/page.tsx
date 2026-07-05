@@ -32,7 +32,7 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
-import { computeActiveLearningSet, dedupeDueReviews } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -217,6 +217,14 @@ function AllDueSessionInner() {
         } catch { /* fall back to defaults */ }
       }
 
+      // Per-pair enabled review tracks — a disabled track's due cards are ghosted
+      // (filtered from Due Now) but their scheduling is preserved.
+      const enabledTracksMap = buildEnabledTracksMap(
+        await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
+      )
+      const tracksFor = (src: string, tgt: string): EnabledTracks | undefined =>
+        enabledTracksMap.get(`${src}|${tgt}`)
+
       // ?category= elective study: build queue from only that category across
       // all decks (or, when source/target are given, just that language pair).
       // Sessions scoped to a language pair are not capped.
@@ -242,16 +250,18 @@ function AllDueSessionInner() {
             } else if (category === 'graduated' && state?.graduated) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated && dirParam !== 'reverse') {
+              const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
               const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
               const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
               const isRecallDue = isDueByDate(state.recallDueAt)
-              if (isTypedDue)  categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
-              if (isRecallDue) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
-              if (isLegacyDue) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+              if (isTypedDue  && trackEnabled(en, 'typed',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+              if (isRecallDue && trackEnabled(en, 'recall', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
+              if (isLegacyDue && trackEnabled(en, 'legacy', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
           }
           if (category === 'due' && dirParam !== 'forward') {
             for (const reverseState of reverseStatesList) {
+              if (!trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)) continue
               if (!isDueByDate(reverseState.recallDueAt) && !isDueByDate(reverseState.dueAt)) continue
               const revCard = cards.find(c => c.id === reverseState.cardId)
               if (revCard) categoryCards.push({ ...deckCommon, card: revCard, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
@@ -335,18 +345,21 @@ function AllDueSessionInner() {
             if (limitedLearningSet && !limitedLearningSet.has(card.id)) continue
             allCards.push({ ...common, state, productionMode: null })
           } else if (state.graduated) {
+            const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
             const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
             const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
             const isRecallDue = isDueByDate(state.recallDueAt)
-            if (isTypedDue)  allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
-            if (isRecallDue) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
-            if (isLegacyDue) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
+            if (isTypedDue  && trackEnabled(en, 'typed',  false)) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
+            if (isRecallDue && trackEnabled(en, 'recall', false)) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
+            if (isLegacyDue && trackEnabled(en, 'legacy', false)) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
           }
         }
 
-        // Add due reverse-direction rows for this deck
+        // Add due reverse-direction rows for this deck (unless the reverse track is disabled)
         const deckCommon = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
+        const reverseEnabled = trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)
         for (const reverseState of reverseStatesList) {
+          if (!reverseEnabled) break
           if (!isDueByDate(reverseState.recallDueAt) && !isDueByDate(reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) allCards.push({ ...deckCommon, card, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })

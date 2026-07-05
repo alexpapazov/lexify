@@ -13,7 +13,9 @@
 import type {
   GradingSettings, GradingResult, GradingIssueType, GradingStatus,
   MultiFieldGradingResult, SynonymAnswerField,
+  TypedStrictness, TypedPenalty, TypedErrorCategory,
 } from '@/domain'
+import { TYPED_PENALTY_WEIGHTS } from '@/domain'
 
 // ─── String utilities ──────────────────────────────────────────────────────────
 
@@ -352,7 +354,7 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
     const isAlmostTypo = minDist > 0 && (() => {
       switch (script) {
         case 'latin':
-        case 'hangul':    return minDist === 1 || ratio <= 0.25
+        case 'hangul':    return minDist === 1 || ratio < 0.25
         case 'cyrillic':  return minDist === 1 || ratio <= 0.20
         case 'cjk':       return minDist === 1 && maxLen >= 3
         default:          return minDist === 1
@@ -421,6 +423,62 @@ export function gradeTyping(
   if (mode === 'strict')   return gradeStrict(userAnswer, eff, settings)
   if (mode === 'smart_ai') return gradeSmartAI(userAnswer, eff, settings)
   return gradeFlexible(userAnswer, eff, settings)
+}
+
+// ─── Per-category strictness → penalty ─────────────────────────────────────────
+
+/**
+ * Maps the loggable slip categories to the GradingResult.issueType values.
+ * 'typo' → spelling; 'accent'/'article' pass through.
+ */
+function issueTypeToCategory(issueType: GradingIssueType): TypedErrorCategory | null {
+  if (issueType === 'accent')  return 'accent'
+  if (issueType === 'article') return 'article'
+  if (issueType === 'typo')    return 'spelling'
+  return null
+}
+
+/**
+ * Applies per-pair strictness to a graded typed answer to decide the scheduling
+ * penalty, the loggable category, and whether a retype is required.
+ *
+ * Contract: grade the answer in flexible mode with ignoreAccents / ignoreDefiniteArticles
+ * / ignoreMinorTypos all FALSE, so every slip surfaces as an 'almost' with an issueType.
+ * This function then decides the *consequence* based on the learner's per-pair toggles:
+ *   - exact correct          → weight 0, no retype
+ *   - accent/article slip     → strict: 0.2 penalty, lenient: 0 (green); always retype + log
+ *   - spelling (typo) slip    → strict: 0.3 penalty, lenient: 0 (green); always retype + log
+ *   - other 'almost' (parenthetical) → mild 0.2, retype, no log
+ *   - incorrect / wrong word  → weight 1 (full "again"), retype, overridable
+ */
+export function resolveTypedPenalty(
+  result:     GradingResult,
+  strictness: TypedStrictness,
+): TypedPenalty {
+  if (result.status === 'correct') {
+    return { weight: 0, category: null, accepted: true, requiresRetype: false }
+  }
+
+  if (result.status === 'almost') {
+    const category = issueTypeToCategory(result.issueType)
+    if (category === 'accent') {
+      const w = strictness.accents ? TYPED_PENALTY_WEIGHTS.accent : 0
+      return { weight: w, category, accepted: true, requiresRetype: true }
+    }
+    if (category === 'article') {
+      const w = strictness.articles ? TYPED_PENALTY_WEIGHTS.article : 0
+      return { weight: w, category, accepted: true, requiresRetype: true }
+    }
+    if (category === 'spelling') {
+      const w = strictness.spelling ? TYPED_PENALTY_WEIGHTS.spelling : 0
+      return { weight: w, category, accepted: true, requiresRetype: true }
+    }
+    // Non-toggleable 'almost' (e.g. missing parenthetical): mild penalty, not logged.
+    return { weight: TYPED_PENALTY_WEIGHTS.other, category: null, accepted: true, requiresRetype: true }
+  }
+
+  // status === 'incorrect' | 'missing' → full wrong.
+  return { weight: 1, category: issueTypeToCategory(result.issueType), accepted: false, requiresRetype: true }
 }
 
 // ─── Multi-field synonym grading ───────────────────────────────────────────────

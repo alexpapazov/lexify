@@ -560,6 +560,46 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     ))
   }
 
+  // Resets the multiplier calibration (Good/Easy/Hard min-ideal-max + floors) for a
+  // single review track back to defaults. Used to un-pollute the reverse-recall track
+  // whose calibration was corrupted by the old reverse-recall miscategorization bug.
+  async function handleResetTrackCalibration(answerField: string) {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    const D = DEFAULT_SCHEDULER_PARAMS
+    const updates: Record<string, number> = {
+      good_min: D.goodMin, good_ideal: D.goodIdeal, good_max: D.goodMax, good_floor: D.goodFloor,
+      hard_min: D.hardMin, hard_ideal: D.hardIdeal, hard_max: D.hardMax, hard_floor: D.hardFloor,
+      easy_min: D.easyMin, easy_ideal: D.easyIdeal, easy_max: D.easyMax, easy_floor: D.easyFloor,
+    }
+    const patch = {
+      goodMin: D.goodMin, goodIdeal: D.goodIdeal, goodMax: D.goodMax, goodFloor: D.goodFloor,
+      hardMin: D.hardMin, hardIdeal: D.hardIdeal, hardMax: D.hardMax, hardFloor: D.hardFloor,
+      easyMin: D.easyMin, easyIdeal: D.easyIdeal, easyMax: D.easyMax, easyFloor: D.easyFloor,
+    }
+    await repo.update(userId, src, tgt, answerField, updates)
+    setSrsParams(prev => prev.map(p =>
+      p.answerField === answerField ? { ...p, ...patch } : p
+    ))
+  }
+
+  // Per-pair typed-answer strictness — stored canonically on the forward_typed row.
+  async function handleSrsStrictness(
+    field: 'strict_spelling' | 'strict_accents' | 'strict_articles',
+    value: boolean,
+  ) {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    await repo.update(userId, src, tgt, 'forward_typed', { [field]: value })
+    const key = field === 'strict_spelling' ? 'strictSpelling'
+      : field === 'strict_accents' ? 'strictAccents' : 'strictArticles'
+    setSrsParams(prev => prev.map(p =>
+      p.answerField === 'forward_typed' ? { ...p, [key]: value } : p
+    ))
+  }
+
   async function handleLoadSrsHistory() {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
@@ -1001,17 +1041,38 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                         {/* Review track toggles */}
                         <div className="flex flex-col gap-1.5">
                           <p className="text-xs text-ink-faint mb-0.5">Enable review tracks for this language pair:</p>
-                          {BUCKETS.map(b => (
-                            <label key={b.field} className="flex items-center gap-2 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={b.row?.[b.toggleKey] ?? true}
-                                onChange={e => handleSrsToggle(b.field, b.dbToggle, e.target.checked).catch(() => {})}
-                                className="accent-accent"
-                              />
-                              <span className="text-sm text-ink">{b.label}</span>
-                            </label>
-                          ))}
+                          {BUCKETS.map(b => {
+                            const off = b.row && (
+                              b.row.goodIdeal !== DEFAULT_SCHEDULER_PARAMS.goodIdeal ||
+                              b.row.easyIdeal !== DEFAULT_SCHEDULER_PARAMS.easyIdeal ||
+                              b.row.hardIdeal !== DEFAULT_SCHEDULER_PARAMS.hardIdeal)
+                            return (
+                              <div key={b.field} className="flex items-center gap-2">
+                                <label className="flex items-center gap-2 cursor-pointer flex-1">
+                                  <input
+                                    type="checkbox"
+                                    checked={b.row?.[b.toggleKey] ?? true}
+                                    onChange={e => handleSrsToggle(b.field, b.dbToggle, e.target.checked).catch(() => {})}
+                                    className="accent-accent"
+                                  />
+                                  <span className="text-sm text-ink">{b.label}</span>
+                                </label>
+                                {off && (
+                                  <button
+                                    className="text-xs text-danger hover:underline whitespace-nowrap"
+                                    title={`Reset ${b.label} multipliers (Good/Easy/Hard) to defaults`}
+                                    onClick={() => {
+                                      if (confirm(`Reset the ${b.label} multiplier calibration back to defaults? Use this to un-pollute a track whose calibration was corrupted (e.g. reverse recall from the old miscategorization bug).`)) {
+                                        handleResetTrackCalibration(b.field).catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
+                                      }
+                                    }}
+                                  >
+                                    Reset calibration
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          })}
                         </div>
 
                         {/* Max interval */}
@@ -1029,6 +1090,30 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                               <option value={maxDays}>{maxDays} days (custom)</option>
                             )}
                           </select>
+                        </div>
+
+                        {/* Typed-answer strictness */}
+                        <div className="flex flex-col gap-1.5">
+                          <p className="text-xs text-ink-faint mb-0.5">Typed-answer strictness (Strict = counts as a penalty; Lenient = no scheduling penalty, but you still retype):</p>
+                          {([
+                            { field: 'strict_spelling' as const, key: 'strictSpelling' as const, label: 'Spelling', pct: '30%' },
+                            { field: 'strict_accents' as const,  key: 'strictAccents' as const,  label: 'Accents',  pct: '20%' },
+                            { field: 'strict_articles' as const, key: 'strictArticles' as const, label: 'Articles', pct: '20%' },
+                          ]).map(t => {
+                            const strict = ftRow?.[t.key] ?? true
+                            return (
+                              <label key={t.field} className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={strict}
+                                  onChange={e => handleSrsStrictness(t.field, e.target.checked).catch(() => {})}
+                                  className="accent-accent"
+                                />
+                                <span className="text-sm text-ink">{t.label}</span>
+                                <span className="text-xs text-ink-faint">{strict ? `strict (${t.pct} penalty)` : 'lenient (no penalty)'}</span>
+                              </label>
+                            )
+                          })}
                         </div>
 
                         {/* Constants table */}

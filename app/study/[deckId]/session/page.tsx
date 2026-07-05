@@ -29,7 +29,7 @@ import { SynonymTypingMode } from '@/components/session/SynonymTypingMode'
 import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
-import { computeActiveLearningSet, dedupeDueReviews } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, unmarkSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
@@ -387,6 +387,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       setTargetLanguage(deck.targetLanguage)
       setAllCards(cards)
 
+      let enabledTracks: EnabledTracks | undefined
       try {
         const paramsRow = await new SupabaseUserSchedulerParamsRepository().getOrCreate(
           session.user.id, deck.sourceLanguage, deck.targetLanguage, 'forward_typed',
@@ -394,6 +395,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         setSchedulerParams(paramsRow)
         setForwardTypedEnabled(paramsRow.forwardTypedEnabled ?? true)
         setForwardRecallEnabled(paramsRow.forwardRecallEnabled ?? true)
+        // Per-pair enabled review tracks (each flag lives on its own answer_field row).
+        const allRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
+        enabledTracks = buildEnabledTracksMap(allRows).get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
       } catch { /* fall back to defaults */ }
 
       const today = getToday(tz, turnoverHour)
@@ -463,9 +467,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
                 const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
                 const isRecallDue = isDueByDate(state.recallDueAt)
                 const items: (typeof categoryQueue)[number][] = []
-                if (isTypedDue)  items.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
-                if (isRecallDue) items.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
-                if (isLegacyDue) items.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
+                if (isTypedDue  && trackEnabled(enabledTracks, 'typed',  false)) items.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
+                if (isRecallDue && trackEnabled(enabledTracks, 'recall', false)) items.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
+                if (isLegacyDue && trackEnabled(enabledTracks, 'legacy', false)) items.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
                 return items
               })
             )
@@ -548,13 +552,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
           const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
           const isRecallDue = isDueByDate(state.recallDueAt)
-          if (isTypedDue) {
+          if (isTypedDue && trackEnabled(enabledTracks, 'typed', false)) {
             dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
           }
-          if (isRecallDue) {
+          if (isRecallDue && trackEnabled(enabledTracks, 'recall', false)) {
             dueCards.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
           }
-          if (isLegacyDue) {
+          if (isLegacyDue && trackEnabled(enabledTracks, 'legacy', false)) {
             dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
           }
           if (!isTypedDue && !isRecallDue && !isLegacyDue) {
@@ -563,8 +567,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         }
       }
 
-      // Add due reverse-direction rows
+      // Add due reverse-direction rows (unless the reverse track is disabled for this pair)
+      const reverseEnabled = trackEnabled(enabledTracks, 'recall', true)
       for (const reverseState of reverseStatesList) {
+        if (!reverseEnabled) break
         if (!reverseState.recallDueAt || new Date(reverseState.recallDueAt) > now) continue
         const card = cards.find(c => c.id === reverseState.cardId)
         if (card) dueCards.push({ card, state: reverseState, pipeline, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })

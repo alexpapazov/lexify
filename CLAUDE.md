@@ -22,6 +22,11 @@ Current feature files:
 - `features/Language Syncing.md` — auto-generating cards in a second language
   pair: sync rules, triggers, modes, translation API, duplicate detection,
   folder/deck infrastructure, manual review flow, settings UI
+- `features/Typed Grading.md` — per-category typed-answer strictness
+  (spelling/accents/articles: strict=penalty vs lenient=no penalty, always
+  retype), weighted near-miss (0.2/0.3), `typing_error_marks` capture for
+  future practice modes. **Backend + settings landed; session/TypingMode
+  wiring pending. Needs migration 066.**
 
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
@@ -624,6 +629,28 @@ to each `TypingMode` usage (2 per page — pre-graduation and graduated/graded-r
   - Reset all progress: calls existing `deckRepo.resetProgress()` (SQL RPC, clears both `card_states` and `choices`), then triggers background `prefetchChoices()`.
 - All three reset operations share `resetting`/`resetError` state (only one runs at a time).
 - **Fix**: reset menu now uses `top-full mt-1 right-0` (drops below the header row) instead of `top-0 right-6` (which overlapped the ↺ button and prevented clicking it again to close).
+
+## Disabled review tracks ghost their Due Now cards (2026-07-05)
+
+When a language pair disables a review track (the "Enable review tracks"
+checkboxes in the pair settings — Typed production / Recall self-grade /
+Reverse recall), that track's due cards are now **filtered out of Due Now**
+(ghosted) but their scheduling data is untouched, so re-enabling the track
+brings them straight back.
+
+- The three flags live on their own answer_field rows (`forward_typed_enabled`
+  on the forward_typed row, `forward_recall_enabled` on forward_recall,
+  `reverse_recall_enabled` on reverse_recall) — so reading them needs all three
+  rows, not just forward_typed.
+- `lib/sessionLimits.ts`: `buildEnabledTracksMap(rows)` →
+  `Map<'${src}|${tgt}', EnabledTracks>` (built from
+  `SupabaseUserSchedulerParamsRepository.listForUser()`), and
+  `trackEnabled(tracks, reviewTrack, isReverse)` (legacy reviews count as typed).
+- All 3 session pages gate every graduated due-push (`reviewTrack` 'typed' /
+  'recall' / 'legacy', and the reverse-direction rows) on `trackEnabled(...)`,
+  keyed by each card's deck pair (correct for multi-pair all/folder sessions).
+- Note: the study-dashboard due **counts** are not yet track-filtered, so a
+  ghosted card can still be counted there (session queue is correct).
 
 ## Known backlog / open issues
 

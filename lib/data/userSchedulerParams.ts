@@ -84,6 +84,9 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     forwardTypedEnabled:  (row.forward_typed_enabled as boolean) ?? true,
     forwardRecallEnabled: (row.forward_recall_enabled as boolean) ?? true,
     reverseRecallEnabled: (row.reverse_recall_enabled as boolean) ?? true,
+    strictSpelling: (row.strict_spelling as boolean | null) ?? DEFAULT_SCHEDULER_PARAMS.strictSpelling,
+    strictAccents:  (row.strict_accents as boolean | null)  ?? DEFAULT_SCHEDULER_PARAMS.strictAccents,
+    strictArticles: (row.strict_articles as boolean | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
   }
 }
 

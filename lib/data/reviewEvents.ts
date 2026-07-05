@@ -26,6 +26,8 @@ function rowToEvent(row: Record<string, unknown>): ReviewEvent {
     lapsed:            (row.lapsed as boolean | null) ?? false,
     hintLevel:         Number(row.hint_level ?? 0),
     nearMiss:          (row.near_miss as boolean | null) ?? false,
+    nearMissWeight:    Number(row.near_miss_weight ?? (row.near_miss ? 0.2 : 0)),
+    errorCategory:     (row.error_category as ReviewEvent['errorCategory']) ?? null,
     graduationErrorCount: Number(row.graduation_error_count ?? 0),
   }
 }
@@ -47,6 +49,8 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
       reps:                input.reps ?? 0,
       hint_level:          input.hintLevel ?? 0,
       near_miss:           input.nearMiss ?? false,
+      near_miss_weight:    input.nearMissWeight ?? (input.nearMiss ? 0.2 : 0),
+      error_category:      input.errorCategory ?? null,
       graduation_error_count: input.graduationErrorCount ?? 0,
     }).select().single()
     if (error) throw new Error(error.message)

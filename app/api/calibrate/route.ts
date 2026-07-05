@@ -90,6 +90,9 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     forwardTypedEnabled:  Boolean(row.forward_typed_enabled ?? true),
     forwardRecallEnabled: Boolean(row.forward_recall_enabled ?? true),
     reverseRecallEnabled: Boolean(row.reverse_recall_enabled ?? true),
+    strictSpelling: (row.strict_spelling as boolean | null) ?? DEFAULT_SCHEDULER_PARAMS.strictSpelling,
+    strictAccents:  (row.strict_accents as boolean | null)  ?? DEFAULT_SCHEDULER_PARAMS.strictAccents,
+    strictArticles: (row.strict_articles as boolean | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
   }
 }
 
@@ -157,7 +160,7 @@ async function calibrateBucket(
 
   const { data: events, error } = await db
     .from('review_events')
-    .select('was_correct, near_miss')
+    .select('was_correct, near_miss, near_miss_weight')
     .eq('user_id', userId)
     .eq('review_mode', 'due')
     .eq('review_direction', reviewDir)
@@ -184,10 +187,12 @@ async function calibrateBucket(
     return
   }
 
-  // Near-miss weighting: a clean correct = 1.0, an "almost" (accent/typo/article
-  // slip) = 0.8, a full miss = 0. So a near-miss counts as only 0.2 of an error.
-  const successWeight = (e: { was_correct: boolean; near_miss: boolean }) =>
-    e.was_correct ? 1 : e.near_miss ? 0.8 : 0
+  // Near-miss weighting: a clean correct = 1.0; an "almost" counts as (1 − weight),
+  // where weight is 0.2 (accent/article) or 0.3 (spelling); a full miss = 0.
+  const nmWeight = (e: { near_miss: boolean; near_miss_weight?: number | null }) =>
+    (e.near_miss_weight ?? (e.near_miss ? 0.2 : 0))
+  const successWeight = (e: { was_correct: boolean; near_miss: boolean; near_miss_weight?: number | null }) =>
+    e.was_correct ? 1 : (nmWeight(e) > 0 ? 1 - nmWeight(e) : 0)
   const retentionRate = events.reduce((sum, e) => sum + successWeight(e), 0) / events.length
 
   let newGoodIdeal = params.goodIdeal
@@ -243,7 +248,7 @@ async function calibrateGradIntervals(userId: string, sourceLang: string, target
   const ninetyDaysAgo = new Date(Date.now() - 90 * 86_400_000).toISOString()
   const { data: firstReviews } = await db
     .from('review_events')
-    .select('was_correct, near_miss, graduation_error_count')
+    .select('was_correct, near_miss, near_miss_weight, graduation_error_count')
     .eq('user_id', userId)
     .eq('reps', 1)
     .eq('review_direction', 'forward')
@@ -253,17 +258,18 @@ async function calibrateGradIntervals(userId: string, sourceLang: string, target
   if (!firstReviews || firstReviews.length === 0) return
 
   // Group into buckets 0–7 and 8 (= 8 or more).
-  const buckets = new Map<number, { was_correct: boolean; near_miss: boolean }[]>()
+  type WeightedEvent = { was_correct: boolean; near_miss_weight: number }
+  const buckets = new Map<number, WeightedEvent[]>()
   for (const e of firstReviews) {
     const raw = Number(e.graduation_error_count ?? 0)
     const bucket = Math.min(8, Math.max(0, raw))
     const arr = buckets.get(bucket) ?? []
-    arr.push({ was_correct: !!e.was_correct, near_miss: !!e.near_miss })
+    arr.push({ was_correct: !!e.was_correct, near_miss_weight: Number(e.near_miss_weight ?? (e.near_miss ? 0.2 : 0)) })
     buckets.set(bucket, arr)
   }
 
-  const failWeight = (e: { was_correct: boolean; near_miss: boolean }) =>
-    e.was_correct ? 0 : e.near_miss ? 0.2 : 1
+  const failWeight = (e: WeightedEvent) =>
+    e.was_correct ? 0 : (e.near_miss_weight > 0 ? e.near_miss_weight : 1)
 
   const updates: Record<string, number> = {}
   let anyChange = false
@@ -305,7 +311,7 @@ async function calibrateAccelBucket(
 
   const { data: events } = await db
     .from('review_events')
-    .select('was_correct, near_miss, accelerated_penalty')
+    .select('was_correct, near_miss, near_miss_weight, accelerated_penalty')
     .eq('user_id', userId)
     .eq('review_mode', 'due')
     .eq('was_accelerated', true)
@@ -318,7 +324,8 @@ async function calibrateAccelBucket(
   let weightedTotal   = 0
   for (const e of events) {
     const weight  = Math.max(0, 1 - (e.accelerated_penalty ?? 0) / 5)
-    const success = e.was_correct ? 1 : e.near_miss ? 0.8 : 0  // near-miss = 0.2 error
+    const nmw     = Number(e.near_miss_weight ?? (e.near_miss ? 0.2 : 0))
+    const success = e.was_correct ? 1 : (nmw > 0 ? 1 - nmw : 0)
     weightedTotal   += weight
     weightedCorrect += weight * success
   }

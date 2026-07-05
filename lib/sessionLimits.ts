@@ -98,3 +98,57 @@ export function computeActiveLearningSet(
   }
   return set
 }
+
+// ─── Enabled review tracks (Due Now filtering) ─────────────────────────────────
+//
+// A language pair can disable any of its three review tracks (Typed production,
+// Recall self-grade, Reverse recall) in the pair settings. A disabled track's
+// due cards are "ghosted" — filtered out of Due Now — but their scheduling data
+// is untouched, so re-enabling the track brings them straight back.
+
+export interface EnabledTracks { typed: boolean; recall: boolean; reverse: boolean }
+
+const DEFAULT_ENABLED_TRACKS: EnabledTracks = { typed: true, recall: true, reverse: true }
+
+interface TrackFlagRow {
+  sourceLanguage:       string
+  targetLanguage:       string
+  answerField:          string
+  forwardTypedEnabled:  boolean
+  forwardRecallEnabled: boolean
+  reverseRecallEnabled: boolean
+}
+
+/**
+ * Builds a `${source}|${target}` → EnabledTracks map from all of a user's
+ * scheduler-param rows. Each track's flag lives on its own answer_field row
+ * (typed on forward_typed, recall on forward_recall, reverse on reverse_recall).
+ */
+export function buildEnabledTracksMap(rows: TrackFlagRow[]): Map<string, EnabledTracks> {
+  const map = new Map<string, EnabledTracks>()
+  for (const r of rows) {
+    const key = `${r.sourceLanguage}|${r.targetLanguage}`
+    const cur = map.get(key) ?? { ...DEFAULT_ENABLED_TRACKS }
+    if (r.answerField === 'forward_typed')  cur.typed   = r.forwardTypedEnabled  ?? true
+    if (r.answerField === 'forward_recall') cur.recall  = r.forwardRecallEnabled ?? true
+    if (r.answerField === 'reverse_recall') cur.reverse = r.reverseRecallEnabled ?? true
+    map.set(key, cur)
+  }
+  return map
+}
+
+/**
+ * Whether a specific due review should surface, given the pair's enabled tracks.
+ * Legacy (pre-dual-track) reviews count as typed production.
+ */
+export function trackEnabled(
+  tracks:      EnabledTracks | undefined,
+  reviewTrack: 'typed' | 'recall' | 'legacy' | undefined,
+  isReverse:   boolean,
+): boolean {
+  const t = tracks ?? DEFAULT_ENABLED_TRACKS
+  if (isReverse) return t.reverse
+  if (reviewTrack === 'recall') return t.recall
+  // 'typed', 'legacy', or undefined → typed production track
+  return t.typed
+}

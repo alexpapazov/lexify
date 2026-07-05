@@ -94,6 +94,8 @@ export interface CreateReviewEventInput {
   reps?:               number | null
   hintLevel?:          number
   nearMiss?:           boolean
+  nearMissWeight?:     number
+  errorCategory?:      ReviewEvent['errorCategory']
   graduationErrorCount?: number
 }
 

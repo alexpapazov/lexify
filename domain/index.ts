@@ -82,6 +82,53 @@ export interface GradingSettings {
   isNativeAnswer?:             boolean
 }
 
+// ─── Per-category typed-answer strictness ───────────────────────────────────────
+//
+// Independent of the ignore* toggles above. The idea: always DETECT accent/article/
+// spelling slips (so the learner is told and must retype), but let the learner decide
+// per language pair whether each category costs a scheduling penalty ("strict") or not
+// ("lenient", green/no penalty). Slips are always logged by category so future
+// "spelling practice" and "gender/article" modes have data.
+
+/** Which loggable category a soft typed slip belongs to. */
+export type TypedErrorCategory = 'spelling' | 'accent' | 'article'
+
+/** Per-pair strictness — true = strict (apply penalty), false = lenient (no penalty). */
+export interface TypedStrictness {
+  spelling: boolean
+  accents:  boolean
+  articles: boolean
+}
+
+export const DEFAULT_TYPED_STRICTNESS: TypedStrictness = {
+  spelling: true,
+  accents:  true,
+  articles: true,
+}
+
+/** Penalty magnitudes when a category is strict. Lenient categories contribute 0. */
+export const TYPED_PENALTY_WEIGHTS = {
+  spelling: 0.30,
+  accent:   0.20,
+  article:  0.20,
+  /** Non-toggleable near-miss (e.g. missing parenthetical) keeps a mild penalty. */
+  other:    0.20,
+} as const
+
+/**
+ * Outcome of applying per-category strictness to a graded typed answer.
+ *   weight   — 0 = full credit (green), 0.2/0.3 = near-miss penalty, 1 = full wrong.
+ *   category — the loggable slip category (for typing_error_marks); null otherwise.
+ *   accepted — true when it counts as correct for scheduling (weight < 1).
+ *   requiresRetype — true for any non-exact answer; learner must retype correctly.
+ */
+export interface TypedPenalty {
+  weight:         number
+  category:       TypedErrorCategory | null
+  accepted:       boolean
+  requiresRetype: boolean
+}
+
 /** Default for new decks — strict mode, case-insensitive only. */
 export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
   gradingMode:                 'strict',
@@ -121,6 +168,8 @@ export interface SchedulerParams {
   gradInterval6errMin: number; gradInterval6errMax: number
   gradInterval7errMin: number; gradInterval7errMax: number
   gradInterval8errMin: number; gradInterval8errMax: number
+  // Per-pair typed-answer strictness (canonical on the forward_typed row). true = strict.
+  strictSpelling: boolean; strictAccents: boolean; strictArticles: boolean
 }
 
 export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
@@ -142,6 +191,7 @@ export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
   gradInterval6errMin: 1, gradInterval6errMax: 1,
   gradInterval7errMin: 1, gradInterval7errMax: 1,
   gradInterval8errMin: 1, gradInterval8errMax: 1,
+  strictSpelling: true, strictAccents: true, strictArticles: true,
 }
 
 /** Defaults when converting an existing deck to flexible mode. */
@@ -612,8 +662,12 @@ export interface ReviewEvent {
   lapsed:              boolean
   /** How much of a "Hint" was used on this Due Now review: 0 = none, 1 = first letter / syllable core, 2 = two letters / full first syllable. */
   hintLevel:           number
-  /** True when the typed answer was an "almost" (accent/typo/article slip); the calibrator weights these as only 0.2 of an error. */
+  /** True when the typed answer was an "almost" (accent/typo/article slip); the calibrator weights these as a partial error. */
   nearMiss:            boolean
+  /** Magnitude of the near-miss as a fraction of a full error: 0 = full credit, 0.2 (accent/article), 0.3 (spelling), 1 = full wrong. Generalizes nearMiss. */
+  nearMissWeight:      number
+  /** Which loggable slip category this review's typed answer had, if any. */
+  errorCategory:       TypedErrorCategory | null
   /** The card's graduationErrorCount at review time — buckets first-post-graduation reviews for grad-interval calibration. */
   graduationErrorCount: number
 }
