@@ -1041,38 +1041,30 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                         {/* Review track toggles */}
                         <div className="flex flex-col gap-1.5">
                           <p className="text-xs text-ink-faint mb-0.5">Enable review tracks for this language pair:</p>
-                          {BUCKETS.map(b => {
-                            const off = b.row && (
-                              b.row.goodIdeal !== DEFAULT_SCHEDULER_PARAMS.goodIdeal ||
-                              b.row.easyIdeal !== DEFAULT_SCHEDULER_PARAMS.easyIdeal ||
-                              b.row.hardIdeal !== DEFAULT_SCHEDULER_PARAMS.hardIdeal)
-                            return (
-                              <div key={b.field} className="flex items-center gap-2">
-                                <label className="flex items-center gap-2 cursor-pointer flex-1">
-                                  <input
-                                    type="checkbox"
-                                    checked={b.row?.[b.toggleKey] ?? true}
-                                    onChange={e => handleSrsToggle(b.field, b.dbToggle, e.target.checked).catch(() => {})}
-                                    className="accent-accent"
-                                  />
-                                  <span className="text-sm text-ink">{b.label}</span>
-                                </label>
-                                {off && (
-                                  <button
-                                    className="text-xs text-danger hover:underline whitespace-nowrap"
-                                    title={`Reset ${b.label} multipliers (Good/Easy/Hard) to defaults`}
-                                    onClick={() => {
-                                      if (confirm(`Reset the ${b.label} multiplier calibration back to defaults? Use this to un-pollute a track whose calibration was corrupted (e.g. reverse recall from the old miscategorization bug).`)) {
-                                        handleResetTrackCalibration(b.field).catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
-                                      }
-                                    }}
-                                  >
-                                    Reset calibration
-                                  </button>
-                                )}
-                              </div>
-                            )
-                          })}
+                          {BUCKETS.map(b => (
+                            <div key={b.field} className="flex items-center gap-2">
+                              <label className="flex items-center gap-2 cursor-pointer flex-1">
+                                <input
+                                  type="checkbox"
+                                  checked={b.row?.[b.toggleKey] ?? true}
+                                  onChange={e => handleSrsToggle(b.field, b.dbToggle, e.target.checked).catch(() => {})}
+                                  className="accent-accent"
+                                />
+                                <span className="text-sm text-ink">{b.label}</span>
+                              </label>
+                              <button
+                                className="text-xs text-danger hover:underline whitespace-nowrap"
+                                title={`Reset ${b.label} multipliers (Good/Easy/Hard) to defaults`}
+                                onClick={() => {
+                                  if (confirm(`Reset the ${b.label} multiplier calibration back to defaults? Use this to un-pollute a track whose calibration was corrupted (e.g. reverse recall from the old miscategorization bug).`)) {
+                                    handleResetTrackCalibration(b.field).catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
+                                  }
+                                }}
+                              >
+                                Reset calibration
+                              </button>
+                            </div>
+                          ))}
                         </div>
 
                         {/* Max interval */}
