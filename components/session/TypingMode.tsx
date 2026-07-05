@@ -696,13 +696,9 @@ export function TypingMode({
               )}
             </div>
 
-            {retypePenalty && retypePenalty.category && (
+            {retypePenalty && retypePenalty.category && retypePenalty.accepted && (
               <p className={`text-sm text-center ${retypePenalty.weight > 0 ? 'text-warning' : 'text-success'}`}>
-                {retypePenalty.category === 'spelling' ? 'Spelling' : retypePenalty.category === 'accent' ? 'Accent' : 'Article'} slip — {
-                  retypePenalty.weight > 0
-                    ? `retype it (${Math.round(retypePenalty.weight * 100)}% penalty)`
-                    : 'retype it, no penalty'
-                }
+                {retypePenalty.category === 'spelling' ? 'Spelling' : retypePenalty.category === 'accent' ? 'Accent' : 'Article'} error
               </p>
             )}
 
