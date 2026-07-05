@@ -192,24 +192,37 @@ async function calibrateBucket(
 
   let newGoodIdeal = params.goodIdeal
   let newEasyIdeal = params.easyIdeal
+  let newHardIdeal = params.hardIdeal
 
   if (retentionRate < 0.88) {
     newGoodIdeal = Math.max(1.50, params.goodIdeal - adjustmentStep)
     newEasyIdeal = Math.max(2.00, params.easyIdeal - adjustmentStep)
+    newHardIdeal = Math.max(1.05, params.hardIdeal - adjustmentStep)  // never fully flatten
   } else if (retentionRate > 0.92) {
     newGoodIdeal = Math.min(4.00, params.goodIdeal + adjustmentStep)
     newEasyIdeal = Math.min(6.00, params.easyIdeal + adjustmentStep)
+    newHardIdeal = Math.min(1.80, params.hardIdeal + adjustmentStep)
   }
 
-  const changed = newGoodIdeal !== params.goodIdeal || newEasyIdeal !== params.easyIdeal
+  const changed = newGoodIdeal !== params.goodIdeal
+    || newEasyIdeal !== params.easyIdeal
+    || newHardIdeal !== params.hardIdeal
 
   if (changed) {
     await saveHistory({ ...params, totalDueReviews: newTotal })
   }
 
+  // Move the [min,max] band by the same delta as the ideal, so the
+  // density-smoothing range stays centered on the calibrated ideal instead of
+  // drifting outside it (which let the smoother partially undo calibration).
+  const gd = newGoodIdeal - params.goodIdeal
+  const ed = newEasyIdeal - params.easyIdeal
+  const hd = newHardIdeal - params.hardIdeal
+
   await updateParams(userId, sourceLang, targetLang, answerField, {
-    good_ideal:            newGoodIdeal,
-    easy_ideal:            newEasyIdeal,
+    good_min:   params.goodMin + gd, good_ideal: newGoodIdeal, good_max: params.goodMax + gd,
+    easy_min:   params.easyMin + ed, easy_ideal: newEasyIdeal, easy_max: params.easyMax + ed,
+    hard_min:   params.hardMin + hd, hard_ideal: newHardIdeal, hard_max: params.hardMax + hd,
     calibrated_at:         new Date().toISOString(),
     total_due_reviews:     newTotal,
     recent_retention_rate: retentionRate,
@@ -327,9 +340,12 @@ async function calibrateAccelBucket(
 
   if (newAccelGoodIdeal !== params.accelGoodIdeal || newAccelEasyIdeal !== params.accelEasyIdeal) {
     await saveHistory({ ...params })
+    // Shift the [min,max] band with the ideal (same fix as the normal track).
+    const gd = newAccelGoodIdeal - params.accelGoodIdeal
+    const ed = newAccelEasyIdeal - params.accelEasyIdeal
     await updateParams(userId, sourceLang, targetLang, 'forward_typed', {
-      accel_good_ideal: newAccelGoodIdeal,
-      accel_easy_ideal: newAccelEasyIdeal,
+      accel_good_min: params.accelGoodMin + gd, accel_good_ideal: newAccelGoodIdeal, accel_good_max: params.accelGoodMax + gd,
+      accel_easy_min: params.accelEasyMin + ed, accel_easy_ideal: newAccelEasyIdeal, accel_easy_max: params.accelEasyMax + ed,
     })
   }
 }

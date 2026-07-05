@@ -913,6 +913,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           ]
 
           const CONST_KEYS: { key: keyof typeof DEFAULT_SCHEDULER_PARAMS; label: string }[] = [
+            { key: 'hardIdeal', label: 'Hard ×' },
             { key: 'goodIdeal', label: 'Good ×' },
             { key: 'easyIdeal', label: 'Easy ×' },
           ]
