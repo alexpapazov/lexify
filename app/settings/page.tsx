@@ -323,6 +323,7 @@ export default function SettingsPage() {
   const [redistributeMsg,   setRedistributeMsg]   = useState<string | null>(null)
   const [langPairs,              setLangPairs]              = useState<LanguagePair[]>([])
   const [goalDrafts,             setGoalDrafts]             = useState<Record<string, Record<string, string>>>({})
+  const [goalModes,              setGoalModes]              = useState<Record<string, 'daily' | 'weekday'>>({})
   const [goalSavingKey,          setGoalSavingKey]          = useState<string | null>(null)
 
   const router   = useRouter()
@@ -363,6 +364,7 @@ export default function SettingsPage() {
 
       setLangPairs(pairs)
       const drafts: Record<string, Record<string, string>> = {}
+      const modes: Record<string, 'daily' | 'weekday'> = {}
       for (const pair of pairs) {
         const key = `${pair.sourceLanguage}|${pair.targetLanguage}`
         drafts[key] = {}
@@ -370,8 +372,12 @@ export default function SettingsPage() {
           const val = pair.goals?.[String(d)]
           drafts[key][String(d)] = typeof val === 'number' ? String(val) : ''
         }
+        // Default to "daily" mode when every weekday holds the same value, else "weekday".
+        const vals = [0, 1, 2, 3, 4, 5, 6].map(d => drafts[key]![String(d)])
+        modes[key] = vals.every(v => v === vals[0]) ? 'daily' : 'weekday'
       }
       setGoalDrafts(drafts)
+      setGoalModes(modes)
       setLoading(false)
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -522,9 +528,13 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleGoalBlur(sourceLanguage: string, targetLanguage: string) {
+  async function handleGoalBlur(
+    sourceLanguage: string,
+    targetLanguage: string,
+    draftsOverride?: Record<string, string>,
+  ) {
     const key    = `${sourceLanguage}|${targetLanguage}`
-    const drafts = goalDrafts[key] ?? {}
+    const drafts = draftsOverride ?? goalDrafts[key] ?? {}
     const goals: Record<string, number | null> = {}
     for (let d = 0; d <= 6; d++) {
       const raw = drafts[String(d)]?.trim()
@@ -682,39 +692,87 @@ export default function SettingsPage() {
             <div>
               <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily Goals</h2>
               <p className="text-xs text-ink-faint mt-1">
-                Target number of words to graduate per language, per day of the week. Leave a day blank for no goal.
+                Target number of words to graduate per language. Choose <span className="text-ink">Daily</span> for one goal every day, or <span className="text-ink">Per weekday</span> to set a different goal for each day. Leave blank for no goal.
               </p>
             </div>
             <div className="space-y-5">
               {langPairs.map(pair => {
                 const pairKey = `${pair.sourceLanguage}|${pair.targetLanguage}`
                 const drafts  = goalDrafts[pairKey] ?? {}
+                const mode    = goalModes[pairKey] ?? 'daily'
+                // Switch modes. daily -> collapse every weekday to Monday's value and save.
+                const setMode = (next: 'daily' | 'weekday') => {
+                  setGoalModes(prev => ({ ...prev, [pairKey]: next }))
+                  if (next === 'daily') {
+                    const common = drafts['0'] ?? ''
+                    const collapsed: Record<string, string> = {}
+                    for (let d = 0; d <= 6; d++) collapsed[String(d)] = common
+                    setGoalDrafts(prev => ({ ...prev, [pairKey]: collapsed }))
+                    handleGoalBlur(pair.sourceLanguage, pair.targetLanguage, collapsed)
+                  }
+                }
                 return (
                   <div key={pairKey} className="space-y-1.5">
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-ink">{pairLabel(pair)}</span>
-                      {goalSavingKey === pairKey && <span className="text-xs text-ink-faint">Saving…</span>}
-                    </div>
-                    <div className="grid grid-cols-7 gap-1.5">
-                      {WEEKDAYS.map(({ day, label }) => (
-                        <div key={day} className="flex flex-col items-center gap-1">
-                          <span className="text-xs text-ink-faint select-none">{label}</span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={999}
-                            className="input text-center text-sm px-1 py-1.5 w-full"
-                            placeholder="—"
-                            value={drafts[String(day)] ?? ''}
-                            onChange={e => setGoalDrafts(prev => ({
-                              ...prev,
-                              [pairKey]: { ...(prev[pairKey] ?? {}), [String(day)]: e.target.value }
-                            }))}
-                            onBlur={() => handleGoalBlur(pair.sourceLanguage, pair.targetLanguage)}
-                          />
+                      <div className="flex items-center gap-2">
+                        {goalSavingKey === pairKey && <span className="text-xs text-ink-faint">Saving…</span>}
+                        <div className="flex rounded-md overflow-hidden border border-surface-border text-xs">
+                          {(['daily', 'weekday'] as const).map(m => (
+                            <button
+                              key={m}
+                              onClick={() => setMode(m)}
+                              className={`px-2 py-0.5 ${mode === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
+                            >
+                              {m === 'daily' ? 'Daily' : 'Per weekday'}
+                            </button>
+                          ))}
                         </div>
-                      ))}
+                      </div>
                     </div>
+                    {mode === 'daily' ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-ink-faint select-none w-20">Every day</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={999}
+                          className="input text-center text-sm px-1 py-1.5 w-24"
+                          placeholder="—"
+                          value={drafts['0'] ?? ''}
+                          onChange={e => {
+                            const v = e.target.value
+                            setGoalDrafts(prev => {
+                              const next: Record<string, string> = {}
+                              for (let d = 0; d <= 6; d++) next[String(d)] = v
+                              return { ...prev, [pairKey]: next }
+                            })
+                          }}
+                          onBlur={() => handleGoalBlur(pair.sourceLanguage, pair.targetLanguage)}
+                        />
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-7 gap-1.5">
+                        {WEEKDAYS.map(({ day, label }) => (
+                          <div key={day} className="flex flex-col items-center gap-1">
+                            <span className="text-xs text-ink-faint select-none">{label}</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={999}
+                              className="input text-center text-sm px-1 py-1.5 w-full"
+                              placeholder="—"
+                              value={drafts[String(day)] ?? ''}
+                              onChange={e => setGoalDrafts(prev => ({
+                                ...prev,
+                                [pairKey]: { ...(prev[pairKey] ?? {}), [String(day)]: e.target.value }
+                              }))}
+                              onBlur={() => handleGoalBlur(pair.sourceLanguage, pair.targetLanguage)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )
               })}
