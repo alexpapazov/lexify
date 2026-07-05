@@ -8,6 +8,8 @@ import { SupabaseDeckRepository }        from '@/lib/data/decks'
 import { SupabaseCardRepository }        from '@/lib/data/cards'
 import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { buildEnabledTracksMap, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
@@ -74,6 +76,7 @@ function buildForecastDays(
   todayStr: string,
   filters: ForecastFilters,
   tz: string,
+  enabledTracks: Map<string, EnabledTracks>,
 ): ForecastDay[] {
   if (!startDate || !endDate || startDate > endDate) return []
 
@@ -90,6 +93,7 @@ function buildForecastDays(
   for (const { deck, states } of stats) {
     const pairKey = `${deck.sourceLanguage}|${deck.targetLanguage}`
     if (filters.langPairs.length > 0 && !filters.langPairs.includes(pairKey)) continue
+    const en = enabledTracks.get(pairKey)
 
     for (const s of states) {
       if (!s.graduated) continue
@@ -106,13 +110,14 @@ function buildForecastDays(
       if (dir === 'reverse') {
         // Reverse rows are recall-only (Target → Native comprehension); they have
         // no typed production track. Their dueAt/recallDueAt count under recall.
+        if (!trackEnabled(en, 'recall', true)) continue
         const recallRef = s.recallDueAt ?? s.dueAt
         const recallEff = recallRef ? effDate(recallRef) : null
         if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
       } else {
         const typedRef  = s.typedDueAt ?? s.dueAt
-        const typedEff  = typedRef     ? effDate(typedRef)     : null
-        const recallEff = s.recallDueAt ? effDate(s.recallDueAt) : null
+        const typedEff  = (typedRef && trackEnabled(en, 'typed', false))  ? effDate(typedRef)     : null
+        const recallEff = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
 
         if (showTyped && typedEff && typedEff >= startDate && typedEff <= endDate) bump(typedEff)
         if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== typedEff) bump(recallEff)
@@ -141,6 +146,7 @@ export default function StudyPage() {
   const [deckStats,    setDeckStats]    = useState<DeckWithStats[]>([])
   const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dueNow: 0 })
   const [forecast,     setForecast]     = useState<ForecastDay[]>([])
+  const [enabledTracks, setEnabledTracks] = useState<Map<string, EnabledTracks>>(new Map())
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
   const [userId,       setUserId]       = useState('')
@@ -187,6 +193,13 @@ export default function StudyPage() {
     const todayDate    = new Date(todayStr + 'T00:00:00.000Z')
     const now          = new Date()
 
+    // Per-pair enabled review tracks — disabled tracks are excluded from due counts
+    // and the forecast (a card whose track is off shouldn't be studied or tallied).
+    const enabledMap = buildEnabledTracksMap(
+      await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
+    )
+    setEnabledTracks(enabledMap)
+
     const stats = await Promise.all(decks.map(async deck => {
       const [cards, states] = await Promise.all([
         cardRepo.listByDeck(deck.id),
@@ -196,8 +209,14 @@ export default function StudyPage() {
       // Reverse states are only valid when their forward counterpart is also graduated.
       const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
       const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
+      const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
       const isDueByDate = (dateStr: string | null | undefined) =>
         !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
+      // Track-aware due checks — a disabled track never counts as due.
+      const typedDueOn  = (s: CardState) => trackEnabled(en, 'typed', false)  && (s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt))
+      const recallDueOn = (s: CardState) => trackEnabled(en, 'recall', false) && isDueByDate(s.recallDueAt)
+      const reverseDueOn = (s: CardState) => trackEnabled(en, 'recall', true) &&
+        stateMap.get(s.cardId)?.graduated === true && (isDueByDate(s.recallDueAt) || isDueByDate(s.dueAt))
       return {
         deck, cards, states,
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,
@@ -205,23 +224,12 @@ export default function StudyPage() {
         graduated: forwardStates.filter(s => s.graduated).length,
         dueNow:        states.filter(s => {
           if (!s.graduated) return false
-          if (s.reviewDirection === 'reverse') {
-            return stateMap.get(s.cardId)?.graduated === true &&
-              (isDueByDate(s.recallDueAt) || isDueByDate(s.dueAt))
-          }
-          const dueTrack = s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt)
-          return dueTrack || isDueByDate(s.recallDueAt)
+          if (s.reviewDirection === 'reverse') return reverseDueOn(s)
+          return typedDueOn(s) || recallDueOn(s)
         }).length,
-        dueNowForward: forwardStates.filter(s => {
-          if (!s.graduated) return false
-          const dueTrack = s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt)
-          return dueTrack || isDueByDate(s.recallDueAt)
-        }).length,
-        dueNowReverse: states.filter(s => {
-          if (!s.graduated || s.reviewDirection !== 'reverse') return false
-          return stateMap.get(s.cardId)?.graduated === true &&
-            (isDueByDate(s.recallDueAt) || isDueByDate(s.dueAt))
-        }).length,
+        dueNowForward: forwardStates.filter(s => s.graduated && (typedDueOn(s) || recallDueOn(s))).length,
+        dueNowReverse: states.filter(s =>
+          s.graduated && s.reviewDirection === 'reverse' && reverseDueOn(s)).length,
       }
     }))
 
@@ -264,7 +272,7 @@ export default function StudyPage() {
     const initEnd   = addDays(todayStr, 13)
     setForecastStartDate(initStart)
     setForecastEndDate(initEnd)
-    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, tz))
+    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, tz, enabledMap))
 
     setLoading(false)
   }
@@ -441,10 +449,10 @@ export default function StudyPage() {
 
   useEffect(() => {
     if (!todayStr || !forecastStartDate || !forecastEndDate) return
-    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, tz))
+    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, tz, enabledTracks))
     setSelectedForecastDate(prev => prev && prev >= forecastStartDate && prev <= forecastEndDate ? prev : null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forecastStartDate, forecastEndDate, forecastFilters])
+  }, [forecastStartDate, forecastEndDate, forecastFilters, enabledTracks])
 
   useEffect(() => {
     if (!showDuePicker) return
@@ -533,6 +541,7 @@ export default function StudyPage() {
     const isToday    = selectedForecastDate === forecast[0]?.date
     const showTyped  = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('typed')
     const showRecall = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('recall')
+    const en = enabledTracks.get(pairKey)
 
     const statesByCard = new Map<string, CardState[]>()
     for (const s of states) {
@@ -562,13 +571,14 @@ export default function StudyPage() {
         let due = false
         if (dir === 'reverse') {
           // Reverse rows are recall-only; never count under typed production.
+          if (!trackEnabled(en, 'recall', true)) continue
           const recallRef = s.recallDueAt ?? s.dueAt
           const recallEff = recallRef ? effDate(recallRef) : null
           if (showRecall && recallEff === selectedForecastDate) due = true
         } else {
           const typedRef  = s.typedDueAt ?? s.dueAt
-          const typedEff: string | null  = typedRef      ? effDate(typedRef)      : null
-          const recallEff: string | null = s.recallDueAt ? effDate(s.recallDueAt) : null
+          const typedEff: string | null  = (typedRef && trackEnabled(en, 'typed', false))      ? effDate(typedRef)      : null
+          const recallEff: string | null = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
           if (showTyped  && typedEff  === selectedForecastDate) due = true
           if (!due && showRecall && recallEff === selectedForecastDate && recallEff !== typedEff) due = true
         }
