@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { hintPlan, hintGrowthFactor } from '@/lib/hints'
-import type { Card, GradingSettings, GradingIssueType, GradingStatus, Rating } from '@/domain'
-import { gradeTyping, normalizeAnswer } from '@/engine/grading'
+import type { Card, GradingSettings, GradingIssueType, GradingStatus, Rating, TypedStrictness, TypedErrorCategory } from '@/domain'
+import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
+import { gradeTyping, normalizeAnswer, resolveTypedPenalty } from '@/engine/grading'
 import { speak } from '@/lib/speak'
 import { langNativeName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
@@ -26,7 +27,7 @@ import { CardInfoButton } from './CardInfoButton'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, hintable, onHint, onNearMiss, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, hintable, onHint, onNearMiss, onTypedPenalty, strictness = DEFAULT_TYPED_STRICTNESS, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -57,6 +58,10 @@ export function TypingMode({
   onHint?: (level: number, growthFactor: number) => void
   /** Reports whether the answer being submitted was an "almost" (near-miss) so the calibrator can weight it. */
   onNearMiss?: (nearMiss: boolean) => void
+  /** Reports the per-category typed penalty on advance: weight (0 / 0.2 / 0.3 / 1) + slip category (for typing_error_marks). */
+  onTypedPenalty?: (weight: number, category: TypedErrorCategory | null) => void
+  /** Per-pair strictness — decides whether accent/article/spelling slips cost a scheduling penalty. */
+  strictness?: TypedStrictness
   /** Called when the user clicks "Add as synonym" on a wrong answer; receives the normalized typed text. */
   onAddSynonym?: (normalizedText: string) => void
   answerLanguage?: string
@@ -331,22 +336,53 @@ export function TypingMode({
 
   const inCanonicalPhase = synonymPhase || !!siblingId
 
-  // A near-miss = the answer graded as "almost" (accent/typo/article slip) and
-  // wasn't overridden to correct. Reported before advancing so the calibrator
-  // can weight it as only 0.2 of an error.
+  // Per-category penalty for a wrong typed answer. Detection runs in flexible mode
+  // with the ignore-toggles OFF so accent/article/typo slips surface as an "almost"
+  // regardless of the deck's grading mode; the pair strictness then decides the cost.
+  function computeTypedPenalty(answered: string) {
+    const detectionSettings: GradingSettings = {
+      ...effectiveGradingSettings,
+      gradingMode: 'flexible',
+      ignoreAccents: false,
+      ignoreDefiniteArticles: false,
+      ignoreMinorTypos: false,
+    }
+    return resolveTypedPenalty(gradeTyping(answered, expected, detectionSettings), strictness)
+  }
+
+  // Display penalty (only meaningful mid-retype on a graded review) — drives the
+  // "Accent — retype it (no penalty)" vs "…(30% penalty)" copy and colour.
+  const retypePenalty = (gradedReview && result && !finalCorrect && override !== true)
+    ? computeTypedPenalty(inCanonicalPhase ? canonInput : input)
+    : null
+
   function reportNearMiss() {
     onNearMiss?.(!!result && result.status === 'almost' && override !== true)
   }
 
   function advanceRetype() {
     if (!retypeCorrect) return
-    reportNearMiss()
-    onRate('again', false, inCanonicalPhase ? canonInput : input, result?.issueType)
+    const answered = inCanonicalPhase ? canonInput : input
+    const penalty = computeTypedPenalty(answered)
+    // Graded (Due Now) reviews: an accepted slip (accent/article/spelling per the
+    // pair's strictness) counts as CORRECT with a weighted penalty — no lapse — while
+    // still requiring the retype. Full wrong answers (and all pre-graduation typing)
+    // keep the old "again" behaviour.
+    if (gradedReview && penalty.accepted) {
+      onTypedPenalty?.(penalty.weight, penalty.category)
+      reportNearMiss()
+      onRate('good', true, answered, result?.issueType)
+    } else {
+      onTypedPenalty?.(1, penalty.category)
+      reportNearMiss()
+      onRate('again', false, answered, result?.issueType)
+    }
   }
 
   function advanceSoftWrong() {
     if (!softWrongRetypeCorrect || !softWrongRecallRating) return
     const userAns = inCanonicalPhase ? canonInput : input
+    onTypedPenalty?.(0.2, null)
     reportNearMiss()
     if (softWrongOverrideAtRating) {
       // Override was active: both tracks get the recall rating
@@ -358,6 +394,7 @@ export function TypingMode({
   }
 
   function tryAdvance(rating: Rating) {
+    onTypedPenalty?.(0, null)
     reportNearMiss()
     onRate(rating, finalCorrect, inCanonicalPhase ? canonInput : input, result?.issueType)
   }
@@ -658,6 +695,16 @@ export function TypingMode({
                 </div>
               )}
             </div>
+
+            {retypePenalty && retypePenalty.category && (
+              <p className={`text-sm text-center ${retypePenalty.weight > 0 ? 'text-warning' : 'text-success'}`}>
+                {retypePenalty.category === 'spelling' ? 'Spelling' : retypePenalty.category === 'accent' ? 'Accent' : 'Article'} slip — {
+                  retypePenalty.weight > 0
+                    ? `retype it (${Math.round(retypePenalty.weight * 100)}% penalty)`
+                    : 'retype it, no penalty'
+                }
+              </p>
+            )}
 
             {isSoftWrong ? (
               <>

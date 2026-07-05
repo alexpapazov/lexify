@@ -17,6 +17,7 @@ import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }    from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
+import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import type { CardSide } from '@/domain'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
@@ -26,7 +27,8 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, Folder, CardConfusion, SchedulerParams, GradingIssueType } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, Folder, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
+import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
@@ -124,6 +126,11 @@ function FolderSessionInner() {
   }, [])
   const nearMissRef = useRef(false)
   const handleNearMiss = useCallback((nearMiss: boolean) => { nearMissRef.current = nearMiss }, [])
+  const typedPenaltyRef = useRef<{ weight: number; category: TypedErrorCategory | null } | null>(null)
+  const handleTypedPenalty = useCallback((weight: number, category: TypedErrorCategory | null) => {
+    typedPenaltyRef.current = { weight, category }
+  }, [])
+  const [strictnessMap, setStrictnessMap] = useState<Map<string, TypedStrictness>>(new Map())
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -214,11 +221,18 @@ function FolderSessionInner() {
       }
 
       // Per-pair enabled review tracks — disabled tracks are ghosted from Due Now.
-      const enabledTracksMap = buildEnabledTracksMap(
-        await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
-      )
+      const allParamRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
+      const enabledTracksMap = buildEnabledTracksMap(allParamRows)
       const tracksFor = (src: string, tgt: string): EnabledTracks | undefined =>
         enabledTracksMap.get(`${src}|${tgt}`)
+      const sMap = new Map<string, TypedStrictness>()
+      for (const r of allParamRows) {
+        if (r.answerField !== 'forward_typed') continue
+        sMap.set(`${r.sourceLanguage}|${r.targetLanguage}`, {
+          spelling: r.strictSpelling, accents: r.strictAccents, articles: r.strictArticles,
+        })
+      }
+      setStrictnessMap(sMap)
 
       // ?category= elective study: build queue from only that category across
       // all decks in the folder, capped at FOLDER_ELECTIVE_LIMIT cards.
@@ -486,9 +500,22 @@ function FolderSessionInner() {
       // Hint (Due Now only): dampens interval growth on a correct answer; ignored on `again`.
       const hint = state.graduated ? hintRef.current : null
       hintRef.current = null
-      const hintGrowthFactor = wasCorrect ? hint?.growthFactor : undefined
       const nearMiss = nearMissRef.current
       nearMissRef.current = false
+
+      // Per-category typed penalty: accepted accent/article/spelling slip = correct with
+      // a weighted interval dampening; lenient slip = weight 0 (no penalty).
+      const typedPenalty = typedPenaltyRef.current
+      typedPenaltyRef.current = null
+      const nmWeight = (typedPenalty && typedPenalty.weight > 0 && typedPenalty.weight < 1) ? typedPenalty.weight : 0
+      const penaltyGrowth = (wasCorrect && nmWeight > 0) ? 1 - nmWeight : undefined
+      const growthFactors = [wasCorrect ? hint?.growthFactor : undefined, penaltyGrowth].filter((x): x is number => x !== undefined)
+      const hintGrowthFactor = growthFactors.length ? growthFactors.reduce((a, b) => a * b, 1) : undefined
+      if (typedPenalty?.category) {
+        new SupabaseTypingErrorMarkRepository()
+          .record(card.id, reviewAnswerSide, typedPenalty.category, reviewAnswerSide === 'front' ? card.front : card.back, userAnswer)
+          .catch(err => console.error('Failed to record typing error mark:', err))
+      }
 
       const reviewEvent = await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
@@ -502,7 +529,9 @@ function FolderSessionInner() {
         reviewDirection:   (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
         reps:              state.reps,
         hintLevel:         hint?.level ?? 0,
-        nearMiss:          !wasCorrect && nearMiss,
+        nearMiss:          nmWeight > 0 || (!wasCorrect && nearMiss),
+        nearMissWeight:    nmWeight,
+        errorCategory:     typedPenalty?.category ?? null,
         graduationErrorCount: state.graduationErrorCount ?? 0,
       })
 
@@ -1145,6 +1174,8 @@ function FolderSessionInner() {
           onResetCard={handleResetCard}
           onInfo={() => setInfoOpen(true)}
           hintable={hintable} onHint={handleHint} onNearMiss={handleNearMiss}
+          onTypedPenalty={handleTypedPenalty}
+          strictness={strictnessMap.get(`${sourceLanguage}|${targetLanguage}`) ?? DEFAULT_TYPED_STRICTNESS}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       )}

@@ -11,6 +11,7 @@ import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
+import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import type { CardSide } from '@/domain'
@@ -19,7 +20,7 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SynonymGroup, SynonymAnswerField, SynonymProductionPrompt, GradingIssueType, SchedulerParams } from '@/domain'
+import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SynonymGroup, SynonymAnswerField, SynonymProductionPrompt, GradingIssueType, SchedulerParams, TypedErrorCategory, TypedStrictness } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
@@ -163,6 +164,11 @@ export default function SessionPage() {
   // Whether the current typed answer was an "almost" (near-miss) — consumed in handleAnswer.
   const nearMissRef    = useRef(false)
   const handleNearMiss = useCallback((nearMiss: boolean) => { nearMissRef.current = nearMiss }, [])
+  // Per-category typed penalty (accent/article/spelling): weight + loggable category.
+  const typedPenaltyRef = useRef<{ weight: number; category: TypedErrorCategory | null } | null>(null)
+  const handleTypedPenalty = useCallback((weight: number, category: TypedErrorCategory | null) => {
+    typedPenaltyRef.current = { weight, category }
+  }, [])
 
 const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -790,9 +796,23 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // ignored on `again`. Consumed here and cleared for the next card.
       const hint = state.graduated ? hintRef.current : null
       hintRef.current = null
-      const hintGrowthFactor = wasCorrect ? hint?.growthFactor : undefined
       const nearMiss = nearMissRef.current
       nearMissRef.current = false
+
+      // Per-category typed penalty: an accepted accent/article/spelling slip counts as
+      // correct but dampens the interval by its weight (0.2/0.3); a lenient slip has
+      // weight 0 (no penalty). Every slip is logged for future practice modes.
+      const typedPenalty = typedPenaltyRef.current
+      typedPenaltyRef.current = null
+      const nmWeight = (typedPenalty && typedPenalty.weight > 0 && typedPenalty.weight < 1) ? typedPenalty.weight : 0
+      const penaltyGrowth = (wasCorrect && nmWeight > 0) ? 1 - nmWeight : undefined
+      const growthFactors = [wasCorrect ? hint?.growthFactor : undefined, penaltyGrowth].filter((x): x is number => x !== undefined)
+      const hintGrowthFactor = growthFactors.length ? growthFactors.reduce((a, b) => a * b, 1) : undefined
+      if (typedPenalty?.category) {
+        new SupabaseTypingErrorMarkRepository()
+          .record(card.id, reviewAnswerSide, typedPenalty.category, reviewAnswerSide === 'front' ? card.front : card.back, userAnswer)
+          .catch(err => console.error('Failed to record typing error mark:', err))
+      }
 
       const reviewEvent = await eventRepo.create({
         userId: userId, cardId: card.id, mode: step.stepType,
@@ -806,7 +826,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         reviewDirection:    (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
         reps:               state.reps,
         hintLevel:          hint?.level ?? 0,
-        nearMiss:           !wasCorrect && nearMiss,
+        nearMiss:           nmWeight > 0 || (!wasCorrect && nearMiss),
+        nearMissWeight:     nmWeight,
+        errorCategory:      typedPenalty?.category ?? null,
         graduationErrorCount: state.graduationErrorCount ?? 0,
       })
 
@@ -1718,6 +1740,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onResetCard={handleResetCard}
           onInfo={() => setInfoOpen(true)}
           hintable={hintable} onHint={handleHint} onNearMiss={handleNearMiss}
+          onTypedPenalty={handleTypedPenalty}
+          strictness={{ spelling: schedulerParams.strictSpelling, accents: schedulerParams.strictAccents, articles: schedulerParams.strictArticles }}
           softWrongEnabled={softWrongEnabled}
           ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
       )}

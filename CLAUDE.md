@@ -25,8 +25,9 @@ Current feature files:
 - `features/Typed Grading.md` — per-category typed-answer strictness
   (spelling/accents/articles: strict=penalty vs lenient=no penalty, always
   retype), weighted near-miss (0.2/0.3), `typing_error_marks` capture for
-  future practice modes. **Backend + settings landed; session/TypingMode
-  wiring pending. Needs migration 066.**
+  future practice modes. **Fully wired for Due Now typed reviews (TypingMode +
+  all 3 session pages). Needs migration 066.** Pre-grad typing + synonym-group
+  typed production not yet covered.
 
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 

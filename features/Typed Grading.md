@@ -1,7 +1,8 @@
 # Typed-answer grading — per-category strictness + error capture
 
-Status: **backend + settings landed; session/TypingMode wiring pending** (see
-"Remaining wiring"). Migration `066` must be applied before this works.
+Status: **fully wired (graded/Due Now reviews).** Migration `066` must be applied
+before this works. Pre-graduation typing still uses the old retype→again behavior;
+synonym-group typed production is not yet covered (both noted below).
 
 ## Goal
 
@@ -69,26 +70,33 @@ surfaces as an `'almost'` with an `issueType`. Then `resolveTypedPenalty()`
   **"Reset calibration"** button (un-pollutes a track — used to fix the
   reverse-recall calibration corrupted by the old miscategorization bug).
 
-## Remaining wiring (next step)
+## Session/TypingMode wiring (done)
 
-1. **`components/session/TypingMode.tsx`**
-   - New prop `strictness: TypedStrictness` (default `DEFAULT_TYPED_STRICTNESS`).
-   - After grading, compute `resolveTypedPenalty(result, strictness)`.
-   - An **accepted** slip (weight < 1) must advance as a *correct* rating with
-     the near-miss weight — NOT the current `onRate('again')` from
-     `advanceRetype()`. Still require retype. Colour green (lenient) / amber
-     (strict) with a category message ("Accent — retype it").
-   - Replace `onNearMiss(boolean)` with `onTypedPenalty(weight, category)` (or
-     extend it) so the session gets the weight + loggable category.
-2. **3 session pages** (`study/[deckId]`, `study/all`, `study/folder/[folderId]`)
-   - Load the pair's `strictness` from `user_scheduler_params` (forward_typed
-     row) and pass to each `TypingMode`.
-   - In `handleAnswer`, stamp `nearMissWeight` + `errorCategory` on the review
-     event; fire-and-forget `SupabaseTypingErrorMarkRepository.record(...)`
-     when a category is present.
-3. **Grading input**: pass a `GradingSettings` with `ignoreAccents` /
-   `ignoreDefiniteArticles` / `ignoreMinorTypos` = false into the typed-
-   production grade call so slips surface as `'almost'`.
+- **`components/session/TypingMode.tsx`**: props `strictness: TypedStrictness`
+  (default all-strict) + `onTypedPenalty(weight, category)`. `computeTypedPenalty()`
+  re-grades the answer in flexible mode with the ignore-toggles OFF (so accent/
+  article/typo slips surface as `'almost'` regardless of the deck's grading mode),
+  then `resolveTypedPenalty()`. In `advanceRetype()`, for **gradedReview** an
+  *accepted* slip advances as `onRate('good', true, …)` (no lapse) while still
+  requiring the retype; full-wrong and all pre-graduation typing keep `onRate('again')`.
+  A `retypePenalty` drives the in-card note ("Accent slip — retype it, no penalty" /
+  "…(30% penalty)"), green for weight 0, amber otherwise.
+- **All 3 session pages**: `typedPenaltyRef` + `handleTypedPenalty`; a per-pair
+  `strictnessMap` (built from the forward_typed rows via `listForUser`, keyed
+  `${src}|${tgt}`) passed to the graded `TypingMode`. In `handleAnswer`: an
+  accepted slip stamps `nearMissWeight` (0.2/0.3) + `errorCategory` on the event
+  and dampens the interval via `hintGrowthFactor = 1 − weight` (multiplied with
+  any real hint factor); every slip with a category is logged to
+  `typing_error_marks` (fire-and-forget). Lenient slip → weight 0 → full-credit
+  `good`, no dampening, category still logged.
+
+## Not yet covered (follow-ups)
+
+- **Pre-graduation typing** keeps the old retype→`again` behavior (blast radius
+  limited to Due Now for now). The strictness prop defaults to the pair value but
+  `advanceRetype` only applies the accepted-slip path when `gradedReview`.
+- **Synonym-group typed production** (the multi-field `gradeMultiField` render path)
+  is not wired to the penalty system yet — only the single-answer typed reviews are.
 
 ## Explicitly future (not now)
 
