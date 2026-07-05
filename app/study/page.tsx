@@ -103,12 +103,20 @@ function buildForecastDays(
         if (!isAccel && !filters.accel.includes('normal')) continue
       }
 
-      const typedRef  = s.typedDueAt ?? s.dueAt
-      const typedEff  = typedRef     ? effDate(typedRef)     : null
-      const recallEff = s.recallDueAt ? effDate(s.recallDueAt) : null
+      if (dir === 'reverse') {
+        // Reverse rows are recall-only (Target → Native comprehension); they have
+        // no typed production track. Their dueAt/recallDueAt count under recall.
+        const recallRef = s.recallDueAt ?? s.dueAt
+        const recallEff = recallRef ? effDate(recallRef) : null
+        if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
+      } else {
+        const typedRef  = s.typedDueAt ?? s.dueAt
+        const typedEff  = typedRef     ? effDate(typedRef)     : null
+        const recallEff = s.recallDueAt ? effDate(s.recallDueAt) : null
 
-      if (showTyped && typedEff && typedEff >= startDate && typedEff <= endDate) bump(typedEff)
-      if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== typedEff) bump(recallEff)
+        if (showTyped && typedEff && typedEff >= startDate && typedEff <= endDate) bump(typedEff)
+        if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== typedEff) bump(recallEff)
+      }
     }
   }
 
@@ -551,12 +559,19 @@ export default function StudyPage() {
         // Snap overdue cards to today (same as buildForecastDays), NOT to the clicked date —
         // otherwise clicking a future bar pulls in all past-due cards too.
         const effDate   = (raw: string): string => { const d = localDate(raw); return d <= todayStr ? todayStr : d }
-        const typedRef  = s.typedDueAt ?? s.dueAt
-        const typedEff: string | null  = typedRef      ? effDate(typedRef)      : null
-        const recallEff: string | null = s.recallDueAt ? effDate(s.recallDueAt) : null
         let due = false
-        if (showTyped  && typedEff  === selectedForecastDate) due = true
-        if (!due && showRecall && recallEff === selectedForecastDate && recallEff !== typedEff) due = true
+        if (dir === 'reverse') {
+          // Reverse rows are recall-only; never count under typed production.
+          const recallRef = s.recallDueAt ?? s.dueAt
+          const recallEff = recallRef ? effDate(recallRef) : null
+          if (showRecall && recallEff === selectedForecastDate) due = true
+        } else {
+          const typedRef  = s.typedDueAt ?? s.dueAt
+          const typedEff: string | null  = typedRef      ? effDate(typedRef)      : null
+          const recallEff: string | null = s.recallDueAt ? effDate(s.recallDueAt) : null
+          if (showTyped  && typedEff  === selectedForecastDate) due = true
+          if (!due && showRecall && recallEff === selectedForecastDate && recallEff !== typedEff) due = true
+        }
         if (!due) continue
 
         results.push({
