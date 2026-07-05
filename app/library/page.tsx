@@ -537,6 +537,29 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     setSrsParams(prev => prev.map(p => ({ ...p, maxIntervalDays: days })))
   }
 
+  async function handleResetGradIntervals() {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    // Graduation intervals are calibrated on the forward_typed row only.
+    const updates: Record<string, number> = {}
+    const patch: Record<string, number> = {}
+    for (let n = 0; n <= 8; n++) {
+      const minKey = `gradInterval${n}errMin` as keyof typeof DEFAULT_SCHEDULER_PARAMS
+      const maxKey = `gradInterval${n}errMax` as keyof typeof DEFAULT_SCHEDULER_PARAMS
+      const defMin = DEFAULT_SCHEDULER_PARAMS[minKey] as number
+      const defMax = DEFAULT_SCHEDULER_PARAMS[maxKey] as number
+      updates[`grad_interval_${n}err_min`] = defMin
+      updates[`grad_interval_${n}err_max`] = defMax
+      patch[minKey] = defMin
+      patch[maxKey] = defMax
+    }
+    await repo.update(userId, src, tgt, 'forward_typed', updates)
+    setSrsParams(prev => prev.map(p =>
+      p.answerField === 'forward_typed' ? { ...p, ...patch } : p
+    ))
+  }
+
   async function handleLoadSrsHistory() {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
@@ -1067,6 +1090,18 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                               </tbody>
                             </table>
                           </div>
+                          {GRAD_BUCKETS.some(b => b.changed) && (
+                            <button
+                              className="self-start text-xs text-danger hover:underline mt-1"
+                              onClick={() => {
+                                if (confirm('Reset all graduation intervals back to their defaults? This clears any calibration on these buckets (the Hard/Good/Easy multipliers are left untouched).')) {
+                                  handleResetGradIntervals().catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
+                                }
+                              }}
+                            >
+                              Reset graduation intervals to default
+                            </button>
+                          )}
                         </div>
 
                         {/* Version history */}
