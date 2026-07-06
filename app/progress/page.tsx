@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { displayText } from '@/lib/cardText'
 import { langName } from '@/lib/languages'
 import { ConnectionGraph } from '@/components/analytics/ConnectionGraph'
+import { DueForecastProjection } from '@/components/analytics/DueForecastProjection'
 import { getToday } from '@/lib/dates'
 
 type RangeDays = 7 | 14 | 30 | 90
@@ -342,6 +343,15 @@ export default function AnalyticsPage() {
             >{r.label}</button>
           ))}
         </div>
+      </div>
+
+      {/* Forward projection: Due Now load over the next 2 years */}
+      <div className="panel p-5 space-y-3">
+        <div>
+          <h2 className="text-sm font-semibold text-ink">Projected Due Now load</h2>
+          <p className="text-xs text-ink-faint">Your existing cards plus new cards from your daily goals, using each language&apos;s latest calibration. Production (typed) vs Recognition (reverse).</p>
+        </div>
+        <DueForecastProjection />
       </div>
 
       {/* Legend — per language pair + reviews + lapses, all color-pickable */}
