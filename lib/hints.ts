@@ -46,7 +46,12 @@ export interface HintPlan {
 /** Computes the reveal plan for an answer in the given answer language. */
 export function hintPlan(answer: string, answerLanguage?: string): HintPlan {
   const empty: HintPlan = { maxLevel: 0, isShortWord: false, levelText: [] }
-  const trimmed = (answer ?? '').trim()
+  let trimmed = (answer ?? '').trim()
+  // Strip surrounding quotes (a quoted literal phrase) so the hint reveals the
+  // first real letter, not the quotation mark — matches gradeTyping's behavior.
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    trimmed = trimmed.slice(1, -1).trim()
+  }
   if (!trimmed) return empty
 
   // Split off a leading article so the *revealed* letters are the content word,
