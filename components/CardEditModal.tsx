@@ -94,6 +94,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [resetError,  setResetError]  = useState<string | null>(null)
   const [dormancyInput, setDormancyInput] = useState('')
   const [dormancyBusy,  setDormancyBusy]  = useState(false)
+  const [dormancyMsg,   setDormancyMsg]   = useState<{ ok: boolean; text: string } | null>(null)
   // Keep the input showing the saved threshold (not a faint placeholder that reads as "unsaved").
   useEffect(() => {
     setDormancyInput(state?.dormancyThreshold != null ? String(state.dormancyThreshold) : '')
@@ -101,14 +102,20 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   }, [card.id, state?.dormancyThreshold])
 
   // Persist a dormancy change (threshold and/or dormant flag) on the forward row.
+  // Every outcome sets an inline message so failures are never silent.
   async function applyDormancy(patch: { dormant?: boolean; dormancyThreshold?: number | null }) {
-    if (!state) return
+    if (!state) { setDormancyMsg({ ok: false, text: 'No card state loaded — cannot save.' }); return }
+    if (!userId) { setDormancyMsg({ ok: false, text: 'No user id — cannot save.' }); return }
     setDormancyBusy(true)
+    setDormancyMsg(null)
     try {
       const updated = await new SupabaseCardStateRepository().setDormancy(userId, card.id, patch)
       onStateChange(updated)
+      setDormancyMsg({ ok: true, text: `Saved (threshold: ${updated.dormancyThreshold ?? 'none'}, dormant: ${updated.dormant})` })
     } catch (err) {
-      alert('Dormancy save failed: ' + (err instanceof Error ? err.message : String(err)))
+      const text = err instanceof Error ? err.message : String(err)
+      console.error('[dormancy] save failed:', err)
+      setDormancyMsg({ ok: false, text })
     } finally {
       setDormancyBusy(false)
     }
@@ -1119,6 +1126,11 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         </>
                       )}
                     </div>
+                    {dormancyMsg && (
+                      <p className={`text-xs ${dormancyMsg.ok ? 'text-success' : 'text-danger'}`}>
+                        {dormancyMsg.ok ? '✓ ' : '⚠ '}{dormancyMsg.text}
+                      </p>
+                    )}
                   </div>
 
                   {!state.graduated && (

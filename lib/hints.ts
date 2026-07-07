@@ -7,8 +7,8 @@
  * Reveal levels:
  *  - Latin / Cyrillic / Greek (any alphabetic script): level 1 = first letter,
  *    level 2 = first two letters (never the whole word).
- *  - Korean (Hangul): level 1 = the first syllable's initial + medial vowel
- *    (안 → 아, 각 → 가); level 2 = the full first syllable (안 → 안, 각 → 각).
+ *  - Korean (Hangul): a single level = the full first syllable block
+ *    (안 → 안, 각 → 각). No hint at all for one-syllable words.
  *
  * The first letter/syllable is taken from the first CONTENT word — a leading
  * article ("el codo") is included in the autopopulated text (so grading still
@@ -29,15 +29,6 @@ const HANGUL_END  = 0xd7a3
 function isHangulSyllable(ch: string): boolean {
   const c = ch.codePointAt(0) ?? 0
   return c >= HANGUL_BASE && c <= HANGUL_END
-}
-
-function decomposeSyllable(ch: string): { cho: number; jung: number; jong: number } {
-  const s = (ch.codePointAt(0) ?? HANGUL_BASE) - HANGUL_BASE
-  return { cho: Math.floor(s / (21 * 28)), jung: Math.floor((s % (21 * 28)) / 28), jong: s % 28 }
-}
-
-function composeSyllable(cho: number, jung: number, jong: number): string {
-  return String.fromCodePoint(HANGUL_BASE + (cho * 21 + jung) * 28 + jong)
 }
 
 export interface HintPlan {
@@ -68,22 +59,13 @@ export function hintPlan(answer: string, answerLanguage?: string): HintPlan {
   const first = chars[0]!
 
   // ── Korean (Hangul) ──────────────────────────────────────────────────────
+  // One hint level only: reveal the FULL first syllable block (안 → 안, 각 → 각).
+  // No hint for single-syllable words (it would give away the whole answer).
   if (isHangulSyllable(first)) {
     const syllableCount = chars.filter(isHangulSyllable).length
-    const { cho, jung, jong } = decomposeSyllable(first)
-    const core = composeSyllable(cho, jung, 0) // initial + medial (안→아, 각→가)
-    const full = first                          // full first syllable
-    const hasJong = jong !== 0
-
-    if (syllableCount === 1) {
-      // Single-syllable word: the full syllable IS the whole answer, so only
-      // the core (no final consonant) can be shown — and only if it differs.
-      if (!hasJong) return { maxLevel: 0, isShortWord: true, levelText: [] }
-      return { maxLevel: 1, isShortWord: true, levelText: [article + core] }
-    }
-    if (hasJong) return { maxLevel: 2, isShortWord: false, levelText: [article + core, article + full] }
-    // First syllable has no final consonant → core === full, only one useful level.
-    return { maxLevel: 1, isShortWord: false, levelText: [article + full] }
+    if (syllableCount <= 1) return { maxLevel: 0, isShortWord: true, levelText: [] }
+    // isShortWord=true for 2-syllable words (one block is half the answer → bigger penalty).
+    return { maxLevel: 1, isShortWord: syllableCount === 2, levelText: [article + first] }
   }
 
   // ── Alphabetic (Latin / Cyrillic / Greek / …) ────────────────────────────

@@ -59,35 +59,39 @@ describe('hintPlan — alphabetic', () => {
   })
 })
 
-describe('hintPlan — Korean', () => {
-  it('안락 → 아 then 안 (vowel-initial with final consonant)', () => {
+describe('hintPlan — Korean (full first syllable, one level only)', () => {
+  it('안락 → reveals the full first syllable 안, one level', () => {
     const p = hintPlan('안락', 'ko')
-    expect(p.maxLevel).toBe(2)
-    expect(p.isShortWord).toBe(false)
-    expect(p.levelText).toEqual(['아', '안'])
+    expect(p.maxLevel).toBe(1)
+    expect(p.levelText).toEqual(['안'])
   })
 
-  it('각시 → 가 then 각 (consonant-initial with final consonant)', () => {
+  it('각시 → reveals 각 (full first syllable), one level', () => {
     const p = hintPlan('각시', 'ko')
-    expect(p.levelText).toEqual(['가', '각'])
+    expect(p.maxLevel).toBe(1)
+    expect(p.levelText).toEqual(['각'])
   })
 
-  it('single-syllable word with final consonant → one short hint (core only)', () => {
-    const p = hintPlan('손', 'ko') // ㅅㅗㄴ → core 소
+  it('two-syllable word → one hint, isShortWord true (bigger penalty)', () => {
+    const p = hintPlan('가방', 'ko')
     expect(p.maxLevel).toBe(1)
     expect(p.isShortWord).toBe(true)
-    expect(p.levelText).toEqual(['소'])
+    expect(p.levelText).toEqual(['가'])
   })
 
-  it('single-syllable word without final consonant → no hint (would reveal all)', () => {
-    expect(hintPlan('차', 'ko').maxLevel).toBe(0) // ㅊㅏ
-  })
-
-  it('multi-syllable first syllable without final consonant → one hint (full syllable)', () => {
-    const p = hintPlan('가방', 'ko') // 가 has no jongseong
+  it('three-syllable word → one hint, isShortWord false', () => {
+    const p = hintPlan('사용자', 'ko')
     expect(p.maxLevel).toBe(1)
     expect(p.isShortWord).toBe(false)
-    expect(p.levelText).toEqual(['가'])
+    expect(p.levelText).toEqual(['사'])
+  })
+
+  it('single-syllable word (with final consonant) → NO hint', () => {
+    expect(hintPlan('손', 'ko').maxLevel).toBe(0)
+  })
+
+  it('single-syllable word (no final consonant) → NO hint', () => {
+    expect(hintPlan('차', 'ko').maxLevel).toBe(0)
   })
 })
 
