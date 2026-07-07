@@ -168,11 +168,15 @@ export function TypingMode({
   function useHintPress() {
     const next = hintLevel + 1
     if (next > plan.maxLevel) return
-    setInput(plan.levelText[next - 1] ?? '')
+    const text = plan.levelText[next - 1] ?? ''
+    // In the synonym/sibling "type the main term" phase, populate the canonical input.
+    const canonical = synonymPhase || !!siblingId
+    if (canonical) setCanonInput(text)
+    else           setInput(text)
     setHintLevel(next)
     onHint?.(next, hintGrowthFactor(next, plan.isShortWord))
     setTimeout(() => {
-      const el = mainInputRef.current
+      const el = canonical ? canonRef.current : mainInputRef.current
       if (el) { el.focus(); const n = el.value.length; el.setSelectionRange(n, n) }
     }, 0)
   }
@@ -581,7 +585,10 @@ export function TypingMode({
               onCompositionEnd={() => setComposingCanon(false)}
               onKeyDown={e => { if (e.key === 'Enter' && !composingCanon) checkCanonical() }}
             />
-            <div className="flex justify-center">
+            <div className="flex justify-center gap-3">
+              {canHint && (
+                <button onClick={useHintPress} className="btn-ghost" title="Reveal the start of the answer (reduces interval growth)">Hint</button>
+              )}
               <button onClick={checkCanonical} disabled={!canonInput.trim()} className="btn-primary">Check</button>
             </div>
           </div>
@@ -620,7 +627,10 @@ export function TypingMode({
               onCompositionEnd={() => setComposingCanon(false)}
               onKeyDown={e => { if (e.key === 'Enter' && !composingCanon) checkCanonical() }}
             />
-            <div className="flex justify-center">
+            <div className="flex justify-center gap-3">
+              {canHint && (
+                <button onClick={useHintPress} className="btn-ghost" title="Reveal the start of the answer (reduces interval growth)">Hint</button>
+              )}
               <button onClick={checkCanonical} disabled={!canonInput.trim()} className="btn-primary">Check</button>
             </div>
           </div>

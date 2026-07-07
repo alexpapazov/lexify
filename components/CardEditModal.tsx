@@ -216,6 +216,15 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     setValidErr(null)
     setSaving(true)
     try {
+      // Persist the dormancy threshold along with the card edit (if it changed).
+      if (state) {
+        const raw = dormancyInput.trim()
+        const newThreshold = raw ? (parseInt(raw, 10) || null) : null
+        if (newThreshold !== (state.dormancyThreshold ?? null)) {
+          const updated = await new SupabaseCardStateRepository().setDormancy(userId, card.id, { dormancyThreshold: newThreshold })
+          onStateChange(updated)
+        }
+      }
       await onSave(card.id, front.trim(), back.trim())
       setSaved(true)
       setTimeout(() => { setSaved(false); onClose() }, 600)
@@ -1082,26 +1091,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         value={dormancyInput}
                         onChange={e => setDormancyInput(e.target.value)}
                       />
-                      <span className="text-xs text-ink-muted">production reviews</span>
-                      <button
-                        disabled={dormancyBusy}
-                        className="text-xs text-accent hover:underline disabled:opacity-50"
-                        onClick={() => {
-                          const raw = dormancyInput.trim()
-                          applyDormancy({ dormancyThreshold: raw ? (parseInt(raw, 10) || null) : null })
-                            .catch(err => alert('Failed: ' + (err instanceof Error ? err.message : String(err))))
-                        }}
-                      >{dormancyBusy ? 'Saving…' : 'Set'}</button>
-                      {state.dormancyThreshold != null && !dormancyBusy && (
-                        <span className="text-[10px] text-success">saved: {state.dormancyThreshold}</span>
-                      )}
-                      {state.dormancyThreshold != null && (
-                        <button
-                          disabled={dormancyBusy}
-                          className="text-xs text-ink-faint hover:text-danger disabled:opacity-50"
-                          onClick={() => applyDormancy({ dormancyThreshold: null }).catch(() => {})}
-                        >Clear</button>
-                      )}
+                      <span className="text-xs text-ink-muted">production reviews (saved with the card)</span>
                     </div>
                     <div className="flex items-center gap-3 pt-0.5">
                       {state.dormant ? (
@@ -1113,10 +1103,10 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                       ) : (
                         <>
                         <button
-                          disabled={dormancyBusy || !state.graduated}
+                          disabled={!state.graduated}
                           className="text-xs text-accent hover:underline disabled:opacity-40"
-                          onClick={() => applyDormancy({ dormancyThreshold: state.reps + 1 })}
-                          title="After your next production review of this card, it goes dormant"
+                          onClick={() => setDormancyInput(String(state.reps + 1))}
+                          title="Sets the threshold so this card goes dormant after your next production review (save to apply)"
                         >Dormant after next review</button>
                         <button
                           disabled={dormancyBusy || !state.graduated}
