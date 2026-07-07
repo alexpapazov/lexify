@@ -1091,7 +1091,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         value={dormancyInput}
                         onChange={e => setDormancyInput(e.target.value)}
                       />
-                      <span className="text-xs text-ink-muted">production reviews (saved with the card)</span>
+                      <span className="text-xs text-ink-muted">production reviews</span>
                     </div>
                     <div className="flex items-center gap-3 pt-0.5">
                       {state.dormant ? (
