@@ -94,6 +94,11 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [resetError,  setResetError]  = useState<string | null>(null)
   const [dormancyInput, setDormancyInput] = useState('')
   const [dormancyBusy,  setDormancyBusy]  = useState(false)
+  // Keep the input showing the saved threshold (not a faint placeholder that reads as "unsaved").
+  useEffect(() => {
+    setDormancyInput(state?.dormancyThreshold != null ? String(state.dormancyThreshold) : '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [card.id, state?.dormancyThreshold])
 
   // Persist a dormancy change (threshold and/or dormant flag) on the forward row.
   async function applyDormancy(patch: { dormant?: boolean; dormancyThreshold?: number | null }) {
@@ -1064,7 +1069,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                       <input
                         type="number" min={1} max={999}
                         className="input text-center text-sm px-1 py-1 w-16"
-                        placeholder={state.dormancyThreshold != null ? String(state.dormancyThreshold) : '—'}
+                        placeholder="—"
                         value={dormancyInput}
                         onChange={e => setDormancyInput(e.target.value)}
                       />
@@ -1075,10 +1080,12 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         onClick={() => {
                           const raw = dormancyInput.trim()
                           applyDormancy({ dormancyThreshold: raw ? (parseInt(raw, 10) || null) : null })
-                            .then(() => setDormancyInput(''))
                             .catch(err => alert('Failed: ' + (err instanceof Error ? err.message : String(err))))
                         }}
-                      >Set</button>
+                      >{dormancyBusy ? 'Saving…' : 'Set'}</button>
+                      {state.dormancyThreshold != null && !dormancyBusy && (
+                        <span className="text-[10px] text-success">saved: {state.dormancyThreshold}</span>
+                      )}
                       {state.dormancyThreshold != null && (
                         <button
                           disabled={dormancyBusy}
