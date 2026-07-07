@@ -128,6 +128,23 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     return rowToCardState(data)
   }
 
+  /** Targeted dormancy update on the forward row (avoids a full-row upsert). */
+  async setDormancy(
+    userId: UserId,
+    cardId: CardId,
+    patch: { dormant?: boolean; dormancyThreshold?: number | null },
+  ): Promise<CardState> {
+    const dbPatch: Record<string, unknown> = {}
+    if ('dormant' in patch)           dbPatch.dormant = patch.dormant
+    if ('dormancyThreshold' in patch) dbPatch.dormancy_threshold = patch.dormancyThreshold
+    const { data, error } = await this.db.from('card_states')
+      .update(dbPatch)
+      .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', 'forward')
+      .select().single()
+    if (error) throw new Error(error.message)
+    return rowToCardState(data)
+  }
+
   async upsertBatch(states: CardState[]): Promise<void> {
     if (states.length === 0) return
     const rows = states.map(s => ({

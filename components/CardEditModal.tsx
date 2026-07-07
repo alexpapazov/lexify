@@ -105,8 +105,10 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     if (!state) return
     setDormancyBusy(true)
     try {
-      const updated = await new SupabaseCardStateRepository().upsert({ ...state, ...patch })
+      const updated = await new SupabaseCardStateRepository().setDormancy(userId, card.id, patch)
       onStateChange(updated)
+    } catch (err) {
+      alert('Dormancy save failed: ' + (err instanceof Error ? err.message : String(err)))
     } finally {
       setDormancyBusy(false)
     }
@@ -1102,11 +1104,19 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                           onClick={() => applyDormancy({ dormant: false }).catch(() => {})}
                         >↺ Wake from dormancy</button>
                       ) : (
+                        <>
+                        <button
+                          disabled={dormancyBusy || !state.graduated}
+                          className="text-xs text-accent hover:underline disabled:opacity-40"
+                          onClick={() => applyDormancy({ dormancyThreshold: state.reps + 1 })}
+                          title="After your next production review of this card, it goes dormant"
+                        >Dormant after next review</button>
                         <button
                           disabled={dormancyBusy || !state.graduated}
                           className="text-xs text-ink-faint hover:text-ink disabled:opacity-40"
                           onClick={() => applyDormancy({ dormant: true }).catch(() => {})}
                         >Make dormant now</button>
+                        </>
                       )}
                     </div>
                   </div>
