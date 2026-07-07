@@ -109,6 +109,9 @@ export function TypingMode({
   const [softWrongRecallRating, setSoftWrongRecallRating] = useState<Rating | null>(null)
   const [softWrongOverrideAtRating, setSoftWrongOverrideAtRating] = useState(false)
   const [overrideAsAlmost, setOverrideAsAlmost] = useState(false)
+  // Manually reclassify a wrong answer as an "almost" (near-miss): retype required,
+  // scheduled as correct-with-penalty instead of a full miss. Works without the recall track.
+  const [forceAlmost, setForceAlmost] = useState(false)
   const [resetConfirm, setResetConfirm] = useState(false)
   const continueRef = useRef<HTMLButtonElement>(null)
   const retypeRef   = useRef<HTMLInputElement>(null)
@@ -133,6 +136,7 @@ export function TypingMode({
     setSoftWrongRecallRating(null)
     setSoftWrongOverrideAtRating(false)
     setOverrideAsAlmost(false)
+    setForceAlmost(false)
   }, [card.id])
 
   // Combines prop synonyms with any added this session so new additions take effect immediately.
@@ -365,11 +369,14 @@ export function TypingMode({
     const answered = inCanonicalPhase ? canonInput : input
     const penalty = computeTypedPenalty(answered)
     // Graded (Due Now) reviews: an accepted slip (accent/article/spelling per the
-    // pair's strictness) counts as CORRECT with a weighted penalty — no lapse — while
-    // still requiring the retype. Full wrong answers (and all pre-graduation typing)
-    // keep the old "again" behaviour.
-    if (gradedReview && penalty.accepted) {
-      onTypedPenalty?.(penalty.weight, penalty.category)
+    // pair's strictness), OR a manual "Override as almost", counts as CORRECT with a
+    // weighted penalty — no lapse — while still requiring the retype. Full wrong answers
+    // (and all pre-graduation typing) keep the old "again" behaviour.
+    const accepted = penalty.accepted || forceAlmost
+    // Manual override defaults to a 0.2 near-miss when the grade itself was a full miss.
+    const weight = penalty.accepted ? penalty.weight : (forceAlmost ? 0.2 : 1)
+    if (gradedReview && accepted) {
+      onTypedPenalty?.(weight, penalty.category)
       reportNearMiss()
       onRate('good', true, answered, result?.issueType)
     } else {
@@ -771,6 +778,14 @@ export function TypingMode({
                     <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
                       Override as correct
                     </button>
+                  )}
+                  {!result.correct && override !== true && gradedReview && !forceAlmost && (
+                    <button onClick={() => setForceAlmost(true)} className="text-xs text-ink-faint hover:text-warning transition-colors">
+                      Override as almost
+                    </button>
+                  )}
+                  {forceAlmost && (
+                    <span className="text-xs text-warning">Almost — retype to continue</span>
                   )}
                   {!result.correct && override !== true && promptSide === 'back' && onAddSynonym && (
                     <button
