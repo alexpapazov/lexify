@@ -662,11 +662,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
   // Fire-and-forget calibration when the session completes.
   useEffect(() => {
-    if (!done || !userId || !sourceLanguage || !targetLanguage || electiveSession) return
+    // Calibrate after any real due-review session (including category=due, which is
+    // flagged elective) — only skip true study-ahead / early-review electives.
+    if (!done || !userId || (electiveSession && category !== 'due')) return
     fetch('/api/calibrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, sourceLanguage, targetLanguage }),
+      body: JSON.stringify(sourceLanguage && targetLanguage ? { userId, sourceLanguage, targetLanguage } : { userId }),
     }).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done])
@@ -830,6 +832,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         nearMissWeight:     nmWeight,
         errorCategory:      typedPenalty?.category ?? null,
         graduationErrorCount: state.graduationErrorCount ?? 0,
+        sourceLanguage, targetLanguage,
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)

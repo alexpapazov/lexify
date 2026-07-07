@@ -97,6 +97,8 @@ export interface CreateReviewEventInput {
   nearMissWeight?:     number
   errorCategory?:      ReviewEvent['errorCategory']
   graduationErrorCount?: number
+  sourceLanguage?:     string | null
+  targetLanguage?:     string | null
 }
 
 export interface ReviewEventRepository {

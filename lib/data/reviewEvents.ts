@@ -52,6 +52,8 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
       near_miss_weight:    input.nearMissWeight ?? (input.nearMiss ? 0.2 : 0),
       error_category:      input.errorCategory ?? null,
       graduation_error_count: input.graduationErrorCount ?? 0,
+      source_language:     input.sourceLanguage ?? null,
+      target_language:     input.targetLanguage ?? null,
     }).select().single()
     if (error) throw new Error(error.message)
     return rowToEvent(data)

@@ -5,25 +5,44 @@ import type { SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
 export const runtime = 'nodejs'
 
 interface CalibratePayload {
-  userId:         string
-  sourceLanguage: string
-  targetLanguage: string
+  userId:          string
+  sourceLanguage?: string
+  targetLanguage?: string
+}
+
+async function calibratePair(userId: string, sourceLanguage: string, targetLanguage: string) {
+  const answerFields = ['forward_typed', 'forward_recall', 'reverse_recall'] as const
+  for (const answerField of answerFields) {
+    await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField)
+  }
+  await calibrateGradIntervals(userId, sourceLanguage, targetLanguage)
+  await calibrateAccelBucket(userId, sourceLanguage, targetLanguage)
 }
 
 export async function POST(req: Request) {
   try {
     const { userId, sourceLanguage, targetLanguage }: CalibratePayload = await req.json()
-    if (!userId || !sourceLanguage || !targetLanguage) {
-      return Response.json({ ok: false, error: 'Missing required fields' }, { status: 400 })
+    if (!userId) {
+      return Response.json({ ok: false, error: 'Missing userId' }, { status: 400 })
     }
 
-    const answerFields = ['forward_typed', 'forward_recall', 'reverse_recall'] as const
-    for (const answerField of answerFields) {
-      await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField)
+    if (sourceLanguage && targetLanguage) {
+      await calibratePair(userId, sourceLanguage, targetLanguage)
+    } else {
+      // No pair given (e.g. after a "Study all due" session across languages):
+      // calibrate every pair the user has, each scoped to its own reviews.
+      const db = createAdminClient()
+      const { data: decks } = await db.from('decks')
+        .select('source_language, target_language')
+        .eq('owner_id', userId)
+      const seen = new Set<string>()
+      for (const d of decks ?? []) {
+        const key = `${d.source_language}|${d.target_language}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        await calibratePair(userId, d.source_language as string, d.target_language as string)
+      }
     }
-
-    await calibrateGradIntervals(userId, sourceLanguage, targetLanguage)
-    await calibrateAccelBucket(userId, sourceLanguage, targetLanguage)
 
     return Response.json({ ok: true })
   } catch (err) {
@@ -153,7 +172,8 @@ async function calibrateBucket(
 
   const n              = params.totalDueReviews
   const windowSize     = Math.max(20, Math.min(150, Math.round(n * 0.15)))
-  const adjustmentStep = Math.max(0.01, 0.08 * Math.exp(-n / 200))
+  // Converge a bit faster than the old 0.01 floor while still easing off as data grows.
+  const adjustmentStep = Math.max(0.03, 0.10 * Math.exp(-n / 300))
 
   const wasTyped  = answerField === 'forward_typed'
   const reviewDir = answerField === 'reverse_recall' ? 'reverse' : 'forward'
@@ -162,6 +182,8 @@ async function calibrateBucket(
     .from('review_events')
     .select('was_correct, near_miss, near_miss_weight')
     .eq('user_id', userId)
+    .eq('source_language', sourceLang)
+    .eq('target_language', targetLang)
     .eq('review_mode', 'due')
     .eq('review_direction', reviewDir)
     .eq('was_typed', wasTyped)
@@ -175,6 +197,8 @@ async function calibrateBucket(
     .from('review_events')
     .select('*', { count: 'exact', head: true })
     .eq('user_id', userId)
+    .eq('source_language', sourceLang)
+    .eq('target_language', targetLang)
     .eq('review_mode', 'due')
     .eq('review_direction', reviewDir)
     .eq('was_typed', wasTyped)
@@ -250,6 +274,8 @@ async function calibrateGradIntervals(userId: string, sourceLang: string, target
     .from('review_events')
     .select('was_correct, near_miss, near_miss_weight, graduation_error_count')
     .eq('user_id', userId)
+    .eq('source_language', sourceLang)
+    .eq('target_language', targetLang)
     .eq('reps', 1)
     .eq('review_direction', 'forward')
     .eq('was_accelerated', false)
@@ -313,6 +339,8 @@ async function calibrateAccelBucket(
     .from('review_events')
     .select('was_correct, near_miss, near_miss_weight, accelerated_penalty')
     .eq('user_id', userId)
+    .eq('source_language', sourceLang)
+    .eq('target_language', targetLang)
     .eq('review_mode', 'due')
     .eq('was_accelerated', true)
     .order('reviewed_at', { ascending: false })

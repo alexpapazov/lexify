@@ -551,6 +551,7 @@ function AllDueSessionInner() {
         nearMissWeight:     nmWeight,
         errorCategory:      typedPenalty?.category ?? null,
         graduationErrorCount: state.graduationErrorCount ?? 0,
+        sourceLanguage, targetLanguage,
       })
 
       const wrongSeverity = !wasCorrect && (step.stepType === 'typing' || wasTyped)
@@ -1052,11 +1053,13 @@ function AllDueSessionInner() {
   useEffect(() => {
     const sourceLanguage = sourceLang ?? queue[0]?.sourceLanguage
     const targetLanguage = targetLang ?? queue[0]?.targetLanguage
-    if (!done || !userId || !sourceLanguage || !targetLanguage || electiveSession) return
+    // Calibrate after any real due-review session (including category=due, which is
+    // flagged elective) — only skip true study-ahead / early-review electives.
+    if (!done || !userId || (electiveSession && category !== 'due')) return
     fetch('/api/calibrate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, sourceLanguage, targetLanguage }),
+      body: JSON.stringify(sourceLanguage && targetLanguage ? { userId, sourceLanguage, targetLanguage } : { userId }),
     }).catch(() => {})
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done])
