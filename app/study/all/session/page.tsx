@@ -69,7 +69,7 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 const ALL_ELECTIVE_LIMIT = 20
-type StudyCategory = 'new' | 'learning' | 'graduated' | 'due'
+type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
 
 export default function AllDueSessionPage() {
   return (
@@ -85,7 +85,7 @@ function AllDueSessionInner() {
   const searchParams = useSearchParams()
   const categoryParam = searchParams.get('category')
   const category: StudyCategory | null =
-    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due'
+    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant'
       ? categoryParam : null
   const sourceLang = searchParams.get('source')
   const targetLang = searchParams.get('target')
@@ -102,6 +102,12 @@ function AllDueSessionInner() {
   const [answerError,     setAnswerError]     = useState<string | null>(null)
   const [submitting,      setSubmitting]      = useState(false)
   const [infoOpen,        setInfoOpen]        = useState(false)
+  const [dormantNotice,   setDormantNotice]   = useState(false)
+  useEffect(() => {
+    if (!dormantNotice) return
+    const t = setTimeout(() => setDormantNotice(false), 2800)
+    return () => clearTimeout(t)
+  }, [dormantNotice])
   const [schedulerParams, setSchedulerParams] = useState<SchedulerParams>(DEFAULT_SCHEDULER_PARAMS)
   const [forwardTypedEnabled, setForwardTypedEnabled] = useState(true)
   const [forwardRecallEnabled, setForwardRecallEnabled] = useState(true)
@@ -262,9 +268,11 @@ function AllDueSessionInner() {
               categoryCards.push({ ...common, card, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
             } else if (category === 'learning' && state && !state.graduated) {
               categoryCards.push({ ...common, card, state, productionMode: null })
-            } else if (category === 'graduated' && state?.graduated) {
+            } else if (category === 'graduated' && state?.graduated && !state.dormant) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
-            } else if (category === 'due' && state?.graduated && dirParam !== 'reverse') {
+            } else if (category === 'dormant' && state?.dormant) {
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+            } else if (category === 'due' && state?.graduated && !state.dormant && dirParam !== 'reverse') {
               const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
               const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
               const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
@@ -277,6 +285,7 @@ function AllDueSessionInner() {
           if (category === 'due' && dirParam !== 'forward') {
             for (const reverseState of reverseStatesList) {
               if (!trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)) continue
+              if (stateMap.get(reverseState.cardId)?.dormant) continue
               if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
               const revCard = cards.find(c => c.id === reverseState.cardId)
               if (revCard) categoryCards.push({ ...deckCommon, card: revCard, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
@@ -359,6 +368,8 @@ function AllDueSessionInner() {
             // In pipeline — include only if within the active learning set.
             if (limitedLearningSet && !limitedLearningSet.has(card.id)) continue
             allCards.push({ ...common, state, productionMode: null })
+          } else if (state.graduated && state.dormant) {
+            // Dormant cards never become due automatically.
           } else if (state.graduated) {
             const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
             const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
@@ -375,6 +386,7 @@ function AllDueSessionInner() {
         const reverseEnabled = trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)
         for (const reverseState of reverseStatesList) {
           if (!reverseEnabled) break
+          if (stateMap.get(reverseState.cardId)?.dormant) continue
           if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) allCards.push({ ...deckCommon, card, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
@@ -707,6 +719,12 @@ function AllDueSessionInner() {
         } else {
           newState = { ...newState, postAccelRestartWindow: newWindow, postAccelWrongCount: newWrong }
         }
+      }
+
+      // Dormancy: auto-go dormant after N production reviews (this path = forward production).
+      if (newState.graduated && !newState.dormant && newState.dormancyThreshold != null && newState.reps >= newState.dormancyThreshold) {
+        newState = { ...newState, dormant: true }
+        if (wasCorrect) setDormantNotice(true)
       }
 
       await stateRepo.upsert(newState)
@@ -1067,7 +1085,7 @@ function AllDueSessionInner() {
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (done) {
-    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now' }
+    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant' }
     const pairLabel = sourceLang && targetLang ? `${langName(sourceLang)} / ${langName(targetLang)}` : null
     const backLabel = pairLabel ? `Back to ${pairLabel}` : 'Back to study'
     return (
@@ -1113,6 +1131,11 @@ function AllDueSessionInner() {
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
+      {dormantNotice && (
+        <div className="fixed left-1/2 -translate-x-1/2 top-6 z-50 px-4 py-2 rounded-card bg-surface-raised border border-white/70 text-sm text-ink shadow-lg">
+          💤 Card is now dormant
+        </div>
+      )}
       <div className="relative flex items-center justify-between">
         <Link href={backHref} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>

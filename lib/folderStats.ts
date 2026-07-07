@@ -6,9 +6,10 @@ export interface FolderCounts {
   learning:  number
   graduated: number
   dueNow:    number
+  dormant:   number
 }
 
-const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }
+const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }
 
 /**
  * IDs of every deck that lives directly inside `folderId` or any of its
@@ -75,12 +76,14 @@ export async function computeDeckCounts(
       cardRepo.listByDeck(deckId),
       stateRepo.listByDeck(userId, deckId),
     ])
-    const stateMap = new Map(states.map(s => [s.cardId, s]))
+    const fwd = states.filter(s => s.reviewDirection !== 'reverse')
+    const stateMap = new Map(fwd.map(s => [s.cardId, s]))
     return {
       unlearned: cards.filter(c => !stateMap.has(c.id)).length,
-      learning:  states.filter(s => !s.graduated).length,
-      graduated: states.filter(s => s.graduated).length,
-      dueNow:    states.filter(s => s.graduated && s.dueAt && new Date(s.dueAt) <= now).length,
+      learning:  fwd.filter(s => !s.graduated).length,
+      graduated: fwd.filter(s => s.graduated && !s.dormant).length,
+      dormant:   fwd.filter(s => s.dormant).length,
+      dueNow:    states.filter(s => s.graduated && !stateMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now).length,
     }
   }))
 
@@ -89,5 +92,6 @@ export async function computeDeckCounts(
     learning:  acc.learning  + s.learning,
     graduated: acc.graduated + s.graduated,
     dueNow:    acc.dueNow    + s.dueNow,
+    dormant:   acc.dormant   + s.dormant,
   }), { ...EMPTY_COUNTS })
 }

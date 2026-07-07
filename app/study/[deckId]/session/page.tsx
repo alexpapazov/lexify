@@ -54,7 +54,7 @@ interface SessionCard {
 }
 
 /** A single elective study category, chosen either via a deck-stat "Study" button (?category=) or the elective picker. */
-type StudyCategory = 'new' | 'learning' | 'graduated' | 'due'
+type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
 
 /** Cards available for elective study once the normal due/new queue is empty, offered via a picker. */
 interface ElectivePickerData {
@@ -67,6 +67,7 @@ const CATEGORY_BANNER: Record<StudyCategory, string> = {
   learning:  'Studying cards still in the learning pipeline.',
   graduated: 'Studying graduated cards for early review.',
   due:       'Studying cards that are due now.',
+  dormant:   'Reviewing dormant cards (they stay dormant).',
 }
 
 const CATEGORY_EMPTY_MESSAGE: Record<StudyCategory, string> = {
@@ -74,6 +75,7 @@ const CATEGORY_EMPTY_MESSAGE: Record<StudyCategory, string> = {
   learning:  'You have no cards currently in the learning pipeline.',
   graduated: 'You have no graduated cards yet.',
   due:       'You have no cards due right now.',
+  dormant:   'You have no dormant cards.',
 }
 
 function shuffle<T>(arr: T[]): T[] {
@@ -98,7 +100,7 @@ export default function SessionPage() {
   // normal new/due queue-building below entirely.
   const categoryParam = searchParams.get('category')
   const category: StudyCategory | null =
-    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due'
+    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant'
       ? categoryParam
       : null
 
@@ -127,6 +129,12 @@ export default function SessionPage() {
   // Card info/edit modal ("i" button) — lets the learner inspect and edit the
   // current card mid-session.
   const [infoOpen,        setInfoOpen]        = useState(false)
+  const [dormantNotice,   setDormantNotice]   = useState(false)
+  useEffect(() => {
+    if (!dormantNotice) return
+    const t = setTimeout(() => setDormantNotice(false), 2800)
+    return () => clearTimeout(t)
+  }, [dormantNotice])
   // When the normal new/due queue is empty (and no ?category= was given),
   // offer a picker to elect into studying unlearned and/or not-yet-due
   // graduated ("early review") cards instead of auto-starting.
@@ -460,7 +468,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             break
           case 'graduated':
             categoryQueue = shuffle(
-              cards.filter(c => stateMap.get(c.id)?.graduated)
+              cards.filter(c => stateMap.get(c.id)?.graduated && !stateMap.get(c.id)!.dormant)
+                .map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
+            )
+            break
+          case 'dormant':
+            categoryQueue = shuffle(
+              cards.filter(c => stateMap.get(c.id)?.dormant)
                 .map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
             )
             break
@@ -468,7 +482,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             categoryQueue = shuffle(
               cards.flatMap(card => {
                 const state = stateMap.get(card.id)
-                if (!state?.graduated) return []
+                if (!state?.graduated || state.dormant) return []
                 const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
                 const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
                 const isRecallDue = isDueByDate(state.recallDueAt)
@@ -554,6 +568,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           // are studied — the rest of the learning backlog waits its turn.
           if (limitedLearningSet && !limitedLearningSet.has(card.id)) continue
           inPipeline.push({ card, state, pipeline, productionMode: null })
+        } else if (state.graduated && state.dormant) {
+          // Dormant cards never become due automatically (studyable via ?category=dormant).
         } else if (state.graduated) {
           const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
           const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
@@ -577,6 +593,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const reverseEnabled = trackEnabled(enabledTracks, 'recall', true)
       for (const reverseState of reverseStatesList) {
         if (!reverseEnabled) break
+        if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant
         if (!reverseState.recallDueAt || new Date(reverseState.recallDueAt) > now) continue
         const card = cards.find(c => c.id === reverseState.cardId)
         if (card) dueCards.push({ card, state: reverseState, pipeline, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
@@ -1008,6 +1025,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         } else {
           newState = { ...newState, postAccelRestartWindow: newWindow, postAccelWrongCount: newWrong }
         }
+      }
+
+      // Dormancy: after N production reviews the card auto-goes dormant (production
+      // reviews only — this path is reached only for forward production reviews).
+      if (newState.graduated && !newState.dormant && newState.dormancyThreshold != null && newState.reps >= newState.dormancyThreshold) {
+        newState = { ...newState, dormant: true }
+        if (wasCorrect) setDormantNotice(true)
       }
 
       await stateRepo.upsert(newState)
@@ -1598,6 +1622,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
+      {dormantNotice && (
+        <div className="fixed left-1/2 -translate-x-1/2 top-6 z-50 px-4 py-2 rounded-card bg-surface-raised border border-white/70 text-sm text-ink shadow-lg">
+          💤 Card is now dormant
+        </div>
+      )}
       <div className="relative flex items-center justify-between">
         <Link href={deckUrl} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>

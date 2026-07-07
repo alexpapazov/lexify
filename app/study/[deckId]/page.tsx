@@ -1156,7 +1156,7 @@ export default function DeckDetailPage() {
     typeof window !== 'undefined' && !!localStorage.getItem(`syn_scan_ignored_${deckId}`)
   )
   const searchParams = useSearchParams()
-  const activeFilter = searchParams.get('filter') as 'new' | 'learning' | 'graduated' | 'due' | null
+  const activeFilter = searchParams.get('filter') as 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | null
   const cardParam    = searchParams.get('card')
 
   async function loadAll(uid: string) {
@@ -1532,10 +1532,12 @@ export default function DeckDetailPage() {
   const activeForwardStates = forwardStates.filter(s => activeCardIds.has(s.cardId))
   const unlearned = cards.filter(c => !stateMap.has(c.id)).length
   const learning  = activeForwardStates.filter(s => !s.graduated).length
-  const graduated = activeForwardStates.filter(s => s.graduated).length
+  const graduated = activeForwardStates.filter(s => s.graduated && !s.dormant).length
+  const dormant   = activeForwardStates.filter(s => s.dormant).length
   const dueNow    = states.filter(s =>
     activeCardIds.has(s.cardId) &&
     s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
+    !stateMap.get(s.cardId)?.dormant &&
     (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
   ).length
 
@@ -1544,8 +1546,9 @@ export default function DeckDetailPage() {
     const s = stateMap.get(card.id)
     if (activeFilter === 'new')       return !s
     if (activeFilter === 'learning')  return s && !s.graduated
-    if (activeFilter === 'graduated') return s?.graduated
-    if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
+    if (activeFilter === 'graduated') return s?.graduated && !s.dormant
+    if (activeFilter === 'dormant')   return s?.dormant
+    if (activeFilter === 'due')       return s?.graduated && !s.dormant && s.dueAt && new Date(s.dueAt) <= now
     return true
   })
   const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(c => selectedCardIds.has(c.id))
@@ -1732,12 +1735,13 @@ export default function DeckDetailPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
           { label: 'Unlearned', value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new',       desc: 'Not yet started'  },
           { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  desc: 'In pipeline'      },
           { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', desc: 'Long-term review' },
           { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'  },
+          { label: 'Dormant',   value: dormant,   color: 'text-ink',         border: 'border-white/70',  filter: 'dormant',   desc: 'Paused — manual'  },
         ].map(({ label, value, color, border, filter, desc }) => {
           const isActive = activeFilter === filter
           return (
@@ -1766,8 +1770,8 @@ export default function DeckDetailPage() {
         </div>
 
         {activeFilter && (() => {
-          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : dueNow
-          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : 'Due Now'
+          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : activeFilter === 'dormant' ? dormant : dueNow
+          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : activeFilter === 'dormant' ? 'Dormant' : 'Due Now'
           return filterCount > 0 ? (
             <Link
               href={`/study/${deckId}/session?category=${activeFilter}`}
@@ -1902,7 +1906,7 @@ export default function DeckDetailPage() {
         <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
           {visibleCards.map(card => {
             const s = stateMap.get(card.id)
-            const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+            const status = !s ? 'New' : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
             const isSelected = selectedCardIds.has(card.id)
             return (
               <div

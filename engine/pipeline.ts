@@ -71,6 +71,8 @@ export function initialCardState(
     typoMistakeCount:     0,
     semanticMistakeCount: 0,
     wrongSynonymCount:    0,
+    dormant:              false,
+    dormancyThreshold:    null,
     acceleratedMode:        'none',
     acceleratedLocked:      false,
     acceleratedWrongStreak: 0,

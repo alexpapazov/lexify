@@ -653,6 +653,27 @@ brings them straight back.
 - Note: the study-dashboard due **counts** are not yet track-filtered, so a
   ghosted card can still be counted there (session queue is correct).
 
+## Card dormancy (2026-07-05)
+
+A card can go **dormant** — stays in the deck, manually reviewable, but never
+becomes due automatically. **Migration 068** adds `card_states.dormant` (bool) +
+`dormancy_threshold` (int, null=never), canonical on the forward row.
+
+- **Trigger**: after a graduated **production** review (typed/self-graded forward
+  track — reverse ignored), if `reps >= dormancyThreshold` → `dormant = true`.
+  Wired in all 3 session pages right before the production `stateRepo.upsert`.
+- **i-menu** (`CardEditModal`): "Go dormant after N production reviews" (Set/Clear)
+  + "Wake from dormancy" / "Make dormant now". Status shows **Dormant**.
+- **Excluded from Due Now everywhere**: all 3 session queues (forward + reverse
+  rows), the dashboard `dueNow` count + forecast (`buildForecastDays` +
+  `forecastCards`), and `lib/folderStats.ts` counts. Reverse rows check the
+  forward counterpart's `dormant` via the forward stateMap.
+- **`?category=dormant`** studies dormant cards (they **stay dormant** — elective).
+- **Dormant stat box** (neutral/white, after Due Now) + **"Dormant"** card-list
+  label at deck detail, folder (`library/[folderId]`), and library-pair
+  (`library/page`) views. `StudyCategory`/`FilterKey` unions extended with
+  `'dormant'`; `FolderCounts` gains `dormant`.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

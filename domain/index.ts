@@ -583,6 +583,11 @@ export interface CardState {
   typoMistakeCount:     number
   semanticMistakeCount: number
   wrongSynonymCount:    number
+  // ── Dormancy ──────────────────────────────────────────────────────────────
+  /** True = card stays in the deck and is manually reviewable, but never becomes due automatically. */
+  dormant:              boolean
+  /** After this many *production* (Due Now) reviews the card auto-goes dormant. null = never. Stored on the forward row. */
+  dormancyThreshold:    number | null
   // ── Fast-track (import-known) acceleration ────────────────────────────────
   /** 'import_known' = fast-tracked with boosted multipliers; 'bulk_known' = bulk-graduated without fast-track; 'none' = normal schedule. */
   acceleratedMode:        'none' | 'import_known' | 'bulk_known'

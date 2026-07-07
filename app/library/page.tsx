@@ -11,7 +11,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
 
-const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }
+const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { langName, langNativeName, langFlag } from '@/lib/languages'
 import { FLAG_OPTIONS } from '@/lib/flagOptions'
@@ -25,7 +25,7 @@ type DragItem = { type: 'folder'; id: string } | { type: 'deck'; id: string }
 type DropPos  = 'before' | 'into' | 'after'
 type DropTarget = { id: string; pos: DropPos } | null
 
-type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
+type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
 
 interface DeckStats {
   deck:   Deck
@@ -284,6 +284,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       for (const { state } of uniqueCards.values()) {
         if (!state) {
           counts.unlearned++
+        } else if (state.dormant) {
+          counts.dormant++
         } else if (state.graduated) {
           counts.graduated++
           if (state.dueAt && new Date(state.dueAt) <= now) counts.dueNow++
@@ -1270,13 +1272,14 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         const s = stateMap.get(card.id)
         if (activeFilter === 'new')       return !s
         if (activeFilter === 'learning')  return s && !s.graduated
-        if (activeFilter === 'graduated') return !!s?.graduated
-        if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
+        if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
+        if (activeFilter === 'dormant')   return !!s?.dormant
+        if (activeFilter === 'due')       return s?.graduated && !s.dormant && s.dueAt && new Date(s.dueAt) <= now
         return false
       })
       .map(card => {
         const s = stateMap.get(card.id)
-        const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+        const status = !s ? 'New' : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
         return { card, state: s, deckName: deck.name, deckId: deck.id, status }
       })
   }) : []
@@ -1301,6 +1304,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     { key: 'learning'  as FilterKey, label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: pairCounts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
+    { key: 'dormant'   as FilterKey, label: 'Dormant',   value: pairCounts.dormant,   color: 'text-ink',         border: 'border-white/70',  desc: 'Paused — manual'  },
   ]
 
   return (
@@ -1349,7 +1353,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       </div>
 
       {/* Pairing-wide stat counters */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {PAIR_COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
           const isActive = activeFilter === key
           return (

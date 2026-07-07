@@ -94,9 +94,12 @@ function buildForecastDays(
     const pairKey = `${deck.sourceLanguage}|${deck.targetLanguage}`
     if (filters.langPairs.length > 0 && !filters.langPairs.includes(pairKey)) continue
     const en = enabledTracks.get(pairKey)
+    // Dormant cards never become due — exclude both their forward and reverse rows.
+    const dormantCards = new Set(states.filter(s => s.reviewDirection !== 'reverse' && s.dormant).map(s => s.cardId))
 
     for (const s of states) {
       if (!s.graduated) continue
+      if (dormantCards.has(s.cardId)) continue
 
       const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
       if (filters.directions.length > 0 && !filters.directions.includes(dir)) continue
@@ -213,13 +216,14 @@ export default function StudyPage() {
       const isDueByDate = (dateStr: string | null | undefined) =>
         !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
       // Track-aware due checks — a disabled track never counts as due.
-      const typedDueOn  = (s: CardState) => trackEnabled(en, 'typed', false)  && (s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt))
-      const recallDueOn = (s: CardState) => trackEnabled(en, 'recall', false) && isDueByDate(s.recallDueAt)
+      const typedDueOn  = (s: CardState) => !s.dormant && trackEnabled(en, 'typed', false)  && (s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt))
+      const recallDueOn = (s: CardState) => !s.dormant && trackEnabled(en, 'recall', false) && isDueByDate(s.recallDueAt)
       // Reverse rows are scheduled by recall_due_at; their due_at is often stale in the
       // past. Prefer recall_due_at (fall back to due_at only when recall is null) so a
       // reverse card whose real schedule is in the future isn't counted as due.
       const reverseDueOn = (s: CardState) => trackEnabled(en, 'recall', true) &&
-        stateMap.get(s.cardId)?.graduated === true && isDueByDate(s.recallDueAt ?? s.dueAt)
+        stateMap.get(s.cardId)?.graduated === true && !stateMap.get(s.cardId)?.dormant &&
+        isDueByDate(s.recallDueAt ?? s.dueAt)
       return {
         deck, cards, states,
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,

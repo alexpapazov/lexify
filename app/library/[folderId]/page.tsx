@@ -12,7 +12,7 @@ import { descendantDeckIds, folderMatchesPair, type FolderCounts } from '@/lib/f
 import { langName } from '@/lib/languages'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
-type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
+type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
 
 interface DeckWithCards {
   deck:   Deck
@@ -209,13 +209,14 @@ function FolderPageInner() {
       return {
         unlearned: acc.unlearned + cards.filter(c => !fwdMap.has(c.id)).length,
         learning:  acc.learning  + forwardStates.filter(s => !s.graduated).length,
-        graduated: acc.graduated + forwardStates.filter(s => s.graduated).length,
+        graduated: acc.graduated + forwardStates.filter(s => s.graduated && !s.dormant).length,
+        dormant:   acc.dormant   + forwardStates.filter(s => s.dormant).length,
         dueNow:    acc.dueNow    + states.filter(s =>
-          s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
+          s.graduated && !fwdMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now &&
           (s.reviewDirection !== 'reverse' || fwdMap.get(s.cardId)?.graduated === true)
         ).length,
       }
-    }, { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 }))
+    }, { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }))
   }
 
   useEffect(() => { load() }, [folderId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -238,13 +239,14 @@ function FolderPageInner() {
         const s = stateMap.get(card.id)
         if (activeFilter === 'new')       return !s
         if (activeFilter === 'learning')  return s && !s.graduated
-        if (activeFilter === 'graduated') return !!s?.graduated
-        if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
+        if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
+        if (activeFilter === 'dormant')   return !!s?.dormant
+        if (activeFilter === 'due')       return s?.graduated && !s.dormant && s.dueAt && new Date(s.dueAt) <= now
         return false
       })
       .map(card => {
         const s = stateMap.get(card.id)
-        const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+        const status = !s ? 'New' : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
         return { card, state: s, deckName: deck.name, deckId: deck.id, status }
       })
   }) : []
@@ -254,6 +256,7 @@ function FolderPageInner() {
     { key: 'learning'  as FilterKey, label: 'Learning',  value: counts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: counts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: counts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
+    { key: 'dormant'   as FilterKey, label: 'Dormant',   value: counts.dormant,   color: 'text-ink',         border: 'border-white/70',  desc: 'Paused — manual'  },
   ] : []
 
   // ── Drop onto row ─────────────────────────────────────────────────────────
@@ -577,7 +580,7 @@ function FolderPageInner() {
       {/* Stats + Study button for this folder (including subfolders) */}
       {counts && (counts.unlearned + counts.learning + counts.graduated) > 0 && (
         <div className="space-y-3">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
               const isActive = activeFilter === key
               return (

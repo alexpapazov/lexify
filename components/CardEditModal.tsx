@@ -92,6 +92,20 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [resetAction, setResetAction] = useState<'distractors' | 'progress' | 'audio' | 'all' | null>(null)
   const [resetting,   setResetting]   = useState(false)
   const [resetError,  setResetError]  = useState<string | null>(null)
+  const [dormancyInput, setDormancyInput] = useState('')
+  const [dormancyBusy,  setDormancyBusy]  = useState(false)
+
+  // Persist a dormancy change (threshold and/or dormant flag) on the forward row.
+  async function applyDormancy(patch: { dormant?: boolean; dormancyThreshold?: number | null }) {
+    if (!state) return
+    setDormancyBusy(true)
+    try {
+      const updated = await new SupabaseCardStateRepository().upsert({ ...state, ...patch })
+      onStateChange(updated)
+    } finally {
+      setDormancyBusy(false)
+    }
+  }
   const [resetDone,   setResetDone]   = useState<string | null>(null)
   const [graduating,          setGraduating]          = useState(false)
   const [graduateAccelerated, setGraduateAccelerated] = useState(false)
@@ -994,7 +1008,9 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             {!state ? (
               <p className="text-ink-faint text-xs">New — not yet studied. No stats yet.</p>
             ) : (() => {
-              const status = state.graduated
+              const status = state.dormant
+                ? 'Dormant'
+                : state.graduated
                 ? 'Graduated'
                 : `Learning — Step ${state.currentStepOrder + 1}`
               const rating = state.lastRating
@@ -1034,6 +1050,59 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     ['Last rating',    rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
                     ["I don't know",   String(state.iDontKnowCount)],
                   ]} />
+
+                  {/* Dormancy controls */}
+                  <div className="space-y-1.5">
+                    <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                      Dormancy
+                    </div>
+                    <p className="text-[10px] text-ink-faint leading-relaxed">
+                      A dormant card stays in the deck and is reviewable, but never becomes due automatically.
+                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs text-ink-muted">Go dormant after</span>
+                      <input
+                        type="number" min={1} max={999}
+                        className="input text-center text-sm px-1 py-1 w-16"
+                        placeholder={state.dormancyThreshold != null ? String(state.dormancyThreshold) : '—'}
+                        value={dormancyInput}
+                        onChange={e => setDormancyInput(e.target.value)}
+                      />
+                      <span className="text-xs text-ink-muted">production reviews</span>
+                      <button
+                        disabled={dormancyBusy}
+                        className="text-xs text-accent hover:underline disabled:opacity-50"
+                        onClick={() => {
+                          const raw = dormancyInput.trim()
+                          applyDormancy({ dormancyThreshold: raw ? (parseInt(raw, 10) || null) : null })
+                            .then(() => setDormancyInput(''))
+                            .catch(err => alert('Failed: ' + (err instanceof Error ? err.message : String(err))))
+                        }}
+                      >Set</button>
+                      {state.dormancyThreshold != null && (
+                        <button
+                          disabled={dormancyBusy}
+                          className="text-xs text-ink-faint hover:text-danger disabled:opacity-50"
+                          onClick={() => applyDormancy({ dormancyThreshold: null }).catch(() => {})}
+                        >Clear</button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 pt-0.5">
+                      {state.dormant ? (
+                        <button
+                          disabled={dormancyBusy}
+                          className="text-xs text-accent hover:underline disabled:opacity-50"
+                          onClick={() => applyDormancy({ dormant: false }).catch(() => {})}
+                        >↺ Wake from dormancy</button>
+                      ) : (
+                        <button
+                          disabled={dormancyBusy || !state.graduated}
+                          className="text-xs text-ink-faint hover:text-ink disabled:opacity-40"
+                          onClick={() => applyDormancy({ dormant: true }).catch(() => {})}
+                        >Make dormant now</button>
+                      )}
+                    </div>
+                  </div>
 
                   {!state.graduated && (
                     <>
