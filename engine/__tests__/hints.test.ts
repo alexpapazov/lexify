@@ -57,6 +57,21 @@ describe('hintPlan — alphabetic', () => {
   it('one-letter word has no hint', () => {
     expect(hintPlan('a', 'es').maxLevel).toBe(0)
   })
+
+  it('English infinitive "to pray" skips "to" → reveals p, pr', () => {
+    const p = hintPlan('to pray', 'en')
+    expect(p.levelText).toEqual(['p', 'pr'])
+  })
+
+  it('quoted phrase reveals the first real letter, not the quote', () => {
+    const p = hintPlan('"to crumble / fall apart"', 'en')
+    expect(p.levelText[0]).toBe('c')
+  })
+
+  it('"to" is only stripped for English answers', () => {
+    // In a non-English answer, a leading "to" is a real word and stays.
+    expect(hintPlan('to casa', 'es').levelText[0]).toBe('t')
+  })
 })
 
 describe('hintPlan — Korean (full first syllable, one level only)', () => {
