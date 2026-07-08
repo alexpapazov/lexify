@@ -1199,6 +1199,7 @@ function AllDueSessionInner() {
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
           hintable={hintable} onHint={handleHint}
           answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />

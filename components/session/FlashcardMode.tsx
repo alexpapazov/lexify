@@ -6,6 +6,7 @@ import { displayText } from '@/lib/cardText'
 import { hintPlan, hintGrowthFactor } from '@/lib/hints'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
+import { EditableAnswerText } from './EditableAnswerText'
 import { CardInfoButton } from './CardInfoButton'
 
 /**
@@ -13,9 +14,11 @@ import { CardInfoButton } from './CardInfoButton'
  * (rare — only if a custom pipeline ends on a recognition step).
  * Shows Again/Hard/Good/Easy once the answer is revealed.
  */
-export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit, onInfo, hintable, onHint, answerLanguage }: {
+export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit, onAnswerEdit, onInfo, hintable, onHint, answerLanguage }: {
   card: Card; promptSide: 'front' | 'back'; deckName?: string; onRate: (r: Rating) => void
   onPromptEdit?: (newText: string) => void
+  /** Edit the answer (other) side of the card from the revealed answer panel. */
+  onAnswerEdit?: (newText: string) => void
   onInfo?: () => void
   /** Whether the "Hint" button is offered (Due Now reviews only). */
   hintable?: boolean
@@ -65,7 +68,9 @@ export function FlashcardMode({ card, promptSide, deckName, onRate, onPromptEdit
       ) : (
         <div className="space-y-4">
           <div className="panel min-h-[100px] flex items-center justify-center text-center bg-surface-raised">
-            <p className="text-xl text-ink">{answer}</p>
+            {onAnswerEdit
+              ? <span className="text-xl text-ink"><EditableAnswerText text={answer} onEdit={t => onAnswerEdit(t)} /></span>
+              : <p className="text-xl text-ink">{answer}</p>}
           </div>
           {dontKnow ? (
             <div className="flex justify-center">
