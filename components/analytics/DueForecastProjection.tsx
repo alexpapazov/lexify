@@ -86,19 +86,34 @@ export function DueForecastProjection() {
         const DAY = 86_400_000
         const offset = (iso: string | null | undefined) => iso ? Math.max(0, Math.round((new Date(iso).getTime() - now) / DAY)) : null
 
-        const simulate = (arr: Float64Array, startDay: number | null, interval: number | null | undefined, m: number, maxInt: number) => {
-          if (startDay === null || m <= 1) return
+        // Simulates a card's future reviews. `maxReviews` caps how many future
+        // reviews it emits before going dormant (returns the day it went dormant);
+        // `stopDay` halts it once the card is dormant (from another track). Returns
+        // the dormant day when `maxReviews` was hit, else null.
+        const simulate = (
+          arr: Float64Array, startDay: number | null, interval: number | null | undefined,
+          m: number, maxInt: number, opts?: { maxReviews?: number; stopDay?: number },
+        ): number | null => {
+          if (startDay === null || m <= 1) return null
           let day = startDay
           let intv = Math.max(0.5, interval || 1)
           let guard = 0
+          let count = 0
           while (day <= HORIZON && guard++ < 300) {
+            if (opts?.stopDay != null && day > opts.stopDay) break
             arr[day] = (arr[day] ?? 0) + 1
+            count++
+            if (opts?.maxReviews != null && count >= opts.maxReviews) return day
             intv = Math.min(intv * m, maxInt)
             day += Math.max(1, Math.round(intv))
           }
+          return null
         }
 
         // Existing graduated cards — simulate their real schedules forward.
+        // Dormancy: already-dormant cards are excluded entirely; a card with a
+        // future dormancy_threshold stops contributing once its remaining
+        // production reviews run out (and its reverse row stops the same day).
         const stateRepo = new SupabaseCardStateRepository()
         const deckStates = await Promise.all(decks.map(d => stateRepo.listByDeck(uid, d.id)))
         for (let di = 0; di < decks.length; di++) {
@@ -106,14 +121,39 @@ export function DueForecastProjection() {
           const states = deckStates[di]!
           const c = ensure(`${deck.sourceLanguage}|${deck.targetLanguage}`)
           const fwd = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
+          // The day each card goes dormant (production threshold reached), so the
+          // reverse row can be stopped at the same point.
+          const dormantDayByCard = new Map<string, number>()
+
+          // Forward (production) pass first, so reverse rows can read dormant days.
           for (const s of states) {
-            if (!s.graduated) continue
-            if (s.reviewDirection === 'reverse') {
-              if (c.reverseOn && fwd.get(s.cardId)?.graduated) simulate(recog, offset(s.recallDueAt ?? s.dueAt), s.recallIntervalDays ?? s.intervalDays, c.reverseM, c.maxInt)
-            } else {
-              if (c.typedOn) simulate(prod, offset(s.typedDueAt ?? s.dueAt), s.typedIntervalDays ?? s.intervalDays, c.typedM, c.maxInt)
-              if (c.recallOn && s.recallDueAt) simulate(prod, offset(s.recallDueAt), s.recallIntervalDays ?? s.intervalDays, c.recallM, c.maxInt)
+            if (s.reviewDirection === 'reverse' || !s.graduated || s.dormant) continue
+            // remaining production reviews before dormancy (null = never goes dormant).
+            const remaining = s.dormancyThreshold != null ? s.dormancyThreshold - s.reps : null
+            if (remaining != null && remaining <= 0) continue   // already at/over threshold → treat as dormant
+            let dormantDay: number | null = null
+            if (c.typedOn) {
+              dormantDay = simulate(prod, offset(s.typedDueAt ?? s.dueAt), s.typedIntervalDays ?? s.intervalDays, c.typedM, c.maxInt,
+                remaining != null ? { maxReviews: remaining } : undefined)
             }
+            if (c.recallOn && s.recallDueAt) {
+              const recallOpts = dormantDay != null ? { stopDay: dormantDay }
+                : (remaining != null ? { maxReviews: remaining } : undefined)
+              const rd = simulate(prod, offset(s.recallDueAt), s.recallIntervalDays ?? s.intervalDays, c.recallM, c.maxInt, recallOpts)
+              if (dormantDay == null) dormantDay = rd
+            }
+            if (dormantDay != null) dormantDayByCard.set(s.cardId, dormantDay)
+          }
+
+          // Reverse (recognition) pass.
+          for (const s of states) {
+            if (s.reviewDirection !== 'reverse' || !s.graduated) continue
+            const fwdState = fwd.get(s.cardId)
+            if (fwdState?.dormant) continue                     // forward already dormant → reverse ghosted
+            if (!(c.reverseOn && fwdState?.graduated)) continue
+            const stopDay = dormantDayByCard.get(s.cardId)
+            simulate(recog, offset(s.recallDueAt ?? s.dueAt), s.recallIntervalDays ?? s.intervalDays, c.reverseM, c.maxInt,
+              stopDay != null ? { stopDay } : undefined)
           }
         }
 
