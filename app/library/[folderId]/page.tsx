@@ -8,7 +8,7 @@ import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import { descendantDeckIds, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
 import { langName } from '@/lib/languages'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
@@ -136,6 +136,7 @@ function FolderPageInner() {
   const [renaming,     setRenaming]     = useState(false)
   const [renameValue,  setRenameValue]  = useState('')
   const [counts,       setCounts]       = useState<FolderCounts | null>(null)
+  const [subfolderCounts, setSubfolderCounts] = useState<Record<string, FolderCounts>>({})
   const [deckStats,    setDeckStats]    = useState<DeckWithCards[]>([])
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
   const [searchQuery,  setSearchQuery]  = useState('')
@@ -217,6 +218,21 @@ function FolderPageInner() {
         ).length,
       }
     }, { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }))
+
+    // Per-subfolder counts for the subfolder row summaries.
+    const subs = folders.filter(f => f.parentId === folderId)
+    const subEntries = await Promise.all(subs.map(async sf => {
+      let dIds = descendantDeckIds(sf.id, folders, decksData)
+      if (pairSource && pairTarget) {
+        dIds = dIds.filter(id => {
+          const dk = decksData.find(d => d.id === id)
+          return !!dk && dk.sourceLanguage === pairSource && dk.targetLanguage === pairTarget
+        })
+      }
+      const c = await computeDeckCounts(dIds, session.user.id, cardRepo, stateRepo)
+      return [sf.id, c] as const
+    }))
+    setSubfolderCounts(Object.fromEntries(subEntries))
   }
 
   useEffect(() => { load() }, [folderId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -759,6 +775,18 @@ function FolderPageInner() {
                   >
                     <div className="text-sm font-medium text-ink truncate">{sub.name}</div>
                   </Link>
+                  {(() => {
+                    const c = subfolderCounts[sub.id]
+                    if (!c || (c.unlearned + c.learning + c.graduated) === 0) return null
+                    return (
+                      <div className="hidden sm:flex items-center gap-3 text-xs shrink-0">
+                        <span className="text-ink-muted">{c.unlearned} new</span>
+                        <span className="text-warning">{c.learning} learning</span>
+                        <span className="text-success">{c.graduated} done</span>
+                        <span className="text-accent-soft">{c.dueNow} due</span>
+                      </div>
+                    )
+                  })()}
                 </div>
                 {dt?.pos === 'after' && (
                   <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-accent rounded-full z-10 translate-y-0.5" />
