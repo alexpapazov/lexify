@@ -20,6 +20,7 @@ import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOve
 import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymLinks'
 import type { Deck, Card, CardState, CardChoices, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
+import { getToday } from '@/lib/dates'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
@@ -1134,6 +1135,8 @@ export default function DeckDetailPage() {
   const [userId,           setUserId]           = useState('')
   const [defaultLimit,     setDefaultLimit]     = useState(DEFAULT_DAILY_NEW_CARDS)
   const [defaultSpillover, setDefaultSpillover] = useState(false)
+  const [tz,               setTz]               = useState('UTC')
+  const [turnoverHour,     setTurnoverHour]     = useState(0)
   const [loading,          setLoading]          = useState(true)
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
   const [bulkGraduating,      setBulkGraduating]      = useState(false)
@@ -1173,11 +1176,13 @@ export default function DeckDetailPage() {
     ])
 
     const { data: profile } = await supabase.from('profiles')
-      .select('default_daily_new_cards, spillover_due')
+      .select('default_daily_new_cards, spillover_due, timezone, day_turnover_hour')
       .eq('user_id', uid).single()
 
     if (profile?.default_daily_new_cards) setDefaultLimit(profile.default_daily_new_cards)
     if (profile?.spillover_due !== undefined) setDefaultSpillover(profile.spillover_due)
+    setTz((profile?.timezone as string | null) ?? 'UTC')
+    setTurnoverHour((profile?.day_turnover_hour as number | null) ?? 0)
 
     if (!d) { router.push('/study'); return }
     setDeck(d); setCards(c); setStates(s); setPrefs(p)
@@ -1521,6 +1526,11 @@ export default function DeckDetailPage() {
   const forwardStates  = states.filter(s => s.reviewDirection !== 'reverse')
   const stateMap       = new Map(forwardStates.map(s => [s.cardId, s]))
   const now            = new Date()
+  // Turnover-aware "today": a card due on today's calendar date (in the user's
+  // timezone, adjusted for the day-turnover hour) is due; nothing later counts.
+  const todayStr = getToday(tz, turnoverHour)
+  const isDueByDate = (dateStr: string | null | undefined) =>
+    !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
 
   const synonymCandidates: SynonymCandidate[] = cards
     .filter(c => !c.synonymGroupId)
@@ -1536,7 +1546,7 @@ export default function DeckDetailPage() {
   const dormant   = activeForwardStates.filter(s => s.dormant).length
   const dueNow    = states.filter(s =>
     activeCardIds.has(s.cardId) &&
-    s.graduated && s.dueAt && new Date(s.dueAt) <= now &&
+    s.graduated && isDueByDate(s.dueAt) &&
     !stateMap.get(s.cardId)?.dormant &&
     (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
   ).length
@@ -1548,7 +1558,7 @@ export default function DeckDetailPage() {
     if (activeFilter === 'learning')  return s && !s.graduated
     if (activeFilter === 'graduated') return s?.graduated && !s.dormant
     if (activeFilter === 'dormant')   return s?.dormant
-    if (activeFilter === 'due')       return s?.graduated && !s.dormant && s.dueAt && new Date(s.dueAt) <= now
+    if (activeFilter === 'due')       return s?.graduated && !s.dormant && isDueByDate(s.dueAt)
     return true
   })
   const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(c => selectedCardIds.has(c.id))
