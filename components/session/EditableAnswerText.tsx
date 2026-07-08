@@ -65,7 +65,7 @@ export function EditableAnswerText({
 
   return (
     <span
-      className="font-mono text-ink cursor-default"
+      className="font-mono text-ink cursor-default select-none"
       onDoubleClick={start}
       title="Double-click to edit"
     >
