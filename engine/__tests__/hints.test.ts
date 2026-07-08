@@ -63,6 +63,11 @@ describe('hintPlan — alphabetic', () => {
     expect(p.levelText).toEqual(['p', 'pr'])
   })
 
+  it('"to be creepy/disgusting" skips "to be" → reveals c, cr', () => {
+    const p = hintPlan('to be creepy/disgusting', 'en')
+    expect(p.levelText).toEqual(['c', 'cr'])
+  })
+
   it('quoted phrase reveals the first real letter, not the quote', () => {
     const p = hintPlan('"to crumble / fall apart"', 'en')
     expect(p.levelText[0]).toBe('c')

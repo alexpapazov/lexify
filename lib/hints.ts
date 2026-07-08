@@ -52,11 +52,13 @@ export function hintPlan(answer: string, answerLanguage?: string): HintPlan {
   if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
     trimmed = trimmed.slice(1, -1).trim()
   }
-  // English infinitive marker: "to pray" → reveal "p…", skipping the "to" (which
-  // carries no information). Only for English answers, where "to" is the marker.
+  // English infinitive marker: "to pray" → reveal "p…"; "to be creepy" → "c…".
+  // Skips the content-free "to " (and a following "be ") so the hint reveals the
+  // meaningful word. Only for English answers, where "to"/"to be" are the markers.
   const langBase = (answerLanguage ?? '').toLowerCase().split(/[-_]/)[0]
-  if (langBase === 'en' && /^to\s+\S/i.test(trimmed)) {
-    trimmed = trimmed.replace(/^to\s+/i, '')
+  if (langBase === 'en') {
+    const stripped = trimmed.replace(/^to\s+(be\s+)?(?=\S)/i, '')
+    if (stripped) trimmed = stripped
   }
   if (!trimmed) return empty
 
