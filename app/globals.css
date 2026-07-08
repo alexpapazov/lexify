@@ -12,6 +12,15 @@
   ::-webkit-scrollbar-thumb { @apply bg-ink-faint rounded-full; }
 }
 
+@keyframes shake-x {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-6px); }
+  40%      { transform: translateX(6px); }
+  60%      { transform: translateX(-4px); }
+  80%      { transform: translateX(4px); }
+}
+.animate-shake { animation: shake-x 0.4s ease-in-out; }
+
 @layer components {
   .panel       { @apply bg-surface rounded-card border border-white/5 p-6; }
   .btn-primary { @apply bg-accent hover:bg-accent-soft text-white font-medium px-5 py-2.5 rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed; }

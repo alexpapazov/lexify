@@ -106,6 +106,8 @@ export function TypingMode({
   const [addedSynonyms,      setAddedSynonyms]      = useState<string[]>([])
   // How many times a sibling was typed in the canonical input before the canonical itself
   const [canonicalLoopCount, setCanonicalLoopCount] = useState(0)
+  // Set briefly when the user retypes a synonym they've already entered — shakes the input.
+  const [shakeCanon, setShakeCanon] = useState(false)
   const [softWrongRecallRating, setSoftWrongRecallRating] = useState<Rating | null>(null)
   const [softWrongOverrideAtRating, setSoftWrongOverrideAtRating] = useState(false)
   const [overrideAsAlmost, setOverrideAsAlmost] = useState(false)
@@ -133,6 +135,7 @@ export function TypingMode({
     setExtraSynonyms([])
     setAddedSynonyms([])
     setCanonicalLoopCount(0)
+    setShakeCanon(false)
     setSoftWrongRecallRating(null)
     setSoftWrongOverrideAtRating(false)
     setOverrideAsAlmost(false)
@@ -319,6 +322,18 @@ export function TypingMode({
     // Exact canonical → success
     if (gradeTyping(canonInput, expected, effectiveGradingSettings).status === 'correct') {
       gradeAndSetResult(canonInput, true)
+      return
+    }
+    // Reject a synonym/sibling the user has ALREADY entered — they must type something
+    // different (ideally the main term). Shake the input and keep the text for editing.
+    const alreadyEntered = [synonymPhaseText, siblingText, ...extraSynonyms].filter(Boolean)
+    const isRepeat = alreadyEntered.some(
+      prev => gradeTyping(canonInput, prev, effectiveGradingSettings).status === 'correct'
+    )
+    if (isRepeat) {
+      setShakeCanon(true)
+      setTimeout(() => setShakeCanon(false), 400)
+      setTimeout(() => canonRef.current?.focus(), 0)
       return
     }
     // Another sibling card → credit the sibling and keep asking for the canonical
@@ -577,7 +592,7 @@ export function TypingMode({
             </div>
             <input
               ref={canonRef}
-              className="input text-center text-lg font-mono"
+              className={`input text-center text-lg font-mono ${shakeCanon ? 'animate-shake border-danger/60' : ''}`}
               placeholder={answerLanguage ? `Type ${langNativeName(answerLanguage)} answer…` : 'Type your answer…'}
               value={canonInput}
               onChange={e => setCanonInput(e.target.value)}
@@ -585,6 +600,9 @@ export function TypingMode({
               onCompositionEnd={() => setComposingCanon(false)}
               onKeyDown={e => { if (e.key === 'Enter' && !composingCanon) checkCanonical() }}
             />
+            {shakeCanon && (
+              <p className="text-xs text-danger text-center">You already entered that — type a different answer.</p>
+            )}
             <div className="flex justify-center gap-3">
               {canHint && (
                 <button onClick={useHintPress} className="btn-ghost" title="Reveal the start of the answer (reduces interval growth)">Hint</button>
@@ -619,7 +637,7 @@ export function TypingMode({
             </div>
             <input
               ref={canonRef}
-              className="input text-center text-lg font-mono"
+              className={`input text-center text-lg font-mono ${shakeCanon ? 'animate-shake border-danger/60' : ''}`}
               placeholder={answerLanguage ? `Type ${langNativeName(answerLanguage)} answer…` : 'Type your answer…'}
               value={canonInput}
               onChange={e => setCanonInput(e.target.value)}
@@ -627,6 +645,9 @@ export function TypingMode({
               onCompositionEnd={() => setComposingCanon(false)}
               onKeyDown={e => { if (e.key === 'Enter' && !composingCanon) checkCanonical() }}
             />
+            {shakeCanon && (
+              <p className="text-xs text-danger text-center">You already entered that — type a different answer.</p>
+            )}
             <div className="flex justify-center gap-3">
               {canHint && (
                 <button onClick={useHintPress} className="btn-ghost" title="Reveal the start of the answer (reduces interval growth)">Hint</button>
