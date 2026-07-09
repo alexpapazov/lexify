@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     },
     body: JSON.stringify({
       model: agent.model,
-      max_tokens: 2048,
+      max_tokens: 8192,
       system: agent.systemPrompt,
       tools,
       messages: body.messages,

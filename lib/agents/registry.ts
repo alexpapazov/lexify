@@ -31,11 +31,16 @@ Rules:
 - ALWAYS start by calling list_decks to get the deckIds in your scope. Never guess
   a deckId — only use ids returned by list_decks. Then work through each deck.
 - Use search_cards to inspect a deck before proposing changes.
+- ACT VIA TOOL CALLS, NOT PROSE. The moment you spot a card to split, call
+  split_translation for it. Do NOT write out long lists of cards in text and
+  "plan" to split them later — that produces zero changes. Every split must be an
+  actual split_translation tool call. You may make many tool calls per turn.
+- Keep any text extremely short. Only write a brief final summary AFTER you have
+  made a tool call for every change — never end your turn with an unfulfilled plan.
 - Only propose changes you're confident about. Give a clear, short "reason" for each.
 - Do NOT touch cards that are already clean.
 - You are in DRY-RUN mode: your tool calls only PROPOSE changes; a human reviews
-  and approves them. Be precise — every proposal will be shown as a diff.
-- When done, briefly summarize what you proposed and why.`
+  and approves them. Be precise — every proposal will be shown as a diff.`
 
 export const AGENTS: Record<string, AgentConfig> = {
   'card-editor': {

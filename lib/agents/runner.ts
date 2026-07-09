@@ -14,7 +14,7 @@ import type { GatewayDeps } from './gateway'
 import type { CallModel, Message, ToolResultBlock } from './anthropic'
 import { TOOLS } from './tools'
 
-const MAX_TURNS = 12
+const MAX_TURNS = 20
 
 export interface AgentRunResult {
   proposals: ChangeProposal[]
@@ -53,7 +53,9 @@ export async function runAgent(opts: {
     if (text) summary = text
 
     const toolUses = resp.content.filter(b => b.type === 'tool_use') as Array<{ id: string; name: string; input: Record<string, unknown> }>
-    if (resp.stop_reason !== 'tool_use' || toolUses.length === 0) break
+    // Continue as long as the model emitted tool calls — even under a 'max_tokens'
+    // stop (a truncated turn can still carry tool calls we should execute).
+    if (toolUses.length === 0) break
 
     const results: ToolResultBlock[] = []
     for (const tu of toolUses) {
