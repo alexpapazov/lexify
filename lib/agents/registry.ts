@@ -28,6 +28,8 @@ has ONE clean gloss — keep the best gloss on the original card via edit_card_t
 and create one sibling card per additional gloss via split_translation.
 
 Rules:
+- ALWAYS start by calling list_decks to get the deckIds in your scope. Never guess
+  a deckId — only use ids returned by list_decks. Then work through each deck.
 - Use search_cards to inspect a deck before proposing changes.
 - Only propose changes you're confident about. Give a clear, short "reason" for each.
 - Do NOT touch cards that are already clean.
@@ -41,7 +43,7 @@ export const AGENTS: Record<string, AgentConfig> = {
     label:        'Card editor',
     model:        'claude-opus-4-8',
     systemPrompt: CARD_EDITOR_PROMPT,
-    tools:        ['search_cards', 'edit_card_text', 'create_card', 'split_translation', 'delete_card'],
+    tools:        ['list_decks', 'search_cards', 'edit_card_text', 'create_card', 'split_translation', 'delete_card'],
     defaultDryRun: true,
   },
 }

@@ -23,6 +23,16 @@ const str = (v: unknown): string => String(v ?? '')
 const strArr = (v: unknown): string[] => Array.isArray(v) ? v.map(str) : []
 
 export const TOOLS: Record<string, ToolDef> = {
+  list_decks: {
+    name: 'list_decks',
+    description: 'List the decks in your grant scope (deckId, name, source/target language). Call this FIRST — you need a real deckId before you can search or edit anything.',
+    inputSchema: { type: 'object', properties: {} },
+    run: async (ctx, deps) => {
+      const decks = await gw.listDecksInScope(ctx, deps)
+      return decks.map(d => ({ deckId: d.id, name: d.name, source: d.sourceLanguage, target: d.targetLanguage }))
+    },
+  },
+
   search_cards: {
     name: 'search_cards',
     description: 'List cards in an in-scope deck, optionally filtered by a substring on either side.',
