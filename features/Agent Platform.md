@@ -1,8 +1,19 @@
 # Agent Platform — design & rollout plan
 
-> **STATUS: PLANNED — not implemented yet.** This is a roadmap, not a
-> description of shipped behavior. Phases 1–2 are specced in full below;
-> Phases 3+ are summarized so a later session can expand them on request.
+> **STATUS: Phase 1 BUILT (2026-07-09, needs migration `070` applied); Phase 2+
+> still PLANNED.** Phases 1–2 are specced in full below; Phases 3+ are summarized
+> so a later session can expand them on request.
+>
+> **Phase 1 shipped:** `domain` types (`Grant`/`GatewayContext`/`ChangeProposal`/
+> `AgentAction`/`AgentOperation`); `lib/agents/gateway.ts` (scope + audit +
+> apply-or-propose: `searchCards`/`editCardText`/`createCard`/`deleteCard`/
+> `splitTranslation`, DI-based); `lib/agents/deps.ts` (Supabase wiring);
+> `lib/agents/tools.ts` (SDK-agnostic manifest); `lib/agents/mcp/` (standalone MCP
+> server scaffold — needs `npm i @modelcontextprotocol/sdk`, excluded from app
+> tsconfig); `lib/data/agentActions.ts` + interface; migration `070_agent_actions`;
+> 12 gateway unit tests. **Not yet done in P1:** `mergeCards`, `triggerSync`,
+> `regenerateDistractors` ops (documented as TODO), and refactoring the existing
+> sync/distractor routes to route their writes through the gateway.
 
 ## Locked decisions (2026-07-09)
 - **Gateway is an MCP server from the start.** Core op logic lives in
