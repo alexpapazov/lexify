@@ -13,6 +13,7 @@ const NAV_LINKS = [
   { href: '/progress',  label: 'Analytics' },
   { href: '/browse',    label: 'Browse'   },
   { href: '/upload',    label: 'Upload'   },
+  { href: '/agents',    label: 'Agents'   },
   { href: '/profile',   label: 'Profile'  },
   { href: '/settings',  label: 'Settings' },
 ]
