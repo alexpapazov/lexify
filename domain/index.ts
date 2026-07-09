@@ -195,6 +195,29 @@ export interface AgentAction {
   createdAt: string
 }
 
+// ── Change sets (Phase 2): an agent run's proposed edits, pending user review ──
+export type ChangeSetStatus  = 'pending' | 'applied' | 'discarded'
+export type ChangeItemStatus = 'pending' | 'approved' | 'rejected' | 'applied' | 'failed'
+
+export interface ChangeSetItem {
+  id:          string
+  changeSetId: string
+  proposal:    ChangeProposal
+  status:      ChangeItemStatus
+  error?:      string | null
+}
+
+export interface ChangeSet {
+  id:        string
+  userId:    UserId
+  agent:     string
+  task:      string
+  summary:   string
+  status:    ChangeSetStatus
+  createdAt: string
+  items:     ChangeSetItem[]
+}
+
 /** Default for new decks — strict mode, case-insensitive only. */
 export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
   gradingMode:                 'strict',

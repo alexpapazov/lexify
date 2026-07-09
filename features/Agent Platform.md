@@ -1,8 +1,26 @@
 # Agent Platform — design & rollout plan
 
-> **STATUS: Phase 1 BUILT (2026-07-09, needs migration `070` applied); Phase 2+
-> still PLANNED.** Phases 1–2 are specced in full below; Phases 3+ are summarized
-> so a later session can expand them on request.
+> **STATUS: Phases 1 & 2 BUILT (2026-07-09, need migrations `070` + `071`
+> applied + `ANTHROPIC_API_KEY` set); Phases 3+ still PLANNED.** Phases 1–2 are
+> specced in full below; Phases 3+ are summarized so a later session can expand
+> them on request.
+>
+> **Phase 2 shipped:** `lib/agents/registry.ts` (AGENTS map — the card-editor
+> agent; add an agent = one entry); `lib/agents/runner.ts` (generic, transport-
+> agnostic tool-use loop, unit-tested with a fake model); `lib/agents/anthropic.ts`
+> (Messages API tool-use typings); `lib/agents/runClient.ts` (browser
+> orchestration: `runAgentAndSave` + `applyProposal`); `app/api/agents/claude`
+> (auth-light proxy that injects the registry's system prompt + tools server-side,
+> keeps the key off the client — model call runs in the browser loop via this
+> proxy); change-set persistence (`domain` `ChangeSet`/`ChangeSetItem`,
+> `lib/data/changeSets.ts`, migration `071_change_sets`); UI: `app/agents`
+> (launcher: pick scope + task, dry-run) and `app/agents/review/[changeSetId]`
+> (diff + approve/reject + Apply approved → applies each via the gateway). Runner
+> tests: 3. **Architecture note:** the agent loop runs CLIENT-side (reuses the
+> RLS-scoped browser repos + gateway, so no server repo duplication); only the
+> Claude turn is proxied. **Not live-verified:** the end-to-end Anthropic tool-use
+> loop (needs the API key + a real run); the proxy is currently gated only by
+> `agentId` validity — add real auth (verify the caller) before trusting it.
 >
 > **Phase 1 shipped:** `domain` types (`Grant`/`GatewayContext`/`ChangeProposal`/
 > `AgentAction`/`AgentOperation`); `lib/agents/gateway.ts` (scope + audit +
