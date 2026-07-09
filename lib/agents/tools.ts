@@ -7,9 +7,14 @@
  * (`lib/agents/mcp/`) consume THIS map, so a new tool is defined in one place.
  */
 
-import type { GatewayContext } from '@/domain'
-import type { GatewayDeps } from './gateway'
+import type { GatewayContext, Card } from '@/domain'
+import type { GatewayDeps, GatewayResult } from './gateway'
 import * as gw from './gateway'
+
+// Trim cards/results before they go into the model context — full Card rows carry
+// heavy fields (base64 `audioData`, `choices`, `ipa`) that would blow the token limit.
+const slimCard = (c: Card) => ({ cardId: c.id, front: c.front, back: c.back, hints: c.hints })
+const slimResult = (r: GatewayResult) => ({ applied: r.applied, proposals: r.proposals, card: r.card ? slimCard(r.card) : undefined })
 
 export interface ToolDef {
   name: string
@@ -44,7 +49,10 @@ export const TOOLS: Record<string, ToolDef> = {
       },
       required: ['deckId'],
     },
-    run: (ctx, deps, args) => gw.searchCards(ctx, deps, { deckId: str(args.deckId), query: args.query ? str(args.query) : undefined }),
+    run: async (ctx, deps, args) => {
+      const cards = await gw.searchCards(ctx, deps, { deckId: str(args.deckId), query: args.query ? str(args.query) : undefined })
+      return cards.map(slimCard)
+    },
   },
 
   edit_card_text: {
@@ -61,12 +69,12 @@ export const TOOLS: Record<string, ToolDef> = {
       },
       required: ['deckId', 'cardId', 'reason'],
     },
-    run: (ctx, deps, args) => gw.editCardText(ctx, deps, {
+    run: async (ctx, deps, args) => slimResult(await gw.editCardText(ctx, deps, {
       deckId: str(args.deckId), cardId: str(args.cardId),
       front: args.front !== undefined ? str(args.front) : undefined,
       back:  args.back  !== undefined ? str(args.back)  : undefined,
       reason: str(args.reason),
-    }),
+    })),
   },
 
   create_card: {
@@ -82,9 +90,9 @@ export const TOOLS: Record<string, ToolDef> = {
       },
       required: ['deckId', 'front', 'back', 'reason'],
     },
-    run: (ctx, deps, args) => gw.createCard(ctx, deps, {
+    run: async (ctx, deps, args) => slimResult(await gw.createCard(ctx, deps, {
       deckId: str(args.deckId), front: str(args.front), back: str(args.back), reason: str(args.reason),
-    }),
+    })),
   },
 
   delete_card: {
@@ -99,9 +107,9 @@ export const TOOLS: Record<string, ToolDef> = {
       },
       required: ['deckId', 'cardId', 'reason'],
     },
-    run: (ctx, deps, args) => gw.deleteCard(ctx, deps, {
+    run: async (ctx, deps, args) => slimResult(await gw.deleteCard(ctx, deps, {
       deckId: str(args.deckId), cardId: str(args.cardId), reason: str(args.reason),
-    }),
+    })),
   },
 
   split_translation: {
@@ -118,10 +126,10 @@ export const TOOLS: Record<string, ToolDef> = {
       },
       required: ['deckId', 'cardId', 'primaryBack', 'extraBacks', 'reason'],
     },
-    run: (ctx, deps, args) => gw.splitTranslation(ctx, deps, {
+    run: async (ctx, deps, args) => slimResult(await gw.splitTranslation(ctx, deps, {
       deckId: str(args.deckId), cardId: str(args.cardId),
       primaryBack: str(args.primaryBack), extraBacks: strArr(args.extraBacks), reason: str(args.reason),
-    }),
+    })),
   },
 }
 
