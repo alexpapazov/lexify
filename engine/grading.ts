@@ -130,9 +130,19 @@ export function stripLeadingArticle(s: string, lang?: string): string {
 
 // ─── Normalization ─────────────────────────────────────────────────────────────
 
+/**
+ * Canonicalizes apostrophe/quote variants to a straight ASCII apostrophe so a
+ * typed "s'avérer" grades identically to a card storing "s'avérer" (curly).
+ * Covers: ' ' (curly single quotes), ʼ (modifier letter apostrophe),
+ * ´ ` (acute/grave used as apostrophes), ′ (prime).
+ */
+function unifyApostrophes(s: string): string {
+  return s.replace(/[‘’ʼ´`′]/g, "'")
+}
+
 /** Flexible-mode normalization — applies only the enabled toggles. */
 function normalizeFlexible(raw: string, settings: GradingSettings): string {
-  let s = raw.normalize('NFC').trim().replace(/\s+/g, ' ')
+  let s = unifyApostrophes(raw.normalize('NFC')).trim().replace(/\s+/g, ' ')
   if (settings.ignoreCapitalization !== false) s = s.toLowerCase()
   if (settings.ignoreAccents)                  s = stripAccents(s)
   if (settings.ignoreDefiniteArticles)         s = stripLeadingArticle(s, settings.answerLanguage)
@@ -141,7 +151,7 @@ function normalizeFlexible(raw: string, settings: GradingSettings): string {
 
 /** Strict-mode normalization — trim, collapse spaces, lowercase only. */
 function normalizeStrict(raw: string): string {
-  return raw.normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase()
+  return unifyApostrophes(raw.normalize('NFC')).trim().replace(/\s+/g, ' ').toLowerCase()
 }
 
 /**
