@@ -15,7 +15,7 @@ export default function AgentsPage() {
   const router = useRouter()
   const [userId, setUserId] = useState<string | null>(null)
   const [decks, setDecks] = useState<Deck[]>([])
-  const [scope, setScope] = useState('')                 // "deck:<id>" | "pair:<src>|<tgt>"
+  const [selected, setSelected] = useState<Set<string>>(new Set())  // "deck:<id>" | "pair:<src>|<tgt>"
   const [task, setTask] = useState(DEFAULT_TASK)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -34,15 +34,35 @@ export default function AgentsPage() {
 
   const pairs = Array.from(new Set(decks.map(d => `${d.sourceLanguage}|${d.targetLanguage}`)))
 
-  function grantFromScope(): Grant {
-    const base: Grant = { operations: ['edit', 'create', 'delete'], languages: [], folderIds: [], deckIds: [], dryRunOnly: true }
-    if (scope.startsWith('deck:'))  return { ...base, deckIds: [scope.slice(5)] }
-    if (scope.startsWith('pair:'))  return { ...base, languages: [scope.slice(5)] }
-    return base
+  function toggle(key: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
   }
 
+  // Expand every selection (whole pairs + individual decks) into a union of deck ids.
+  function scopedDeckIds(): string[] {
+    const ids = new Set<string>()
+    for (const key of selected) {
+      if (key.startsWith('deck:')) ids.add(key.slice(5))
+      else if (key.startsWith('pair:')) {
+        const pair = key.slice(5)
+        decks.filter(d => `${d.sourceLanguage}|${d.targetLanguage}` === pair).forEach(d => ids.add(d.id))
+      }
+    }
+    return [...ids]
+  }
+
+  function grantFromScope(): Grant {
+    return { operations: ['edit', 'create', 'delete'], languages: [], folderIds: [], deckIds: scopedDeckIds(), dryRunOnly: true }
+  }
+
+  const inScopeDeckCount = scopedDeckIds().length
+
   async function run() {
-    if (!userId || !scope || running) return
+    if (!userId || selected.size === 0 || running) return
     setRunning(true); setError(null)
     try {
       const id = await runAgentAndSave({ agentId: 'card-editor', userId, grant: grantFromScope(), task })
@@ -62,18 +82,36 @@ export default function AgentsPage() {
 
       <div className="panel space-y-4">
         <div className="space-y-1">
-          <label className="text-xs text-ink-faint">Scope</label>
-          <select className="input" value={scope} onChange={e => setScope(e.target.value)}>
-            <option value="">Select what the agent may touch…</option>
+          <div className="flex items-baseline justify-between">
+            <label className="text-xs text-ink-faint">Scope — select what the agent may touch</label>
+            <span className="text-xs text-ink-faint">{inScopeDeckCount} deck{inScopeDeckCount === 1 ? '' : 's'} in scope</span>
+          </div>
+          <div className="border border-white/10 rounded-lg max-h-64 overflow-y-auto divide-y divide-white/5">
             {pairs.length > 0 && (
-              <optgroup label="Whole language pair">
-                {pairs.map(p => <option key={p} value={`pair:${p}`}>All {p.replace('|', ' → ')} decks</option>)}
-              </optgroup>
+              <>
+                <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-ink-faint bg-surface/50 sticky top-0">Whole language pair</div>
+                {pairs.map(p => {
+                  const key = `pair:${p}`
+                  return (
+                    <label key={key} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface/40">
+                      <input type="checkbox" className="accent-accent" checked={selected.has(key)} onChange={() => toggle(key)} />
+                      <span className="text-sm text-ink">All {p.replace('|', ' → ')} decks</span>
+                    </label>
+                  )
+                })}
+              </>
             )}
-            <optgroup label="Single deck">
-              {decks.map(d => <option key={d.id} value={`deck:${d.id}`}>{d.name} ({d.sourceLanguage}→{d.targetLanguage})</option>)}
-            </optgroup>
-          </select>
+            <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-ink-faint bg-surface/50 sticky top-0">Single deck</div>
+            {decks.map(d => {
+              const key = `deck:${d.id}`
+              return (
+                <label key={key} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface/40">
+                  <input type="checkbox" className="accent-accent" checked={selected.has(key)} onChange={() => toggle(key)} />
+                  <span className="text-sm text-ink truncate">{d.name} <span className="text-ink-faint">({d.sourceLanguage}→{d.targetLanguage})</span></span>
+                </label>
+              )
+            })}
+          </div>
         </div>
 
         <div className="space-y-1">
@@ -83,7 +121,7 @@ export default function AgentsPage() {
 
         {error && <p className="text-sm text-danger">{error}</p>}
 
-        <button className="btn-primary w-full" disabled={!scope || running || !userId} onClick={run}>
+        <button className="btn-primary w-full" disabled={selected.size === 0 || running || !userId} onClick={run}>
           {running ? 'Running… (this can take a moment)' : 'Run card editor'}
         </button>
       </div>
