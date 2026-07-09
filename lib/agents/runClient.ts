@@ -23,7 +23,7 @@ function proxyCallModel(agentId: string): CallModel {
       body: JSON.stringify({ agentId, messages }),
     })
     const data = await res.json()
-    if (!data.ok) throw new Error(data.error || 'model call failed')
+    if (!data.ok) throw new Error([data.error, data.detail].filter(Boolean).join(' — ') || 'model call failed')
     return { content: data.content, stop_reason: data.stop_reason }
   }
 }

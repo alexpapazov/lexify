@@ -41,7 +41,9 @@ export const AGENTS: Record<string, AgentConfig> = {
   'card-editor': {
     id:           'card-editor',
     label:        'Card editor',
-    model:        'claude-opus-4-8',
+    // Date-suffixed id proven to work with this project's key (same as api/distractors).
+    // Bump to a stronger model (e.g. a Sonnet id) once access is confirmed.
+    model:        'claude-haiku-4-5-20251001',
     systemPrompt: CARD_EDITOR_PROMPT,
     tools:        ['list_decks', 'search_cards', 'edit_card_text', 'create_card', 'split_translation', 'delete_card'],
     defaultDryRun: true,
