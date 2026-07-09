@@ -1,8 +1,31 @@
 # Typed-answer grading — per-category strictness + error capture
 
-Status: **fully wired (graded/Due Now reviews).** Migration `066` must be applied
-before this works. Pre-graduation typing still uses the old retype→again behavior;
-synonym-group typed production is not yet covered (both noted below).
+Status: **fully wired (graded/Due Now reviews).** Migrations `066` **and `069`**
+must be applied before this works. Pre-graduation typing still uses the old
+retype→again behavior; synonym-group typed production is not yet covered (both
+noted below).
+
+## Three-way strictness (migration 069, 2026-07-09)
+
+Each category (spelling / accents / articles) is no longer a boolean but a
+**3-stop level** (`TypedStrictnessLevel = 'penalize' | 'retype' | 'accept'`),
+set by a slider in the pair's SRS settings (`app/library/page.tsx`):
+
+| Level | Penalty | Retype required? | UX |
+|---|---|---|---|
+| `penalize` | full category weight (0.3 / 0.2) | yes | old "strict" |
+| `retype` | 0 | yes | old "lenient" |
+| `accept` | 0 | **no** | marked correct with an "X error" note |
+
+- Stored as TEXT columns `spelling_mode` / `accents_mode` / `articles_mode` on the
+  `forward_typed` `user_scheduler_params` row (069 backfills from the old `strict_*`
+  booleans: strict→`penalize`, lenient→`retype`). Old boolean columns kept but unused.
+- `resolveTypedPenalty()` maps level→`{weight, requiresRetype}`.
+  `SchedulerParams.strict{Spelling,Accents,Articles}` now hold a
+  `TypedStrictnessLevel` (property names unchanged).
+- `TypingMode`: when `requiresRetype === false` for a graded almost,
+  `autoAcceptSlip` is true — no retype input; rating buttons appear and
+  `advanceAccepted()` rates it correct with penalty 0 and the category logged.
 
 ## Goal
 

@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
+import type { TypedStrictnessLevel } from '@/domain'
 import type { SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
 
 export const runtime = 'nodejs'
@@ -109,9 +110,9 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     forwardTypedEnabled:  Boolean(row.forward_typed_enabled ?? true),
     forwardRecallEnabled: Boolean(row.forward_recall_enabled ?? true),
     reverseRecallEnabled: Boolean(row.reverse_recall_enabled ?? true),
-    strictSpelling: (row.strict_spelling as boolean | null) ?? DEFAULT_SCHEDULER_PARAMS.strictSpelling,
-    strictAccents:  (row.strict_accents as boolean | null)  ?? DEFAULT_SCHEDULER_PARAMS.strictAccents,
-    strictArticles: (row.strict_articles as boolean | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
+    strictSpelling: (row.spelling_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictSpelling,
+    strictAccents:  (row.accents_mode  as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictAccents,
+    strictArticles: (row.articles_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
   }
 }
 

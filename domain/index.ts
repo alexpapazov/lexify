@@ -93,17 +93,25 @@ export interface GradingSettings {
 /** Which loggable category a soft typed slip belongs to. */
 export type TypedErrorCategory = 'spelling' | 'accent' | 'article'
 
-/** Per-pair strictness — true = strict (apply penalty), false = lenient (no penalty). */
+/**
+ * Per-category strictness level for a typed slip:
+ *   'penalize' — counts as a scheduling penalty AND you must retype it correctly.
+ *   'retype'   — no scheduling penalty, but you still must retype it correctly.
+ *   'accept'   — no penalty and no retype: it's marked correct with an "X error" note.
+ */
+export type TypedStrictnessLevel = 'penalize' | 'retype' | 'accept'
+
+/** Per-pair strictness — one level per loggable category. */
 export interface TypedStrictness {
-  spelling: boolean
-  accents:  boolean
-  articles: boolean
+  spelling: TypedStrictnessLevel
+  accents:  TypedStrictnessLevel
+  articles: TypedStrictnessLevel
 }
 
 export const DEFAULT_TYPED_STRICTNESS: TypedStrictness = {
-  spelling: true,
-  accents:  true,
-  articles: true,
+  spelling: 'penalize',
+  accents:  'penalize',
+  articles: 'penalize',
 }
 
 /** Penalty magnitudes when a category is strict. Lenient categories contribute 0. */
@@ -168,8 +176,8 @@ export interface SchedulerParams {
   gradInterval6errMin: number; gradInterval6errMax: number
   gradInterval7errMin: number; gradInterval7errMax: number
   gradInterval8errMin: number; gradInterval8errMax: number
-  // Per-pair typed-answer strictness (canonical on the forward_typed row). true = strict.
-  strictSpelling: boolean; strictAccents: boolean; strictArticles: boolean
+  // Per-pair typed-answer strictness levels (canonical on the forward_typed row).
+  strictSpelling: TypedStrictnessLevel; strictAccents: TypedStrictnessLevel; strictArticles: TypedStrictnessLevel
 }
 
 export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
@@ -191,7 +199,7 @@ export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
   gradInterval6errMin: 1, gradInterval6errMax: 1,
   gradInterval7errMin: 1, gradInterval7errMax: 1,
   gradInterval8errMin: 1, gradInterval8errMax: 1,
-  strictSpelling: true, strictAccents: true, strictArticles: true,
+  strictSpelling: 'penalize', strictAccents: 'penalize', strictArticles: 'penalize',
 }
 
 /** Defaults when converting an existing deck to flexible mode. */

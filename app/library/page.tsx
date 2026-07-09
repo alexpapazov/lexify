@@ -15,7 +15,7 @@ const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, du
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { langName, langNativeName, langFlag } from '@/lib/languages'
 import { FLAG_OPTIONS } from '@/lib/flagOptions'
-import type { Folder, Deck, LanguagePair, Card, CardState } from '@/domain'
+import type { Folder, Deck, LanguagePair, Card, CardState, TypedStrictnessLevel } from '@/domain'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow, type SchedulerParamsHistoryRow } from '@/lib/data/userSchedulerParams'
 
@@ -586,17 +586,16 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     ))
   }
 
-  // Per-pair typed-answer strictness — stored canonically on the forward_typed row.
+  // Per-pair typed-answer strictness level — stored canonically on the forward_typed row.
   async function handleSrsStrictness(
-    field: 'strict_spelling' | 'strict_accents' | 'strict_articles',
-    value: boolean,
+    field: 'spelling_mode' | 'accents_mode' | 'articles_mode',
+    key:   'strictSpelling' | 'strictAccents' | 'strictArticles',
+    value: TypedStrictnessLevel,
   ) {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
     const repo = new SupabaseUserSchedulerParamsRepository()
     await repo.update(userId, src, tgt, 'forward_typed', { [field]: value })
-    const key = field === 'strict_spelling' ? 'strictSpelling'
-      : field === 'strict_accents' ? 'strictAccents' : 'strictArticles'
     setSrsParams(prev => prev.map(p =>
       p.answerField === 'forward_typed' ? { ...p, [key]: value } : p
     ))
@@ -1086,26 +1085,46 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                           </select>
                         </div>
 
-                        {/* Typed-answer strictness */}
-                        <div className="flex flex-col gap-1.5">
-                          <p className="text-xs text-ink-faint mb-0.5">Typed-answer strictness (Strict = counts as a penalty; Lenient = no scheduling penalty, but you still retype):</p>
+                        {/* Typed-answer strictness — one 3-stop slider per category */}
+                        <div className="flex flex-col gap-3">
+                          <p className="text-xs text-ink-faint mb-0.5">Typed-answer strictness — drag each slider from strict (penalty) to accepted (no retype):</p>
                           {([
-                            { field: 'strict_spelling' as const, key: 'strictSpelling' as const, label: 'Spelling', pct: '30%' },
-                            { field: 'strict_accents' as const,  key: 'strictAccents' as const,  label: 'Accents',  pct: '20%' },
-                            { field: 'strict_articles' as const, key: 'strictArticles' as const, label: 'Articles', pct: '20%' },
+                            { field: 'spelling_mode' as const, key: 'strictSpelling' as const, label: 'Spelling', pct: '30%' },
+                            { field: 'accents_mode' as const,  key: 'strictAccents' as const,  label: 'Accents',  pct: '20%' },
+                            { field: 'articles_mode' as const, key: 'strictArticles' as const, label: 'Articles', pct: '20%' },
                           ]).map(t => {
-                            const strict = ftRow?.[t.key] ?? true
+                            const LEVELS = ['penalize', 'retype', 'accept'] as const
+                            const level = ftRow?.[t.key] ?? 'penalize'
+                            const idx   = Math.max(0, LEVELS.indexOf(level))
+                            const desc  =
+                              level === 'penalize' ? `Strict — ${t.pct} penalty, and you retype it`
+                              : level === 'retype'  ? 'No penalty, but you still retype it'
+                              :                       `Accepted — marked correct with a "${t.label.toLowerCase()} error" note, no retype`
+                            const descColor =
+                              level === 'penalize' ? 'text-warning'
+                              : level === 'retype' ? 'text-ink-muted'
+                              :                      'text-success'
                             return (
-                              <label key={t.field} className="flex items-center gap-2 cursor-pointer">
+                              <div key={t.field} className="flex flex-col gap-1">
+                                <div className="flex items-baseline justify-between">
+                                  <span className="text-sm text-ink">{t.label}</span>
+                                  <span className={`text-xs ${descColor}`}>{desc}</span>
+                                </div>
                                 <input
-                                  type="checkbox"
-                                  checked={strict}
-                                  onChange={e => handleSrsStrictness(t.field, e.target.checked).catch(() => {})}
-                                  className="accent-accent"
+                                  type="range"
+                                  min={0}
+                                  max={2}
+                                  step={1}
+                                  value={idx}
+                                  onChange={e => handleSrsStrictness(t.field, t.key, LEVELS[Number(e.target.value)]!).catch(() => {})}
+                                  className="accent-accent w-full"
                                 />
-                                <span className="text-sm text-ink">{t.label}</span>
-                                <span className="text-xs text-ink-faint">{strict ? `strict (${t.pct} penalty)` : 'lenient (no penalty)'}</span>
-                              </label>
+                                <div className="flex justify-between text-[10px] text-ink-faint px-0.5">
+                                  <span>Penalty</span>
+                                  <span>Retype only</span>
+                                  <span>Accept</span>
+                                </div>
+                              </div>
                             )
                           })}
                         </div>

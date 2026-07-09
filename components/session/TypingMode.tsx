@@ -187,6 +187,9 @@ export function TypingMode({
 
   const finalCorrect = override ?? result?.correct ?? false
 
+  // The text currently being graded (canonical box in the synonym/sibling phase, else the main input).
+  const answeredText = (synonymPhase || !!siblingId) ? canonInput : input
+
   // Soft-wrong: accent/article/typo near-miss with both dual tracks active.
   // override === null: only when user hasn't overridden at all.
   //   override=true  → user said "correct" → no split, treat as fully correct.
@@ -200,7 +203,14 @@ export function TypingMode({
     )
   )
 
-  const needsRetype = !!result && !finalCorrect && !isSoftWrong
+  // "Accept" strictness level: a graded slip whose category is set to auto-accept
+  // (no retype). It's marked correct with an "X error" note instead of a retype step.
+  const autoAcceptSlip = !!(
+    gradedReview && result && result.status === 'almost' && override === null && !isSoftWrong &&
+    !computeTypedPenalty(answeredText).requiresRetype
+  )
+
+  const needsRetype = !!result && !finalCorrect && !isSoftWrong && !autoAcceptSlip
 
   const softWrongNeedsRetype  = isSoftWrong && softWrongRecallRating !== null
   // Retype checks use accent-lenient grading: the point is to type the word, not to nail accents again.
@@ -403,6 +413,15 @@ export function TypingMode({
       reportNearMiss()
       onRate('again', false, answered, result?.issueType)
     }
+  }
+
+  // Auto-accept ("accept" strictness level): no retype — the slip is marked correct
+  // with a weighted penalty of 0 and its category logged. Fires from the rating buttons.
+  function advanceAccepted(rating: Rating) {
+    const penalty = computeTypedPenalty(answeredText)
+    onTypedPenalty?.(penalty.weight, penalty.category)
+    reportNearMiss()
+    onRate(rating, true, answeredText, result?.issueType)
   }
 
   function advanceSoftWrong() {
@@ -873,6 +892,9 @@ export function TypingMode({
                   gradedReview ? (
                     finalCorrect ? (
                       <RatingButtons onRate={tryAdvance} suggestedRating={suggestedRating} />
+                    ) : autoAcceptSlip ? (
+                      // "Accept" strictness: marked correct (no retype), rate as usual.
+                      <RatingButtons onRate={advanceAccepted} suggestedRating="good" />
                     ) : (
                       <div className="flex justify-center">
                         <button

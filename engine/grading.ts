@@ -13,7 +13,7 @@
 import type {
   GradingSettings, GradingResult, GradingIssueType, GradingStatus,
   MultiFieldGradingResult, SynonymAnswerField,
-  TypedStrictness, TypedPenalty, TypedErrorCategory,
+  TypedStrictness, TypedStrictnessLevel, TypedPenalty, TypedErrorCategory,
 } from '@/domain'
 import { TYPED_PENALTY_WEIGHTS } from '@/domain'
 
@@ -471,18 +471,19 @@ export function resolveTypedPenalty(
 
   if (result.status === 'almost') {
     const category = issueTypeToCategory(result.issueType)
-    if (category === 'accent') {
-      const w = strictness.accents ? TYPED_PENALTY_WEIGHTS.accent : 0
-      return { weight: w, category, accepted: true, requiresRetype: true }
-    }
-    if (category === 'article') {
-      const w = strictness.articles ? TYPED_PENALTY_WEIGHTS.article : 0
-      return { weight: w, category, accepted: true, requiresRetype: true }
-    }
-    if (category === 'spelling') {
-      const w = strictness.spelling ? TYPED_PENALTY_WEIGHTS.spelling : 0
-      return { weight: w, category, accepted: true, requiresRetype: true }
-    }
+    // Map a category + its level to (penalty weight, whether a retype is required):
+    //   'penalize' → full category weight, retype required
+    //   'retype'   → no penalty, retype required
+    //   'accept'   → no penalty, no retype (marked correct with an "X error" note)
+    const resolve = (level: TypedStrictnessLevel, weight: number): TypedPenalty => ({
+      weight:         level === 'penalize' ? weight : 0,
+      category,
+      accepted:       true,
+      requiresRetype: level !== 'accept',
+    })
+    if (category === 'accent')   return resolve(strictness.accents,  TYPED_PENALTY_WEIGHTS.accent)
+    if (category === 'article')  return resolve(strictness.articles, TYPED_PENALTY_WEIGHTS.article)
+    if (category === 'spelling') return resolve(strictness.spelling, TYPED_PENALTY_WEIGHTS.spelling)
     // Non-toggleable 'almost' (e.g. missing parenthetical): mild penalty, not logged.
     return { weight: TYPED_PENALTY_WEIGHTS.other, category: null, accepted: true, requiresRetype: true }
   }
