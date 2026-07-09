@@ -78,12 +78,21 @@ export async function computeDeckCounts(
     ])
     const fwd = states.filter(s => s.reviewDirection !== 'reverse')
     const stateMap = new Map(fwd.map(s => [s.cardId, s]))
+    // Anchor every count to the deck's current cards so orphaned states (from
+    // deleted/moved cards) don't inflate learning/graduated/dormant/due — this
+    // mirrors the deck-detail page's `activeForwardStates` filter.
+    const activeCardIds = new Set(cards.map(c => c.id))
+    const activeFwd = fwd.filter(s => activeCardIds.has(s.cardId))
     return {
       unlearned: cards.filter(c => !stateMap.has(c.id)).length,
-      learning:  fwd.filter(s => !s.graduated).length,
-      graduated: fwd.filter(s => s.graduated && !s.dormant).length,
-      dormant:   fwd.filter(s => s.dormant).length,
-      dueNow:    states.filter(s => s.graduated && !stateMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now).length,
+      learning:  activeFwd.filter(s => !s.graduated).length,
+      graduated: activeFwd.filter(s => s.graduated && !s.dormant).length,
+      dormant:   activeFwd.filter(s => s.dormant).length,
+      dueNow:    states.filter(s =>
+        activeCardIds.has(s.cardId) &&
+        s.graduated && !stateMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now &&
+        (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
+      ).length,
     }
   }))
 

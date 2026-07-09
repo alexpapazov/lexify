@@ -205,37 +205,42 @@ function FolderPageInner() {
     setDeckStats(stats)
 
     const now = new Date()
-    setCounts(stats.reduce((acc, { cards, states }) => {
+    // Counts a single deck's {cards, states}, anchored to the deck's current cards
+    // so orphaned states (deleted/moved cards) don't inflate the totals — matches
+    // the deck-detail page's `activeForwardStates` filter.
+    const countDeck = (cards: typeof stats[number]['cards'], states: typeof stats[number]['states']): FolderCounts => {
       const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
       const fwdMap = new Map(forwardStates.map(s => [s.cardId, s]))
+      const activeCardIds = new Set(cards.map(cd => cd.id))
+      const activeFwd = forwardStates.filter(s => activeCardIds.has(s.cardId))
       return {
-        unlearned: acc.unlearned + cards.filter(c => !fwdMap.has(c.id)).length,
-        learning:  acc.learning  + forwardStates.filter(s => !s.graduated).length,
-        graduated: acc.graduated + forwardStates.filter(s => s.graduated && !s.dormant).length,
-        dormant:   acc.dormant   + forwardStates.filter(s => s.dormant).length,
-        dueNow:    acc.dueNow    + states.filter(s =>
+        unlearned: cards.filter(cd => !fwdMap.has(cd.id)).length,
+        learning:  activeFwd.filter(s => !s.graduated).length,
+        graduated: activeFwd.filter(s => s.graduated && !s.dormant).length,
+        dormant:   activeFwd.filter(s => s.dormant).length,
+        dueNow:    states.filter(s =>
+          activeCardIds.has(s.cardId) &&
           s.graduated && !fwdMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now &&
           (s.reviewDirection !== 'reverse' || fwdMap.get(s.cardId)?.graduated === true)
         ).length,
+      }
+    }
+
+    setCounts(stats.reduce((acc, { cards, states }) => {
+      const c = countDeck(cards, states)
+      return {
+        unlearned: acc.unlearned + c.unlearned,
+        learning:  acc.learning  + c.learning,
+        graduated: acc.graduated + c.graduated,
+        dormant:   acc.dormant   + c.dormant,
+        dueNow:    acc.dueNow    + c.dueNow,
       }
     }, { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }))
 
     // Per-deck counts for the deck row summaries (derived from the states we just loaded).
-    setDeckCounts(Object.fromEntries(stats.map(({ deck, cards, states }) => {
-      const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
-      const fwdMap = new Map(forwardStates.map(s => [s.cardId, s]))
-      const c: FolderCounts = {
-        unlearned: cards.filter(cd => !fwdMap.has(cd.id)).length,
-        learning:  forwardStates.filter(s => !s.graduated).length,
-        graduated: forwardStates.filter(s => s.graduated && !s.dormant).length,
-        dormant:   forwardStates.filter(s => s.dormant).length,
-        dueNow:    states.filter(s =>
-          s.graduated && !fwdMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now &&
-          (s.reviewDirection !== 'reverse' || fwdMap.get(s.cardId)?.graduated === true)
-        ).length,
-      }
-      return [deck.id, c] as const
-    })))
+    setDeckCounts(Object.fromEntries(stats.map(({ deck, cards, states }) =>
+      [deck.id, countDeck(cards, states)] as const
+    )))
 
     // Per-subfolder counts for the subfolder row summaries.
     const subs = folders.filter(f => f.parentId === folderId)
