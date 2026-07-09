@@ -47,6 +47,16 @@ describe('hintPlan — alphabetic', () => {
     expect(p.levelText[1]).toBe('об')
   })
 
+  it('Italian space-separated article "il cane" reveals il c, il ca', () => {
+    const p = hintPlan('il cane', 'it')
+    expect(p.levelText).toEqual(['il c', 'il ca'])
+  })
+
+  it('Italian elided article "l\'acqua" reveals l\'a, l\'ac (not just l)', () => {
+    const p = hintPlan("l'acqua", 'it')
+    expect(p.levelText).toEqual(["l'a", "l'ac"])
+  })
+
   it('two-letter word gets a single (short) hint', () => {
     const p = hintPlan('tú', 'es')
     expect(p.maxLevel).toBe(1)

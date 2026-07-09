@@ -30,6 +30,7 @@ import { SynonymTypingMode } from '@/components/session/SynonymTypingMode'
 import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
+import { forwardStateMap } from '@/lib/cardStateMap'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
@@ -423,7 +424,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const existingStates  = await stateRepo.listByDeck(session.user.id, deckId)
       const forwardStates   = existingStates.filter(s => s.reviewDirection !== 'reverse')
       const reverseStatesList = existingStates.filter(s => s.reviewDirection === 'reverse')
-      const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
+      const stateMap = forwardStateMap(forwardStates)
       setCardStates(stateMap)
 
       const existingOverrides = await new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id)

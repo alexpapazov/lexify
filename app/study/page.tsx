@@ -10,6 +10,7 @@ import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
+import { forwardStateMap } from '@/lib/cardStateMap'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
@@ -211,7 +212,7 @@ export default function StudyPage() {
       // Forward states are the authoritative source for card-level counts.
       // Reverse states are only valid when their forward counterpart is also graduated.
       const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
-      const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
+      const stateMap = forwardStateMap(forwardStates)
       const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
       const isDueByDate = (dateStr: string | null | undefined) =>
         !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr

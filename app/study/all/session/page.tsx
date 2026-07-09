@@ -34,6 +34,7 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
+import { forwardStateMap } from '@/lib/cardStateMap'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 
@@ -320,7 +321,7 @@ function AllDueSessionInner() {
 
         const forwardStates     = states.filter(s => s.reviewDirection !== 'reverse')
         const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
-        const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
+        const stateMap = forwardStateMap(forwardStates)
         const cardsPerSession   = prefs?.cardsPerSession   ?? null
         const learningBatchMode = prefs?.learningBatchMode ?? false
 

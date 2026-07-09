@@ -122,8 +122,17 @@ function getArticleSet(lang?: string): Set<string> {
 export function stripLeadingArticle(s: string, lang?: string): string {
   const articles = getArticleSet(lang)
   const parts = s.split(/\s+/)
-  if (parts.length > 1 && articles.has(parts[0]!.toLowerCase())) {
+  const first = parts[0] ?? ''
+  // Space-separated article: "il cane" → "cane".
+  if (parts.length > 1 && articles.has(first.toLowerCase())) {
     return parts.slice(1).join(' ')
+  }
+  // Elided article attached by an apostrophe (no space): "l'acqua" → "acqua",
+  // so the hint reveals the content word ("l'a…"), consistent with "il c…".
+  // Apostrophe variants (straight/curly) are normalized before the lookup.
+  const elided = first.match(/^(\p{L}+['’])(\p{L}.*)$/u)
+  if (elided && articles.has(elided[1]!.replace(/['’]/g, "'").toLowerCase())) {
+    return [elided[2]!, ...parts.slice(1)].join(' ')
   }
   return s
 }

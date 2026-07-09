@@ -21,6 +21,7 @@ import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymL
 import type { Deck, Card, CardState, CardChoices, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { getToday } from '@/lib/dates'
+import { forwardStateMap } from '@/lib/cardStateMap'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
@@ -1524,7 +1525,7 @@ export default function DeckDetailPage() {
   // Forward states are authoritative for card-level status and filtering.
   // Reverse states only count toward dueNow when their forward counterpart is also graduated.
   const forwardStates  = states.filter(s => s.reviewDirection !== 'reverse')
-  const stateMap       = new Map(forwardStates.map(s => [s.cardId, s]))
+  const stateMap       = forwardStateMap(forwardStates)
   const now            = new Date()
   // Turnover-aware "today": a card due on today's calendar date (in the user's
   // timezone, adjusted for the day-turnover hour) is due; nothing later counts.

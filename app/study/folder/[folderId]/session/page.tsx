@@ -22,6 +22,7 @@ import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOve
 import type { CardSide } from '@/domain'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { descendantDeckIds } from '@/lib/folderStats'
+import { forwardStateMap } from '@/lib/cardStateMap'
 import { progressAfterReview, initialCardState } from '@/engine/pipeline'
 import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
@@ -300,7 +301,7 @@ function FolderSessionInner() {
 
         const forwardStates     = states.filter(s => s.reviewDirection !== 'reverse')
         const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
-        const stateMap = new Map(forwardStates.map(s => [s.cardId, s]))
+        const stateMap = forwardStateMap(forwardStates)
         const cardsPerSession   = prefs?.cardsPerSession   ?? null
         const learningBatchMode = prefs?.learningBatchMode ?? false
 

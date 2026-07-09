@@ -137,12 +137,16 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     const dbPatch: Record<string, unknown> = {}
     if ('dormant' in patch)           dbPatch.dormant = patch.dormant
     if ('dormancyThreshold' in patch) dbPatch.dormancy_threshold = patch.dormancyThreshold
+    // Update EVERY forward row for this card (some accounts have duplicate forward
+    // rows) so dormancy is card-level — no stale duplicate can keep the card due.
+    // `.select()` (not `.single()`) tolerates the multi-row case.
     const { data, error } = await this.db.from('card_states')
       .update(dbPatch)
       .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', 'forward')
-      .select().single()
+      .select()
     if (error) throw new Error(error.message)
-    return rowToCardState(data)
+    if (!data || data.length === 0) throw new Error('setDormancy: no forward row found for card')
+    return rowToCardState(data[0])
   }
 
   async upsertBatch(states: CardState[]): Promise<void> {
