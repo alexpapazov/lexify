@@ -793,50 +793,56 @@ export function TypingMode({
               </>
             ) : (
               <>
-                {/* Override controls */}
+                {/* Override controls — once any override is active, only "Undo override"
+                    is offered; undoing brings the full set of options back. */}
                 <div className="flex items-center justify-center gap-3">
-                  {result.correct && override !== false && (
-                    <button onClick={() => setOverrideAndPersist(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
-                      Override as incorrect
-                    </button>
-                  )}
-                  {result.correct && override !== false && softWrongEnabled && (
-                    <button onClick={() => setOverrideAsAlmost(true)} className="text-xs text-ink-faint hover:text-warning transition-colors">
-                      Override as almost
-                    </button>
-                  )}
-                  {!result.correct && override !== true && (
-                    <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
-                      Override as correct
-                    </button>
-                  )}
-                  {!result.correct && override !== true && gradedReview && !forceAlmost && (
-                    <button onClick={() => setForceAlmost(true)} className="text-xs text-ink-faint hover:text-warning transition-colors">
-                      Override as almost
-                    </button>
-                  )}
-                  {forceAlmost && (
-                    <span className="text-xs text-warning">Almost — retype to continue</span>
-                  )}
-                  {!result.correct && override !== true && promptSide === 'back' && onAddSynonym && (
-                    <button
-                      onClick={() => {
-                        onAddSynonym(result.normalizedUser)
-                        setAddedSynonyms(prev => [...prev, result.normalizedUser])
-                        setSynonymPhase(true)
-                        setSynonymPhaseText(input)
-                        setResult(null)
-                        setCanonInput('')
-                      }}
-                      className="text-xs text-ink-faint hover:text-warning transition-colors"
-                    >
-                      Add as synonym
-                    </button>
-                  )}
-                  {override !== null && (
-                    <button onClick={() => setOverrideAndPersist(null)} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
-                      Undo override
-                    </button>
+                  {(override !== null || forceAlmost) ? (
+                    <>
+                      {forceAlmost && (
+                        <span className="text-xs text-warning">Almost — retype to continue</span>
+                      )}
+                      <button onClick={() => { setForceAlmost(false); setOverrideAndPersist(null) }} className="text-xs text-ink-faint hover:text-ink-muted transition-colors">
+                        Undo override
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {result.correct && (
+                        <button onClick={() => setOverrideAndPersist(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
+                          Override as incorrect
+                        </button>
+                      )}
+                      {result.correct && softWrongEnabled && (
+                        <button onClick={() => setOverrideAsAlmost(true)} className="text-xs text-ink-faint hover:text-warning transition-colors">
+                          Override as almost
+                        </button>
+                      )}
+                      {!result.correct && (
+                        <button onClick={() => setOverrideAndPersist(true)} className="text-xs text-ink-faint hover:text-success transition-colors">
+                          Override as correct
+                        </button>
+                      )}
+                      {!result.correct && gradedReview && (
+                        <button onClick={() => setForceAlmost(true)} className="text-xs text-ink-faint hover:text-warning transition-colors">
+                          Override as almost
+                        </button>
+                      )}
+                      {!result.correct && promptSide === 'back' && onAddSynonym && (
+                        <button
+                          onClick={() => {
+                            onAddSynonym(result.normalizedUser)
+                            setAddedSynonyms(prev => [...prev, result.normalizedUser])
+                            setSynonymPhase(true)
+                            setSynonymPhaseText(input)
+                            setResult(null)
+                            setCanonInput('')
+                          }}
+                          className="text-xs text-ink-faint hover:text-warning transition-colors"
+                        >
+                          Add as synonym
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
 
