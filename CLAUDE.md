@@ -69,7 +69,10 @@ assuming this work is fully deployed or debugging it as "broken".
 
 The real "Lexify" app — the one deployed at lexify-flax.vercel.app — lives at:
 
-    /Users/alexanderpapazov/Code/alex_creates/lang_learn_app
+    /Users/alexanderpapazov/Code/alex_creates/lexify
+
+(Renamed 2026-07-09 from `.../alex_creates/lang_learn_app`; the old path no
+longer exists.)
 
 If you don't already have access to this folder, **ask the user for access
 before doing anything else** (e.g. via the cowork directory-connection tool).
@@ -468,7 +471,7 @@ built/pushed/deployed.
   **must be quoted** in every git command, due to zsh glob expansion.
 - The `mcp__workspace__bash` sandbox has a persistent mount error for this
   project's folder (`failed to mount ... as Language Learning Application` /
-  similar for `lang_learn_app`) — assume it's broken unless you've just
+  similar for `lexify`/`lang_learn_app`) — assume it's broken unless you've just
   verified otherwise. Give build/test/migration/commit commands as chat code
   blocks for the user to run locally and paste results back.
 
@@ -694,7 +697,7 @@ session — see migration 026 above.)
 ## Verifying changes
 
 ```
-cd "/Users/alexanderpapazov/Code/alex_creates/lang_learn_app"
+cd "/Users/alexanderpapazov/Code/alex_creates/lexify"
 npm run build
 npm test
 ```
