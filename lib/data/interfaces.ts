@@ -1,4 +1,4 @@
-import type { Deck, DeckId, Card, CardId, CardState, ReviewEvent, Pipeline, UserId, DeckPreferences, DismissedPair, CardConfusion, CardSide, TypedAnswerOverride } from '@/domain'
+import type { Deck, DeckId, Card, CardId, CardState, ReviewEvent, Pipeline, UserId, DeckPreferences, DismissedPair, CardConfusion, CardSide, TypedAnswerOverride, AgentAction } from '@/domain'
 
 export interface CreateDeckInput {
   name:           string
@@ -145,6 +145,13 @@ export interface CardConfusionRepository {
   listForCard(userId: UserId, cardId: CardId): Promise<CardConfusion[]>
   /** All tracked mix-ups for this user across every card — fetched once per session. */
   listForUser(userId: UserId): Promise<CardConfusion[]>
+}
+
+export interface AgentActionRepository {
+  /** Records one applied gateway mutation (before/after snapshot) for audit. */
+  record(action: Omit<AgentAction, 'id' | 'createdAt'>): Promise<void>
+  /** Recent actions for this user, newest first. */
+  listForUser(userId: UserId, limit?: number): Promise<AgentAction[]>
 }
 
 export interface TypedAnswerOverrideRepository {

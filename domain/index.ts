@@ -137,6 +137,64 @@ export interface TypedPenalty {
   requiresRetype: boolean
 }
 
+// ─── Agent platform (see features/Agent Platform.md) ───────────────────────
+// Phase 1: scoped, audited tool gateway over the data. "Agents" (Phase 2+) are
+// configs that share these primitives.
+
+/** The kinds of mutation an agent may be granted. */
+export type AgentOperation = 'edit' | 'create' | 'delete' | 'merge' | 'sync' | 'regen'
+
+/**
+ * What an agent operation is allowed to touch. Each dimension is an allow-list;
+ * an EMPTY array means "no restriction on this dimension".
+ */
+export interface Grant {
+  operations: AgentOperation[]
+  /** `${sourceLanguage}|${targetLanguage}` pair keys. [] = all pairs. */
+  languages:  string[]
+  /** Scoped folders — descendants are auto-included. [] = all folders. */
+  folderIds:  string[]
+  /** Scoped decks. [] = all decks. */
+  deckIds:    string[]
+  /** true → mutations may only PROPOSE a change set, never apply. */
+  dryRunOnly: boolean
+  expiresAt?: string | null
+}
+
+/** Passed into every gateway call — who is acting and under what grant. */
+export interface GatewayContext {
+  userId: UserId
+  grant:  Grant
+  /** The acting agent's id, or 'user' for direct user actions. */
+  actor:  string
+}
+
+export type ChangeField = 'front' | 'back' | 'synonyms' | 'create' | 'delete'
+
+/** One proposed change; a change set is `ChangeProposal[]`. */
+export interface ChangeProposal {
+  cardId: CardId | null   // null for a create
+  deckId: DeckId
+  field:  ChangeField
+  before: unknown
+  after:  unknown
+  reason: string
+}
+
+/** A gateway mutation, recorded to `agent_actions` for audit. */
+export interface AgentAction {
+  id:        string
+  userId:    UserId
+  actor:     string
+  operation: AgentOperation
+  cardId:    CardId | null
+  deckId:    DeckId | null
+  before:    unknown
+  after:     unknown
+  dryRun:    boolean
+  createdAt: string
+}
+
 /** Default for new decks — strict mode, case-insensitive only. */
 export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
   gradingMode:                 'strict',
