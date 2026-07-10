@@ -1,8 +1,22 @@
 import {
   retrievability, intervalForRetention, nextDifficulty, initialDifficulty,
   initialStability, stabilityAfterSuccess, stabilityAfterLapse, reviewCard,
-  DIFFICULTY_DELTA, BASE_DIFFICULTY, type FsrsState,
+  DIFFICULTY_DELTA, BASE_DIFFICULTY, fsrsFuzzRange, type FsrsState,
 } from '@/engine/fsrs'
+
+describe('fsrsFuzzRange', () => {
+  it('does not fuzz very short intervals', () => {
+    expect(fsrsFuzzRange(1)).toEqual([1, 1])
+    expect(fsrsFuzzRange(2)).toEqual([2, 2])
+  })
+  it('widens by ~5% (at least a day) and stays >= 1', () => {
+    expect(fsrsFuzzRange(7)).toEqual([6, 8])       // ±1
+    expect(fsrsFuzzRange(30)).toEqual([28, 32])    // ±round(1.5)=±2
+    expect(fsrsFuzzRange(100)).toEqual([95, 105])  // ±5
+    const [min] = fsrsFuzzRange(3)
+    expect(min).toBeGreaterThanOrEqual(1)
+  })
+})
 
 describe('retrievability', () => {
   it('is 1 right after review, 0.9 at one stability, and decays further with time', () => {

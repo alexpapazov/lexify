@@ -726,9 +726,29 @@ Learning (pre-graduation) is untouched — the ladder/pipeline still runs it.
   `app/library/page.tsx` (`handleSrsRetention`). **Must apply migration 076.**
   Note: all/folder sessions span multiple pairs but use the single loaded
   `schedulerParams` row for retention — same existing limitation as `scheduleNext`.
-- **v1 limitations / follow-ups**: no interval fuzz beyond day-snapping;
-  `sendToLadder` doesn't clear a stale `ladder_climb` row yet; recall track
-  un-graduation is a loop, not a real send-back.
+- **Polish pass (2026-07-10)** — four refinements on top of Stages 1–4:
+  1. **Interval fuzz + redistribute.** `engine/fsrs.ts: fsrsFuzzRange(intervalDays)`
+     returns the `[minDays, maxDays]` window (±5%, ≥1 day; no fuzz under 2.5 days).
+     At scheduling time the session pages feed this window to `smoothDueDate`
+     (density smoothing) so same-day batches don't pile up on one future day. The
+     "Redistribute" buttons (`app/settings/page.tsx` global, `app/study/page.tsx`
+     per-forecast-day) now compute each graduated card's movable window from
+     `fsrsFuzzRange(scheduledIntervalDays)` — the same window it was scheduled in —
+     instead of the retired legacy multiplier range.
+  2. **`sendToLadder` → CURRENT ladder.** On a forward 3-Agains-in-a-row un-graduation,
+     the session now deletes the card's `ladder_climb` row (`SupabaseLadderClimbRepository.remove`)
+     so it restarts from whatever the ladder is configured as now, not a stale rung.
+  3. **Only target-language production redoes the pipeline.** `sendToLadder` un-graduates
+     only from the forward (production) path; the recall/reverse path never un-graduates
+     (a would-be sendToLadder there just loops one more 5-min relearn).
+  4. **Per-pair constants in all/folder sessions.** Both pages build a
+     `paramsByPair` map (forward_typed row per `${src}|${tgt}`); `handleAnswer`
+     derives `cardParams` from the reviewed card's pair and uses it for FSRS
+     retention, `graduationIntervalRange`, `maxIntervalDays`, and `scheduleNext`.
+     So a mixed "Study all due" session schedules each card with its own pair's
+     constants. (Scoped picker rows already pass `?source=&target=` and were exact.)
+     Known small gap: load-time `decideProductionMode` (typed-vs-self-graded odds)
+     still uses the primary pair in a mixed session.
 
 ## Known backlog / open issues
 

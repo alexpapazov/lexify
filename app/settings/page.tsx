@@ -10,7 +10,7 @@ import { SupabaseLanguagePairRepository }     from '@/lib/data/languagePairs'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import type { LanguagePair, LanguageSyncRule, CardState } from '@/domain'
 import { langName } from '@/lib/languages'
-import { effectiveMultiplierRange, acceleratedEffectiveMultiplierRange } from '@/engine/scheduler'
+import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
 
 const LANGUAGES = [
@@ -437,17 +437,11 @@ export default function SettingsPage() {
           continue
         }
 
-        if (!s.lastRating || s.lastRating === 'again') continue
+        // Graduated cards are FSRS-scheduled — the movable window is the fuzz
+        // window around the current interval (matches how they were scheduled).
         if (!s.lastReviewedAt || s.scheduledIntervalDays <= 0) continue
 
-        const rating = s.lastRating as 'hard' | 'good' | 'easy'
-        const range = s.acceleratedMode === 'import_known' && s.acceleratedWrongStreak < 2
-          ? acceleratedEffectiveMultiplierRange(rating, s.scheduledIntervalDays, s.acceleratedPenalty)
-          : effectiveMultiplierRange(rating, s.scheduledIntervalDays)
-
-        const baseInterval = s.scheduledIntervalDays / range.ideal
-        const smoothMinDays = baseInterval * range.min
-        const smoothMaxDays = baseInterval * range.max
+        const [smoothMinDays, smoothMaxDays] = fsrsFuzzRange(s.scheduledIntervalDays)
 
         const lastReviewed = new Date(s.lastReviewedAt)
         lastReviewed.setUTCHours(0, 0, 0, 0)

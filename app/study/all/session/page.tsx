@@ -14,6 +14,7 @@ import { SupabaseDeckRepository }        from '@/lib/data/decks'
 import { SupabaseCardRepository }        from '@/lib/data/cards'
 import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
 import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
+import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabasePipelineRepository }    from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
@@ -25,12 +26,12 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { scheduleGraduatedFsrs, RELEARN_MINUTES } from '@/engine/dueNow'
-import { DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
+import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
-import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
@@ -138,6 +139,9 @@ function AllDueSessionInner() {
   }, [])
   // Per-pair typed-answer strictness (forward_typed row), keyed `${src}|${tgt}`.
   const [strictnessMap, setStrictnessMap] = useState<Map<string, TypedStrictness>>(new Map())
+  // Per-pair scheduler params (forward_typed row), keyed `${src}|${tgt}` — so a
+  // mixed all-due session schedules each card with ITS pair's constants/retention.
+  const [paramsByPair, setParamsByPair] = useState<Map<string, SchedulerParamsRow>>(new Map())
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
@@ -239,13 +243,16 @@ function AllDueSessionInner() {
       const allParamRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
       const enabledTracksMap = buildEnabledTracksMap(allParamRows)
       const sMap = new Map<string, TypedStrictness>()
+      const pMap = new Map<string, SchedulerParamsRow>()
       for (const r of allParamRows) {
         if (r.answerField !== 'forward_typed') continue
         sMap.set(`${r.sourceLanguage}|${r.targetLanguage}`, {
           spelling: r.strictSpelling, accents: r.strictAccents, articles: r.strictArticles,
         })
+        pMap.set(`${r.sourceLanguage}|${r.targetLanguage}`, r)
       }
       setStrictnessMap(sMap)
+      setParamsByPair(pMap)
       const tracksFor = (src: string, tgt: string): EnabledTracks | undefined =>
         enabledTracksMap.get(`${src}|${tgt}`)
 
@@ -498,6 +505,9 @@ function AllDueSessionInner() {
 
     try {
       const { card, state, pipeline, gradingSettings, productionMode, reviewTrack, isReverse, deckCards, sourceLanguage, targetLanguage } = current
+      // This card's own language-pair scheduler constants (retention, graduation
+      // ranges, max interval) — a mixed all-due session may span several pairs.
+      const cardParams = paramsByPair.get(`${sourceLanguage}|${targetLanguage}`) ?? schedulerParams
       const stateRepo  = new SupabaseCardStateRepository()
       const eventRepo  = new SupabaseReviewEventRepository()
       const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
@@ -597,15 +607,25 @@ function AllDueSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention })
-        // sendToLadder from a recall track (rare: 3 Agains in a row) is handled as
-        // one more 5-min relearn loop for v1 rather than un-graduating a reverse row.
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention })
+        // The recall/reverse track only ever recognises the native side, so failing it
+        // never sends a card back to the ladder — only failing target-language production
+        // (the forward path) does. A recall sendToLadder is treated as one more 5-min loop.
         const relearnMinutes = fsrs.dueInMinutes ?? (fsrs.sendToLadder ? RELEARN_MINUTES.again : null)
-        const newRecallDueAt = relearnMinutes != null
-          ? new Date(nowDate.getTime() + relearnMinutes * 60_000).toISOString()
-          : (fsrs.intervalDays != null
-              ? snapDueAtToStartOfDay(new Date(nowDate.getTime() + fsrs.intervalDays * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
-              : state.recallDueAt)
+        let newRecallDueAt: string | null
+        if (relearnMinutes != null) {
+          newRecallDueAt = new Date(nowDate.getTime() + relearnMinutes * 60_000).toISOString()
+        } else if (fsrs.intervalDays != null) {
+          const days = fsrs.intervalDays
+          const [minDays, maxDays] = fsrsFuzzRange(days)
+          const idealDueAt = new Date(nowDate.getTime() + days * 86_400_000).toISOString()
+          const smoothed = (maxDays - minDays >= 1)
+            ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, days, stateRepo)
+            : idealDueAt
+          newRecallDueAt = snapDueAtToStartOfDay(smoothed, tzRef.current, turnoverRef.current)
+        } else {
+          newRecallDueAt = state.recallDueAt
+        }
         const recallNewState: CardState = {
           ...state,
           difficulty:         fsrs.difficulty,
@@ -640,7 +660,7 @@ function AllDueSessionInner() {
 
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
-      let scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams, hintGrowthFactor }) : null
+      let scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: cardParams, hintGrowthFactor }) : null
 
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
 
@@ -671,18 +691,29 @@ function AllDueSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention })
         if (fsrs.sendToLadder) {
+          // Un-graduate and restart the CURRENT ladder (drop any stale climb row).
           newState = {
             ...initialCardState(userId, card.id, pipeline.id),
             introducedDate:  state.introducedDate,
             reviewDirection: state.reviewDirection,
           }
+          new SupabaseLadderClimbRepository().remove(userId, card.id).catch(() => {})
           fsrsSentToLadder = true
         } else {
-          const dueAt = fsrs.dueInMinutes != null
-            ? new Date(nowDate.getTime() + fsrs.dueInMinutes * 60_000).toISOString()
-            : snapDueAtToStartOfDay(new Date(nowDate.getTime() + fsrs.intervalDays! * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
+          let dueAt: string
+          if (fsrs.dueInMinutes != null) {
+            dueAt = new Date(nowDate.getTime() + fsrs.dueInMinutes * 60_000).toISOString()  // relearn loop — precise, no fuzz
+          } else {
+            const days = fsrs.intervalDays!
+            const [minDays, maxDays] = fsrsFuzzRange(days)
+            const idealDueAt = new Date(nowDate.getTime() + days * 86_400_000).toISOString()
+            const smoothed = (maxDays - minDays >= 1)
+              ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, days, stateRepo)
+              : idealDueAt
+            dueAt = snapDueAtToStartOfDay(smoothed, tzRef.current, turnoverRef.current)
+          }
           newState = {
             ...newState,
             difficulty:            fsrs.difficulty,
@@ -713,7 +744,7 @@ function AllDueSessionInner() {
 
       if (!state.graduated && newState.graduated && newState.dueAt) {
         const errors    = state.pipelineErrorCount ?? 0
-        const [minDays, maxDays] = graduationIntervalRange(errors, schedulerParams)
+        const [minDays, maxDays] = graduationIntervalRange(errors, cardParams)
         const idealDays = Math.floor((minDays + maxDays) / 2)
         const idealDueAt = new Date(nowDate.getTime() + idealDays * 24 * 60 * 60 * 1000).toISOString()
         const smoothed = (maxDays - minDays >= 1)
@@ -747,7 +778,7 @@ function AllDueSessionInner() {
             const priorTyped   = state.typedIntervalDays ?? 1
             const newTyped     = newState.typedIntervalDays ?? 1
             const growthRatio  = Math.max(1, newTyped / priorTyped)
-            const newRecallInt = Math.min(Math.round((newState.recallIntervalDays) * growthRatio), schedulerParams.maxIntervalDays)
+            const newRecallInt = Math.min(Math.round((newState.recallIntervalDays) * growthRatio), cardParams.maxIntervalDays)
             newState = { ...newState, recallIntervalDays: newRecallInt, recallDueAt: new Date(nowDate.getTime() + newRecallInt * 86_400_000).toISOString() }
           }
         }
@@ -758,7 +789,7 @@ function AllDueSessionInner() {
       if (softWrongRecallRating && newState.graduated && !isRecallReview && (reviewTrack === 'typed' || reviewTrack === 'legacy')) {
         const recallIntervalBase = state.recallIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
         const recallBase = { ...state, intervalDays: recallIntervalBase, scheduledIntervalDays: recallIntervalBase }
-        const recallSched = scheduleNext(recallBase, softWrongRecallRating, { now: nowDate, wrongSeverity: undefined, params: schedulerParams })
+        const recallSched = scheduleNext(recallBase, softWrongRecallRating, { now: nowDate, wrongSeverity: undefined, params: cardParams })
         const newRecallDueAt = recallSched.dueAt
           ? snapDueAtToStartOfDay(recallSched.dueAt, tzRef.current, turnoverRef.current)
           : state.recallDueAt

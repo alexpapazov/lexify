@@ -39,6 +39,23 @@ export const DEFAULT_FSRS_CONFIG: FsrsConfig = {
 export const DIFFICULTY_DELTA: Record<Rating, number> = { again: 2.0, hard: 0.6, good: 0, easy: -2.0 }
 export const BASE_DIFFICULTY = 5
 
+/**
+ * Anki-style interval fuzz: given a scheduled interval (days), returns the
+ * `[minDays, maxDays]` window (absolute interval days from the last review) that
+ * the due date may land anywhere within, so a batch reviewed the same day doesn't
+ * pile up on the exact same future day forever. Density smoothing then picks the
+ * least-crowded day in this window. Very short intervals aren't fuzzed.
+ *
+ * The same window is used both when scheduling a review and by the "redistribute"
+ * tools, so redistribution only ever moves a card within its own fuzz window.
+ */
+export function fsrsFuzzRange(intervalDays: number): [number, number] {
+  const i = intervalDays
+  if (i < 2.5) return [i, i]                       // too short to fuzz
+  const fuzz = Math.max(1, Math.round(i * 0.05))   // ±5%, at least a day
+  return [Math.max(1, i - fuzz), i + fuzz]
+}
+
 const LN_09 = Math.log(0.9)
 const clampD = (d: number) => Math.min(10, Math.max(1, d))
 const clampRetention = (r: number) => Math.min(0.97, Math.max(0.70, r))

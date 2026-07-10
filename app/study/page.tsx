@@ -14,7 +14,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
-import { effectiveMultiplierRange, acceleratedEffectiveMultiplierRange } from '@/engine/scheduler'
+import { fsrsFuzzRange } from '@/engine/fsrs'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
 
@@ -320,18 +320,11 @@ export default function StudyPage() {
             continue
           }
 
-          // Standard graduated cards: use smooth multiplier window
-          if (!s.lastRating || s.lastRating === 'again') continue
+          // Standard graduated cards are FSRS-scheduled — the movable window is the
+          // fuzz window around the current interval (matches how they were scheduled).
           if (!s.lastReviewedAt || s.scheduledIntervalDays <= 0) continue
 
-          const rating = s.lastRating as 'hard' | 'good' | 'easy'
-          const range = s.acceleratedMode === 'import_known' && s.acceleratedWrongStreak < 2
-            ? acceleratedEffectiveMultiplierRange(rating, s.scheduledIntervalDays, s.acceleratedPenalty)
-            : effectiveMultiplierRange(rating, s.scheduledIntervalDays)
-
-          const baseInterval = s.scheduledIntervalDays / range.ideal
-          const smoothMinDays = baseInterval * range.min
-          const smoothMaxDays = baseInterval * range.max
+          const [smoothMinDays, smoothMaxDays] = fsrsFuzzRange(s.scheduledIntervalDays)
 
           const lastReviewed = new Date(s.lastReviewedAt)
           lastReviewed.setUTCHours(0, 0, 0, 0)

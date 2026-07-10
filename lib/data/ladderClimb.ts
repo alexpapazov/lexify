@@ -21,4 +21,11 @@ export class SupabaseLadderClimbRepository {
     )
     if (error) throw new Error(error.message)
   }
+
+  /** Removes a card's climb row so it restarts from the CURRENT ladder config next time. */
+  async remove(userId: UserId, cardId: CardId): Promise<void> {
+    const { error } = await this.db.from('ladder_climb')
+      .delete().eq('user_id', userId).eq('card_id', cardId)
+    if (error) throw new Error(error.message)
+  }
 }

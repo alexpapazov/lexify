@@ -8,6 +8,7 @@ import { SupabaseDeckRepository }            from '@/lib/data/decks'
 import { SupabaseCardRepository }            from '@/lib/data/cards'
 import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
+import { SupabaseLadderClimbRepository }     from '@/lib/data/ladderClimb'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
@@ -20,7 +21,7 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { scheduleGraduatedFsrs, RELEARN_MINUTES } from '@/engine/dueNow'
-import { DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
+import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SynonymGroup, SynonymAnswerField, SynonymProductionPrompt, GradingIssueType, SchedulerParams, TypedErrorCategory, TypedStrictness } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
@@ -884,14 +885,24 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           againStreak: state.againStreak,
           elapsedDays,
         }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention })
-        // sendToLadder from a recall track (rare: 3 Agains in a row) is handled as
-        // one more 5-min relearn loop for v1 rather than un-graduating a reverse row.
+        // The recall/reverse track only ever recognises the native side, so failing it
+        // never sends a card back to the ladder — only failing target-language production
+        // (the forward path) does. A recall sendToLadder is treated as one more 5-min loop.
         const relearnMinutes = fsrs.dueInMinutes ?? (fsrs.sendToLadder ? RELEARN_MINUTES.again : null)
-        const newRecallDueAt = relearnMinutes != null
-          ? new Date(nowDate.getTime() + relearnMinutes * 60_000).toISOString()
-          : (fsrs.intervalDays != null
-              ? snapDueAtToStartOfDay(new Date(nowDate.getTime() + fsrs.intervalDays * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
-              : state.recallDueAt)
+        let newRecallDueAt: string | null
+        if (relearnMinutes != null) {
+          newRecallDueAt = new Date(nowDate.getTime() + relearnMinutes * 60_000).toISOString()
+        } else if (fsrs.intervalDays != null) {
+          const days = fsrs.intervalDays
+          const [minDays, maxDays] = fsrsFuzzRange(days)
+          const idealDueAt = new Date(nowDate.getTime() + days * 86_400_000).toISOString()
+          const smoothed = (maxDays - minDays >= 1)
+            ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, days, stateRepo)
+            : idealDueAt
+          newRecallDueAt = snapDueAtToStartOfDay(smoothed, tzRef.current, turnoverRef.current)
+        } else {
+          newRecallDueAt = state.recallDueAt
+        }
         const recallNewState: CardState = {
           ...state,
           difficulty:         fsrs.difficulty,
@@ -971,17 +982,29 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           elapsedDays,
         }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention })
         if (fsrs.sendToLadder) {
-          // Three Agains in a row → un-graduate and restart the learning ladder.
+          // Three Agains in a row producing the target language → un-graduate and
+          // restart the CURRENT ladder (drop any stale climb row so it re-enters
+          // whatever the ladder is configured as now, not the old pipeline position).
           newState = {
             ...initialCardState(userId, card.id, pipeline.id),
             introducedDate:  state.introducedDate,
             reviewDirection: state.reviewDirection,
           }
+          new SupabaseLadderClimbRepository().remove(userId, card.id).catch(() => {})
           fsrsSentToLadder = true
         } else {
-          const dueAt = fsrs.dueInMinutes != null
-            ? new Date(nowDate.getTime() + fsrs.dueInMinutes * 60_000).toISOString()
-            : snapDueAtToStartOfDay(new Date(nowDate.getTime() + fsrs.intervalDays! * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
+          let dueAt: string
+          if (fsrs.dueInMinutes != null) {
+            dueAt = new Date(nowDate.getTime() + fsrs.dueInMinutes * 60_000).toISOString()  // relearn loop — precise, no fuzz
+          } else {
+            const days = fsrs.intervalDays!
+            const [minDays, maxDays] = fsrsFuzzRange(days)
+            const idealDueAt = new Date(nowDate.getTime() + days * 86_400_000).toISOString()
+            const smoothed = (maxDays - minDays >= 1)
+              ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, days, stateRepo)
+              : idealDueAt
+            dueAt = snapDueAtToStartOfDay(smoothed, tzRef.current, turnoverRef.current)
+          }
           newState = {
             ...newState,
             difficulty:            fsrs.difficulty,
