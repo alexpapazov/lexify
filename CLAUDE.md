@@ -711,11 +711,15 @@ Learning (pre-graduation) is untouched — the ladder/pipeline still runs it.
   10-min relearn pool (via `relearningStep = 1`). `sendToLadder` resets the forward
   row to `initialCardState` (un-graduate); the rare recall-track `sendToLadder` is
   treated as one more 5-min loop for v1.
+- **Stage 3 (backfill) — migration `075_fsrs_backfill.sql`**: seeds D/S for all
+  already-graduated rows up front (same formulas as the lazy seed), per direction
+  (forward → typed interval, reverse → recall interval). Idempotent — only touches
+  graduated rows with NULL difficulty/stability, so it never overwrites a card that
+  already has a reviewed FSRS state. **Must be applied.**
 - **v1 limitations / follow-ups**: retention is fixed at 90% (Stage 4 = per-language
   80–95% slider); no interval fuzz beyond day-snapping; `sendToLadder` doesn't clear
   a stale `ladder_climb` row yet; recall track un-graduation is a loop, not a real
-  send-back; the ~1,100 existing graduated cards seed D/S lazily on their next review
-  (Stage 3 = one-time backfill migration). **Not yet verified on-device by the user.**
+  send-back.
 
 ## Known backlog / open issues
 
