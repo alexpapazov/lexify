@@ -1783,9 +1783,15 @@ export default function DeckDetailPage() {
         {activeFilter && (() => {
           const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : activeFilter === 'dormant' ? dormant : dueNow
           const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : activeFilter === 'dormant' ? 'Dormant' : 'Due Now'
+          // Learning-phase categories climb the ladder; post-graduation ones
+          // (graduated / due / dormant) stay on the long-term review flow.
+          const isLearningPhase = activeFilter === 'new' || activeFilter === 'learning'
+          const studyHref = isLearningPhase
+            ? `/study/ladder/${deckId}?category=${activeFilter}`
+            : `/study/${deckId}/session?category=${activeFilter}`
           return filterCount > 0 ? (
             <Link
-              href={`/study/${deckId}/session?category=${activeFilter}`}
+              href={studyHref}
               className="btn-primary block w-full text-center"
             >
               Study {filterLabel}

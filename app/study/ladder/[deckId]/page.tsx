@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useParams, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
@@ -13,17 +13,20 @@ import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
-import type { Card, CardChoices, Deck, Ladder } from '@/domain'
+import type { Card, CardChoices, Deck, Ladder, RungType } from '@/domain'
 
 const DAY_MS = 86_400_000
+const RUNG_LABEL: Record<RungType, string> = { mcq: 'multiple choice', typing: 'typing', self_graded: 'self-graded', dictation: 'dictation' }
 
-export default function LadderStudyPage() {
+function LadderStudyInner() {
   const { deckId } = useParams<{ deckId: string }>()
+  const category = useSearchParams().get('category') // 'new' | 'learning' | null
   const [userId, setUserId] = useState<string | null>(null)
   const [deck, setDeck] = useState<Deck | null>(null)
   const [ladder, setLadder] = useState<Ladder | null>(null)
   const [cardsById, setCardsById] = useState<Map<string, Card>>(new Map())
   const [queue, setQueue] = useState<string[]>([])
+  const [total, setTotal] = useState(0)
   const [states, setStates] = useState<Map<string, ClimbState>>(new Map())
   const [graduated, setGraduated] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -42,27 +45,39 @@ export default function LadderStudyPage() {
       const [pair, def] = await Promise.all([ladderRepo.getForPair(uid, d.sourceLanguage, d.targetLanguage), ladderRepo.getDefault(uid)])
       setLadder(resolveEffectiveLadder(pair, def))
 
-      // Cards already graduated (old pipeline OR ladder) are in long-term review — skip them.
       const cardStates = await new SupabaseCardStateRepository().listByDeck(uid, deckId)
       const gradSet = new Set(cardStates.filter(s => s.reviewDirection !== 'reverse' && s.graduated).map(s => s.cardId))
       const climb = await new SupabaseLadderClimbRepository().listForCards(uid, cards.map(c => c.id))
       setStates(climb)
 
-      // Intake: in-progress ladder cards + new cards up to the deck's daily limit.
-      const prefsRepo = new SupabaseDeckPreferencesRepository()
-      const prefs = await prefsRepo.get(uid, deckId)
-      const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
-      const learning: string[] = []
-      const fresh: string[] = []
+      const shuffle = <T,>(a: T[]) => a.sort(() => Math.random() - 0.5)
+      const learning: string[] = []  // already climbing the ladder
+      const fresh: string[] = []      // never started
       for (const c of cards) {
         if (gradSet.has(c.id) || climb.get(c.id)?.graduated) continue
         (climb.has(c.id) ? learning : fresh).push(c.id)
       }
-      const shuffle = <T,>(a: T[]) => a.sort(() => Math.random() - 0.5)
-      setQueue([...shuffle(learning), ...shuffle(fresh).slice(0, Math.max(0, newLimit))])
+
+      let q: string[]
+      if (category === 'new')          q = shuffle(fresh)
+      else if (category === 'learning') q = shuffle(learning)
+      else {
+        // Normal intake: apply the deck's card-intake settings.
+        const prefsRepo = new SupabaseDeckPreferencesRepository()
+        const prefs = await prefsRepo.get(uid, deckId)
+        if (prefs?.learningBatchMode) {
+          // Keep at most `cardsPerSession` cards in the pipeline at once.
+          const cap = prefs.cardsPerSession ?? 5
+          q = [...shuffle(learning), ...shuffle(fresh)].slice(0, Math.max(0, cap))
+        } else {
+          const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
+          q = [...shuffle(learning), ...shuffle(fresh).slice(0, Math.max(0, newLimit))]
+        }
+      }
+      setQueue(q); setTotal(q.length)
       setLoading(false)
     })()
-  }, [deckId])
+  }, [deckId, category])
 
   const currentId = queue[0]
   const currentCard = currentId ? cardsById.get(currentId) : undefined
@@ -73,7 +88,6 @@ export default function LadderStudyPage() {
     setCardsById(prev => { const c = prev.get(cardId); if (!c) return prev; return new Map(prev).set(cardId, { ...c, choices }) })
   }
 
-  // Writes the two graduated review states (forward + reverse) so the card enters Due Now.
   async function graduate(cardId: string, target: IntervalRange | null, native: IntervalRange | null) {
     if (!userId || !deck) return
     const repo = new SupabaseCardStateRepository()
@@ -107,8 +121,8 @@ export default function LadderStudyPage() {
 
   if (!currentCard || !currentRung || !currentClimb) {
     return (
-      <div className="max-w-lg mx-auto p-6 text-center space-y-3">
-        <h1 className="text-xl font-semibold text-ink">Learning complete — {deck.name}</h1>
+      <div className="max-w-md mx-auto pt-16 text-center space-y-6">
+        <h1 className="text-xl font-semibold text-ink">Learning complete</h1>
         <p className="text-ink-muted">{graduated > 0 ? `Graduated ${graduated} card${graduated === 1 ? '' : 's'}.` : 'Nothing to learn right now.'}</p>
         <div className="flex justify-center gap-3">
           <a href={`/study/${deckId}/session?category=due`} className="btn-primary">Review due cards</a>
@@ -118,13 +132,23 @@ export default function LadderStudyPage() {
     )
   }
 
+  const done = total - queue.length
   return (
-    <div className="max-w-xl mx-auto p-6 space-y-5">
-      <div className="flex items-center justify-between text-xs text-ink-faint">
-        <a href={`/study/${deckId}`} className="hover:text-ink">✕ End</a>
-        <span>Rung {currentClimb.rungIndex + 1} of {ladder.rungs.length}</span>
-        <span>{graduated} graduated</span>
+    <div className="space-y-8 max-w-2xl mx-auto">
+      <div className="relative flex items-center justify-between">
+        <a href={`/study/${deckId}`} className="text-sm text-ink-muted hover:text-ink">✕ End session</a>
+        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{done} / {total}</div>
+        <div className="text-xs text-ink-muted">Rung {currentClimb.rungIndex + 1} · {RUNG_LABEL[currentRung.type]}</div>
       </div>
+      <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
+        <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${total ? Math.round((done / total) * 100) : 0}%` }} />
+      </div>
+      {category && (
+        <p className="text-xs text-accent text-center">
+          {category === 'new' ? 'Studying unlearned cards.' : 'Studying cards still in the learning pipeline.'}
+        </p>
+      )}
+
       <LadderStudyCard
         key={`${currentId}:${currentClimb.rungIndex}`}
         card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
@@ -133,4 +157,8 @@ export default function LadderStudyPage() {
       />
     </div>
   )
+}
+
+export default function LadderStudyPage() {
+  return <Suspense fallback={<p className="p-6 text-sm text-ink-faint">Loading…</p>}><LadderStudyInner /></Suspense>
 }
