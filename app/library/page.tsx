@@ -84,6 +84,49 @@ function DeckIcon() {
   )
 }
 
+/** A graduation-interval table cell. Double-click to edit min–max; Enter or
+ *  clicking away saves; Esc cancels. */
+function GradIntervalCell({ min, max, changed, onSave }: {
+  min: number; max: number; changed: boolean; onSave: (min: number, max: number) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [lo, setLo] = useState(String(min))
+  const [hi, setHi] = useState(String(max))
+  const containerRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => { if (!editing) { setLo(String(min)); setHi(String(max)) } }, [min, max, editing])
+
+  function save() {
+    setEditing(false)
+    const nlo = Number(lo), nhi = Number(hi)
+    if (Number.isFinite(nlo) && Number.isFinite(nhi) && nlo > 0) onSave(nlo, nhi)
+  }
+  // Save when focus leaves the whole cell (not when tabbing between the two inputs).
+  function onBlur(e: React.FocusEvent) {
+    if (!containerRef.current?.contains(e.relatedTarget as Node | null)) save()
+  }
+
+  if (editing) {
+    return (
+      <span ref={containerRef} className="inline-flex items-center justify-end gap-1">
+        <input autoFocus type="number" min={1} value={lo} onChange={e => setLo(e.target.value)} onBlur={onBlur}
+          onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
+          className="w-11 bg-surface-raised border border-white/10 rounded px-1 py-0.5 text-right text-ink outline-none focus:border-accent/60" />
+        <span className="text-ink-faint">–</span>
+        <input type="number" min={1} value={hi} onChange={e => setHi(e.target.value)} onBlur={onBlur}
+          onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
+          className="w-11 bg-surface-raised border border-white/10 rounded px-1 py-0.5 text-right text-ink outline-none focus:border-accent/60" />
+      </span>
+    )
+  }
+  return (
+    <span onDoubleClick={() => setEditing(true)} title="Double-click to edit"
+      className={`cursor-pointer select-none ${changed ? 'text-accent font-medium' : 'text-ink'}`}>
+      {min === max ? `${min}` : `${min}–${max}`}
+    </span>
+  )
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getDropPos(e: React.DragEvent, isFolder: boolean): DropPos {
@@ -539,6 +582,24 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     setSrsParams(prev => prev.map(p => ({ ...p, maxIntervalDays: days })))
   }
 
+  // Manually set one graduation-interval bucket (double-tap-to-edit in the table).
+  async function handleGradIntervalEdit(n: number, min: number, max: number) {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    const lo = Math.max(1, Math.round(min))
+    const hi = Math.max(lo, Math.round(max))
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    await repo.update(userId, src, tgt, 'forward_typed', {
+      [`grad_interval_${n}err_min`]: lo,
+      [`grad_interval_${n}err_max`]: hi,
+    })
+    const minKey = `gradInterval${n}errMin` as keyof typeof DEFAULT_SCHEDULER_PARAMS
+    const maxKey = `gradInterval${n}errMax` as keyof typeof DEFAULT_SCHEDULER_PARAMS
+    setSrsParams(prev => prev.map(p =>
+      p.answerField === 'forward_typed' ? { ...p, [minKey]: lo, [maxKey]: hi } : p
+    ))
+  }
+
   async function handleResetGradIntervals() {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
@@ -992,6 +1053,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             const defMin = DEFAULT_SCHEDULER_PARAMS[minKey] as number
             const defMax = DEFAULT_SCHEDULER_PARAMS[maxKey] as number
             return {
+              n, min, max,
               label: n === 8 ? '8+ err' : `${n} err`,
               value: min === max ? `${min}` : `${min}–${max}`,
               def:   defMin === defMax ? `${defMin}` : `${defMin}–${defMax}`,
@@ -1181,7 +1243,12 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                                 {GRAD_BUCKETS.map(b => (
                                   <tr key={b.label} className="border-t border-surface-border/50">
                                     <td className="py-1 pr-2 text-ink-muted">{b.label}</td>
-                                    <td className={`text-right py-1 px-1 ${b.changed ? 'text-accent font-medium' : 'text-ink'}`}>{b.value}</td>
+                                    <td className="text-right py-1 px-1">
+                                      <GradIntervalCell
+                                        min={b.min} max={b.max} changed={b.changed}
+                                        onSave={(mn, mx) => handleGradIntervalEdit(b.n, mn, mx).catch(err => alert('Save failed: ' + (err instanceof Error ? err.message : String(err))))}
+                                      />
+                                    </td>
                                     <td className="text-right py-1 pl-1 text-ink-faint">{b.def}</td>
                                   </tr>
                                 ))}
