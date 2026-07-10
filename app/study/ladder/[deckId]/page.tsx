@@ -11,6 +11,7 @@ import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
+import { pickNextCard, reshowDelayMs, type QueueItem } from '@/lib/ladderSession'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
 import { CardEditModal } from '@/components/CardEditModal'
@@ -26,7 +27,8 @@ function LadderStudyInner() {
   const [deck, setDeck] = useState<Deck | null>(null)
   const [ladder, setLadder] = useState<Ladder | null>(null)
   const [cardsById, setCardsById] = useState<Map<string, Card>>(new Map())
-  const [queue, setQueue] = useState<string[]>([])
+  const [queue, setQueue] = useState<QueueItem[]>([])
+  const [currentId, setCurrentId] = useState<string | null>(null)
   const [total, setTotal] = useState(0)
   const [states, setStates] = useState<Map<string, ClimbState>>(new Map())
   const [graduated, setGraduated] = useState(0)
@@ -76,12 +78,13 @@ function LadderStudyInner() {
           q = [...shuffle(learning), ...shuffle(fresh).slice(0, Math.max(0, newLimit))]
         }
       }
-      setQueue(q); setTotal(q.length)
+      const items: QueueItem[] = q.map(cardId => ({ cardId, readyAt: 0, ratedAt: 0 }))
+      setQueue(items); setTotal(items.length)
+      setCurrentId(pickNextCard(items, Date.now())?.cardId ?? null)
       setLoading(false)
     })()
   }, [deckId, category])
 
-  const currentId = queue[0]
   const currentCard = currentId ? cardsById.get(currentId) : undefined
   const currentClimb = currentId ? applyWindow(states.get(currentId) ?? initialClimbState(), Date.now()) : null
   const currentRung = ladder && currentClimb ? ladder.rungs[currentClimb.rungIndex] : undefined
@@ -106,16 +109,25 @@ function LadderStudyInner() {
 
   async function onOutcome(outcome: RungAttemptOutcome) {
     if (!userId || !ladder || !currentId || !currentClimb) return
-    const res = reviewRung(ladder, currentClimb, outcome, Date.now())
+    const now = Date.now()
+    const res = reviewRung(ladder, currentClimb, outcome, now)
     await new SupabaseLadderClimbRepository().save(userId, currentId, deckId, res.state).catch(console.error)
     setStates(prev => new Map(prev).set(currentId, res.state))
-    if (res.state.graduated) { await graduate(currentId, res.state.targetInterval, res.state.nativeInterval); setGraduated(g => g + 1) }
-    setQueue(prev => {
-      const rest = prev.slice(1)
-      if (res.state.graduated) return rest
-      const at = Math.min(3, rest.length)
-      return [...rest.slice(0, at), currentId, ...rest.slice(at)]
-    })
+
+    let nextQueue: QueueItem[]
+    if (res.state.graduated) {
+      await graduate(currentId, res.state.targetInterval, res.state.nativeInterval)
+      setGraduated(g => g + 1)
+      nextQueue = queue.filter(e => e.cardId !== currentId)
+    } else {
+      // Hold the card until its Again/Hard/Good window is (nearly) up; 0 = show freely.
+      const delay = reshowDelayMs(res.reshow)
+      nextQueue = queue.map(e => e.cardId === currentId
+        ? { cardId: currentId, readyAt: delay > 0 ? now + delay : 0, ratedAt: delay > 0 ? now : 0 }
+        : e)
+    }
+    setQueue(nextQueue)
+    setCurrentId(pickNextCard(nextQueue, now, currentId)?.cardId ?? null)
   }
 
   if (loading) return <p className="p-6 text-sm text-ink-faint">Loading…</p>
@@ -168,7 +180,7 @@ function LadderStudyInner() {
           }}
           onCardChange={c => setCardsById(prev => new Map(prev).set(c.id, c))}
           onStateChange={() => {}}
-          onDelete={cid => { setCardsById(prev => { const m = new Map(prev); m.delete(cid); return m }); setQueue(q => q.filter(x => x !== cid)); setInfoOpen(false) }}
+          onDelete={cid => { setCardsById(prev => { const m = new Map(prev); m.delete(cid); return m }); setQueue(q => q.filter(x => x.cardId !== cid)); if (currentId === cid) setCurrentId(pickNextCard(queue.filter(x => x.cardId !== cid), Date.now())?.cardId ?? null); setInfoOpen(false) }}
           onClose={() => setInfoOpen(false)}
           initialShowStats
         />

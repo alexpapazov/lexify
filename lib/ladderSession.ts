@@ -5,7 +5,7 @@
  */
 
 import type { Rung, Rating } from '@/domain'
-import type { RungAttemptOutcome, IntervalRange } from '@/engine/ladderEngine'
+import type { RungAttemptOutcome, IntervalRange, ReshowHint } from '@/engine/ladderEngine'
 
 /** Which existing study screen renders a given rung. */
 export type RungUI = 'mcq' | 'typing' | 'flashcard' | 'dictation'
@@ -52,4 +52,48 @@ export function pickIntervalDay(range: IntervalRange, dueInDays: Map<number, num
     if (c < bestCount) { bestCount = c; best = d }
   }
   return best
+}
+
+// ─── In-session re-show timing (short Again/Hard/Good windows) ────────────────
+
+/** A card waiting in the session queue. `readyAt` = 0 means no timer (free to show). */
+export interface QueueItem { cardId: string; readyAt: number; ratedAt: number }
+
+/**
+ * How long a card that STAYED on a rung should be held before reappearing — we
+ * want to burn as much of the window as possible: Again ≤ 1 min, Hard ≤ 5 min,
+ * Good (first) ≤ 10 min. Advancing/other outcomes have no timer (0).
+ */
+export function reshowDelayMs(hint: ReshowHint): number {
+  switch (hint) {
+    case 'soon':   return 60_000    // Again
+    case 'short':  return 300_000   // Hard
+    case 'medium': return 600_000   // Good (first)
+    default:       return 0
+  }
+}
+
+function pctElapsed(e: QueueItem, now: number): number {
+  return e.readyAt <= e.ratedAt ? 1 : (now - e.ratedAt) / (e.readyAt - e.ratedAt)
+}
+
+/**
+ * Chooses the next card to show:
+ *  1. A card whose timer has ELAPSED (readyAt ≤ now) must go next — most-overdue first;
+ *  2. otherwise fill the time with a free card (no timer);
+ *  3. if every remaining card is still waiting on a timer, show the one closest to its
+ *     target (greatest % of its window elapsed).
+ * Avoids immediately repeating `avoidId` when another card is available.
+ */
+export function pickNextCard(queue: QueueItem[], now: number, avoidId?: string): QueueItem | null {
+  if (queue.length === 0) return null
+  const others = queue.filter(e => e.cardId !== avoidId)
+  const pool = others.length ? others : queue
+
+  const eligible = pool.filter(e => e.readyAt <= now)
+  if (eligible.length) {
+    const overdueTimers = eligible.filter(e => e.readyAt > 0).sort((a, b) => a.readyAt - b.readyAt)
+    return overdueTimers[0] ?? eligible.find(e => e.readyAt === 0) ?? eligible[0]!
+  }
+  return [...pool].sort((a, b) => pctElapsed(b, now) - pctElapsed(a, now))[0]!
 }
