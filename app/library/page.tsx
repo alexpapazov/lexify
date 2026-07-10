@@ -672,6 +672,17 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     ))
   }
 
+  // Per-pair FSRS target retention (0.80–0.95) — stored canonically on the forward_typed row.
+  async function handleSrsRetention(value: number) {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    await repo.update(userId, src, tgt, 'forward_typed', { request_retention: value })
+    setSrsParams(prev => prev.map(p =>
+      p.answerField === 'forward_typed' ? { ...p, requestRetention: value } : p
+    ))
+  }
+
   async function handleLoadSrsHistory() {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
@@ -1200,6 +1211,40 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                             )
                           })}
                         </div>
+
+                        {/* FSRS target retention — one slider per pair (0.80–0.95) */}
+                        {(() => {
+                          const retention = ftRow?.requestRetention ?? 0.90
+                          const pct = Math.round(retention * 100)
+                          const idx = Math.round((retention - 0.80) / 0.01)  // 0.80→0, 0.95→15
+                          return (
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-baseline justify-between">
+                                <span className="text-sm text-ink">Target retention</span>
+                                <span className="text-xs text-ink-muted">{pct}% — {
+                                  retention >= 0.93 ? 'more reviews, stronger recall'
+                                  : retention <= 0.83 ? 'fewer reviews, more forgetting'
+                                  : 'balanced (recommended ~90%)'
+                                }</span>
+                              </div>
+                              <p className="text-xs text-ink-faint mb-0.5">How likely you want to be to recall a card when it comes due. Higher = shorter intervals.</p>
+                              <input
+                                type="range"
+                                min={0}
+                                max={15}
+                                step={1}
+                                value={idx}
+                                onChange={e => handleSrsRetention(Number((0.80 + Number(e.target.value) * 0.01).toFixed(2))).catch(() => {})}
+                                className="accent-accent w-full"
+                              />
+                              <div className="flex justify-between text-[10px] text-ink-faint px-0.5">
+                                <span>80%</span>
+                                <span>90%</span>
+                                <span>95%</span>
+                              </div>
+                            </div>
+                          )
+                        })()}
 
                         {/* Constants table */}
                         <div className="flex flex-col gap-1">

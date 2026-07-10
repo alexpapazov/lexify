@@ -113,6 +113,7 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     strictSpelling: (row.spelling_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictSpelling,
     strictAccents:  (row.accents_mode  as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictAccents,
     strictArticles: (row.articles_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
+    requestRetention: (row.request_retention as number | null) ?? DEFAULT_SCHEDULER_PARAMS.requestRetention,
   }
 }
 

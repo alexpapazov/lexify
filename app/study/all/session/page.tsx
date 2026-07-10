@@ -597,7 +597,7 @@ function AllDueSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, DEFAULT_FSRS_CONFIG)
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention })
         // sendToLadder from a recall track (rare: 3 Agains in a row) is handled as
         // one more 5-min relearn loop for v1 rather than un-graduating a reverse row.
         const relearnMinutes = fsrs.dueInMinutes ?? (fsrs.sendToLadder ? RELEARN_MINUTES.again : null)
@@ -671,7 +671,7 @@ function AllDueSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, DEFAULT_FSRS_CONFIG)
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention })
         if (fsrs.sendToLadder) {
           newState = {
             ...initialCardState(userId, card.id, pipeline.id),

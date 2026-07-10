@@ -716,10 +716,19 @@ Learning (pre-graduation) is untouched — the ladder/pipeline still runs it.
   (forward → typed interval, reverse → recall interval). Idempotent — only touches
   graduated rows with NULL difficulty/stability, so it never overwrites a card that
   already has a reviewed FSRS state. **Must be applied.**
-- **v1 limitations / follow-ups**: retention is fixed at 90% (Stage 4 = per-language
-  80–95% slider); no interval fuzz beyond day-snapping; `sendToLadder` doesn't clear
-  a stale `ladder_climb` row yet; recall track un-graduation is a loop, not a real
-  send-back.
+- **Stage 4 (per-pair retention) — migration `076_fsrs_request_retention.sql`**:
+  adds `user_scheduler_params.request_retention` (real, default 0.90), surfaced on
+  `SchedulerParams.requestRetention` (canonical on the forward_typed row, like the
+  strictness levels). The three session pages pass
+  `{ ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention }`
+  to `scheduleGraduatedFsrs` (engine still clamps effective retention to 0.70–0.97).
+  UI: a "Target retention" slider (80–95%) in the per-pair SRS settings modal in
+  `app/library/page.tsx` (`handleSrsRetention`). **Must apply migration 076.**
+  Note: all/folder sessions span multiple pairs but use the single loaded
+  `schedulerParams` row for retention — same existing limitation as `scheduleNext`.
+- **v1 limitations / follow-ups**: no interval fuzz beyond day-snapping;
+  `sendToLadder` doesn't clear a stale `ladder_climb` row yet; recall track
+  un-graduation is a loop, not a real send-back.
 
 ## Known backlog / open issues
 

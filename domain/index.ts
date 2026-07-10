@@ -311,6 +311,9 @@ export interface SchedulerParams {
   gradInterval8errMin: number; gradInterval8errMax: number
   // Per-pair typed-answer strictness levels (canonical on the forward_typed row).
   strictSpelling: TypedStrictnessLevel; strictAccents: TypedStrictnessLevel; strictArticles: TypedStrictnessLevel
+  // Per-pair FSRS target retention (0.80–0.95). Higher = shorter intervals, more
+  // reviews, better recall. Canonical on the forward_typed row.
+  requestRetention: number
 }
 
 export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
@@ -333,6 +336,7 @@ export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
   gradInterval7errMin: 1, gradInterval7errMax: 1,
   gradInterval8errMin: 1, gradInterval8errMax: 1,
   strictSpelling: 'penalize', strictAccents: 'penalize', strictArticles: 'penalize',
+  requestRetention: 0.90,
 }
 
 /** Defaults when converting an existing deck to flexible mode. */
