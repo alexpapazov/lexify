@@ -24,6 +24,8 @@ import { progressAfterReview, initialCardState } from '@/engine/pipeline'
 import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
+import { scheduleGraduatedFsrs, RELEARN_MINUTES } from '@/engine/dueNow'
+import { DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
@@ -580,25 +582,43 @@ function AllDueSessionInner() {
       }
 
       // Recall/reverse review: update only the recall track then return early.
+      // Graduated recall reviews are self-graded, so the FSRS grade is the rating.
       if (isRecallReview) {
-        const recallBase = state.recallIntervalDays != null
-          ? { ...state, intervalDays: state.recallIntervalDays, scheduledIntervalDays: state.recallIntervalDays }
-          : state
-        const recallSched = scheduleNext(recallBase, rating, { now: nowDate, wrongSeverity, params: schedulerParams, hintGrowthFactor })
-        const newRecallDueAt = recallSched.dueAt
-          ? snapDueAtToStartOfDay(recallSched.dueAt, tzRef.current, turnoverRef.current)
-          : state.recallDueAt
+        const grade: Rating = rating
+        const elapsedDays = state.lastReviewedAt
+          ? Math.max(0, (nowDate.getTime() - new Date(state.lastReviewedAt).getTime()) / 86_400_000)
+          : (state.recallIntervalDays ?? state.intervalDays ?? 1)
+        const fsrs = scheduleGraduatedFsrs({
+          difficulty:  state.difficulty,
+          stability:   state.stability,
+          intervalDays: state.recallIntervalDays ?? state.intervalDays,
+          lapses:      state.lapses,
+          relearning:  state.relearning,
+          goodStreak:  state.goodStreak,
+          againStreak: state.againStreak,
+          elapsedDays,
+        }, grade, DEFAULT_FSRS_CONFIG)
+        // sendToLadder from a recall track (rare: 3 Agains in a row) is handled as
+        // one more 5-min relearn loop for v1 rather than un-graduating a reverse row.
+        const relearnMinutes = fsrs.dueInMinutes ?? (fsrs.sendToLadder ? RELEARN_MINUTES.again : null)
+        const newRecallDueAt = relearnMinutes != null
+          ? new Date(nowDate.getTime() + relearnMinutes * 60_000).toISOString()
+          : (fsrs.intervalDays != null
+              ? snapDueAtToStartOfDay(new Date(nowDate.getTime() + fsrs.intervalDays * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
+              : state.recallDueAt)
         const recallNewState: CardState = {
           ...state,
-          ease:               recallSched.ease,
+          difficulty:         fsrs.difficulty,
+          stability:          fsrs.stability,
+          relearning:         fsrs.relearning,
+          goodStreak:         fsrs.goodStreak,
+          againStreak:        fsrs.againStreak,
           lastRating:         rating,
           lastReviewedAt:     nowDate.toISOString(),
           reps:               rating !== 'hard' ? state.reps + 1 : state.reps,
-          lapseClusterCount:  recallSched.lapseClusterCount,
-          lastLapseAt:        recallSched.lastLapseAt,
-          relearningStep:     recallSched.relearningStep ?? 0,
-          pendingIntervalDays: recallSched.pendingIntervalDays ?? null,
-          recallIntervalDays: recallSched.intervalDays,
+          lapses:             grade === 'again' ? state.lapses + 1 : state.lapses,
+          relearningStep:     relearnMinutes != null ? 1 : 0,
+          recallIntervalDays: fsrs.intervalDays ?? state.recallIntervalDays,
           recallDueAt:        newRecallDueAt,
           ...(isReverse ? { dueAt: newRecallDueAt } : {}),
         }
@@ -606,7 +626,7 @@ function AllDueSessionInner() {
         setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState }])
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
-        if (recallSched.relearningStep > 0) {
+        if (recallNewState.relearningStep > 0) {
           setRelearnPool(prev => [...prev, { ...current, state: recallNewState }])
           setIndex(i => i + 1)
           return
@@ -620,7 +640,7 @@ function AllDueSessionInner() {
 
       // Computed independently (same `nowDate`) so the density-smoothing
       // window matches exactly what progressAfterReview just applied.
-      const scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams, hintGrowthFactor }) : null
+      let scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: schedulerParams, hintGrowthFactor }) : null
 
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
 
@@ -630,6 +650,55 @@ function AllDueSessionInner() {
 
       if (!newState.graduated) {
         newState = { ...newState, pipelineErrorCount: (state.pipelineErrorCount ?? 0) + pipelineErrorInc }
+      }
+
+      // ── FSRS scheduling for already-graduated forward reviews (engine/dueNow) ──
+      // Keeps progressAfterReview's production bookkeeping (typed accuracy window,
+      // forced-typing, reps/lapses) but replaces the legacy scheduler's interval
+      // with the FSRS memory model + relearn gate. A wrong typed answer is an Again.
+      let fsrsSentToLadder = false
+      if (state.graduated) {
+        const grade: Rating = (wasTyped && !wasCorrect) ? 'again' : rating
+        const elapsedDays = state.lastReviewedAt
+          ? Math.max(0, (nowDate.getTime() - new Date(state.lastReviewedAt).getTime()) / 86_400_000)
+          : (state.scheduledIntervalDays || state.intervalDays || 1)
+        const fsrs = scheduleGraduatedFsrs({
+          difficulty:  state.difficulty,
+          stability:   state.stability,
+          intervalDays: state.typedIntervalDays ?? state.intervalDays,
+          lapses:      state.lapses,
+          relearning:  state.relearning,
+          goodStreak:  state.goodStreak,
+          againStreak: state.againStreak,
+          elapsedDays,
+        }, grade, DEFAULT_FSRS_CONFIG)
+        if (fsrs.sendToLadder) {
+          newState = {
+            ...initialCardState(userId, card.id, pipeline.id),
+            introducedDate:  state.introducedDate,
+            reviewDirection: state.reviewDirection,
+          }
+          fsrsSentToLadder = true
+        } else {
+          const dueAt = fsrs.dueInMinutes != null
+            ? new Date(nowDate.getTime() + fsrs.dueInMinutes * 60_000).toISOString()
+            : snapDueAtToStartOfDay(new Date(nowDate.getTime() + fsrs.intervalDays! * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
+          newState = {
+            ...newState,
+            difficulty:            fsrs.difficulty,
+            stability:             fsrs.stability,
+            relearning:            fsrs.relearning,
+            goodStreak:            fsrs.goodStreak,
+            againStreak:           fsrs.againStreak,
+            relearningStep:        fsrs.dueInMinutes != null ? 1 : 0,
+            intervalDays:          fsrs.intervalDays ?? newState.intervalDays,
+            scheduledIntervalDays: fsrs.intervalDays ?? newState.scheduledIntervalDays,
+            typedIntervalDays:     fsrs.intervalDays ?? newState.typedIntervalDays,
+            typedDueAt:            dueAt,
+            dueAt,
+          }
+        }
+        scheduled = null  // FSRS owns the schedule; skip the legacy density smoothing below.
       }
 
       if (
@@ -731,7 +800,7 @@ function AllDueSessionInner() {
       await stateRepo.upsert(newState)
 
       // Lazy reverse-row creation (deferred from above — uses newState's forward due date).
-      if (reverseExistsForLazyInit === false) {
+      if (reverseExistsForLazyInit === false && !fsrsSentToLadder) {
         const fwdNextDue  = newState.typedDueAt ?? newState.dueAt ?? nowDate.toISOString()
         const fwdInterval = newState.typedIntervalDays ?? newState.intervalDays
         const revInterval = Math.max(1, Math.round(fwdInterval / 2))

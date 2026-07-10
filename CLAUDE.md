@@ -677,6 +677,46 @@ becomes due automatically. **Migration 068** adds `card_states.dormant` (bool) +
   (`library/page`) views. `StudyCategory`/`FilterKey` unions extended with
   `'dormant'`; `FolderCounts` gains `dormant`.
 
+## FSRS Due Now scheduler (Stage 2 complete, 2026-07-10)
+
+Graduated cards are now scheduled by an FSRS memory model (Difficulty +
+Stability + Retrievability) instead of the legacy interval-multiplier scheduler.
+Learning (pre-graduation) is untouched — the ladder/pipeline still runs it.
+
+- **`engine/fsrs.ts`** — pure FSRS-5 math: `retrievability`, `intervalForRetention`
+  (retention clamped 0.70–0.97), `nextDifficulty`, `initialStability/Difficulty`,
+  `stabilityAfterSuccess`/`stabilityAfterLapse`, `reviewCard`. `DEFAULT_FSRS_CONFIG`
+  = 19-weight FSRS-5 defaults, requestRetention 0.9.
+- **`engine/dueNow.ts`** — the Due Now decision layer over the math:
+  - `reviewDueNow(state, grade, elapsedDays, cfg)` — clean Hard/Good/Easy advance
+    (Hard grows slower, no auto-jump); Again → 5-min relearn loop. Relearn gate:
+    Hard = 10-min loop (no exit/reset), needs **two Goods in a row** to escape
+    (first Good = 20-min loop), Easy escapes immediately, **three Agains in a row
+    → `sendToLadder`** (un-graduate).
+  - `scheduleGraduatedFsrs(cur, grade, cfg)` — lazily seeds D/S for pre-FSRS cards
+    (`seedDifficulty = clamp(5 + 0.7·lapses)`, `seedStability = max(0.5, interval)`),
+    returns `{difficulty, stability, relearning, goodStreak, againStreak,
+    intervalDays|null, dueInMinutes|null, sendToLadder}`.
+  - `gradeFromTyped({status, slip, strictness, chosen})` — maps a typed answer to a
+    grade using the 3-way strictness slider (penalize→Again, retype→Hard,
+    accept→chosen; wrong→Again).
+- **Data model** — `CardState` gained `difficulty|null`, `stability|null`,
+  `relearning`, `goodStreak`, `againStreak` (migration **074_fsrs_state.sql** —
+  **must be applied**). `initialCardState` + `lib/data/cardStates.ts` mappings updated.
+- **Session-page wiring (all 3 pages)** — in `handleAnswer`, both the recall/reverse
+  track and the forward graduated track call `scheduleGraduatedFsrs` instead of
+  `scheduleNext`. `progressAfterReview` still runs for its production bookkeeping
+  (typed accuracy window, forced-typing, reps/lapses); FSRS only overrides the
+  schedule (D/S, dueAt, intervalDays, relearn gate). Relearn re-uses the existing
+  10-min relearn pool (via `relearningStep = 1`). `sendToLadder` resets the forward
+  row to `initialCardState` (un-graduate); the rare recall-track `sendToLadder` is
+  treated as one more 5-min loop for v1.
+- **v1 limitations / follow-ups**: retention is fixed at 90% (Stage 4 = per-language
+  80–95% slider); no interval fuzz beyond day-snapping; `sendToLadder` doesn't clear
+  a stale `ladder_climb` row yet; recall track un-graduation is a loop, not a real
+  send-back; the ~1,100 existing graduated cards seed D/S lazily on their next review
+  (Stage 3 = one-time backfill migration). **Not yet verified on-device by the user.**
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
