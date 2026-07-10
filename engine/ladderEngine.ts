@@ -1,0 +1,163 @@
+/**
+ * engine/ladderEngine.ts — the pure "climb" state machine for the configurable
+ * learning ladder (Stage 2). No React, no Supabase — just the rules.
+ *
+ * A card climbs the ladder's rungs in order. Each attempt yields an OUTCOME; this
+ * decides whether the card advances, retries the same rung, or drops back to an
+ * earlier rung. Interval-setting rungs graduate their direction with a computed
+ * starting interval. The whole climb must finish within 12 hours of clearing the
+ * first rung, or it resets to the beginning.
+ *
+ * Timing of re-shows (under a minute / 5 min / 10 min) is returned as a hint; the
+ * session layer (Stage 3) turns it into an actual schedule. Interval "ranges" are
+ * returned as {min,max}; the session picks the least-busy day inside them.
+ */
+
+import type { Ladder, Rung, RungOutcome, Rating } from '@/domain'
+
+export const CLIMB_WINDOW_MS = 12 * 60 * 60 * 1000  // 12 hours
+
+/** Normalized result of one attempt, fed to the engine. */
+export type RungAttemptOutcome = 'pass' | 'almost' | 'miss' | 'again' | 'hard' | 'good' | 'easy'
+
+export interface IntervalRange { min: number; max: number }
+
+export interface ClimbState {
+  rungIndex:      number
+  progress:       number                              // count toward the advance requirement
+  messUps:        number                              // Again/Hard this sitting (for Easy interval)
+  lastRating:     Rating | null                       // last self-rating on this rung
+  outcomeCounts:  Partial<Record<RungOutcome, number>> // per-rung tally, for drop-back thresholds
+  startedAt:      number | null                       // ms when the first rung was cleared
+  graduated:      boolean
+  targetInterval: IntervalRange | null
+  nativeInterval: IntervalRange | null
+}
+
+/** When to show the card again if it stays on the same rung. */
+export type ReshowHint = 'soon' | 'short' | 'medium' | 'advanced'
+
+export interface RungResult {
+  state:         ClimbState
+  reshow:        ReshowHint
+  advanced:      boolean        // moved to a different rung (up or back)
+  droppedBackTo: number | null  // rung index if this was a drop-back
+}
+
+export function initialClimbState(): ClimbState {
+  return { rungIndex: 0, progress: 0, messUps: 0, lastRating: null, outcomeCounts: {}, startedAt: null, graduated: false, targetInterval: null, nativeInterval: null }
+}
+
+// ─── 12-hour window ──────────────────────────────────────────────────────────
+
+export function isWindowExpired(state: ClimbState, now: number): boolean {
+  return state.startedAt !== null && !state.graduated && (now - state.startedAt) > CLIMB_WINDOW_MS
+}
+
+/** Call before showing a card: if the window lapsed, reset to the first rung. */
+export function applyWindow(state: ClimbState, now: number): ClimbState {
+  return isWindowExpired(state, now) ? initialClimbState() : state
+}
+
+// ─── Easy interval table ─────────────────────────────────────────────────────
+
+/** Starting interval (in days) for an Easy on an interval-setting rung. */
+export function easyInterval(messUps: number, lastRating: Rating | null): IntervalRange {
+  if (lastRating === 'good') return messUps === 0 ? { min: 3, max: 4 } : { min: 3, max: 3 }
+  if (messUps === 0) return { min: 3, max: 4 }
+  if (messUps === 1) return { min: 2, max: 3 }
+  return { min: 2, max: 2 }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function resetPerRung(s: ClimbState): ClimbState {
+  return { ...s, progress: 0, messUps: 0, lastRating: null, outcomeCounts: {} }
+}
+
+/** Move to an earlier/later rung by index (drop-back), clearing per-rung state. */
+function toRung(s: ClimbState, index: number): ClimbState {
+  return { ...resetPerRung(s), rungIndex: index }
+}
+
+/** Advance past `fromIndex`; may set the window start, record an interval, and graduate. */
+function advance(s: ClimbState, ladder: Ladder, now: number, fromIndex: number, interval?: IntervalRange): ClimbState {
+  let next = resetPerRung(s)
+  if (fromIndex === 0 && next.startedAt === null) next.startedAt = now
+  if (interval) {
+    if (ladder.rungs[fromIndex]!.direction === 'produce_target') next.targetInterval = interval
+    else next.nativeInterval = interval
+  }
+  next = { ...next, rungIndex: fromIndex + 1 }
+  if (next.rungIndex >= ladder.rungs.length) {
+    next.graduated = true
+    if (!next.targetInterval) next.targetInterval = { min: 1, max: 1 }
+    if (!next.nativeInterval) next.nativeInterval = { min: 1, max: 1 }
+  }
+  return next
+}
+
+const RESHOW_BY_RATING: Record<Rating, ReshowHint> = { again: 'soon', hard: 'short', good: 'medium', easy: 'medium' }
+
+// ─── Main entry ──────────────────────────────────────────────────────────────
+
+export function reviewRung(ladder: Ladder, state: ClimbState, outcome: RungAttemptOutcome, now: number): RungResult {
+  const rung = ladder.rungs[state.rungIndex]
+  if (!rung || state.graduated) return { state, reshow: 'advanced', advanced: false, droppedBackTo: null }
+
+  // Tally the outcome for drop-back thresholds ('pass' isn't a drop-back trigger).
+  const outcomeKey: RungOutcome | null = outcome === 'pass' ? null : outcome
+  const s: ClimbState = outcomeKey
+    ? { ...state, outcomeCounts: { ...state.outcomeCounts, [outcomeKey]: (state.outcomeCounts[outcomeKey] ?? 0) + 1 } }
+    : { ...state }
+
+  // Drop-back rules take priority.
+  if (outcomeKey) {
+    const rule = rung.dropBacks.find(r => r.on === outcomeKey && (s.outcomeCounts[outcomeKey] ?? 0) >= r.times)
+    if (rule) {
+      const idx = ladder.rungs.findIndex(r => r.id === rule.toRungId)
+      if (idx >= 0) return { state: toRung(s, idx), reshow: 'soon', advanced: true, droppedBackTo: idx }
+    }
+  }
+
+  const isRating = outcome === 'again' || outcome === 'hard' || outcome === 'good' || outcome === 'easy'
+
+  // ── Interval-setting rung: Anki-style graduation of this direction ──
+  if (rung.intervalInit) {
+    if (outcome === 'again') return { state: { ...s, messUps: s.messUps + 1, lastRating: 'again' }, reshow: 'soon', advanced: false, droppedBackTo: null }
+    if (outcome === 'hard')  return { state: { ...s, messUps: s.messUps + 1, lastRating: 'hard' }, reshow: 'short', advanced: false, droppedBackTo: null }
+    if (outcome === 'good') {
+      if (s.lastRating === 'good') return { state: advance(s, ladder, now, s.rungIndex, { min: 1, max: 1 }), reshow: 'advanced', advanced: true, droppedBackTo: null }
+      return { state: { ...s, lastRating: 'good' }, reshow: 'medium', advanced: false, droppedBackTo: null }
+    }
+    if (outcome === 'easy') {
+      const iv = easyInterval(s.messUps, s.lastRating)
+      return { state: advance(s, ladder, now, s.rungIndex, iv), reshow: 'advanced', advanced: true, droppedBackTo: null }
+    }
+    // A wrong auto-check on a self-rated interval rung counts as Again.
+    return { state: { ...s, messUps: s.messUps + 1, lastRating: 'again' }, reshow: 'soon', advanced: false, droppedBackTo: null }
+  }
+
+  // ── Self-rated (non-init) rung: advance on the chosen rating ──
+  if (rung.selfRated && isRating) {
+    const advanceRating = rung.advanceRating ?? 'good'
+    if (outcome === advanceRating) {
+      const progress = s.progress + 1
+      if (progress >= rung.advanceTimes) return { state: advance(s, ladder, now, s.rungIndex), reshow: 'advanced', advanced: true, droppedBackTo: null }
+      return { state: { ...s, progress, lastRating: outcome }, reshow: RESHOW_BY_RATING[outcome], advanced: false, droppedBackTo: null }
+    }
+    const progress = rung.advanceInARow ? 0 : s.progress
+    const messUps = (outcome === 'again' || outcome === 'hard') ? s.messUps + 1 : s.messUps
+    return { state: { ...s, progress, messUps, lastRating: outcome }, reshow: RESHOW_BY_RATING[outcome], advanced: false, droppedBackTo: null }
+  }
+
+  // ── Auto-checked rung: advance on clean passes ──
+  if (outcome === 'pass') {
+    const progress = s.progress + 1
+    if (progress >= rung.advanceTimes) return { state: advance(s, ladder, now, s.rungIndex), reshow: 'advanced', advanced: true, droppedBackTo: null }
+    return { state: { ...s, progress }, reshow: 'medium', advanced: false, droppedBackTo: null }
+  }
+  // almost / miss → retry; an in-a-row rung loses its streak.
+  const progress = rung.advanceInARow ? 0 : s.progress
+  return { state: { ...s, progress }, reshow: 'soon', advanced: false, droppedBackTo: null }
+}
