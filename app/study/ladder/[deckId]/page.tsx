@@ -5,14 +5,19 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
+import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { resolveEffectiveLadder } from '@/lib/ladder'
-import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome } from '@/engine/ladderEngine'
-import { LadderExercise } from '@/components/ladder/LadderExercise'
-import type { Card, Deck, Ladder } from '@/domain'
+import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
+import { initialCardState } from '@/engine/pipeline'
+import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
+import type { Card, CardChoices, Deck, Ladder } from '@/domain'
 
-export default function LadderPracticePage() {
+const DAY_MS = 86_400_000
+
+export default function LadderStudyPage() {
   const { deckId } = useParams<{ deckId: string }>()
   const [userId, setUserId] = useState<string | null>(null)
   const [deck, setDeck] = useState<Deck | null>(null)
@@ -36,11 +41,25 @@ export default function LadderPracticePage() {
       const ladderRepo = new SupabaseLadderRepository()
       const [pair, def] = await Promise.all([ladderRepo.getForPair(uid, d.sourceLanguage, d.targetLanguage), ladderRepo.getDefault(uid)])
       setLadder(resolveEffectiveLadder(pair, def))
+
+      // Cards already graduated (old pipeline OR ladder) are in long-term review — skip them.
+      const cardStates = await new SupabaseCardStateRepository().listByDeck(uid, deckId)
+      const gradSet = new Set(cardStates.filter(s => s.reviewDirection !== 'reverse' && s.graduated).map(s => s.cardId))
       const climb = await new SupabaseLadderClimbRepository().listForCards(uid, cards.map(c => c.id))
       setStates(climb)
-      // Queue = cards not yet graduated, shuffled.
-      const q = cards.filter(c => !climb.get(c.id)?.graduated).map(c => c.id).sort(() => Math.random() - 0.5)
-      setQueue(q)
+
+      // Intake: in-progress ladder cards + new cards up to the deck's daily limit.
+      const prefsRepo = new SupabaseDeckPreferencesRepository()
+      const prefs = await prefsRepo.get(uid, deckId)
+      const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
+      const learning: string[] = []
+      const fresh: string[] = []
+      for (const c of cards) {
+        if (gradSet.has(c.id) || climb.get(c.id)?.graduated) continue
+        (climb.has(c.id) ? learning : fresh).push(c.id)
+      }
+      const shuffle = <T,>(a: T[]) => a.sort(() => Math.random() - 0.5)
+      setQueue([...shuffle(learning), ...shuffle(fresh).slice(0, Math.max(0, newLimit))])
       setLoading(false)
     })()
   }, [deckId])
@@ -50,15 +69,35 @@ export default function LadderPracticePage() {
   const currentClimb = currentId ? applyWindow(states.get(currentId) ?? initialClimbState(), Date.now()) : null
   const currentRung = ladder && currentClimb ? ladder.rungs[currentClimb.rungIndex] : undefined
 
+  function onChoicesCached(cardId: string, choices: CardChoices) {
+    setCardsById(prev => { const c = prev.get(cardId); if (!c) return prev; return new Map(prev).set(cardId, { ...c, choices }) })
+  }
+
+  // Writes the two graduated review states (forward + reverse) so the card enters Due Now.
+  async function graduate(cardId: string, target: IntervalRange | null, native: IntervalRange | null) {
+    if (!userId || !deck) return
+    const repo = new SupabaseCardStateRepository()
+    const now = new Date()
+    const due = (days: number) => new Date(now.getTime() + days * DAY_MS).toISOString()
+    const base = initialCardState(userId, cardId, deck.pipelineId)
+    const tDays = target?.min ?? 1
+    const nDays = native?.min ?? 1
+    await repo.upsert({ ...base, graduated: true, graduatedAt: now.toISOString(), reps: 1, lastRating: 'good', lastReviewedAt: now.toISOString(),
+      reviewDirection: 'forward', intervalDays: tDays, scheduledIntervalDays: tDays, typedIntervalDays: tDays, dueAt: due(tDays), typedDueAt: due(tDays) })
+    await repo.upsert({ ...base, graduated: true, graduatedAt: now.toISOString(), reps: 1, lastRating: 'good', lastReviewedAt: now.toISOString(),
+      reviewDirection: 'reverse', intervalDays: nDays, scheduledIntervalDays: nDays, recallIntervalDays: nDays, dueAt: due(nDays), recallDueAt: due(nDays) })
+  }
+
   async function onOutcome(outcome: RungAttemptOutcome) {
     if (!userId || !ladder || !currentId || !currentClimb) return
     const res = reviewRung(ladder, currentClimb, outcome, Date.now())
     await new SupabaseLadderClimbRepository().save(userId, currentId, deckId, res.state).catch(console.error)
     setStates(prev => new Map(prev).set(currentId, res.state))
+    if (res.state.graduated) { await graduate(currentId, res.state.targetInterval, res.state.nativeInterval); setGraduated(g => g + 1) }
     setQueue(prev => {
       const rest = prev.slice(1)
-      if (res.state.graduated) { setGraduated(g => g + 1); return rest }
-      const at = Math.min(3, rest.length)     // rotate this card back into the deck
+      if (res.state.graduated) return rest
+      const at = Math.min(3, rest.length)
       return [...rest.slice(0, at), currentId, ...rest.slice(at)]
     })
   }
@@ -69,29 +108,29 @@ export default function LadderPracticePage() {
   if (!currentCard || !currentRung || !currentClimb) {
     return (
       <div className="max-w-lg mx-auto p-6 text-center space-y-3">
-        <h1 className="text-xl font-semibold text-ink">Ladder practice — {deck.name}</h1>
-        <p className="text-ink-muted">All caught up. {graduated > 0 && `Graduated ${graduated} card${graduated === 1 ? '' : 's'} this session.`}</p>
-        <a href={`/study/${deckId}`} className="btn-ghost inline-block">Back to deck</a>
+        <h1 className="text-xl font-semibold text-ink">Learning complete — {deck.name}</h1>
+        <p className="text-ink-muted">{graduated > 0 ? `Graduated ${graduated} card${graduated === 1 ? '' : 's'}.` : 'Nothing to learn right now.'}</p>
+        <div className="flex justify-center gap-3">
+          <a href={`/study/${deckId}/session?category=due`} className="btn-primary">Review due cards</a>
+          <a href={`/study/${deckId}`} className="btn-ghost">Back to deck</a>
+        </div>
       </div>
     )
   }
 
-  const g = currentClimb.targetInterval && currentClimb.nativeInterval
   return (
-    <div className="max-w-lg mx-auto p-6 space-y-5">
+    <div className="max-w-xl mx-auto p-6 space-y-5">
       <div className="flex items-center justify-between text-xs text-ink-faint">
         <a href={`/study/${deckId}`} className="hover:text-ink">✕ End</a>
         <span>Rung {currentClimb.rungIndex + 1} of {ladder.rungs.length}</span>
         <span>{graduated} graduated</span>
       </div>
-      <p className="text-center text-xs text-ink-faint uppercase tracking-wider">{deck.name}</p>
-
-      <LadderExercise
+      <LadderStudyCard
         key={`${currentId}:${currentClimb.rungIndex}`}
-        card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} onOutcome={onOutcome}
+        card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
+        sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage} gradingSettings={deck.gradingSettings}
+        onOutcome={onOutcome} onChoicesCached={onChoicesCached}
       />
-
-      {g && <p className="text-xs text-ink-faint text-center">Once graduated: target {currentClimb.targetInterval!.min}–{currentClimb.targetInterval!.max}d · native {currentClimb.nativeInterval!.min}–{currentClimb.nativeInterval!.max}d</p>}
     </div>
   )
 }
