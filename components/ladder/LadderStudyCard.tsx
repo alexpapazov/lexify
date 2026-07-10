@@ -21,7 +21,7 @@ import { displayText } from '@/lib/cardText'
  * is a small custom screen (no existing equivalent). Each screen's result is
  * mapped to a single ladder outcome via `onOutcome`.
  */
-export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, onOutcome, onChoicesCached }: {
+export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, onOutcome, onChoicesCached, onInfo }: {
   card:           Card
   rung:           Rung
   deckCards:      Card[]
@@ -31,10 +31,15 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   gradingSettings: GradingSettings
   onOutcome:      (o: RungAttemptOutcome) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
+  onInfo?:        () => void
 }) {
   const native = producesNative(rung)
   const promptSide = native ? 'front' : 'back'   // produce native → show the target word; produce target → show the native gloss
   const answerSide = native ? 'back' : 'front'
+  const [showIpa, setShowIpa] = useState(false)
+  // Shared "corner button" wiring: ? (give up → a miss/again), IPA toggle, and info.
+  const missOutcome: RungAttemptOutcome = rung.selfRated ? 'again' : 'miss'
+  const ipaProps = { ipaText: showIpa ? (card.ipa ?? undefined) : undefined, onToggleIPA: () => setShowIpa(v => !v) }
 
   if (rung.type === 'mcq') {
     return (
@@ -42,7 +47,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         key={`${card.id}-${rung.id}`}
         card={card} promptSide={promptSide} answerSide={answerSide}
         deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
-        onChoicesCached={onChoicesCached}
+        onChoicesCached={onChoicesCached} onInfo={onInfo}
+        onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
         onRate={(r, wasCorrect) => onOutcome(mcqOutcome(wasCorrect, rung.selfRated, r))}
       />
     )
@@ -52,7 +58,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
     return (
       <FlashcardMode
         key={`${card.id}-${rung.id}`}
-        card={card} promptSide={promptSide} deckName={deckName}
+        card={card} promptSide={promptSide} deckName={deckName} onInfo={onInfo}
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         onRate={r => onOutcome(r)}
       />
@@ -67,17 +73,25 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         promptLanguage={promptSide === 'front' ? sourceLanguage : undefined}
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         gradingSettings={gradingSettings} gradedReview={rung.selfRated}
-        strictness={rung.strictness ?? DEFAULT_TYPED_STRICTNESS} deckName={deckName}
+        strictness={rung.strictness ?? DEFAULT_TYPED_STRICTNESS} deckName={deckName} onInfo={onInfo}
+        onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
         onRate={(r, wasCorrect) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r))}
       />
     )
   }
 
   // Dictation — custom (no existing screen): play target audio, type it.
-  return <Dictation card={card} rung={rung} deckName={deckName} onOutcome={onOutcome} />
+  return <Dictation card={card} rung={rung} deckName={deckName} onOutcome={onOutcome} onInfo={onInfo} />
 }
 
-function Dictation({ card, rung, deckName, onOutcome }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome) => void }) {
+function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
+  if (!onInfo) return null
+  return (
+    <button onClick={onInfo} title="Card info" className="absolute top-3 right-3 w-5 h-5 flex items-center justify-center rounded-full border border-white/10 text-ink-faint hover:text-ink-muted text-xs italic">i</button>
+  )
+}
+
+function Dictation({ card, rung, deckName, onOutcome, onInfo }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome) => void; onInfo?: () => void }) {
   const [input, setInput] = useState('')
   const [rating, setRating] = useState(false)
   const [audio, setAudio] = useState<string | null>(card.audioData ?? null)
@@ -106,6 +120,7 @@ function Dictation({ card, rung, deckName, onOutcome }: { card: Card; rung: Rung
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
       <div className="panel relative min-h-[120px] flex flex-col items-center justify-center text-center gap-3">
+        <DictationInfoButton onInfo={onInfo} />
         <button onClick={play} className="text-ink-muted hover:text-ink" title="Play again">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10">
             <path d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-4.5 4.5H4.508c-1.141 0-2.318.664-2.66 1.905A9.76 9.76 0 0 0 1.5 12c0 .898.121 1.768.35 2.595.341 1.24 1.518 1.905 2.659 1.905h1.93l4.5 4.5c.945.945 2.561.276 2.561-1.06V4.06ZM18.584 5.106a.75.75 0 0 1 1.06 0c3.808 3.807 3.808 9.98 0 13.788a.75.75 0 0 1-1.06-1.06 8.25 8.25 0 0 0 0-11.668.75.75 0 0 1 0-1.06Z" />
@@ -123,6 +138,7 @@ function Dictation({ card, rung, deckName, onOutcome }: { card: Card; rung: Rung
           <input ref={inputRef} className="input text-center text-lg font-mono" value={input} placeholder="Type what you hear…"
             onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && input.trim()) check() }} />
           <div className="flex justify-center"><button className="btn-primary px-10" disabled={!input.trim()} onClick={check}>Check</button></div>
+          <button onClick={() => onOutcome(rung.selfRated ? 'again' : 'miss')} className="block mx-auto text-sm text-danger/70 hover:text-danger">Don&apos;t know</button>
         </>
       )}
     </div>

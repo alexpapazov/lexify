@@ -13,6 +13,7 @@ import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
+import { CardEditModal } from '@/components/CardEditModal'
 import type { Card, CardChoices, Deck, Ladder, RungType } from '@/domain'
 
 const DAY_MS = 86_400_000
@@ -30,6 +31,7 @@ function LadderStudyInner() {
   const [states, setStates] = useState<Map<string, ClimbState>>(new Map())
   const [graduated, setGraduated] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [infoOpen, setInfoOpen] = useState(false)
 
   useEffect(() => {
     ;(async () => {
@@ -153,8 +155,24 @@ function LadderStudyInner() {
         key={`${currentId}:${currentClimb.rungIndex}`}
         card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
         sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage} gradingSettings={deck.gradingSettings}
-        onOutcome={onOutcome} onChoicesCached={onChoicesCached}
+        onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
       />
+
+      {infoOpen && userId && (
+        <CardEditModal
+          card={currentCard} state={undefined} userId={userId} deckId={deckId}
+          deckCards={[...cardsById.values()]} sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage}
+          onSave={async (id, front, back) => {
+            await new SupabaseCardRepository().update(id, { front, back })
+            setCardsById(prev => { const c = prev.get(id); return c ? new Map(prev).set(id, { ...c, front, back }) : prev })
+          }}
+          onCardChange={c => setCardsById(prev => new Map(prev).set(c.id, c))}
+          onStateChange={() => {}}
+          onDelete={cid => { setCardsById(prev => { const m = new Map(prev); m.delete(cid); return m }); setQueue(q => q.filter(x => x !== cid)); setInfoOpen(false) }}
+          onClose={() => setInfoOpen(false)}
+          initialShowStats
+        />
+      )}
     </div>
   )
 }

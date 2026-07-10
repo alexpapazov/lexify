@@ -29,6 +29,8 @@ export default function AgentsPage() {
   const batchesRef = useRef<ScopedCard[][]>([])
   const nextBatchRef = useRef(0)
   const taskRef = useRef('')
+  const bufferRef = useRef<EditProposal[]>([])   // next non-empty batch, prefetched in the background
+  const prefetchingRef = useRef(false)
 
   useEffect(() => {
     ;(async () => {
@@ -53,17 +55,34 @@ export default function AgentsPage() {
   }
   const inScopeDeckCount = scopedDeckIds().length
 
-  async function fillQueue() {
-    while (nextBatchRef.current < batchesRef.current.length) {
-      setPhase('analyzing')
-      const batch = batchesRef.current[nextBatchRef.current++]!
-      setScanned(s => s + batch.length)
-      try {
-        const props = await analyzeBatch(batch, taskRef.current)
-        if (props.length) { setQueue(props); setPhase('review'); return }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e)); setPhase('review'); return
+  // Analyzes one batch (advancing the cursor). Returns its proposals, or null when out of batches.
+  async function analyzeOne(): Promise<EditProposal[] | null> {
+    if (nextBatchRef.current >= batchesRef.current.length) return null
+    const batch = batchesRef.current[nextBatchRef.current++]!
+    setScanned(s => s + batch.length)
+    try { return await analyzeBatch(batch, taskRef.current) }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); return [] }
+  }
+
+  // Background: keep the buffer topped with the next batch that actually has proposals.
+  async function prefetch() {
+    if (prefetchingRef.current || bufferRef.current.length > 0) return
+    prefetchingRef.current = true
+    try {
+      while (bufferRef.current.length === 0 && nextBatchRef.current < batchesRef.current.length) {
+        const props = await analyzeOne()
+        if (props && props.length) { bufferRef.current = props; break }
       }
+    } finally { prefetchingRef.current = false }
+  }
+
+  // Load the next set of proposals to review: instantly from the buffer if ready, else analyze.
+  async function loadNext() {
+    if (bufferRef.current.length) { setQueue(bufferRef.current); bufferRef.current = []; setPhase('review'); prefetch(); return }
+    setPhase('analyzing')
+    while (nextBatchRef.current < batchesRef.current.length) {
+      const props = await analyzeOne()
+      if (props && props.length) { setQueue(props); setPhase('review'); prefetch(); return }
     }
     setPhase('done')
   }
@@ -72,13 +91,14 @@ export default function AgentsPage() {
     if (!userId || selected.size === 0 || !task.trim()) return
     taskRef.current = task.trim()
     setPhase('gathering'); setError(null); setScanned(0); setApproved(0); setDenied(0)
+    bufferRef.current = []
     try {
       const grant: Grant = { operations: ['edit', 'create', 'delete'], languages: [], folderIds: [], deckIds: scopedDeckIds(), dryRunOnly: false }
       const cards = await gatherScopedCards(userId, grant)
       setTotal(cards.length)
       batchesRef.current = chunk(cards, BATCH_SIZE)
       nextBatchRef.current = 0
-      await fillQueue()
+      await loadNext()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e)); setPhase('setup')
     }
@@ -86,8 +106,8 @@ export default function AgentsPage() {
 
   function advance() {
     const next = queue.slice(1)
-    setQueue(next)
-    if (next.length === 0) fillQueue()
+    if (next.length > 0) { setQueue(next); prefetch() }   // keep buffering the next batch while reviewing
+    else loadNext()
   }
   async function approve() {
     const current = queue[0]

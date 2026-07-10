@@ -22,6 +22,8 @@ import type { Deck, Card, CardState, CardChoices, DeckPreferences, Folder, Langu
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { getToday } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
+import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
+import type { ClimbState } from '@/engine/ladderEngine'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
@@ -1132,6 +1134,7 @@ export default function DeckDetailPage() {
   const [parentFolder,     setParentFolder]     = useState<Folder | null>(null)
   const [cards,            setCards]            = useState<Card[]>([])
   const [states,           setStates]           = useState<CardState[]>([])
+  const [climb,            setClimb]            = useState<Map<string, ClimbState>>(new Map())
   const [prefs,            setPrefs]            = useState<DeckPreferences | null>(null)
   const [userId,           setUserId]           = useState('')
   const [defaultLimit,     setDefaultLimit]     = useState(DEFAULT_DAILY_NEW_CARDS)
@@ -1187,6 +1190,8 @@ export default function DeckDetailPage() {
 
     if (!d) { router.push('/study'); return }
     setDeck(d); setCards(c); setStates(s); setPrefs(p)
+    // Ladder climb progress (drives the Learning status for cards on the ladder).
+    new SupabaseLadderClimbRepository().listForCards(uid, c.map(x => x.id)).then(setClimb).catch(() => {})
     if (!d.syncingComplete) triggerSyncFill()
 
     if (d.folderId) {
@@ -1540,11 +1545,20 @@ export default function DeckDetailPage() {
       return segs ? [{ card: c, segments: segs, split: true }] : []
     })
   const activeCardIds       = new Set(cards.map(c => c.id))
-  const activeForwardStates = forwardStates.filter(s => activeCardIds.has(s.cardId))
-  const unlearned = cards.filter(c => !stateMap.has(c.id)).length
-  const learning  = activeForwardStates.filter(s => !s.graduated).length
-  const graduated = activeForwardStates.filter(s => s.graduated && !s.dormant).length
-  const dormant   = activeForwardStates.filter(s => s.dormant).length
+  // A card's phase, combining long-term review state with LADDER climb progress:
+  // past the first rung (rungIndex ≥ 1) and not graduated → Learning.
+  const statusOf = (cardId: string): 'graduated' | 'dormant' | 'learning' | 'new' => {
+    const s = stateMap.get(cardId)
+    if (s?.dormant) return 'dormant'
+    if (s?.graduated) return 'graduated'
+    const cl = climb.get(cardId)
+    if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) return 'learning'
+    return 'new'
+  }
+  const unlearned = cards.filter(c => statusOf(c.id) === 'new').length
+  const learning  = cards.filter(c => statusOf(c.id) === 'learning').length
+  const graduated = cards.filter(c => statusOf(c.id) === 'graduated').length
+  const dormant   = cards.filter(c => statusOf(c.id) === 'dormant').length
   const dueNow    = states.filter(s =>
     activeCardIds.has(s.cardId) &&
     s.graduated && isDueByDate(s.dueAt) &&
@@ -1554,12 +1568,11 @@ export default function DeckDetailPage() {
 
   const visibleCards = cards.filter(card => {
     if (!activeFilter) return true
-    const s = stateMap.get(card.id)
-    if (activeFilter === 'new')       return !s
-    if (activeFilter === 'learning')  return s && !s.graduated
-    if (activeFilter === 'graduated') return s?.graduated && !s.dormant
-    if (activeFilter === 'dormant')   return s?.dormant
-    if (activeFilter === 'due')       return s?.graduated && !s.dormant && isDueByDate(s.dueAt)
+    if (activeFilter === 'new')       return statusOf(card.id) === 'new'
+    if (activeFilter === 'learning')  return statusOf(card.id) === 'learning'
+    if (activeFilter === 'graduated') return statusOf(card.id) === 'graduated'
+    if (activeFilter === 'dormant')   return statusOf(card.id) === 'dormant'
+    if (activeFilter === 'due')       { const s = stateMap.get(card.id); return !!s?.graduated && !s.dormant && isDueByDate(s.dueAt) }
     return true
   })
   const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(c => selectedCardIds.has(c.id))
@@ -1923,7 +1936,10 @@ export default function DeckDetailPage() {
         <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
           {visibleCards.map(card => {
             const s = stateMap.get(card.id)
-            const status = !s ? 'New' : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+            const phase = statusOf(card.id)
+            const cl = climb.get(card.id)
+            const status = phase === 'graduated' ? 'Graduated' : phase === 'dormant' ? 'Dormant'
+              : phase === 'learning' ? (cl && cl.rungIndex >= 1 && !cl.graduated ? `Rung ${cl.rungIndex + 1}` : 'Learning') : 'New'
             const isSelected = selectedCardIds.has(card.id)
             return (
               <div
