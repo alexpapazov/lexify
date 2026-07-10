@@ -323,7 +323,7 @@ export function classifyReviewMode(state: CardState, now: Date = new Date()): 'e
   // use the wrong track's scheduledIntervalDays on split typed/recall cards
   // (e.g. the recall interval is longer, making a genuinely-due typed review
   // look elective). If any known due date is in the past, the review is due.
-  const dueDates = [state.typedDueAt, state.recallDueAt, state.dueAt].filter(Boolean) as string[]
+  const dueDates = [state.typedDueAt, state.recallDueAt, state.smartDueAt, state.dueAt].filter(Boolean) as string[]
   if (dueDates.length > 0) {
     return dueDates.some(d => new Date(d) <= now) ? 'due' : 'elective'
   }

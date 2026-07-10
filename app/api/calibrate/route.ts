@@ -12,7 +12,7 @@ interface CalibratePayload {
 }
 
 async function calibratePair(userId: string, sourceLanguage: string, targetLanguage: string) {
-  const answerFields = ['forward_typed', 'forward_recall', 'reverse_recall'] as const
+  const answerFields = ['forward_typed', 'forward_recall', 'reverse_recall', 'forward_smart'] as const
   for (const answerField of answerFields) {
     await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField)
   }
@@ -110,10 +110,12 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     forwardTypedEnabled:  Boolean(row.forward_typed_enabled ?? true),
     forwardRecallEnabled: Boolean(row.forward_recall_enabled ?? true),
     reverseRecallEnabled: Boolean(row.reverse_recall_enabled ?? true),
+    forwardSmartEnabled:  Boolean(row.forward_smart_enabled ?? false),
     strictSpelling: (row.spelling_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictSpelling,
     strictAccents:  (row.accents_mode  as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictAccents,
     strictArticles: (row.articles_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
     requestRetention: (row.request_retention as number | null) ?? DEFAULT_SCHEDULER_PARAMS.requestRetention,
+    smartTypingThresholdDays: (row.smart_typing_threshold_days as number | null) ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays,
   }
 }
 
@@ -167,7 +169,7 @@ async function calibrateBucket(
   userId: string,
   sourceLang: string,
   targetLang: string,
-  answerField: 'forward_typed' | 'forward_recall' | 'reverse_recall',
+  answerField: 'forward_typed' | 'forward_recall' | 'reverse_recall' | 'forward_smart',
 ) {
   const db     = createAdminClient()
   const params = await getOrCreate(userId, sourceLang, targetLang, answerField)
@@ -177,7 +179,7 @@ async function calibrateBucket(
   // Converge a bit faster than the old 0.01 floor while still easing off as data grows.
   const adjustmentStep = Math.max(0.03, 0.10 * Math.exp(-n / 300))
 
-  const wasTyped  = answerField === 'forward_typed'
+  const wasTyped  = answerField === 'forward_typed' || answerField === 'forward_smart'
   const reviewDir = answerField === 'reverse_recall' ? 'reverse' : 'forward'
 
   const { data: events, error } = await db

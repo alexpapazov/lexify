@@ -505,7 +505,11 @@ export default function SettingsPage() {
         const newDay = assignments.get(state.cardId)
         if (!newDay || newDay === state.dueAt!.slice(0, 10)) continue
         const timePart = state.dueAt!.slice(10)
-        toUpdate.push({ ...state, dueAt: newDay + timePart })
+        const newDue   = newDay + timePart
+        // Move the active production column too (queue building reads it, not dueAt).
+        const trackPatch = state.smartDueAt ? { smartDueAt: newDue }
+          : state.typedDueAt ? { typedDueAt: newDue } : {}
+        toUpdate.push({ ...state, dueAt: newDue, ...trackPatch })
       }
 
       if (toUpdate.length > 0) {

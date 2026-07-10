@@ -750,6 +750,50 @@ Learning (pre-graduation) is untouched — the ladder/pipeline still runs it.
      Known small gap: load-time `decideProductionMode` (typed-vs-self-graded odds)
      still uses the primary pair in a mixed session.
 
+## Smart-typing review track (2026-07-10)
+
+A fourth, independent forward-production review track alongside typed-production,
+self-graded recall, and reverse recall. It is presented as **typed** while its
+interval is below a per-pair threshold (default 20 days), then **self-graded** once
+past it — and reverts to typing if a lapse drops the interval back under. Its own
+FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
+
+- **Migrations** (must apply, in order): `077_smart_typing_track.sql` (adds
+  `card_states.smart_due_at`/`smart_interval_days` + `user_scheduler_params.forward_smart_enabled`
+  (default false) + `smart_typing_threshold_days` (default 20)); `078_migrate_typing_to_smart.sql`
+  (moves every existing typed card's schedule into the smart lane — incl. legacy
+  dueAt-only cards — and flips each pair's `forward_typed_enabled`→off /
+  `forward_smart_enabled`←old typed value). **After 078, all existing cards are smart-typing.**
+- **Data model**: `CardState.smartIntervalDays`/`smartDueAt`; `SchedulerParams.smartTypingThresholdDays`
+  (canonical on the forward_typed row, like retention). `initialCardState`, cardStates
+  repo, userSchedulerParams (`forwardSmartEnabled`), calibrate route all mapped.
+- **Enabled tracks** (`lib/sessionLimits.ts`): `EnabledTracks.smart` (default false),
+  `buildEnabledTracksMap` reads `forward_smart_enabled` off the `forward_smart` row,
+  `trackEnabled(...,'smart',...)`, `dedupeDueReviews` rank typed<smart<legacy<recall.
+  `smartProductionMode(smartIntervalDays, thresholdDays)` → 'typed' | 'self-graded'.
+- **Session pages (all 3)**: `reviewTrack` union gains `'smart'`; queue building detects
+  `isSmartDue` and pushes with `smartProductionMode(...)`; **typed pushes are now always
+  'typed'** (the old probabilistic typed-vs-self-graded split is gone — that behavior
+  moved into smart typing); the `legacy` due-check is guarded with `!smartDueAt`.
+  `handleAnswer` has a self-contained early-return **smart branch** (mirrors the recall
+  branch but writes `smart_*` columns, keeps `dueAt`/`intervalDays`/`scheduledIntervalDays`
+  in sync, honors `sendToLadder` un-graduation + dormancy since it IS production).
+- **Counts/forecast/redistribute** (`app/study/page.tsx`, `app/settings/page.tsx`):
+  `smartDueOn` added to dueNow; forecast + forecastCards treat smart as production
+  (shown under the "typed" filter); redistribute moves the active production column
+  (`smart_due_at`/`typed_due_at`) alongside `due_at`. folderStats works unchanged via
+  the synced `due_at`.
+- **Settings UI** (`app/library/page.tsx`): the "Enable review tracks" list now has
+  **Typed production (always type)**, **Smart typing** (with an inline integer
+  "type until interval reaches N days" box), **Self-graded production (no typing)**
+  (renamed from "Recall (self-grade)"), **Reverse recall**. `handleSrsToggle` enforces
+  **Typed ⊕ Smart** mutual exclusivity (enabling one disables the other). The
+  graduation-interval-by-error-count table + its handlers/`GradIntervalCell` were
+  **removed** (dead with the ladder).
+- **Not yet wired (peripheral, non-breaking)**: `components/session/CardEditModal`'s
+  per-track "i" schedule panel and `components/analytics/DueForecastProjection.tsx`
+  don't yet special-case the smart track (they'll under-display it, not error).
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

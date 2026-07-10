@@ -88,6 +88,8 @@ export function initialCardState(
     typedDueAt:          null,
     recallIntervalDays:  null,
     recallDueAt:         null,
+    smartIntervalDays:   null,
+    smartDueAt:          null,
     reviewDirection:     'forward',
   }
 }

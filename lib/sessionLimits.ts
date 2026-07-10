@@ -45,7 +45,7 @@ export interface LimitState {
 export function dedupeDueReviews<
   T extends { card: { id: string }; reviewTrack?: string; isReverse?: boolean },
 >(items: T[]): T[] {
-  const rank = (t?: string) => (t === 'typed' ? 0 : t === 'legacy' ? 1 : t === 'recall' ? 2 : 3)
+  const rank = (t?: string) => (t === 'typed' ? 0 : t === 'smart' ? 1 : t === 'legacy' ? 2 : t === 'recall' ? 3 : 4)
   const best = new Map<string, T>()
   for (const it of items) {
     const key = `${it.card.id}:${it.isReverse ? 'reverse' : 'forward'}`
@@ -106,9 +106,20 @@ export function computeActiveLearningSet(
 // due cards are "ghosted" — filtered out of Due Now — but their scheduling data
 // is untouched, so re-enabling the track brings them straight back.
 
-export interface EnabledTracks { typed: boolean; recall: boolean; reverse: boolean }
+export interface EnabledTracks { typed: boolean; recall: boolean; reverse: boolean; smart: boolean }
 
-const DEFAULT_ENABLED_TRACKS: EnabledTracks = { typed: true, recall: true, reverse: true }
+/**
+ * Smart-typing presentation: the track requires typing while its interval is below
+ * the pair's threshold (still building the memory), then flips to self-graded once
+ * it's comfortably past it. Dropping back below the threshold (a lapse) resumes typing.
+ */
+export function smartProductionMode(smartIntervalDays: number | null, thresholdDays: number): 'typed' | 'self-graded' {
+  return smartIntervalDays != null && smartIntervalDays < thresholdDays ? 'typed' : 'self-graded'
+}
+
+// Smart typing is a new track, off by default (typed production stays the default
+// forward track for brand-new pairs); migration 078 flips existing pairs to smart.
+const DEFAULT_ENABLED_TRACKS: EnabledTracks = { typed: true, recall: true, reverse: true, smart: false }
 
 interface TrackFlagRow {
   sourceLanguage:       string
@@ -117,6 +128,7 @@ interface TrackFlagRow {
   forwardTypedEnabled:  boolean
   forwardRecallEnabled: boolean
   reverseRecallEnabled: boolean
+  forwardSmartEnabled:  boolean
 }
 
 /**
@@ -132,6 +144,7 @@ export function buildEnabledTracksMap(rows: TrackFlagRow[]): Map<string, Enabled
     if (r.answerField === 'forward_typed')  cur.typed   = r.forwardTypedEnabled  ?? true
     if (r.answerField === 'forward_recall') cur.recall  = r.forwardRecallEnabled ?? true
     if (r.answerField === 'reverse_recall') cur.reverse = r.reverseRecallEnabled ?? true
+    if (r.answerField === 'forward_smart')  cur.smart   = r.forwardSmartEnabled  ?? false
     map.set(key, cur)
   }
   return map
@@ -143,12 +156,13 @@ export function buildEnabledTracksMap(rows: TrackFlagRow[]): Map<string, Enabled
  */
 export function trackEnabled(
   tracks:      EnabledTracks | undefined,
-  reviewTrack: 'typed' | 'recall' | 'legacy' | undefined,
+  reviewTrack: 'typed' | 'recall' | 'legacy' | 'smart' | undefined,
   isReverse:   boolean,
 ): boolean {
   const t = tracks ?? DEFAULT_ENABLED_TRACKS
   if (isReverse) return t.reverse
   if (reviewTrack === 'recall') return t.recall
+  if (reviewTrack === 'smart')  return t.smart
   // 'typed', 'legacy', or undefined → typed production track
   return t.typed
 }

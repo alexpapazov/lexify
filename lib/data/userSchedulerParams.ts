@@ -13,6 +13,7 @@ export interface SchedulerParamsRow extends SchedulerParams {
   forwardTypedEnabled: boolean
   forwardRecallEnabled: boolean
   reverseRecallEnabled: boolean
+  forwardSmartEnabled:  boolean
 }
 
 export interface SchedulerParamsHistoryRow {
@@ -84,10 +85,12 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     forwardTypedEnabled:  (row.forward_typed_enabled as boolean) ?? true,
     forwardRecallEnabled: (row.forward_recall_enabled as boolean) ?? true,
     reverseRecallEnabled: (row.reverse_recall_enabled as boolean) ?? true,
+    forwardSmartEnabled:  (row.forward_smart_enabled  as boolean) ?? false,
     strictSpelling: (row.spelling_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictSpelling,
     strictAccents:  (row.accents_mode  as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictAccents,
     strictArticles: (row.articles_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
     requestRetention: (row.request_retention as number | null) ?? DEFAULT_SCHEDULER_PARAMS.requestRetention,
+    smartTypingThresholdDays: (row.smart_typing_threshold_days as number | null) ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays,
   }
 }
 

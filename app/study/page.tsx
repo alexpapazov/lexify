@@ -119,8 +119,12 @@ function buildForecastDays(
         const recallEff = recallRef ? effDate(recallRef) : null
         if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
       } else {
-        const typedRef  = s.typedDueAt ?? s.dueAt
-        const typedEff  = (typedRef && trackEnabled(en, 'typed', false))  ? effDate(typedRef)     : null
+        // Production track (typed / smart / legacy-dueAt) — mutually exclusive per pair,
+        // all shown under the "typed" forecast filter. Recall counts separately.
+        const onSmart   = !!s.smartDueAt
+        const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
+        const prodGate  = onSmart ? trackEnabled(en, 'smart', false) : trackEnabled(en, 'typed', false)
+        const typedEff  = (prodRef && prodGate) ? effDate(prodRef) : null
         const recallEff = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
 
         if (showTyped && typedEff && typedEff >= startDate && typedEff <= endDate) bump(typedEff)
@@ -217,7 +221,9 @@ export default function StudyPage() {
       const isDueByDate = (dateStr: string | null | undefined) =>
         !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
       // Track-aware due checks — a disabled track never counts as due.
-      const typedDueOn  = (s: CardState) => !s.dormant && trackEnabled(en, 'typed', false)  && (s.typedDueAt ? isDueByDate(s.typedDueAt) : isDueByDate(s.dueAt))
+      // Legacy cards (no typed/smart due date) fall back to dueAt under the typed gate.
+      const typedDueOn  = (s: CardState) => !s.dormant && trackEnabled(en, 'typed', false)  && (s.typedDueAt ? isDueByDate(s.typedDueAt) : (!s.smartDueAt && isDueByDate(s.dueAt)))
+      const smartDueOn  = (s: CardState) => !s.dormant && trackEnabled(en, 'smart', false)  && isDueByDate(s.smartDueAt)
       const recallDueOn = (s: CardState) => !s.dormant && trackEnabled(en, 'recall', false) && isDueByDate(s.recallDueAt)
       // Reverse rows are scheduled by recall_due_at; their due_at is often stale in the
       // past. Prefer recall_due_at (fall back to due_at only when recall is null) so a
@@ -233,9 +239,9 @@ export default function StudyPage() {
         dueNow:        states.filter(s => {
           if (!s.graduated) return false
           if (s.reviewDirection === 'reverse') return reverseDueOn(s)
-          return typedDueOn(s) || recallDueOn(s)
+          return typedDueOn(s) || smartDueOn(s) || recallDueOn(s)
         }).length,
-        dueNowForward: forwardStates.filter(s => s.graduated && (typedDueOn(s) || recallDueOn(s))).length,
+        dueNowForward: forwardStates.filter(s => s.graduated && (typedDueOn(s) || smartDueOn(s) || recallDueOn(s))).length,
         dueNowReverse: states.filter(s =>
           s.graduated && s.reviewDirection === 'reverse' && reverseDueOn(s)).length,
       }
@@ -397,7 +403,11 @@ export default function StudyPage() {
         const newDay = assignments.get(state.cardId)
         if (!newDay || newDay === state.dueAt!.slice(0, 10)) continue
         const timePart = state.dueAt!.slice(10)
-        toUpdate.push({ ...state, dueAt: newDay + timePart })
+        const newDue   = newDay + timePart
+        // Move the active production column too (queue building reads it, not dueAt).
+        const trackPatch = state.smartDueAt ? { smartDueAt: newDue }
+          : state.typedDueAt ? { typedDueAt: newDue } : {}
+        toUpdate.push({ ...state, dueAt: newDue, ...trackPatch })
       }
 
       if (toUpdate.length > 0) {
@@ -577,8 +587,10 @@ export default function StudyPage() {
           const recallEff = recallRef ? effDate(recallRef) : null
           if (showRecall && recallEff === selectedForecastDate) due = true
         } else {
-          const typedRef  = s.typedDueAt ?? s.dueAt
-          const typedEff: string | null  = (typedRef && trackEnabled(en, 'typed', false))      ? effDate(typedRef)      : null
+          const onSmart   = !!s.smartDueAt
+          const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
+          const prodGate  = onSmart ? trackEnabled(en, 'smart', false) : trackEnabled(en, 'typed', false)
+          const typedEff: string | null  = (prodRef && prodGate) ? effDate(prodRef) : null
           const recallEff: string | null = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
           if (showTyped  && typedEff  === selectedForecastDate) due = true
           if (!due && showRecall && recallEff === selectedForecastDate && recallEff !== typedEff) due = true

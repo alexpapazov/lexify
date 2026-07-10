@@ -86,47 +86,6 @@ function DeckIcon() {
 
 /** A graduation-interval table cell. Double-click to edit min–max; Enter or
  *  clicking away saves; Esc cancels. */
-function GradIntervalCell({ min, max, changed, onSave }: {
-  min: number; max: number; changed: boolean; onSave: (min: number, max: number) => void
-}) {
-  const [editing, setEditing] = useState(false)
-  const [lo, setLo] = useState(String(min))
-  const [hi, setHi] = useState(String(max))
-  const containerRef = useRef<HTMLSpanElement>(null)
-
-  useEffect(() => { if (!editing) { setLo(String(min)); setHi(String(max)) } }, [min, max, editing])
-
-  function save() {
-    setEditing(false)
-    const nlo = Number(lo), nhi = Number(hi)
-    if (Number.isFinite(nlo) && Number.isFinite(nhi) && nlo > 0) onSave(nlo, nhi)
-  }
-  // Save when focus leaves the whole cell (not when tabbing between the two inputs).
-  function onBlur(e: React.FocusEvent) {
-    if (!containerRef.current?.contains(e.relatedTarget as Node | null)) save()
-  }
-
-  if (editing) {
-    return (
-      <span ref={containerRef} className="inline-flex items-center justify-end gap-1">
-        <input autoFocus type="number" min={1} value={lo} onChange={e => setLo(e.target.value)} onBlur={onBlur}
-          onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
-          className="w-11 bg-surface-raised border border-white/10 rounded px-1 py-0.5 text-right text-ink outline-none focus:border-accent/60" />
-        <span className="text-ink-faint">–</span>
-        <input type="number" min={1} value={hi} onChange={e => setHi(e.target.value)} onBlur={onBlur}
-          onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
-          className="w-11 bg-surface-raised border border-white/10 rounded px-1 py-0.5 text-right text-ink outline-none focus:border-accent/60" />
-      </span>
-    )
-  }
-  return (
-    <span onDoubleClick={() => setEditing(true)} title="Double-click to edit"
-      className={`cursor-pointer select-none ${changed ? 'text-accent font-medium' : 'text-ink'}`}>
-      {min === max ? `${min}` : `${min}–${max}`}
-    </span>
-  )
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getDropPos(e: React.DragEvent, isFolder: boolean): DropPos {
@@ -352,7 +311,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     setSrsHistory({})
     setSrsHistoryOpen(false)
     const repo = new SupabaseUserSchedulerParamsRepository()
-    const buckets = ['forward_typed', 'forward_recall', 'reverse_recall']
+    const buckets = ['forward_typed', 'forward_recall', 'reverse_recall', 'forward_smart']
     Promise.all(buckets.map(b => repo.getOrCreate(userId, src, tgt, b)))
       .then(rows => setSrsParams(rows))
       .catch(() => {})
@@ -573,14 +532,27 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     }
   }
 
-  async function handleSrsToggle(answerField: string, field: 'forward_typed_enabled' | 'forward_recall_enabled' | 'reverse_recall_enabled', value: boolean) {
+  async function handleSrsToggle(answerField: string, field: 'forward_typed_enabled' | 'forward_recall_enabled' | 'reverse_recall_enabled' | 'forward_smart_enabled', value: boolean) {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
     const repo = new SupabaseUserSchedulerParamsRepository()
+    const keyFor = {
+      forward_typed_enabled:  'forwardTypedEnabled',
+      forward_recall_enabled: 'forwardRecallEnabled',
+      reverse_recall_enabled: 'reverseRecallEnabled',
+      forward_smart_enabled:  'forwardSmartEnabled',
+    } as const
     await repo.update(userId, src, tgt, answerField, { [field]: value })
-    setSrsParams(prev => prev.map(p =>
-      p.answerField === answerField ? { ...p, [field === 'forward_typed_enabled' ? 'forwardTypedEnabled' : field === 'forward_recall_enabled' ? 'forwardRecallEnabled' : 'reverseRecallEnabled']: value } : p
-    ))
+    setSrsParams(prev => prev.map(p => p.answerField === answerField ? { ...p, [keyFor[field]]: value } : p))
+
+    // Typed production and Smart typing are mutually exclusive — enabling one turns
+    // the other off (they'd otherwise double-schedule the same target production).
+    if (value && (field === 'forward_typed_enabled' || field === 'forward_smart_enabled')) {
+      const otherAnswer = field === 'forward_typed_enabled' ? 'forward_smart' : 'forward_typed'
+      const otherField  = field === 'forward_typed_enabled' ? 'forward_smart_enabled' : 'forward_typed_enabled'
+      await repo.update(userId, src, tgt, otherAnswer, { [otherField]: false })
+      setSrsParams(prev => prev.map(p => p.answerField === otherAnswer ? { ...p, [keyFor[otherField]]: false } : p))
+    }
   }
 
   async function handleSrsMaxInterval(days: number) {
@@ -590,47 +562,6 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     const buckets = ['forward_typed', 'forward_recall', 'reverse_recall']
     await Promise.all(buckets.map(b => repo.update(userId, src, tgt, b, { max_interval_days: days })))
     setSrsParams(prev => prev.map(p => ({ ...p, maxIntervalDays: days })))
-  }
-
-  // Manually set one graduation-interval bucket (double-tap-to-edit in the table).
-  async function handleGradIntervalEdit(n: number, min: number, max: number) {
-    if (!pairSettingsFor || !userId) return
-    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
-    const lo = Math.max(1, Math.round(min))
-    const hi = Math.max(lo, Math.round(max))
-    const repo = new SupabaseUserSchedulerParamsRepository()
-    await repo.update(userId, src, tgt, 'forward_typed', {
-      [`grad_interval_${n}err_min`]: lo,
-      [`grad_interval_${n}err_max`]: hi,
-    })
-    const minKey = `gradInterval${n}errMin` as keyof typeof DEFAULT_SCHEDULER_PARAMS
-    const maxKey = `gradInterval${n}errMax` as keyof typeof DEFAULT_SCHEDULER_PARAMS
-    setSrsParams(prev => prev.map(p =>
-      p.answerField === 'forward_typed' ? { ...p, [minKey]: lo, [maxKey]: hi } : p
-    ))
-  }
-
-  async function handleResetGradIntervals() {
-    if (!pairSettingsFor || !userId) return
-    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
-    const repo = new SupabaseUserSchedulerParamsRepository()
-    // Graduation intervals are calibrated on the forward_typed row only.
-    const updates: Record<string, number> = {}
-    const patch: Record<string, number> = {}
-    for (let n = 0; n <= 8; n++) {
-      const minKey = `gradInterval${n}errMin` as keyof typeof DEFAULT_SCHEDULER_PARAMS
-      const maxKey = `gradInterval${n}errMax` as keyof typeof DEFAULT_SCHEDULER_PARAMS
-      const defMin = DEFAULT_SCHEDULER_PARAMS[minKey] as number
-      const defMax = DEFAULT_SCHEDULER_PARAMS[maxKey] as number
-      updates[`grad_interval_${n}err_min`] = defMin
-      updates[`grad_interval_${n}err_max`] = defMax
-      patch[minKey] = defMin
-      patch[maxKey] = defMax
-    }
-    await repo.update(userId, src, tgt, 'forward_typed', updates)
-    setSrsParams(prev => prev.map(p =>
-      p.answerField === 'forward_typed' ? { ...p, ...patch } : p
-    ))
   }
 
   // Resets the multiplier calibration (Good/Easy/Hard min-ideal-max + floors) for a
@@ -680,6 +611,18 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     await repo.update(userId, src, tgt, 'forward_typed', { request_retention: value })
     setSrsParams(prev => prev.map(p =>
       p.answerField === 'forward_typed' ? { ...p, requestRetention: value } : p
+    ))
+  }
+
+  // Per-pair smart-typing threshold (days) — stored canonically on the forward_typed row.
+  async function handleSrsSmartThreshold(days: number) {
+    if (!pairSettingsFor || !userId) return
+    const clamped = Math.max(1, Math.min(3650, Math.round(days)))
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    const repo = new SupabaseUserSchedulerParamsRepository()
+    await repo.update(userId, src, tgt, 'forward_typed', { smart_typing_threshold_days: clamped })
+    setSrsParams(prev => prev.map(p =>
+      p.answerField === 'forward_typed' ? { ...p, smartTypingThresholdDays: clamped } : p
     ))
   }
 
@@ -1042,6 +985,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           const ftRow  = srsParams.find(p => p.answerField === 'forward_typed')
           const frRow  = srsParams.find(p => p.answerField === 'forward_recall')
           const rrRow  = srsParams.find(p => p.answerField === 'reverse_recall')
+          const smRow  = srsParams.find(p => p.answerField === 'forward_smart')
           const maxDays = ftRow?.maxIntervalDays ?? DEFAULT_SCHEDULER_PARAMS.maxIntervalDays
 
           const MAX_PRESETS = [
@@ -1052,9 +996,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             { label: 'No limit',  days: 999999 },
           ]
 
-          const BUCKETS: { field: string; label: string; row: SchedulerParamsRow | undefined; dbToggle: 'forward_typed_enabled' | 'forward_recall_enabled' | 'reverse_recall_enabled'; toggleKey: 'forwardTypedEnabled' | 'forwardRecallEnabled' | 'reverseRecallEnabled' }[] = [
-            { field: 'forward_typed',  label: 'Typed production',   row: ftRow, dbToggle: 'forward_typed_enabled',  toggleKey: 'forwardTypedEnabled'  },
-            { field: 'forward_recall', label: 'Recall (self-grade)', row: frRow, dbToggle: 'forward_recall_enabled', toggleKey: 'forwardRecallEnabled' },
+          const BUCKETS: { field: string; label: string; row: SchedulerParamsRow | undefined; dbToggle: 'forward_typed_enabled' | 'forward_recall_enabled' | 'reverse_recall_enabled' | 'forward_smart_enabled'; toggleKey: 'forwardTypedEnabled' | 'forwardRecallEnabled' | 'reverseRecallEnabled' | 'forwardSmartEnabled' }[] = [
+            { field: 'forward_typed',  label: 'Typed production (always type)', row: ftRow, dbToggle: 'forward_typed_enabled',  toggleKey: 'forwardTypedEnabled'  },
+            { field: 'forward_smart',  label: 'Smart typing',                   row: smRow, dbToggle: 'forward_smart_enabled',  toggleKey: 'forwardSmartEnabled'  },
+            { field: 'forward_recall', label: 'Self-graded production (no typing)', row: frRow, dbToggle: 'forward_recall_enabled', toggleKey: 'forwardRecallEnabled' },
             { field: 'reverse_recall', label: 'Reverse recall',      row: rrRow, dbToggle: 'reverse_recall_enabled', toggleKey: 'reverseRecallEnabled' },
           ]
 
@@ -1066,21 +1011,6 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
 
           // Graduation intervals are a single per-pair value (calibrated on the
           // forward_typed row), bucketed by exact pipeline-error count. 8 = "8+".
-          const GRAD_BUCKETS = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(n => {
-            const minKey = `gradInterval${n}errMin` as keyof typeof DEFAULT_SCHEDULER_PARAMS
-            const maxKey = `gradInterval${n}errMax` as keyof typeof DEFAULT_SCHEDULER_PARAMS
-            const min = (ftRow?.[minKey] as number | undefined) ?? (DEFAULT_SCHEDULER_PARAMS[minKey] as number)
-            const max = (ftRow?.[maxKey] as number | undefined) ?? (DEFAULT_SCHEDULER_PARAMS[maxKey] as number)
-            const defMin = DEFAULT_SCHEDULER_PARAMS[minKey] as number
-            const defMax = DEFAULT_SCHEDULER_PARAMS[maxKey] as number
-            return {
-              n, min, max,
-              label: n === 8 ? '8+ err' : `${n} err`,
-              value: min === max ? `${min}` : `${min}–${max}`,
-              def:   defMin === defMax ? `${defMin}` : `${defMin}–${defMax}`,
-              changed: min !== defMin || max !== defMax,
-            }
-          })
 
           return (
             <div
@@ -1126,27 +1056,43 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                         <div className="flex flex-col gap-1.5">
                           <p className="text-xs text-ink-faint mb-0.5">Enable review tracks for this language pair:</p>
                           {BUCKETS.map(b => (
-                            <div key={b.field} className="flex items-center gap-2">
-                              <label className="flex items-center gap-2 cursor-pointer flex-1">
-                                <input
-                                  type="checkbox"
-                                  checked={b.row?.[b.toggleKey] ?? true}
-                                  onChange={e => handleSrsToggle(b.field, b.dbToggle, e.target.checked).catch(() => {})}
-                                  className="accent-accent"
-                                />
-                                <span className="text-sm text-ink">{b.label}</span>
-                              </label>
-                              <button
-                                className="text-xs text-danger hover:underline whitespace-nowrap"
-                                title={`Reset ${b.label} multipliers (Good/Easy/Hard) to defaults`}
-                                onClick={() => {
-                                  if (confirm(`Reset the ${b.label} multiplier calibration back to defaults? Use this to un-pollute a track whose calibration was corrupted (e.g. reverse recall from the old miscategorization bug).`)) {
-                                    handleResetTrackCalibration(b.field).catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
-                                  }
-                                }}
-                              >
-                                Reset calibration
-                              </button>
+                            <div key={b.field} className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <label className="flex items-center gap-2 cursor-pointer flex-1">
+                                  <input
+                                    type="checkbox"
+                                    checked={b.row?.[b.toggleKey] ?? (b.field === 'forward_smart' ? false : true)}
+                                    onChange={e => handleSrsToggle(b.field, b.dbToggle, e.target.checked).catch(() => {})}
+                                    className="accent-accent"
+                                  />
+                                  <span className="text-sm text-ink">{b.label}</span>
+                                </label>
+                                <button
+                                  className="text-xs text-danger hover:underline whitespace-nowrap"
+                                  title={`Reset ${b.label} multipliers (Good/Easy/Hard) to defaults`}
+                                  onClick={() => {
+                                    if (confirm(`Reset the ${b.label} multiplier calibration back to defaults? Use this to un-pollute a track whose calibration was corrupted (e.g. reverse recall from the old miscategorization bug).`)) {
+                                      handleResetTrackCalibration(b.field).catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
+                                    }
+                                  }}
+                                >
+                                  Reset calibration
+                                </button>
+                              </div>
+                              {b.field === 'forward_smart' && (b.row?.forwardSmartEnabled ?? false) && (
+                                <div className="flex items-center gap-2 pl-6 flex-wrap">
+                                  <span className="text-xs text-ink-muted">Type it until the interval reaches</span>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={3650}
+                                    value={smRow?.smartTypingThresholdDays ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays}
+                                    onChange={e => handleSrsSmartThreshold(Number(e.target.value)).catch(() => {})}
+                                    className="input text-sm w-16"
+                                  />
+                                  <span className="text-xs text-ink-muted">days, then it becomes self-graded.</span>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1280,48 +1226,6 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                               </tbody>
                             </table>
                           </div>
-                        </div>
-
-                        {/* Graduation intervals by pipeline-error count (days). */}
-                        <div className="flex flex-col gap-1">
-                          <p className="text-xs text-ink-faint">Graduation interval (days) by how many errors a card made in the pipeline:</p>
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-xs border-collapse">
-                              <thead>
-                                <tr className="text-ink-muted">
-                                  <th className="text-left py-1 pr-2 font-medium">Errors</th>
-                                  <th className="text-right py-1 px-1 font-medium">Interval</th>
-                                  <th className="text-right py-1 pl-1 font-medium text-ink-faint">Default</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {GRAD_BUCKETS.map(b => (
-                                  <tr key={b.label} className="border-t border-surface-border/50">
-                                    <td className="py-1 pr-2 text-ink-muted">{b.label}</td>
-                                    <td className="text-right py-1 px-1">
-                                      <GradIntervalCell
-                                        min={b.min} max={b.max} changed={b.changed}
-                                        onSave={(mn, mx) => handleGradIntervalEdit(b.n, mn, mx).catch(err => alert('Save failed: ' + (err instanceof Error ? err.message : String(err))))}
-                                      />
-                                    </td>
-                                    <td className="text-right py-1 pl-1 text-ink-faint">{b.def}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          {GRAD_BUCKETS.some(b => b.changed) && (
-                            <button
-                              className="self-start text-xs text-danger hover:underline mt-1"
-                              onClick={() => {
-                                if (confirm('Reset all graduation intervals back to their defaults? This clears any calibration on these buckets (the Hard/Good/Easy multipliers are left untouched).')) {
-                                  handleResetGradIntervals().catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
-                                }
-                              }}
-                            >
-                              Reset graduation intervals to default
-                            </button>
-                          )}
                         </div>
 
                         {/* Version history */}

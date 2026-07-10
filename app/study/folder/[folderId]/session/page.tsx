@@ -40,7 +40,7 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, smartProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -59,7 +59,7 @@ interface SessionCard {
   /** For graduated cards: whether this review should use typed or self-graded production. Null pre-graduation. */
   productionMode:  ProductionMode | null
   /** Which interval track triggered this queue entry ('typed' | 'recall' | 'legacy'). Undefined for pipeline cards. */
-  reviewTrack?: 'typed' | 'recall' | 'legacy'
+  reviewTrack?: 'typed' | 'recall' | 'legacy' | 'smart'
   /** True when this entry is for the reverse-direction (Spanish→English) recall row. */
   isReverse?: boolean
   /** Marks a copy of a card re-inserted after "I don't know" — used for undo cleanup. */
@@ -249,6 +249,8 @@ function FolderSessionInner() {
       }
       setStrictnessMap(sMap)
       setParamsByPair(pMap)
+      const smartThresholdFor = (src: string, tgt: string): number =>
+        pMap.get(`${src}|${tgt}`)?.smartTypingThresholdDays ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays
 
       // ?category= elective study: build queue from only that category across
       // all decks in the folder, capped at FOLDER_ELECTIVE_LIMIT cards.
@@ -273,10 +275,12 @@ function FolderSessionInner() {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated && !state.dormant) {
               const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
-              const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
+              const isLegacyDue = !state.typedDueAt && !state.smartDueAt && isDueByDate(state.dueAt)
               const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
+              const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
               const isRecallDue = isDueByDate(state.recallDueAt)
-              if (isTypedDue  && trackEnabled(en, 'typed',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+              if (isTypedDue  && trackEnabled(en, 'typed',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: 'typed' })
+              if (isSmartDue  && trackEnabled(en, 'smart',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'smart',  productionMode: smartProductionMode(state.smartIntervalDays, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
               if (isRecallDue && trackEnabled(en, 'recall', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
               if (isLegacyDue && trackEnabled(en, 'legacy', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
@@ -362,10 +366,12 @@ function FolderSessionInner() {
             // Dormant cards never become due automatically.
           } else if (state.graduated) {
             const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
-            const isLegacyDue = !state.typedDueAt && isDueByDate(state.dueAt)
+            const isLegacyDue = !state.typedDueAt && !state.smartDueAt && isDueByDate(state.dueAt)
             const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
+            const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
             const isRecallDue = isDueByDate(state.recallDueAt)
-            if (isTypedDue  && trackEnabled(en, 'typed',  false)) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'typed' })
+            if (isTypedDue  && trackEnabled(en, 'typed',  false)) allCards.push({ ...common, state, productionMode: 'typed', reviewTrack: 'typed' })
+            if (isSmartDue  && trackEnabled(en, 'smart',  false)) allCards.push({ ...common, state, productionMode: smartProductionMode(state.smartIntervalDays, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'smart' })
             if (isRecallDue && trackEnabled(en, 'recall', false)) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
             if (isLegacyDue && trackEnabled(en, 'legacy', false)) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
           }
@@ -629,6 +635,110 @@ function FolderSessionInner() {
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
         if (recallNewState.relearningStep > 0) {
           setRelearnPool(prev => [...prev, { ...current, state: recallNewState }])
+          setIndex(i => i + 1)
+          return
+        }
+        if (index + 1 < queue.length || relearnPool.length > 0) { setIndex(i => i + 1) } else { setDone(true) }
+        return
+      }
+
+      // Smart-typing review: an independent forward-production track, presented typed
+      // (interval below the pair's threshold) or self-graded (past it). Own schedule
+      // (smart_due_at/smart_interval_days), shares the row's FSRS D/S, mirrors dueAt.
+      // Because it IS target-language production, three Agains in a row un-graduate.
+      if (reviewTrack === 'smart') {
+        const grade: Rating = (wasTyped && !wasCorrect) ? 'again' : rating
+        const elapsedDays = state.lastReviewedAt
+          ? Math.max(0, (nowDate.getTime() - new Date(state.lastReviewedAt).getTime()) / 86_400_000)
+          : (state.smartIntervalDays ?? state.intervalDays ?? 1)
+        const fsrs = scheduleGraduatedFsrs({
+          difficulty:  state.difficulty,
+          stability:   state.stability,
+          intervalDays: state.smartIntervalDays ?? state.intervalDays,
+          lapses:      state.lapses,
+          relearning:  state.relearning,
+          goodStreak:  state.goodStreak,
+          againStreak: state.againStreak,
+          elapsedDays,
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention })
+
+        let smartNewState: CardState
+        if (fsrs.sendToLadder) {
+          smartNewState = {
+            ...initialCardState(userId, card.id, pipeline.id),
+            introducedDate:  state.introducedDate,
+            reviewDirection: state.reviewDirection,
+          }
+          new SupabaseLadderClimbRepository().remove(userId, card.id).catch(() => {})
+        } else {
+          let dueAt: string
+          if (fsrs.dueInMinutes != null) {
+            dueAt = new Date(nowDate.getTime() + fsrs.dueInMinutes * 60_000).toISOString()
+          } else {
+            const days = fsrs.intervalDays!
+            const [minDays, maxDays] = fsrsFuzzRange(days)
+            const idealDueAt = new Date(nowDate.getTime() + days * 86_400_000).toISOString()
+            const smoothed = (maxDays - minDays >= 1)
+              ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, days, stateRepo)
+              : idealDueAt
+            dueAt = snapDueAtToStartOfDay(smoothed, tzRef.current, turnoverRef.current)
+          }
+          smartNewState = {
+            ...state,
+            difficulty:        fsrs.difficulty,
+            stability:         fsrs.stability,
+            relearning:        fsrs.relearning,
+            goodStreak:        fsrs.goodStreak,
+            againStreak:       fsrs.againStreak,
+            lastRating:        rating,
+            lastReviewedAt:    nowDate.toISOString(),
+            reps:              rating !== 'hard' ? state.reps + 1 : state.reps,
+            lapses:            grade === 'again' ? state.lapses + 1 : state.lapses,
+            relearningStep:    fsrs.dueInMinutes != null ? 1 : 0,
+            // Keep the general interval/due in sync with the smart lane so folderStats,
+            // redistribute, and classifyReviewMode all see the active schedule.
+            intervalDays:          fsrs.intervalDays ?? state.intervalDays,
+            scheduledIntervalDays: fsrs.intervalDays ?? state.scheduledIntervalDays,
+            smartIntervalDays:     fsrs.intervalDays ?? state.smartIntervalDays,
+            smartDueAt:            dueAt,
+            dueAt,
+          }
+          if (smartNewState.graduated && !smartNewState.dormant && smartNewState.dormancyThreshold != null && smartNewState.reps >= smartNewState.dormancyThreshold) {
+            smartNewState = { ...smartNewState, dormant: true }
+            if (wasCorrect) setDormantNotice(true)
+          }
+        }
+
+        if (state.graduated && !smartNewState.graduated) {
+          eventRepo.markLapsed(reviewEvent.id, userId).catch(() => {})
+        }
+        await stateRepo.upsert(smartNewState)
+
+        if (reverseExistsForLazyInit === false && smartNewState.graduated) {
+          const fwdNextDue  = smartNewState.smartDueAt ?? smartNewState.dueAt ?? nowDate.toISOString()
+          const fwdInterval = smartNewState.smartIntervalDays ?? smartNewState.intervalDays
+          const revInterval = Math.max(1, Math.round(fwdInterval / 2))
+          const revDueAt    = new Date(new Date(fwdNextDue).getTime() + revInterval * 86_400_000).toISOString()
+          await stateRepo.upsert({
+            ...initialCardState(userId, card.id, pipeline.id),
+            graduated:             true,
+            reviewDirection:       'reverse',
+            intervalDays:          revInterval,
+            scheduledIntervalDays: revInterval,
+            recallIntervalDays:    revInterval,
+            recallDueAt:           revDueAt,
+            dueAt:                 revDueAt,
+            lastReviewedAt:        nowDate.toISOString(),
+            graduatedAt:           state.graduatedAt ?? nowDate.toISOString(),
+            introducedDate:        state.introducedDate,
+          })
+        }
+
+        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: smartNewState }])
+        setRedoStack([])
+        setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: smartNewState } : item))
+        if (smartNewState.relearningStep > 0) {
+          setRelearnPool(prev => [...prev, { ...current, state: smartNewState }])
           setIndex(i => i + 1)
           return
         }

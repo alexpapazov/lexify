@@ -314,6 +314,9 @@ export interface SchedulerParams {
   // Per-pair FSRS target retention (0.80–0.95). Higher = shorter intervals, more
   // reviews, better recall. Canonical on the forward_typed row.
   requestRetention: number
+  // Per-pair smart-typing threshold (days): the smart-typing track requires typing
+  // while its interval is below this, then goes self-graded. Canonical on forward_typed.
+  smartTypingThresholdDays: number
 }
 
 export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
@@ -337,6 +340,7 @@ export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
   gradInterval8errMin: 1, gradInterval8errMax: 1,
   strictSpelling: 'penalize', strictAccents: 'penalize', strictArticles: 'penalize',
   requestRetention: 0.90,
+  smartTypingThresholdDays: 20,
 }
 
 /** Defaults when converting an existing deck to flexible mode. */
@@ -774,6 +778,15 @@ export interface CardState {
   recallIntervalDays:  number | null
   /** ISO timestamp when the recall track is next due. Null until Phase 2. */
   recallDueAt:         string | null
+  /**
+   * Smart-typing track: an independent forward-production lane presented as typed
+   * while its interval is below the pair's threshold and self-graded once past it.
+   * Its own FSRS schedule (shares difficulty/stability on the row). Null when the
+   * card isn't on the smart-typing track.
+   */
+  smartIntervalDays:   number | null
+  /** ISO timestamp when the smart-typing track is next due. Null when not on this track. */
+  smartDueAt:          string | null
   /**
    * 'forward' = English→Spanish (typed + recall).
    * 'reverse' = Spanish→English (recall only, never typed).
