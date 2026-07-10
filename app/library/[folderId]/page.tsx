@@ -365,6 +365,7 @@ function FolderPageInner() {
     const t = e.touches[0]!
     const startX = t.clientX, startY = t.clientY
     touchTimerRef.current = setTimeout(() => {
+      touchTimerRef.current = null
       setDragging(item)
       setTouchGhost({ x: startX, y: startY, type: item.type })
     }, 350)
@@ -372,6 +373,15 @@ function FolderPageInner() {
 
   function onItemTouchMove(e: React.TouchEvent) {
     if (!touchGhost && touchTimerRef.current) {
+      clearTimeout(touchTimerRef.current)
+      touchTimerRef.current = null
+    }
+  }
+
+  // Finger lifted (or gesture cancelled) before the long-press fired → it was a tap,
+  // not a drag. Cancel the pending drag so taps navigate normally.
+  function onItemTouchEnd() {
+    if (touchTimerRef.current) {
       clearTimeout(touchTimerRef.current)
       touchTimerRef.current = null
     }
@@ -783,6 +793,8 @@ function FolderPageInner() {
                   onDrop={e => { e.preventDefault(); commitDrop({ id: sub.id, pos: dropTarget?.pos ?? 'after' }) }}
                   onTouchStart={e => onItemTouchStart(e, { type: 'folder', id: sub.id })}
                   onTouchMove={onItemTouchMove}
+                  onTouchEnd={onItemTouchEnd}
+                  onTouchCancel={onItemTouchEnd}
                   style={{ WebkitTouchCallout: 'none' } as React.CSSProperties}
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
                     isDragging      ? 'opacity-40' :
@@ -841,6 +853,8 @@ function FolderPageInner() {
                   onDrop={e => { e.preventDefault(); commitDrop({ id: deck.id, pos: dropTarget?.pos ?? 'after' }) }}
                   onTouchStart={e => onItemTouchStart(e, { type: 'deck', id: deck.id })}
                   onTouchMove={onItemTouchMove}
+                  onTouchEnd={onItemTouchEnd}
+                  onTouchCancel={onItemTouchEnd}
                   style={{ WebkitTouchCallout: 'none' } as React.CSSProperties}
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
                     isDragging ? 'opacity-40' : 'hover:border-white/10'
