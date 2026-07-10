@@ -16,9 +16,10 @@ import { TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 
 export const runtime = 'nodejs'
 
-// ElevenLabs voice ID — "Rachel" works well across all supported languages with
-// the eleven_multilingual_v2 model, which adapts accent to match the input language.
-const ELEVENLABS_VOICE_ID = '21m00Tcm4TlvDq8ikWAM'
+// ElevenLabs voice — uses the ELEVENLABS_VOICE_ID env var when set, else falls
+// back to "Rachel", which works well across all supported languages with the
+// eleven_multilingual_v2 model (it adapts accent to match the input language).
+const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM'
 
 interface RequestBody {
   text:     string

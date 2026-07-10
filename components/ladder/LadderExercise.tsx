@@ -6,7 +6,9 @@ import { DEFAULT_GRADING_SETTINGS } from '@/domain'
 import { gradeTyping, resolveTypedPenalty } from '@/engine/grading'
 import type { RungAttemptOutcome } from '@/engine/ladderEngine'
 import { displayText } from '@/lib/cardText'
-import { speak } from '@/lib/speak'
+import { speak, speakViaTts } from '@/lib/speak'
+import { TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
+import { SupabaseCardRepository } from '@/lib/data/cards'
 import { RatingButtons } from '@/components/session/RatingButtons'
 
 // Which side is shown vs. produced, and the produced side's language.
@@ -72,10 +74,26 @@ export function LadderExercise({ card, rung, deckCards, onOutcome, autoPlayAudio
   const [feedback, setFeedback] = useState<'pass' | 'almost' | 'miss' | null>(null)
   const options = useMemo(() => rung.type === 'mcq' ? mcqOptions(card, rung, deckCards) : [], [card, rung, deckCards])
   const inputRef = useRef<HTMLInputElement>(null)
+  const [audio, setAudio] = useState<string | null>(card.audioData ?? null)
 
-  // Dictation always plays the target audio.
+  // Plays the target audio: cached if present, else generate on demand (ElevenLabs)
+  // and cache it on the card; browser TTS as a last resort.
+  async function playAudio() {
+    if (audio) { speak(card.front, card.sourceLanguage, audio); return }
+    if (TTS_SUPPORTED_LANGUAGES.has(card.sourceLanguage)) {
+      const b64 = await speakViaTts(card.front, card.sourceLanguage)
+      if (b64) {
+        setAudio(b64)
+        new SupabaseCardRepository().update(card.id, { audioGenerated: true, audioData: b64 }).catch(() => {})
+        return
+      }
+    }
+    speak(card.front, card.sourceLanguage, null)
+  }
+
+  // Dictation always plays the target audio on mount.
   useEffect(() => {
-    if (isDictation && autoPlayAudio) speak(card.front, card.sourceLanguage, card.audioData)
+    if (isDictation && autoPlayAudio) playAudio()
     setTimeout(() => inputRef.current?.focus(), 50)
   }, [card.id, rung.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -135,7 +153,7 @@ export function LadderExercise({ card, rung, deckCards, onOutcome, autoPlayAudio
     <div className="space-y-4">
       <Prompt text={isDictation ? '🔊 Type what you hear' : s.prompt} sub={isDictation ? 'Dictation (target language)' : 'Type the answer'} />
       {isDictation && (
-        <button className="btn-ghost text-sm" onClick={() => speak(card.front, card.sourceLanguage, card.audioData)}>▶ Play again</button>
+        <button className="btn-ghost text-sm" onClick={() => playAudio()}>▶ Play again</button>
       )}
       {awaitingRating ? (
         <>
