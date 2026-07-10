@@ -65,6 +65,14 @@ export async function analyzeBatch(batch: ScopedCard[], task: string): Promise<E
   })
 }
 
+/** Reverts a just-applied text edit back to the card's original front/back (single-level undo). */
+export async function undoEdit(userId: UserId, p: EditProposal): Promise<void> {
+  if (p.action !== 'edit') return
+  const deps = createSupabaseGatewayDeps()
+  const ctx: GatewayContext = { userId, grant: editGrant([p.deckId]), actor: 'card-editor' }
+  await gw.editCardText(ctx, deps, { deckId: p.deckId, cardId: p.cardId, front: p.front, back: p.back, reason: 'undo' })
+}
+
 /** Applies one approved proposal to the library through the gateway (audited). */
 export async function applyProposal(userId: UserId, p: EditProposal): Promise<void> {
   const deps = createSupabaseGatewayDeps()

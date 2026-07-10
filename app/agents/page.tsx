@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
-import { gatherScopedCards, analyzeBatch, applyProposal, chunk } from '@/lib/agents/cardEditor'
+import { gatherScopedCards, analyzeBatch, applyProposal, undoEdit, chunk } from '@/lib/agents/cardEditor'
 import type { ScopedCard, EditProposal } from '@/lib/agents/cardEditor'
 import type { Deck, Grant } from '@/domain'
 
@@ -25,6 +25,7 @@ export default function AgentsPage() {
   const [total, setTotal] = useState(0)
   const [approved, setApproved] = useState(0)
   const [denied, setDenied] = useState(0)
+  const [lastApplied, setLastApplied] = useState<EditProposal | null>(null)  // last approved text edit (Cmd+Z undoable)
 
   const batchesRef = useRef<ScopedCard[][]>([])
   const nextBatchRef = useRef(0)
@@ -113,12 +114,37 @@ export default function AgentsPage() {
     const current = queue[0]
     if (!current || !userId || busy) return
     setBusy(true)
-    try { await applyProposal(userId, current); setApproved(a => a + 1) }
+    try { await applyProposal(userId, current); setApproved(a => a + 1); setLastApplied(current.action === 'edit' ? current : null) }
     catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     setBusy(false)
     advance()
   }
-  function deny() { setDenied(d => d + 1); advance() }
+  function deny() { setDenied(d => d + 1); setLastApplied(null); advance() }
+
+  function exit() {
+    setPhase('setup'); setQueue([]); bufferRef.current = []; setLastApplied(null)
+  }
+
+  // Cmd/Ctrl+Z undoes the last approved TEXT edit and re-shows it to decide again.
+  useEffect(() => {
+    async function onKey(e: KeyboardEvent) {
+      if (!((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z')) return
+      const p = lastApplied
+      if (!p || p.action !== 'edit' || !userId || busy) return
+      e.preventDefault()
+      setBusy(true)
+      try {
+        await undoEdit(userId, p)
+        setApproved(a => Math.max(0, a - 1))
+        setLastApplied(null)
+        setQueue(q => [p, ...q])
+        setPhase('review')
+      } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
+      setBusy(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lastApplied, userId, busy])
 
   const current = queue[0]
 
@@ -174,9 +200,12 @@ export default function AgentsPage() {
       )}
 
       {phase !== 'setup' && (
-        <p className="text-xs text-ink-faint text-center">
-          Scanned {scanned}{total ? ` / ${total}` : ''} cards · <span className="text-success">{approved} applied</span> · <span className="text-ink-muted">{denied} skipped</span>
-        </p>
+        <div className="flex items-center justify-center gap-4 text-xs">
+          <button onClick={exit} className="text-ink-faint hover:text-ink">✕ Exit</button>
+          <p className="text-ink-faint">
+            Scanned {scanned}{total ? ` / ${total}` : ''} cards · <span className="text-success">{approved} applied</span> · <span className="text-ink-muted">{denied} skipped</span>
+          </p>
+        </div>
       )}
 
       {(phase === 'gathering' || phase === 'analyzing') && (
@@ -192,6 +221,7 @@ export default function AgentsPage() {
             <button className="btn-ghost flex-1" disabled={busy} onClick={deny}>Deny</button>
             <button className="btn-primary flex-1" disabled={busy} onClick={approve}>{busy ? 'Applying…' : 'Approve'}</button>
           </div>
+          {lastApplied && <p className="text-[10px] text-ink-faint text-center">Last approval can be undone — press ⌘Z / Ctrl+Z</p>}
         </div>
       )}
 

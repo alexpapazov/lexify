@@ -68,12 +68,18 @@ export async function POST(req: NextRequest) {
   const data = await res.json()
   const text = (data.content ?? []).filter((b: { type: string }) => b.type === 'text').map((b: { text: string }) => b.text).join('')
   const parsed = extractJson(text) as { edits?: Edit[] } | null
-  const valid = new Set(cards.map(c => c.cardId))
+  const byId = new Map(cards.map(c => [c.cardId, c]))
   const edits = (parsed?.edits ?? []).filter(e => {
-    if (!e || !valid.has(e.cardId)) return false
+    const src = byId.get(e?.cardId)
+    if (!e || !src) return false
     if (e.action === 'split') return typeof e.primaryBack === 'string' && Array.isArray(e.extraBacks) && e.extraBacks.length > 0
-    if (e.action === 'edit')   return typeof e.front === 'string' || typeof e.back === 'string'
     if (e.action === 'delete') return true
+    if (e.action === 'edit') {
+      // Drop no-ops: only keep when the proposed text differs from the card's CURRENT text.
+      const frontChg = typeof e.front === 'string' && e.front.trim() !== src.front.trim()
+      const backChg  = typeof e.back  === 'string' && e.back.trim()  !== src.back.trim()
+      return frontChg || backChg
+    }
     return false
   })
   return NextResponse.json({ ok: true, edits })
