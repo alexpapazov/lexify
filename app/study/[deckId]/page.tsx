@@ -870,6 +870,8 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
     try {
       const deckRepo = new SupabaseDeckRepository()
       await deckRepo.resetProgress(deckId)
+      // Also clear ladder climb progress for the deck's cards (returns them to Unlearned).
+      await createClient().from('ladder_climb').delete().in('card_id', cards.map(c => c.id)).eq('user_id', userId)
       setConfirmFullReset(false)
       onClose()
       const resetCards = cards.map(c => ({ ...c, choices: null }))
@@ -1510,7 +1512,10 @@ export default function DeckDetailPage() {
       }
       if (action === 'progress' || action === 'all') {
         await supabase.from('card_states').delete().in('card_id', ids).eq('user_id', userId)
+        // Also clear ladder climb progress so the cards return to Unlearned.
+        await supabase.from('ladder_climb').delete().in('card_id', ids).eq('user_id', userId)
         setStates(prev => prev.filter(s => !selectedCardIds.has(s.cardId)))
+        setClimb(prev => { const m = new Map(prev); ids.forEach(id => m.delete(id)); return m })
       }
       if (action === 'audio' || action === 'all') {
         await supabase.from('cards').update({ audio_generated: false, audio_data: null }).in('id', ids)

@@ -70,12 +70,10 @@ function LadderStudyInner() {
         const prefsRepo = new SupabaseDeckPreferencesRepository()
         const prefs = await prefsRepo.get(uid, deckId)
         if (prefs?.learningBatchMode) {
-          // Batch mode: at most `cardsPerSession` cards in the pipeline at once, and
-          // the current batch must fully graduate before a new batch of fresh cards unlocks.
+          // Batch mode: keep the pipeline filled up to `cardsPerSession` — in-progress
+          // cards first, then top up with fresh ones to reach the cap.
           const cap = Math.max(1, prefs.cardsPerSession ?? 5)
-          q = learning.length > 0
-            ? shuffle(learning)                 // finish what's already in the pipeline first
-            : shuffle(fresh).slice(0, cap)      // pipeline empty → start a fresh batch
+          q = [...shuffle(learning), ...shuffle(fresh)].slice(0, cap)
         } else {
           const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
           q = [...shuffle(learning), ...shuffle(fresh).slice(0, Math.max(0, newLimit))]
