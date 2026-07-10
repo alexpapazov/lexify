@@ -70,9 +70,12 @@ function LadderStudyInner() {
         const prefsRepo = new SupabaseDeckPreferencesRepository()
         const prefs = await prefsRepo.get(uid, deckId)
         if (prefs?.learningBatchMode) {
-          // Keep at most `cardsPerSession` cards in the pipeline at once.
-          const cap = prefs.cardsPerSession ?? 5
-          q = [...shuffle(learning), ...shuffle(fresh)].slice(0, Math.max(0, cap))
+          // Batch mode: at most `cardsPerSession` cards in the pipeline at once, and
+          // the current batch must fully graduate before a new batch of fresh cards unlocks.
+          const cap = Math.max(1, prefs.cardsPerSession ?? 5)
+          q = learning.length > 0
+            ? shuffle(learning)                 // finish what's already in the pipeline first
+            : shuffle(fresh).slice(0, cap)      // pipeline empty → start a fresh batch
         } else {
           const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
           q = [...shuffle(learning), ...shuffle(fresh).slice(0, Math.max(0, newLimit))]
@@ -146,16 +149,21 @@ function LadderStudyInner() {
     )
   }
 
-  const done = total - queue.length
-  return (
+      // Progress bar = fraction of ALL rung-steps completed (so it moves as cards climb,
+      // not only when they graduate); the number = cards fully graduated this batch.
+      const ladderLen = Math.max(1, ladder.rungs.length)
+      const stepsDone = graduated * ladderLen + queue.reduce((sum, e) => sum + Math.min(states.get(e.cardId)?.rungIndex ?? 0, ladderLen), 0)
+      const totalSteps = total * ladderLen
+      const pct = totalSteps ? Math.round((stepsDone / totalSteps) * 100) : 0
+      return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="relative flex items-center justify-between">
         <a href={`/study/${deckId}`} className="text-sm text-ink-muted hover:text-ink">✕ End session</a>
-        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{done} / {total}</div>
+        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{graduated} / {total} done</div>
         <div className="text-xs text-ink-muted">Rung {currentClimb.rungIndex + 1} · {RUNG_LABEL[currentRung.type]}</div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
-        <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${total ? Math.round((done / total) * 100) : 0}%` }} />
+        <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
       </div>
       {category && (
         <p className="text-xs text-accent text-center">
