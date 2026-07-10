@@ -218,6 +218,58 @@ export interface ChangeSet {
   items:     ChangeSetItem[]
 }
 
+// ─── Configurable learning ladder (see features/Configurable Pipeline) ─────────
+// A per-language-pair ordered list of exercise "rungs" a card climbs before it
+// graduates. Stage 1: the data model + storage only (studying is unchanged).
+
+export type RungType = 'mcq' | 'typing' | 'self_graded' | 'dictation'
+/** Which side the learner must PRODUCE. Dictation is always 'produce_target'. */
+export type RungDirection = 'produce_target' | 'produce_native'
+export type DistractorSource = 'smart' | 'deck'
+/** Ways an attempt on a rung can land (drives drop-back rules). */
+export type RungOutcome = 'almost' | 'miss' | 'again' | 'hard' | 'good' | 'easy'
+
+/** "On this outcome (after N occurrences), jump back to the rung with this id." */
+export interface DropBackRule {
+  on:       RungOutcome
+  times:    number
+  toRungId: string
+}
+
+export interface Rung {
+  id:                string
+  type:              RungType
+  direction:         RungDirection
+  /** MCQ only. */
+  distractorSource?: DistractorSource
+  /** Typing / dictation only — per-category strictness. */
+  strictness?:       TypedStrictness
+  /** Whether the four rating buttons appear (always true for self_graded). */
+  selfRated:         boolean
+  /** Interval-setting rung (typing/self_graded only; one per direction). */
+  intervalInit:      boolean
+  /** How many times you must succeed / press the advancing rating to move up. */
+  advanceTimes:      number
+  /** In a row vs. total. */
+  advanceInARow:     boolean
+  /** For self-rated non-init rungs: which rating advances (default 'good'). */
+  advanceRating?:    'good' | 'easy'
+  dropBacks:         DropBackRule[]
+}
+
+export interface Ladder { rungs: Rung[] }
+
+/** Built-in fallback ladder (used until a user defines a default or per-pair one). */
+export const DEFAULT_LADDER: Ladder = {
+  rungs: [
+    { id: 'r1', type: 'mcq',        direction: 'produce_native', distractorSource: 'deck', selfRated: false, intervalInit: false, advanceTimes: 1, advanceInARow: true, dropBacks: [] },
+    { id: 'r2', type: 'mcq',        direction: 'produce_target', distractorSource: 'deck', selfRated: false, intervalInit: false, advanceTimes: 1, advanceInARow: true, dropBacks: [] },
+    { id: 'r3', type: 'typing',     direction: 'produce_target', strictness: { spelling: 'penalize', accents: 'penalize', articles: 'penalize' }, selfRated: false, intervalInit: false, advanceTimes: 2, advanceInARow: true, dropBacks: [] },
+    { id: 'r4', type: 'typing',     direction: 'produce_target', strictness: { spelling: 'penalize', accents: 'penalize', articles: 'penalize' }, selfRated: true, intervalInit: true, advanceTimes: 1, advanceInARow: true, dropBacks: [] },
+    { id: 'r5', type: 'self_graded', direction: 'produce_native', selfRated: true, intervalInit: true, advanceTimes: 1, advanceInARow: true, dropBacks: [] },
+  ],
+}
+
 /** Default for new decks — strict mode, case-insensitive only. */
 export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
   gradingMode:                 'strict',

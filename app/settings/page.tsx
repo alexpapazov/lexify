@@ -629,6 +629,12 @@ export default function SettingsPage() {
       </div>
 
       {/* Study defaults */}
+      <div className="panel space-y-3">
+        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Learning ladders</h2>
+        <p className="text-xs text-ink-faint">Build the sequence of exercises a card climbs before it graduates — set a default, and customize it per language.</p>
+        <a href="/settings/ladders" className="btn-ghost inline-block text-sm py-1.5 px-3">Edit learning ladders →</a>
+      </div>
+
       <div className="panel space-y-4">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Study defaults</h2>
 
