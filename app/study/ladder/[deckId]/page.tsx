@@ -69,11 +69,17 @@ function LadderStudyInner() {
         // Normal intake: apply the deck's card-intake settings.
         const prefsRepo = new SupabaseDeckPreferencesRepository()
         const prefs = await prefsRepo.get(uid, deckId)
-        if (prefs?.learningBatchMode) {
-          // Batch mode: keep the pipeline filled up to `cardsPerSession` — in-progress
-          // cards first, then top up with fresh ones to reach the cap.
-          const cap = Math.max(1, prefs.cardsPerSession ?? 5)
-          q = [...shuffle(learning), ...shuffle(fresh)].slice(0, cap)
+        const cap = prefs?.cardsPerSession ?? null  // "Limit cards in learning" → the cap
+        if (cap != null && cap > 0) {
+          if (prefs!.learningBatchMode) {
+            // "Wait for full batch to graduate": strict groups — the current group must
+            // ALL graduate before a fresh group of `cap` is introduced.
+            q = learning.length > 0 ? shuffle(learning) : shuffle(fresh).slice(0, cap)
+          } else {
+            // Top-up: keep up to `cap` different cards in the pipeline, refilling as
+            // cards graduate (in-progress first, then fresh to reach the cap).
+            q = [...shuffle(learning), ...shuffle(fresh)].slice(0, cap)
+          }
         } else {
           const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
           q = [...shuffle(learning), ...shuffle(fresh).slice(0, Math.max(0, newLimit))]

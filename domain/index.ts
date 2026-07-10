@@ -628,6 +628,17 @@ export interface CardState {
    */
   scheduledIntervalDays: number
   ease:             number
+  // ── FSRS Due Now scheduler (migration 074) ────────────────────────────────
+  /** FSRS difficulty (1–10); null until the card is scheduled under FSRS. */
+  difficulty:       number | null
+  /** FSRS stability in days; null until scheduled under FSRS. */
+  stability:        number | null
+  /** In the post-lapse relearn gate (must reach 2 Goods in a row / Easy to leave). */
+  relearning:       boolean
+  /** Consecutive Goods while relearning (2 → exit). */
+  goodStreak:       number
+  /** Consecutive Agains while relearning (3 → back to the learning ladder). */
+  againStreak:      number
   reps:             number
   lapses:           number
   lastRating:       Rating | null

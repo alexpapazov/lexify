@@ -27,6 +27,7 @@ function baseState(overrides: Partial<CardState> = {}): CardState {
     intervalDays: 10,
     scheduledIntervalDays: 10,
     ease: 2.5,
+    difficulty: null, stability: null, relearning: false, goodStreak: 0, againStreak: 0,
     reps: 5,
     lapses: 0,
     lastRating: 'good',
