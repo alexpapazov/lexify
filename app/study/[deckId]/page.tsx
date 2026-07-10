@@ -1716,6 +1716,7 @@ export default function DeckDetailPage() {
           </button>
           <Link href={`/study/${deckId}/add`}     className="btn-ghost text-sm">Add cards</Link>
           <Link href={`/study/${deckId}/edit`}    className="btn-ghost text-sm">Edit</Link>
+          <Link href={`/study/ladder/${deckId}`}  className="btn-ghost text-sm">Practice ladder</Link>
           <Link href={`/study/${deckId}/session`} className="btn-primary text-sm">Study</Link>
         </div>
       </div>
