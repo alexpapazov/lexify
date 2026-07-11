@@ -38,7 +38,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, smartProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -94,6 +94,12 @@ function AllDueSessionInner() {
   const sourceLang = searchParams.get('source')
   const targetLang = searchParams.get('target')
   const dirParam   = searchParams.get('dir') as 'forward' | 'reverse' | null
+  // Optional card-type filter for "Study all due" → Typing / Self-graded buckets.
+  const presentParam = searchParams.get('present') as 'typing' | 'selfgraded' | null
+  const filterByPresent = <T extends { productionMode: 'typed' | 'self-graded' | null }>(items: T[]): T[] =>
+    presentParam === 'typing'     ? items.filter(i => i.productionMode === 'typed')
+    : presentParam === 'selfgraded' ? items.filter(i => i.productionMode === 'self-graded')
+    : items
   const backHref = sourceLang && targetLang ? `/library?source=${sourceLang}&target=${targetLang}` : '/study'
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
@@ -290,8 +296,8 @@ function AllDueSessionInner() {
               const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
               const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
               const isRecallDue = isDueByDate(state.recallDueAt)
-              if (isTypedDue  && trackEnabled(en, 'typed',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: 'typed' })
-              if (isSmartDue  && trackEnabled(en, 'smart',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'smart',  productionMode: smartProductionMode(state.smartIntervalDays, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
+              if (isTypedDue  && trackEnabled(en, 'typed',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: forwardProductionMode(state, 'typed', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
+              if (isSmartDue  && trackEnabled(en, 'smart',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'smart',  productionMode: forwardProductionMode(state, 'smart', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
               if (isRecallDue && trackEnabled(en, 'recall', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
               if (isLegacyDue && trackEnabled(en, 'legacy', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
@@ -306,7 +312,7 @@ function AllDueSessionInner() {
             }
           }
         }
-        const dedupedCards = dedupeDueReviews(categoryCards)
+        const dedupedCards = filterByPresent(dedupeDueReviews(categoryCards))
         const finalQueue = hasLangFilter ? shuffle(dedupedCards) : shuffle(dedupedCards).slice(0, ALL_ELECTIVE_LIMIT)
         if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
         setElectiveSession(true)
@@ -390,8 +396,8 @@ function AllDueSessionInner() {
             const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
             const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
             const isRecallDue = isDueByDate(state.recallDueAt)
-            if (isTypedDue  && trackEnabled(en, 'typed',  false)) allCards.push({ ...common, state, productionMode: 'typed', reviewTrack: 'typed' })
-            if (isSmartDue  && trackEnabled(en, 'smart',  false)) allCards.push({ ...common, state, productionMode: smartProductionMode(state.smartIntervalDays, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'smart' })
+            if (isTypedDue  && trackEnabled(en, 'typed',  false)) allCards.push({ ...common, state, productionMode: forwardProductionMode(state, 'typed', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'typed' })
+            if (isSmartDue  && trackEnabled(en, 'smart',  false)) allCards.push({ ...common, state, productionMode: forwardProductionMode(state, 'smart', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'smart' })
             if (isRecallDue && trackEnabled(en, 'recall', false)) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
             if (isLegacyDue && trackEnabled(en, 'legacy', false)) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
           }
@@ -412,7 +418,7 @@ function AllDueSessionInner() {
       if (allCards.length === 0) { setDone(true); setLoading(false); return }
 
       // Collapse multiple due tracks for the same card+direction into one review.
-      const dedupedAll = dedupeDueReviews(allCards)
+      const dedupedAll = filterByPresent(dedupeDueReviews(allCards))
 
       // Shuffle all seen cards; keep new cards in order at the start
       const newCards  = dedupedAll.filter(c => !c.state.lastReviewedAt)
@@ -721,6 +727,8 @@ function AllDueSessionInner() {
             smartIntervalDays:     fsrs.intervalDays ?? state.smartIntervalDays,
             smartDueAt:            dueAt,
             dueAt,
+            // Accelerated (import-known) cards go self-graded once a typed review is correct.
+            acceleratedTypedConfirmed: state.acceleratedTypedConfirmed || (state.acceleratedMode === 'import_known' && !!wasTyped && wasCorrect),
           }
           if (smartNewState.graduated && !smartNewState.dormant && smartNewState.dormancyThreshold != null && smartNewState.reps >= smartNewState.dormancyThreshold) {
             smartNewState = { ...smartNewState, dormant: true }
@@ -837,6 +845,7 @@ function AllDueSessionInner() {
             typedIntervalDays:     fsrs.intervalDays ?? newState.typedIntervalDays,
             typedDueAt:            dueAt,
             dueAt,
+            acceleratedTypedConfirmed: state.acceleratedTypedConfirmed || (state.acceleratedMode === 'import_known' && !!wasTyped && wasCorrect),
           }
         }
         scheduled = null  // FSRS owns the schedule; skip the legacy density smoothing below.

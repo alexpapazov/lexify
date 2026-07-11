@@ -798,9 +798,21 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   Self-graded, Reverse); it reads the `forward_smart` row and routes each simulated
   smart review to typed-or-self-graded by interval vs threshold (new-card renewal splits
   via `stages(t, m, min(threshold, maxInt))` for the typed portion).
-- **Not yet wired (peripheral, non-breaking)**: `components/session/CardEditModal`'s
-  per-track "i" schedule panel still labels the smart schedule as "Typed production"
-  (cosmetic mislabel in the card-info popover; doesn't error).
+- **Card-info "i" panel** (`components/CardEditModal.tsx`): now recognises the smart
+  track — the schedule section titles as "Smart typing track" and reads
+  `smart_*` columns (falls back to typed/legacy).
+- **Accelerated auto-self-grade** (migration `079_accelerated_typed_confirmed.sql`):
+  `CardState.acceleratedTypedConfirmed`. An import-known card flips to self-graded
+  presentation forever after its first correct **typed** review (set in the smart +
+  forward FSRS branches when `acceleratedMode==='import_known' && wasTyped && wasCorrect`).
+  Presentation goes through `sessionLimits.forwardProductionMode(state, track, threshold)`
+  which applies the accelerated override, else the smart threshold rule, else always-type.
+- **"Study all due" grouped by card type**: the dashboard popover now leads with
+  **Typing** / **Self-graded** rows (counts from `dueNowTyping`/`dueNowSelfGraded`,
+  split by presentation) above the by-language rows. They link to
+  `/study/all/session?category=due&present=typing|selfgraded`; all-session filters the
+  deduped queue by `productionMode` (`filterByPresent`). Typing = forward production
+  shown typed (one direction); Self-graded = forward self-graded + recall + reverse.
 
 ## Known backlog / open issues
 

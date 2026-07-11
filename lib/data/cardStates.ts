@@ -60,6 +60,7 @@ function rowToCardState(row: Record<string, unknown>): CardState {
     recallDueAt:         (row.recall_due_at        as string | null) ?? null,
     smartIntervalDays:   row.smart_interval_days  != null ? Number(row.smart_interval_days)  : null,
     smartDueAt:          (row.smart_due_at         as string | null) ?? null,
+    acceleratedTypedConfirmed: (row.accelerated_typed_confirmed as boolean | null) ?? false,
     reviewDirection:     ((row.review_direction as string) === 'reverse' ? 'reverse' : 'forward') as 'forward' | 'reverse',
   }
 }
@@ -136,6 +137,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       recall_due_at:            state.recallDueAt,
       smart_interval_days:      state.smartIntervalDays,
       smart_due_at:             state.smartDueAt,
+      accelerated_typed_confirmed: state.acceleratedTypedConfirmed,
       review_direction:         state.reviewDirection,
     }, { onConflict: 'user_id,card_id,review_direction' }).select().single()
     if (error) throw new Error(error.message)
@@ -198,6 +200,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       recall_due_at:        s.recallDueAt,
       smart_interval_days:  s.smartIntervalDays,
       smart_due_at:         s.smartDueAt,
+      accelerated_typed_confirmed: s.acceleratedTypedConfirmed,
       review_direction:     s.reviewDirection,
     }))
     const { error } = await this.db.from('card_states').upsert(rows, { onConflict: 'user_id,card_id,review_direction' })

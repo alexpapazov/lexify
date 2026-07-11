@@ -9,7 +9,7 @@ import { SupabaseCardRepository }        from '@/lib/data/cards'
 import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
-import { buildEnabledTracksMap, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
+import { buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
@@ -28,6 +28,8 @@ interface DeckWithStats {
   dueNow:        number
   dueNowForward: number
   dueNowReverse: number
+  dueNowTyping:     number  // due reviews presented as typing (forward production below threshold / typed track)
+  dueNowSelfGraded: number  // due reviews presented as self-graded (forward self-graded + recall + reverse)
 }
 
 interface GlobalCounts {
@@ -35,6 +37,8 @@ interface GlobalCounts {
   learning:  number
   graduated: number
   dueNow:    number
+  dueNowTyping:     number
+  dueNowSelfGraded: number
 }
 
 // A flat card entry for the cross-deck filtered view
@@ -155,7 +159,7 @@ function buildForecastDays(
 
 export default function StudyPage() {
   const [deckStats,    setDeckStats]    = useState<DeckWithStats[]>([])
-  const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dueNow: 0 })
+  const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
   const [forecast,     setForecast]     = useState<ForecastDay[]>([])
   const [enabledTracks, setEnabledTracks] = useState<Map<string, EnabledTracks>>(new Map())
   const [smartThresholds, setSmartThresholds] = useState<Map<string, number>>(new Map())
@@ -240,6 +244,16 @@ export default function StudyPage() {
       const reverseDueOn = (s: CardState) => trackEnabled(en, 'recall', true) &&
         stateMap.get(s.cardId)?.graduated === true && !stateMap.get(s.cardId)?.dormant &&
         isDueByDate(s.recallDueAt ?? s.dueAt)
+      // How a due forward card is presented (mirrors dedupe: production wins over recall).
+      const threshold = thresholdMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`) ?? 20
+      const forwardPresentedTyping = (s: CardState) => {
+        const prodDue = typedDueOn(s) || smartDueOn(s)
+        if (prodDue) return forwardProductionMode(s, s.smartDueAt ? 'smart' : 'typed', threshold) === 'typed'
+        return false  // recall-only due → self-graded
+      }
+      const dueNowReverse = states.filter(s => s.graduated && s.reviewDirection === 'reverse' && reverseDueOn(s)).length
+      const dueNowTyping = forwardStates.filter(s => s.graduated && (typedDueOn(s) || smartDueOn(s) || recallDueOn(s)) && forwardPresentedTyping(s)).length
+      const dueNowForward = forwardStates.filter(s => s.graduated && (typedDueOn(s) || smartDueOn(s) || recallDueOn(s))).length
       return {
         deck, cards, states,
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,
@@ -250,9 +264,11 @@ export default function StudyPage() {
           if (s.reviewDirection === 'reverse') return reverseDueOn(s)
           return typedDueOn(s) || smartDueOn(s) || recallDueOn(s)
         }).length,
-        dueNowForward: forwardStates.filter(s => s.graduated && (typedDueOn(s) || smartDueOn(s) || recallDueOn(s))).length,
-        dueNowReverse: states.filter(s =>
-          s.graduated && s.reviewDirection === 'reverse' && reverseDueOn(s)).length,
+        dueNowForward,
+        dueNowReverse,
+        dueNowTyping,
+        // Everything self-graded: forward production shown self-graded + recall + reverse.
+        dueNowSelfGraded: (dueNowForward - dueNowTyping) + dueNowReverse,
       }
     }))
 
@@ -261,7 +277,9 @@ export default function StudyPage() {
       learning:  acc.learning  + s.learning,
       graduated: acc.graduated + s.graduated,
       dueNow:    acc.dueNow    + s.dueNow,
-    }), { unlearned: 0, learning: 0, graduated: 0, dueNow: 0 })
+      dueNowTyping:     acc.dueNowTyping     + s.dueNowTyping,
+      dueNowSelfGraded: acc.dueNowSelfGraded + s.dueNowSelfGraded,
+    }), { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
     setDeckStats(stats)
     setGlobal(globalCounts)
 
@@ -747,8 +765,25 @@ export default function StudyPage() {
                 </button>
               )}
               {showDuePicker && langPairDue.length > 0 && (
-                <div className="absolute left-0 top-full mt-2 z-20 min-w-[220px] rounded-card border border-white/10 bg-surface-deep shadow-xl overflow-hidden">
-                  <p className="px-4 py-2.5 text-xs text-ink-faint border-b border-white/10">Choose a language to study</p>
+                <div className="absolute left-0 top-full mt-2 z-20 min-w-[240px] rounded-card border border-white/10 bg-surface-deep shadow-xl overflow-hidden">
+                  <p className="px-4 py-2.5 text-xs text-ink-faint border-b border-white/10">By card type</p>
+                  {([
+                    { key: 'typing',     label: 'Typing',      count: global.dueNowTyping,     hint: 'native → target' },
+                    { key: 'selfgraded', label: 'Self-graded', count: global.dueNowSelfGraded, hint: 'both directions' },
+                  ] as const).filter(t => t.count > 0).map(t => (
+                    <button
+                      key={t.key}
+                      className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
+                      onClick={() => {
+                        setShowDuePicker(false)
+                        router.push(`/study/all/session?category=due&present=${t.key}`)
+                      }}
+                    >
+                      <span className="text-ink">{t.label} <span className="text-ink-faint text-xs">· {t.hint}</span></span>
+                      <span className="chip text-xs ml-3">{t.count}</span>
+                    </button>
+                  ))}
+                  <p className="px-4 py-2.5 text-xs text-ink-faint border-y border-white/10">By language</p>
                   {langPairDue.map(pair => {
                     const label = pair.direction === 'forward'
                       ? `${langName(pair.targetLanguage)} → ${langName(pair.sourceLanguage)}`

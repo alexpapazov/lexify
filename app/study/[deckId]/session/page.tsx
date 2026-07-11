@@ -34,7 +34,7 @@ import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, smartProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, unmarkSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
@@ -492,8 +492,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
                 const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
                 const isRecallDue = isDueByDate(state.recallDueAt)
                 const items: (typeof categoryQueue)[number][] = []
-                if (isTypedDue  && trackEnabled(enabledTracks, 'typed',  false)) items.push({ card, state, pipeline, productionMode: 'typed', reviewTrack: 'typed' })
-                if (isSmartDue  && trackEnabled(enabledTracks, 'smart',  false)) items.push({ card, state, pipeline, productionMode: smartProductionMode(state.smartIntervalDays, schedulerParams.smartTypingThresholdDays), reviewTrack: 'smart' })
+                if (isTypedDue  && trackEnabled(enabledTracks, 'typed',  false)) items.push({ card, state, pipeline, productionMode: forwardProductionMode(state, 'typed', schedulerParams.smartTypingThresholdDays), reviewTrack: 'typed' })
+                if (isSmartDue  && trackEnabled(enabledTracks, 'smart',  false)) items.push({ card, state, pipeline, productionMode: forwardProductionMode(state, 'smart', schedulerParams.smartTypingThresholdDays), reviewTrack: 'smart' })
                 if (isRecallDue && trackEnabled(enabledTracks, 'recall', false)) items.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
                 if (isLegacyDue && trackEnabled(enabledTracks, 'legacy', false)) items.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
                 return items
@@ -582,10 +582,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
           const isRecallDue = isDueByDate(state.recallDueAt)
           if (isTypedDue && trackEnabled(enabledTracks, 'typed', false)) {
-            dueCards.push({ card, state, pipeline, productionMode: 'typed', reviewTrack: 'typed' })
+            dueCards.push({ card, state, pipeline, productionMode: forwardProductionMode(state, 'typed', schedulerParams.smartTypingThresholdDays), reviewTrack: 'typed' })
           }
           if (isSmartDue && trackEnabled(enabledTracks, 'smart', false)) {
-            dueCards.push({ card, state, pipeline, productionMode: smartProductionMode(state.smartIntervalDays, schedulerParams.smartTypingThresholdDays), reviewTrack: 'smart' })
+            dueCards.push({ card, state, pipeline, productionMode: forwardProductionMode(state, 'smart', schedulerParams.smartTypingThresholdDays), reviewTrack: 'smart' })
           }
           if (isRecallDue && trackEnabled(enabledTracks, 'recall', false)) {
             dueCards.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
@@ -1009,6 +1009,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             smartIntervalDays:     fsrs.intervalDays ?? state.smartIntervalDays,
             smartDueAt:            dueAt,
             dueAt,
+            // Accelerated (import-known) cards go self-graded once a typed review is correct.
+            acceleratedTypedConfirmed: state.acceleratedTypedConfirmed || (state.acceleratedMode === 'import_known' && !!wasTyped && wasCorrect),
           }
           if (smartNewState.graduated && !smartNewState.dormant && smartNewState.dormancyThreshold != null && smartNewState.reps >= smartNewState.dormancyThreshold) {
             smartNewState = { ...smartNewState, dormant: true }
@@ -1131,6 +1133,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             typedIntervalDays:     fsrs.intervalDays ?? newState.typedIntervalDays,
             typedDueAt:            dueAt,
             dueAt,
+            acceleratedTypedConfirmed: state.acceleratedTypedConfirmed || (state.acceleratedMode === 'import_known' && !!wasTyped && wasCorrect),
           }
         }
         scheduled = null  // FSRS owns the schedule; skip the legacy density smoothing below.

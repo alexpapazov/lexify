@@ -117,6 +117,22 @@ export function smartProductionMode(smartIntervalDays: number | null, thresholdD
   return smartIntervalDays != null && smartIntervalDays < thresholdDays ? 'typed' : 'self-graded'
 }
 
+/**
+ * How a forward production review is presented. Accelerated (import-known) cards go
+ * self-graded once confirmed by a correct typed review (you already knew the word);
+ * otherwise the smart track uses its interval-vs-threshold rule and the typed track
+ * always types.
+ */
+export function forwardProductionMode(
+  state: { acceleratedMode: string; acceleratedTypedConfirmed: boolean; smartIntervalDays: number | null },
+  reviewTrack: 'typed' | 'smart',
+  thresholdDays: number,
+): 'typed' | 'self-graded' {
+  if (state.acceleratedMode === 'import_known' && state.acceleratedTypedConfirmed) return 'self-graded'
+  if (reviewTrack === 'smart') return smartProductionMode(state.smartIntervalDays, thresholdDays)
+  return 'typed'
+}
+
 // Smart typing is a new track, off by default (typed production stays the default
 // forward track for brand-new pairs); migration 078 flips existing pairs to smart.
 const DEFAULT_ENABLED_TRACKS: EnabledTracks = { typed: true, recall: true, reverse: true, smart: false }

@@ -788,6 +788,11 @@ export interface CardState {
   /** ISO timestamp when the smart-typing track is next due. Null when not on this track. */
   smartDueAt:          string | null
   /**
+   * Accelerated (import-known) cards switch to self-graded once confirmed by a correct
+   * typed review — after that they never demand typing again (you already knew the word).
+   */
+  acceleratedTypedConfirmed: boolean
+  /**
    * 'forward' = English→Spanish (typed + recall).
    * 'reverse' = Spanish→English (recall only, never typed).
    * Separate CardState rows per direction share the same cardId.

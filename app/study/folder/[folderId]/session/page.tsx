@@ -40,7 +40,7 @@ import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, smartProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -279,8 +279,8 @@ function FolderSessionInner() {
               const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
               const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
               const isRecallDue = isDueByDate(state.recallDueAt)
-              if (isTypedDue  && trackEnabled(en, 'typed',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: 'typed' })
-              if (isSmartDue  && trackEnabled(en, 'smart',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'smart',  productionMode: smartProductionMode(state.smartIntervalDays, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
+              if (isTypedDue  && trackEnabled(en, 'typed',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: forwardProductionMode(state, 'typed', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
+              if (isSmartDue  && trackEnabled(en, 'smart',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'smart',  productionMode: forwardProductionMode(state, 'smart', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
               if (isRecallDue && trackEnabled(en, 'recall', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
               if (isLegacyDue && trackEnabled(en, 'legacy', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             }
@@ -370,8 +370,8 @@ function FolderSessionInner() {
             const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
             const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
             const isRecallDue = isDueByDate(state.recallDueAt)
-            if (isTypedDue  && trackEnabled(en, 'typed',  false)) allCards.push({ ...common, state, productionMode: 'typed', reviewTrack: 'typed' })
-            if (isSmartDue  && trackEnabled(en, 'smart',  false)) allCards.push({ ...common, state, productionMode: smartProductionMode(state.smartIntervalDays, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'smart' })
+            if (isTypedDue  && trackEnabled(en, 'typed',  false)) allCards.push({ ...common, state, productionMode: forwardProductionMode(state, 'typed', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'typed' })
+            if (isSmartDue  && trackEnabled(en, 'smart',  false)) allCards.push({ ...common, state, productionMode: forwardProductionMode(state, 'smart', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'smart' })
             if (isRecallDue && trackEnabled(en, 'recall', false)) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
             if (isLegacyDue && trackEnabled(en, 'legacy', false)) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
           }
@@ -702,6 +702,8 @@ function FolderSessionInner() {
             smartIntervalDays:     fsrs.intervalDays ?? state.smartIntervalDays,
             smartDueAt:            dueAt,
             dueAt,
+            // Accelerated (import-known) cards go self-graded once a typed review is correct.
+            acceleratedTypedConfirmed: state.acceleratedTypedConfirmed || (state.acceleratedMode === 'import_known' && !!wasTyped && wasCorrect),
           }
           if (smartNewState.graduated && !smartNewState.dormant && smartNewState.dormancyThreshold != null && smartNewState.reps >= smartNewState.dormancyThreshold) {
             smartNewState = { ...smartNewState, dormant: true }
@@ -818,6 +820,7 @@ function FolderSessionInner() {
             typedIntervalDays:     fsrs.intervalDays ?? newState.typedIntervalDays,
             typedDueAt:            dueAt,
             dueAt,
+            acceleratedTypedConfirmed: state.acceleratedTypedConfirmed || (state.acceleratedMode === 'import_known' && !!wasTyped && wasCorrect),
           }
         }
         scheduled = null  // FSRS owns the schedule; skip the legacy density smoothing below.

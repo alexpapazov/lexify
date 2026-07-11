@@ -1185,13 +1185,16 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     })()
                     const gradIntervalDays = state.graduated && state.intervalHistory.length > 0
                       ? state.intervalHistory[0]! : null
+                    const isSmartTrack = state.graduated && state.smartDueAt != null
                     const isDualTrack = state.graduated && state.typedDueAt != null
                     const hasRecallTrack = state.graduated && (state.recallDueAt != null || state.recallIntervalDays != null)
-                    const prodInterval = state.typedIntervalDays ?? state.intervalDays
-                    const prodDue = state.typedDueAt ?? state.dueAt
+                    const prodInterval = state.smartIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
+                    const prodDue = state.smartDueAt ?? state.typedDueAt ?? state.dueAt
+                    const prodTitle = isSmartTrack ? 'Smart typing track (typed below threshold, else self-graded)'
+                      : isDualTrack ? 'Production track (typed / self-graded)' : 'Scheduling'
                     return (<>
-                      {/* Production track (typed + self-graded forward reviews) */}
-                      <StatGroup title={isDualTrack ? 'Production track (typed / self-graded)' : 'Scheduling'} rows={[
+                      {/* Production track (typed / smart / self-graded forward reviews) */}
+                      <StatGroup title={prodTitle} rows={[
                         ['Interval (ideal)',    formatIntervalDays(prodInterval)],
                         ['Scheduled interval',  formatIntervalDays(state.scheduledIntervalDays)],
                         ['Review window',       reviewWindow],
@@ -1614,7 +1617,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
               // Per-track scheduling info
               function trackSchedule(key: 'typed' | 'recall' | 'recognition') {
-                if (key === 'typed')   return state ? { interval: state.typedIntervalDays ?? state.intervalDays, due: state.typedDueAt ?? state.dueAt } : null
+                if (key === 'typed')   return state ? { interval: state.smartIntervalDays ?? state.typedIntervalDays ?? state.intervalDays, due: state.smartDueAt ?? state.typedDueAt ?? state.dueAt } : null
                 if (key === 'recall')  return state ? { interval: state.recallIntervalDays, due: state.recallDueAt } : null
                 const rs = reverseCardState
                 return rs ? { interval: rs.recallIntervalDays, due: rs.recallDueAt } : null
