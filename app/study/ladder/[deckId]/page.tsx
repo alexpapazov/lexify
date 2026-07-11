@@ -37,6 +37,7 @@ function LadderStudyInner() {
   const [graduated, setGraduated] = useState(0)
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
+  const [repeatNonce, setRepeatNonce] = useState(0)  // bump to re-mount the current card (Repeat)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
@@ -225,10 +226,11 @@ function LadderStudyInner() {
       )}
 
       <LadderStudyCard
-        key={`${currentId}:${currentClimb.rungIndex}`}
+        key={`${currentId}:${currentClimb.rungIndex}:${repeatNonce}`}
         card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
         sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage} gradingSettings={deck.gradingSettings}
         overrides={overrides} onOverrideAnswer={handleOverrideAnswer} onChoiceEdit={handleChoiceEdit}
+        onRepeat={() => setRepeatNonce(n => n + 1)}
         onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
       />
 

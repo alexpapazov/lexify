@@ -173,6 +173,18 @@ async function fetchAiChoices(
  * `excludeTexts` — additional answer texts to exclude from the distractor pool,
  * used for synonym-group cards whose other members are also correct answers.
  */
+/**
+ * True when a distractor mixes scripts (e.g. Cyrillic stem + Latin word like
+ * "тронClassifications") — an AI-generation artifact that should never be shown.
+ * A word legitimately in one script won't trip this; only Cyrillic/Greek + Latin does.
+ */
+function looksMalformed(text: string): boolean {
+  const hasLatin    = /[A-Za-z]/.test(text)
+  const hasCyrillic = /[Ѐ-ӿ]/.test(text)
+  const hasGreek    = /[Ͱ-Ͽ]/.test(text)
+  return hasLatin && (hasCyrillic || hasGreek)
+}
+
 export function buildOptions(
   card: Card,
   side: CardSide,
@@ -184,9 +196,9 @@ export function buildOptions(
   const distractorsNeeded = OPTIONS_NEEDED - 1
   const excludeNorms = new Set((excludeTexts ?? []).map(norm))
 
-  // Filter out synonyms AND explicitly excluded texts from cached AI distractors.
+  // Filter out synonyms, excluded texts, AND malformed (mixed-script) AI distractors.
   const cachedFiltered = (card.choices?.[side] ?? []).filter(d =>
-    !synonyms.some(s => norm(s) === norm(d)) && !excludeNorms.has(norm(d))
+    !synonyms.some(s => norm(s) === norm(d)) && !excludeNorms.has(norm(d)) && !looksMalformed(d)
   )
 
   let pool = dedupeAgainst(correct, cachedFiltered)

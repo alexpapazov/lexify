@@ -21,7 +21,7 @@ import { displayText } from '@/lib/cardText'
  * is a small custom screen (no existing equivalent). Each screen's result is
  * mapped to a single ladder outcome via `onOutcome`.
  */
-export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onOutcome, onChoicesCached, onInfo }: {
+export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onRepeat, onOutcome, onChoicesCached, onInfo }: {
   card:           Card
   rung:           Rung
   deckCards:      Card[]
@@ -32,6 +32,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   overrides?:      Map<string, Set<string>>
   onOverrideAnswer?: (cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => void
   onChoiceEdit?:   (cardId: string, answerSide: CardSide, originalChoice: string, newText: string, isCorrect: boolean) => Promise<void>
+  onRepeat?:       () => void
   onOutcome:      (o: RungAttemptOutcome) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onInfo?:        () => void
@@ -55,6 +56,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
         onChoiceEdit={onChoiceEdit ? ((orig, newText, isCorrect) => onChoiceEdit(card.id, answerSide, orig, newText, isCorrect)) : undefined}
+        onRepeat={onRepeat}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
         onRate={(r, wasCorrect) => onOutcome(mcqOutcome(wasCorrect, rung.selfRated, r))}
       />
@@ -85,6 +87,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
         synonyms={answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+        onRepeat={onRepeat}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
         onRate={(r, wasCorrect) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r))}
       />
