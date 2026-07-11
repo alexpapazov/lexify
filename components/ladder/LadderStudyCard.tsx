@@ -68,7 +68,10 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
       <FlashcardMode
         key={`${card.id}-${rung.id}`}
         card={card} promptSide={promptSide} deckName={deckName} onInfo={onInfo}
+        promptLanguage={promptSide === 'front' ? sourceLanguage : undefined}
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
+        autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
+        {...ipaProps}
         onRate={r => onOutcome(r)}
       />
     )
