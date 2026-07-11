@@ -188,6 +188,7 @@ export default function StudyPage() {
   const [langPairs,         setLangPairs]         = useState<LanguagePair[]>([])
   const [todayGradCounts,   setTodayGradCounts]   = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
+  const [expandedDueType, setExpandedDueType] = useState<'typing' | 'selfgraded' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
   const forecastSettingsRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
@@ -565,21 +566,17 @@ export default function StudyPage() {
     })
   }
 
-  // Group due counts by language pair + direction for the "Study all due" popover
-  interface LangPairDue { sourceLanguage: string; targetLanguage: string; direction: 'forward' | 'reverse'; dueNow: number }
-  const langPairDue: LangPairDue[] = Object.values(
-    deckStats.reduce<Record<string, LangPairDue>>((acc, { deck, dueNowForward, dueNowReverse }) => {
-      const fwdKey = `${deck.sourceLanguage}|${deck.targetLanguage}|forward`
-      if (!acc[fwdKey]) acc[fwdKey] = { sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, direction: 'forward', dueNow: 0 }
-      acc[fwdKey]!.dueNow += dueNowForward
-      if (dueNowReverse > 0) {
-        const revKey = `${deck.sourceLanguage}|${deck.targetLanguage}|reverse`
-        if (!acc[revKey]) acc[revKey] = { sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, direction: 'reverse', dueNow: 0 }
-        acc[revKey]!.dueNow += dueNowReverse
-      }
+  // Per-pair typing / self-graded due counts, for nesting languages under each card type.
+  interface PairTypeDue { source: string; target: string; typing: number; selfgraded: number }
+  const pairTypeDue: PairTypeDue[] = Object.values(
+    deckStats.reduce<Record<string, PairTypeDue>>((acc, { deck, dueNowTyping, dueNowSelfGraded }) => {
+      const key = `${deck.sourceLanguage}|${deck.targetLanguage}`
+      if (!acc[key]) acc[key] = { source: deck.sourceLanguage, target: deck.targetLanguage, typing: 0, selfgraded: 0 }
+      acc[key]!.typing     += dueNowTyping
+      acc[key]!.selfgraded += dueNowSelfGraded
       return acc
     }, {})
-  ).filter(p => p.dueNow > 0)
+  )
 
   // Cards due on the selected forecast date (for the click-to-expand panel)
   // Mirrors the same filter logic as buildForecastDays so what's counted = what's listed
@@ -778,42 +775,48 @@ export default function StudyPage() {
                   Study all due ({totalDue})
                 </button>
               )}
-              {showDuePicker && langPairDue.length > 0 && (
-                <div className="absolute left-0 top-full mt-2 z-20 min-w-[240px] rounded-card border border-white/10 bg-surface-deep shadow-xl overflow-hidden">
-                  <p className="px-4 py-2.5 text-xs text-ink-faint border-b border-white/10">By card type</p>
+              {showDuePicker && (global.dueNowTyping + global.dueNowSelfGraded) > 0 && (
+                <div className="absolute left-0 top-full mt-2 z-20 min-w-[260px] rounded-card border border-white/10 bg-surface-deep shadow-xl overflow-hidden">
                   {([
                     { key: 'typing',     label: 'Typing',      count: global.dueNowTyping,     hint: 'native → target' },
                     { key: 'selfgraded', label: 'Self-graded', count: global.dueNowSelfGraded, hint: 'both directions' },
-                  ] as const).filter(t => t.count > 0).map(t => (
-                    <button
-                      key={t.key}
-                      className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
-                      onClick={() => {
-                        setShowDuePicker(false)
-                        router.push(`/study/all/session?category=due&present=${t.key}`)
-                      }}
-                    >
-                      <span className="text-ink">{t.label} <span className="text-ink-faint text-xs">· {t.hint}</span></span>
-                      <span className="chip text-xs ml-3">{t.count}</span>
-                    </button>
-                  ))}
-                  <p className="px-4 py-2.5 text-xs text-ink-faint border-y border-white/10">By language</p>
-                  {langPairDue.map(pair => {
-                    const label = pair.direction === 'forward'
-                      ? `${langName(pair.targetLanguage)} → ${langName(pair.sourceLanguage)}`
-                      : `${langName(pair.sourceLanguage)} → ${langName(pair.targetLanguage)}`
+                  ] as const).filter(t => t.count > 0).map(t => {
+                    const expanded = expandedDueType === t.key
+                    const pairs = pairTypeDue.filter(p => (t.key === 'typing' ? p.typing : p.selfgraded) > 0)
                     return (
-                      <button
-                        key={`${pair.sourceLanguage}|${pair.targetLanguage}|${pair.direction}`}
-                        className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
-                        onClick={() => {
-                          setShowDuePicker(false)
-                          router.push(`/study/all/session?category=due&source=${pair.sourceLanguage}&target=${pair.targetLanguage}&dir=${pair.direction}`)
-                        }}
-                      >
-                        <span className="text-ink">{label}</span>
-                        <span className="chip text-xs ml-3">{pair.dueNow}</span>
-                      </button>
+                      <div key={t.key} className="border-b border-white/10 last:border-b-0">
+                        <button
+                          className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
+                          onClick={() => setExpandedDueType(v => v === t.key ? null : t.key)}
+                        >
+                          <span className="text-ink flex items-center gap-1.5">
+                            <span className={`text-ink-faint transition-transform ${expanded ? 'rotate-90' : ''}`}>›</span>
+                            {t.label} <span className="text-ink-faint text-xs">· {t.hint}</span>
+                          </span>
+                          <span className="chip text-xs ml-3">{t.count}</span>
+                        </button>
+                        {expanded && (
+                          <div className="bg-surface-deep/60">
+                            <button
+                              className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
+                              onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&present=${t.key}`) }}
+                            >
+                              <span className="text-ink-muted">All languages</span>
+                              <span className="chip text-xs ml-3">{t.count}</span>
+                            </button>
+                            {pairs.map(p => (
+                              <button
+                                key={`${p.source}|${p.target}`}
+                                className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
+                                onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&present=${t.key}&source=${p.source}&target=${p.target}`) }}
+                              >
+                                <span className="text-ink">{langName(p.source)} → {langName(p.target)}</span>
+                                <span className="chip text-xs ml-3">{t.key === 'typing' ? p.typing : p.selfgraded}</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     )
                   })}
                 </div>
