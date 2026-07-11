@@ -118,9 +118,9 @@ describe('drop-back rules', () => {
     const last = rung({ dropBacks: [{ on: 'miss', times: 2, inARow: true, toRungId: first.id }] })
     const l: Ladder = { rungs: [first, last] }
     const start: ClimbState = { ...initialClimbState(), rungIndex: 1 }
-    // miss, pass, miss → not two misses in a row → no drop-back.
+    // miss, almost, miss → not two misses in a row (almost breaks it) → no drop-back.
     let s = start
-    for (const o of ['miss', 'pass', 'miss'] as const) s = reviewRung(l, s, o, NOW).state
+    for (const o of ['miss', 'almost', 'miss'] as const) s = reviewRung(l, s, o, NOW).state
     expect(s.rungIndex).toBe(1)
     // one more miss → two in a row → drop back.
     expect(reviewRung(l, s, 'miss', NOW).droppedBackTo).toBe(0)
