@@ -5,6 +5,13 @@ const SPEECH_LANG: Record<string, string> = {
   pt: 'pt-BR',
 }
 
+/** Strips gender/number/notes annotations — "(f)", "(m)", "[note]" — that shouldn't be
+ *  spoken or graded. Falls back to the original if stripping empties it. */
+export function stripAnnotations(text: string): string {
+  const cleaned = text.replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim()
+  return cleaned || text.trim()
+}
+
 // Current audio playback speed (per-deck setting). Pages set this from the deck's
 // preferences when they load; `speak` applies it to both cached audio (via
 // playbackRate, pitch preserved) and the Web Speech fallback (via utterance rate).
@@ -44,7 +51,8 @@ export function speak(text: string, langCode: string, audioData?: string | null)
 
   if (!window.speechSynthesis) return
   window.speechSynthesis.cancel()
-  const utt = new SpeechSynthesisUtterance(text)
+  // Don't speak "(f)"/"(m)"/notes — they garble the robotic voice.
+  const utt = new SpeechSynthesisUtterance(stripAnnotations(text))
   utt.lang = SPEECH_LANG[langCode] ?? langCode
   utt.rate = audioPlaybackRate
   window.speechSynthesis.speak(utt)

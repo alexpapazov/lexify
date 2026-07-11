@@ -163,11 +163,13 @@ export function DueForecastProjection() {
             if (remaining != null && remaining <= 0) continue   // already at/over threshold → treat as dormant
             const remOpts = remaining != null ? { maxReviews: remaining } : undefined
             let dormantDay: number | null = null
-            // Typed and smart are mutually exclusive; only the active one has a due date.
-            if (c.typedOn && s.typedDueAt) {
+            // Production is one lane (typed/smart mutually exclusive); show it if EITHER
+            // mode is enabled (smart defaults off, so gating on it alone hides migrated cards).
+            const prodOn = c.typedOn || c.smartOn
+            if (prodOn && s.typedDueAt) {
               dormantDay = simulate(typed, offset(s.typedDueAt ?? s.dueAt), s.typedIntervalDays ?? s.intervalDays, c.typedM, c.maxInt, remOpts)
             }
-            if (c.smartOn && s.smartDueAt) {
+            if (prodOn && s.smartDueAt) {
               const sd = simulateSmart(typed, selfg, offset(s.smartDueAt), s.smartIntervalDays ?? s.intervalDays, c.smartM, c.maxInt, c.smartThreshold, remOpts)
               if (dormantDay == null) dormantDay = sd
             }

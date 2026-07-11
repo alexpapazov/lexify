@@ -70,7 +70,7 @@ function addDays(dateStr: string, n: number): string {
 interface ForecastFilters {
   langPairs:  string[]  // 'src|tgt'; empty = all
   directions: string[]  // 'forward' | 'reverse'; empty = all
-  modes:      string[]  // 'typed' | 'selfgraded'; empty = all
+  modes:      string[]  // 'typed' | 'smart' | 'selfgraded'; empty = all
   accel:      string[]  // 'accelerated' | 'normal'; empty = all
 }
 
@@ -86,7 +86,9 @@ function buildForecastDays(
 ): ForecastDay[] {
   if (!startDate || !endDate || startDate > endDate) return []
 
+  // REVIEW TYPE filter is track-based: typed production, smart typing, self-graded.
   const showTyped  = filters.modes.length === 0 || filters.modes.includes('typed')
+  const showSmart  = filters.modes.length === 0 || filters.modes.includes('smart')
   const showSelfGraded = filters.modes.length === 0 || filters.modes.includes('selfgraded')
 
   const localDate = (d: string) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
@@ -123,19 +125,17 @@ function buildForecastDays(
         const recallEff = recallRef ? effDate(recallRef) : null
         if (showSelfGraded && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
       } else {
-        // Production track (typed / smart / legacy-dueAt) — one logical lane, so it's
-        // visible if EITHER production mode is enabled (smart defaults off, so gating on
-        // it alone would hide migrated production). Smart cards are typed while their
-        // interval is below the pair's threshold, else self-graded; typed/legacy always typed.
-        const threshold = thresholds.get(pairKey) ?? 20
+        // Production is one logical lane (typed/smart mutually exclusive), visible if EITHER
+        // mode is enabled. Classify by TRACK for the filter: smart_due_at → Smart typing,
+        // else → Typed production (legacy dueAt counts as typed). Recall → Self-graded.
         const onSmart   = !!s.smartDueAt
         const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
         const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
         const prodEff   = (prodRef && prodEnabled) ? effDate(prodRef) : null
-        const prodTyped = onSmart ? ((s.smartIntervalDays ?? s.intervalDays ?? 0) < threshold) : true
+        const prodShow  = onSmart ? showSmart : showTyped
         const recallEff = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
 
-        if (prodEff && prodEff >= startDate && prodEff <= endDate && (prodTyped ? showTyped : showSelfGraded)) bump(prodEff)
+        if (prodEff && prodEff >= startDate && prodEff <= endDate && prodShow) bump(prodEff)
         if (showSelfGraded && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== prodEff) bump(recallEff)
       }
     }
@@ -583,9 +583,9 @@ export default function StudyPage() {
 
     const isToday    = selectedForecastDate === forecast[0]?.date
     const showTyped  = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('typed')
+    const showSmart  = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('smart')
     const showSelfGraded = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('selfgraded')
     const en = enabledTracks.get(pairKey)
-    const threshold = smartThresholds.get(pairKey) ?? 20
 
     const statesByCard = new Map<string, CardState[]>()
     for (const s of states) {
@@ -624,9 +624,9 @@ export default function StudyPage() {
           const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
           const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
           const prodEff: string | null  = (prodRef && prodEnabled) ? effDate(prodRef) : null
-          const prodTyped = onSmart ? ((s.smartIntervalDays ?? s.intervalDays ?? 0) < threshold) : true
+          const prodShow  = onSmart ? showSmart : showTyped
           const recallEff: string | null = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
-          if (prodEff === selectedForecastDate && (prodTyped ? showTyped : showSelfGraded)) due = true
+          if (prodEff === selectedForecastDate && prodShow) due = true
           if (!due && showSelfGraded && recallEff === selectedForecastDate && recallEff !== prodEff) due = true
         }
         if (!due) continue
@@ -902,7 +902,7 @@ export default function StudyPage() {
                     <div className="space-y-1.5">
                       <p className="text-[11px] font-medium text-ink-muted uppercase tracking-wider">Review type</p>
                       <div className="space-y-1">
-                        {([['typed', 'Typed'], ['selfgraded', 'Self-graded']] as const).map(([val, label]) => (
+                        {([['typed', 'Typed'], ['smart', 'Smart typing'], ['selfgraded', 'Self-graded']] as const).map(([val, label]) => (
                           <label key={val} className="flex items-center gap-2 cursor-pointer group">
                             <input
                               type="checkbox"

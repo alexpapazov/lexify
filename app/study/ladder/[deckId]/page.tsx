@@ -1,10 +1,12 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
+import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
+import type { CardSide } from '@/domain'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { setAudioPlaybackRate } from '@/lib/speak'
@@ -35,6 +37,22 @@ function LadderStudyInner() {
   const [graduated, setGraduated] = useState(0)
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
+  const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
+
+  const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
+    if (!userId) return
+    const key = `${cardId}:${answerSide}`
+    setOverrides(prev => {
+      const next = new Map(prev)
+      const set  = new Set(next.get(key) ?? [])
+      if (accept) set.add(answerText); else set.delete(answerText)
+      next.set(key, set)
+      return next
+    })
+    const repo = new SupabaseTypedAnswerOverrideRepository()
+    const op = accept ? repo.add(userId, cardId, answerSide, answerText) : repo.remove(userId, cardId, answerSide, answerText)
+    op.catch(err => console.error('Failed to save typed-answer override:', err))
+  }, [userId])
 
   useEffect(() => {
     ;(async () => {
@@ -46,6 +64,17 @@ function LadderStudyInner() {
       setDeck(d)
       const cards = await new SupabaseCardRepository().listByDeck(deckId)
       setCardsById(new Map(cards.map(c => [c.id, c])))
+
+      // Persisted typed-answer overrides (so the pipeline honours answers you've marked OK).
+      const overrideRows = await new SupabaseTypedAnswerOverrideRepository().listForUser(uid)
+      const overrideMap = new Map<string, Set<string>>()
+      for (const o of overrideRows) {
+        const key = `${o.cardId}:${o.answerSide}`
+        const set = overrideMap.get(key) ?? new Set<string>()
+        set.add(o.answerText)
+        overrideMap.set(key, set)
+      }
+      setOverrides(overrideMap)
       const ladderRepo = new SupabaseLadderRepository()
       const [pair, def] = await Promise.all([ladderRepo.getForPair(uid, d.sourceLanguage, d.targetLanguage), ladderRepo.getDefault(uid)])
       setLadder(resolveEffectiveLadder(pair, def))
@@ -182,6 +211,7 @@ function LadderStudyInner() {
         key={`${currentId}:${currentClimb.rungIndex}`}
         card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
         sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage} gradingSettings={deck.gradingSettings}
+        overrides={overrides} onOverrideAnswer={handleOverrideAnswer}
         onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
       />
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { Card, Rung, GradingSettings, CardChoices } from '@/domain'
+import type { Card, Rung, GradingSettings, CardChoices, CardSide } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
 import type { RungAttemptOutcome } from '@/engine/ladderEngine'
 import { mcqOutcome, typedOutcome, producesNative } from '@/lib/ladderSession'
@@ -9,7 +9,7 @@ import { gradeTyping, resolveTypedPenalty } from '@/engine/grading'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
-import { speak, speakViaTts } from '@/lib/speak'
+import { speak, speakViaTts, stripAnnotations } from '@/lib/speak'
 import { TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { RatingButtons } from '@/components/session/RatingButtons'
@@ -21,7 +21,7 @@ import { displayText } from '@/lib/cardText'
  * is a small custom screen (no existing equivalent). Each screen's result is
  * mapped to a single ladder outcome via `onOutcome`.
  */
-export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, onOutcome, onChoicesCached, onInfo }: {
+export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onOutcome, onChoicesCached, onInfo }: {
   card:           Card
   rung:           Rung
   deckCards:      Card[]
@@ -29,6 +29,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   sourceLanguage: string
   targetLanguage: string
   gradingSettings: GradingSettings
+  overrides?:      Map<string, Set<string>>
+  onOverrideAnswer?: (cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => void
   onOutcome:      (o: RungAttemptOutcome) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onInfo?:        () => void
@@ -74,6 +76,9 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         gradingSettings={gradingSettings} gradedReview={rung.selfRated}
         strictness={rung.strictness ?? DEFAULT_TYPED_STRICTNESS} deckName={deckName} onInfo={onInfo}
+        overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
+        onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
+        synonyms={answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
         onRate={(r, wasCorrect) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r))}
       />
@@ -81,7 +86,9 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   }
 
   // Dictation — custom (no existing screen): play target audio, type it.
-  return <Dictation card={card} rung={rung} deckName={deckName} onOutcome={onOutcome} onInfo={onInfo} />
+  return <Dictation card={card} rung={rung} deckName={deckName} onOutcome={onOutcome} onInfo={onInfo}
+    overrideAnswers={Array.from(overrides?.get(`${card.id}:front`) ?? [])}
+    onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, 'front', answerText, accept)} />
 }
 
 function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
@@ -91,10 +98,10 @@ function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
   )
 }
 
-function Dictation({ card, rung, deckName, onOutcome, onInfo }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome) => void; onInfo?: () => void }) {
+function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void }) {
   const [input, setInput] = useState('')
   const [rating, setRating] = useState(false)
-  const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean } | null>(null)
+  const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean; normalized: string } | null>(null)
   const [audio, setAudio] = useState<string | null>(card.audioData ?? null)
   const inputRef = useRef<HTMLInputElement>(null)
   const continueRef = useRef<HTMLButtonElement>(null)
@@ -114,11 +121,15 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo }: { card: Card; ru
   useEffect(() => { setInput(''); setResult(null); setRating(false); play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function check() {
-    const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: true, slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: card.sourceLanguage }
-    const res = gradeTyping(input, card.front, settings)
-    const status: 'pass' | 'almost' | 'miss' = res.status === 'correct' ? 'pass'
+    const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: false, slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: card.sourceLanguage }
+    // Grade against the word without its "(f)"/"(m)" annotation — you only type what you hear.
+    const res = gradeTyping(input, stripAnnotations(card.front), settings)
+    let status: 'pass' | 'almost' | 'miss' = res.status === 'correct' ? 'pass'
       : res.status === 'almost' ? (resolveTypedPenalty(res, rung.strictness ?? DEFAULT_TYPED_STRICTNESS).requiresRetype ? 'almost' : 'pass') : 'miss'
-    setResult({ status, overridden: false })
+    // Honour a persisted override for this exact typed answer (marked OK before).
+    const viaOverride = status !== 'pass' && !!res.normalizedUser && (overrideAnswers ?? []).includes(res.normalizedUser)
+    if (viaOverride) status = 'pass'
+    setResult({ status, overridden: viaOverride, normalized: res.normalizedUser })
     // Focus Continue after the result renders (delayed so the Enter that triggered
     // this check doesn't immediately fire the newly-focused button).
     setTimeout(() => continueRef.current?.focus(), 100)
@@ -149,18 +160,23 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo }: { card: Card; ru
       {rating ? (
         <>
           <div className="panel text-center font-mono text-lg text-success">{displayText(card.front)}</div>
+          <p className="text-center text-sm text-ink-muted">{card.back}</p>
           <RatingButtons onRate={r => onOutcome(r)} suggestedRating="good" />
         </>
       ) : result ? (
         <>
           <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>{displayText(card.front)}</div>
+          <p className="text-center text-sm text-ink-muted">{card.back}</p>
           {!isCorrect && (
             <p className="text-center text-sm text-ink-muted">You typed: <span className="font-mono text-ink">{input || '—'}</span></p>
           )}
           <div className="flex flex-col items-center gap-2">
             <button ref={continueRef} className="btn-primary px-10" onClick={proceed}>Continue</button>
             {!isCorrect && (
-              <button onClick={() => setResult(r => r ? { ...r, overridden: true } : r)} className="text-sm text-ink-muted hover:text-ink">Override as correct</button>
+              <button
+                onClick={() => { setResult(r => r ? { ...r, overridden: true } : r); if (result?.normalized) onOverrideAnswer?.(result.normalized, true) }}
+                className="text-sm text-ink-muted hover:text-ink"
+              >Override as correct</button>
             )}
           </div>
         </>
