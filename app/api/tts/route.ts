@@ -2,7 +2,8 @@
  * POST /api/tts
  *
  * Generates speech audio for a single word/phrase.
- * Prefers ElevenLabs eleven_multilingual_v2 (native-accented for all languages)
+ * Prefers ElevenLabs eleven_turbo_v2_5 (which ENFORCES an explicit language_code —
+ * multilingual_v2 only auto-detects and mis-reads short Cyrillic words as Russian)
  * when ELEVENLABS_API_KEY is set; falls back to OpenAI tts-1-hd otherwise.
  * Returns base64-encoded mp3. Only called for source-language (learned language)
  * text — never for the learner's native language.
@@ -26,7 +27,10 @@ interface RequestBody {
   language: string
 }
 
-async function ttsElevenLabs(text: string, apiKey: string): Promise<string> {
+async function ttsElevenLabs(text: string, language: string, apiKey: string): Promise<string> {
+  // A trailing period gives the model a phrase boundary — short isolated words
+  // otherwise get their onset clipped or come out as garbled nonsense.
+  const padded = /[.!?…。]$/.test(text) ? text : `${text}.`
   const res = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
     {
@@ -37,9 +41,12 @@ async function ttsElevenLabs(text: string, apiKey: string): Promise<string> {
         'Accept':       'audio/mpeg',
       },
       body: JSON.stringify({
-        text,
-        model_id: 'eleven_multilingual_v2',
-        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        text: padded,
+        // Turbo v2.5 honours language_code (multilingual_v2 ignores it and guesses).
+        model_id:      'eleven_turbo_v2_5',
+        language_code: language,
+        // Higher stability = steadier, less-hallucinated output on very short inputs.
+        voice_settings: { stability: 0.6, similarity_boost: 0.8, use_speaker_boost: true },
       }),
     }
   )
@@ -99,7 +106,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const audioData = elevenKey
-      ? await ttsElevenLabs(text.trim(), elevenKey)
+      ? await ttsElevenLabs(text.trim(), language, elevenKey)
       : await ttsOpenAI(text.trim(), openaiKey!)
     return NextResponse.json({ ok: true, audioData })
   } catch (err) {
