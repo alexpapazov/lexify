@@ -66,7 +66,7 @@ function addDays(dateStr: string, n: number): string {
 interface ForecastFilters {
   langPairs:  string[]  // 'src|tgt'; empty = all
   directions: string[]  // 'forward' | 'reverse'; empty = all
-  modes:      string[]  // 'typed' | 'recall'; empty = all
+  modes:      string[]  // 'typed' | 'selfgraded'; empty = all
   accel:      string[]  // 'accelerated' | 'normal'; empty = all
 }
 
@@ -78,11 +78,12 @@ function buildForecastDays(
   filters: ForecastFilters,
   tz: string,
   enabledTracks: Map<string, EnabledTracks>,
+  thresholds: Map<string, number>,
 ): ForecastDay[] {
   if (!startDate || !endDate || startDate > endDate) return []
 
   const showTyped  = filters.modes.length === 0 || filters.modes.includes('typed')
-  const showRecall = filters.modes.length === 0 || filters.modes.includes('recall')
+  const showSelfGraded = filters.modes.length === 0 || filters.modes.includes('selfgraded')
 
   const localDate = (d: string) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
   const effDate   = (raw: string) => { const d = localDate(raw); return d <= todayStr ? todayStr : d }
@@ -112,23 +113,25 @@ function buildForecastDays(
       }
 
       if (dir === 'reverse') {
-        // Reverse rows are recall-only (Target → Native comprehension); they have
-        // no typed production track. Their dueAt/recallDueAt count under recall.
+        // Reverse rows are recognition (Target → Native) — inherently self-graded.
         if (!trackEnabled(en, 'recall', true)) continue
         const recallRef = s.recallDueAt ?? s.dueAt
         const recallEff = recallRef ? effDate(recallRef) : null
-        if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
+        if (showSelfGraded && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
       } else {
-        // Production track (typed / smart / legacy-dueAt) — mutually exclusive per pair,
-        // all shown under the "typed" forecast filter. Recall counts separately.
+        // Production track (typed / smart / legacy-dueAt) — mutually exclusive per pair.
+        // Smart cards are typed while their interval is below the pair's threshold,
+        // else self-graded; typed/legacy are always typed; recall is always self-graded.
+        const threshold = thresholds.get(pairKey) ?? 20
         const onSmart   = !!s.smartDueAt
         const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
         const prodGate  = onSmart ? trackEnabled(en, 'smart', false) : trackEnabled(en, 'typed', false)
-        const typedEff  = (prodRef && prodGate) ? effDate(prodRef) : null
+        const prodEff   = (prodRef && prodGate) ? effDate(prodRef) : null
+        const prodTyped = onSmart ? ((s.smartIntervalDays ?? s.intervalDays ?? 0) < threshold) : true
         const recallEff = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
 
-        if (showTyped && typedEff && typedEff >= startDate && typedEff <= endDate) bump(typedEff)
-        if (showRecall && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== typedEff) bump(recallEff)
+        if (prodEff && prodEff >= startDate && prodEff <= endDate && (prodTyped ? showTyped : showSelfGraded)) bump(prodEff)
+        if (showSelfGraded && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== prodEff) bump(recallEff)
       }
     }
   }
@@ -155,6 +158,7 @@ export default function StudyPage() {
   const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dueNow: 0 })
   const [forecast,     setForecast]     = useState<ForecastDay[]>([])
   const [enabledTracks, setEnabledTracks] = useState<Map<string, EnabledTracks>>(new Map())
+  const [smartThresholds, setSmartThresholds] = useState<Map<string, number>>(new Map())
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
   const [userId,       setUserId]       = useState('')
@@ -203,10 +207,15 @@ export default function StudyPage() {
 
     // Per-pair enabled review tracks — disabled tracks are excluded from due counts
     // and the forecast (a card whose track is off shouldn't be studied or tallied).
-    const enabledMap = buildEnabledTracksMap(
-      await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
-    )
+    const paramRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
+    const enabledMap = buildEnabledTracksMap(paramRows)
     setEnabledTracks(enabledMap)
+    // Per-pair smart-typing threshold (canonical on the forward_typed row).
+    const thresholdMap = new Map<string, number>()
+    for (const r of paramRows) {
+      if (r.answerField === 'forward_typed') thresholdMap.set(`${r.sourceLanguage}|${r.targetLanguage}`, r.smartTypingThresholdDays)
+    }
+    setSmartThresholds(thresholdMap)
 
     const stats = await Promise.all(decks.map(async deck => {
       const [cards, states] = await Promise.all([
@@ -286,7 +295,7 @@ export default function StudyPage() {
     const initEnd   = addDays(todayStr, 13)
     setForecastStartDate(initStart)
     setForecastEndDate(initEnd)
-    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, tz, enabledMap))
+    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, tz, enabledMap, thresholdMap))
 
     setLoading(false)
   }
@@ -460,7 +469,7 @@ export default function StudyPage() {
 
   useEffect(() => {
     if (!todayStr || !forecastStartDate || !forecastEndDate) return
-    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, tz, enabledTracks))
+    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, tz, enabledTracks, smartThresholds))
     setSelectedForecastDate(prev => prev && prev >= forecastStartDate && prev <= forecastEndDate ? prev : null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forecastStartDate, forecastEndDate, forecastFilters, enabledTracks])
@@ -551,8 +560,9 @@ export default function StudyPage() {
 
     const isToday    = selectedForecastDate === forecast[0]?.date
     const showTyped  = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('typed')
-    const showRecall = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('recall')
+    const showSelfGraded = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('selfgraded')
     const en = enabledTracks.get(pairKey)
+    const threshold = smartThresholds.get(pairKey) ?? 20
 
     const statesByCard = new Map<string, CardState[]>()
     for (const s of states) {
@@ -581,19 +591,20 @@ export default function StudyPage() {
         const effDate   = (raw: string): string => { const d = localDate(raw); return d <= todayStr ? todayStr : d }
         let due = false
         if (dir === 'reverse') {
-          // Reverse rows are recall-only; never count under typed production.
+          // Reverse rows are recognition — inherently self-graded.
           if (!trackEnabled(en, 'recall', true)) continue
           const recallRef = s.recallDueAt ?? s.dueAt
           const recallEff = recallRef ? effDate(recallRef) : null
-          if (showRecall && recallEff === selectedForecastDate) due = true
+          if (showSelfGraded && recallEff === selectedForecastDate) due = true
         } else {
           const onSmart   = !!s.smartDueAt
           const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
           const prodGate  = onSmart ? trackEnabled(en, 'smart', false) : trackEnabled(en, 'typed', false)
-          const typedEff: string | null  = (prodRef && prodGate) ? effDate(prodRef) : null
+          const prodEff: string | null  = (prodRef && prodGate) ? effDate(prodRef) : null
+          const prodTyped = onSmart ? ((s.smartIntervalDays ?? s.intervalDays ?? 0) < threshold) : true
           const recallEff: string | null = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
-          if (showTyped  && typedEff  === selectedForecastDate) due = true
-          if (!due && showRecall && recallEff === selectedForecastDate && recallEff !== typedEff) due = true
+          if (prodEff === selectedForecastDate && (prodTyped ? showTyped : showSelfGraded)) due = true
+          if (!due && showSelfGraded && recallEff === selectedForecastDate && recallEff !== prodEff) due = true
         }
         if (!due) continue
 
@@ -851,7 +862,7 @@ export default function StudyPage() {
                     <div className="space-y-1.5">
                       <p className="text-[11px] font-medium text-ink-muted uppercase tracking-wider">Review type</p>
                       <div className="space-y-1">
-                        {([['typed', 'Typed production'], ['recall', 'Recall / self-graded']] as const).map(([val, label]) => (
+                        {([['typed', 'Typed'], ['selfgraded', 'Self-graded']] as const).map(([val, label]) => (
                           <label key={val} className="flex items-center gap-2 cursor-pointer group">
                             <input
                               type="checkbox"

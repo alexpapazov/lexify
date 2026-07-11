@@ -7,25 +7,29 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
 
-// Forward projection of daily "Due Now" load, split into Production (typed +
-// self-graded recall) and Recognition (reverse recall). Blends:
+// Forward projection of daily "Due Now" load, split into four lines: Typed
+// production, Self-graded production (recall + smart-typing past its threshold),
+// Reverse recognition, and Total. Blends:
 //   • existing graduated cards — simulated forward from their real due dates
 //     and intervals, growing by each pair's calibrated multiplier;
 //   • new cards — added at each pair's average daily goal (from Settings),
 //     contributing via the renewal model N·(1/p)·stages(t).
+// Smart-typing cards are typed while their interval is below the pair's threshold,
+// then self-graded — each simulated review is routed accordingly.
 
 const HORIZON = 730          // 2 years
 const STEP = 14              // chart sampling / smoothing window (days)
 const I0 = 3                 // assumed post-graduation interval for new cards
 
 interface PairCfg {
-  typedM: number; recallM: number; reverseM: number
-  typedP: number; recallP: number; reverseP: number
-  typedOn: boolean; recallOn: boolean; reverseOn: boolean
+  typedM: number; selfgM: number; smartM: number; reverseM: number
+  typedP: number; selfgP: number; smartP: number; reverseP: number
+  typedOn: boolean; selfgOn: boolean; smartOn: boolean; reverseOn: boolean
+  smartThreshold: number
   maxInt: number; dailyGoal: number
 }
 
-interface ChartPoint { day: number; prod: number; recog: number; total: number }
+interface ChartPoint { day: number; typed: number; selfg: number; recog: number; total: number }
 
 function stages(t: number, m: number, maxInt: number): number {
   if (t <= 0 || m <= 1) return 0
@@ -58,15 +62,16 @@ export function DueForecastProjection() {
         const cfg = new Map<string, PairCfg>()
         const ensure = (k: string): PairCfg => {
           let c = cfg.get(k)
-          if (!c) { c = { typedM: 2.25, recallM: 2.25, reverseM: 2.25, typedP: 0.85, recallP: 0.9, reverseP: 0.9, typedOn: true, recallOn: true, reverseOn: true, maxInt: 1460, dailyGoal: 0 }; cfg.set(k, c) }
+          if (!c) { c = { typedM: 2.25, selfgM: 2.25, smartM: 2.25, reverseM: 2.25, typedP: 0.85, selfgP: 0.9, smartP: 0.85, reverseP: 0.9, typedOn: true, selfgOn: true, smartOn: false, reverseOn: true, smartThreshold: 20, maxInt: 1460, dailyGoal: 0 }; cfg.set(k, c) }
           return c
         }
         for (const r of paramRows) {
           const c = ensure(`${r.sourceLanguage}|${r.targetLanguage}`)
           c.maxInt = r.maxIntervalDays
           const p = r.recentRetentionRate ?? undefined
-          if (r.answerField === 'forward_typed')  { c.typedM = r.goodIdeal;  c.typedOn = r.forwardTypedEnabled;  if (p) c.typedP = p }
-          if (r.answerField === 'forward_recall') { c.recallM = r.goodIdeal; c.recallOn = r.forwardRecallEnabled; if (p) c.recallP = p }
+          if (r.answerField === 'forward_typed')  { c.typedM = r.goodIdeal;  c.typedOn = r.forwardTypedEnabled;  c.smartThreshold = r.smartTypingThresholdDays; if (p) c.typedP = p }
+          if (r.answerField === 'forward_recall') { c.selfgM = r.goodIdeal;  c.selfgOn = r.forwardRecallEnabled; if (p) c.selfgP = p }
+          if (r.answerField === 'forward_smart')  { c.smartM = r.goodIdeal;  c.smartOn = r.forwardSmartEnabled;  if (p) c.smartP = p }
           if (r.answerField === 'reverse_recall') { c.reverseM = r.goodIdeal; c.reverseOn = r.reverseRecallEnabled; if (p) c.reverseP = p }
         }
         let anyGoal = false
@@ -80,16 +85,17 @@ export function DueForecastProjection() {
           }
         }
 
-        const prod = new Float64Array(HORIZON + 1)
+        const typed = new Float64Array(HORIZON + 1)
+        const selfg = new Float64Array(HORIZON + 1)
         const recog = new Float64Array(HORIZON + 1)
         const now = Date.now()
         const DAY = 86_400_000
         const offset = (iso: string | null | undefined) => iso ? Math.max(0, Math.round((new Date(iso).getTime() - now) / DAY)) : null
 
-        // Simulates a card's future reviews. `maxReviews` caps how many future
-        // reviews it emits before going dormant (returns the day it went dormant);
-        // `stopDay` halts it once the card is dormant (from another track). Returns
-        // the dormant day when `maxReviews` was hit, else null.
+        // Simulates a card's future reviews into `arr`. `maxReviews` caps how many
+        // future reviews it emits before going dormant (returns the day it went
+        // dormant); `stopDay` halts it once dormant (from another track). Returns the
+        // dormant day when `maxReviews` was hit, else null.
         const simulate = (
           arr: Float64Array, startDay: number | null, interval: number | null | undefined,
           m: number, maxInt: number, opts?: { maxReviews?: number; stopDay?: number },
@@ -101,6 +107,30 @@ export function DueForecastProjection() {
           let count = 0
           while (day <= HORIZON && guard++ < 300) {
             if (opts?.stopDay != null && day > opts.stopDay) break
+            arr[day] = (arr[day] ?? 0) + 1
+            count++
+            if (opts?.maxReviews != null && count >= opts.maxReviews) return day
+            intv = Math.min(intv * m, maxInt)
+            day += Math.max(1, Math.round(intv))
+          }
+          return null
+        }
+
+        // Smart-typing variant: routes each review to `typedArr` while the interval is
+        // below `threshold`, else `selfgArr`. Same maxReviews/stopDay semantics.
+        const simulateSmart = (
+          typedArr: Float64Array, selfgArr: Float64Array, startDay: number | null,
+          interval: number | null | undefined, m: number, maxInt: number, threshold: number,
+          opts?: { maxReviews?: number; stopDay?: number },
+        ): number | null => {
+          if (startDay === null || m <= 1) return null
+          let day = startDay
+          let intv = Math.max(0.5, interval || 1)
+          let guard = 0
+          let count = 0
+          while (day <= HORIZON && guard++ < 300) {
+            if (opts?.stopDay != null && day > opts.stopDay) break
+            const arr = intv < threshold ? typedArr : selfgArr
             arr[day] = (arr[day] ?? 0) + 1
             count++
             if (opts?.maxReviews != null && count >= opts.maxReviews) return day
@@ -131,15 +161,19 @@ export function DueForecastProjection() {
             // remaining production reviews before dormancy (null = never goes dormant).
             const remaining = s.dormancyThreshold != null ? s.dormancyThreshold - s.reps : null
             if (remaining != null && remaining <= 0) continue   // already at/over threshold → treat as dormant
+            const remOpts = remaining != null ? { maxReviews: remaining } : undefined
             let dormantDay: number | null = null
-            if (c.typedOn) {
-              dormantDay = simulate(prod, offset(s.typedDueAt ?? s.dueAt), s.typedIntervalDays ?? s.intervalDays, c.typedM, c.maxInt,
-                remaining != null ? { maxReviews: remaining } : undefined)
+            // Typed and smart are mutually exclusive; only the active one has a due date.
+            if (c.typedOn && s.typedDueAt) {
+              dormantDay = simulate(typed, offset(s.typedDueAt ?? s.dueAt), s.typedIntervalDays ?? s.intervalDays, c.typedM, c.maxInt, remOpts)
             }
-            if (c.recallOn && s.recallDueAt) {
-              const recallOpts = dormantDay != null ? { stopDay: dormantDay }
-                : (remaining != null ? { maxReviews: remaining } : undefined)
-              const rd = simulate(prod, offset(s.recallDueAt), s.recallIntervalDays ?? s.intervalDays, c.recallM, c.maxInt, recallOpts)
+            if (c.smartOn && s.smartDueAt) {
+              const sd = simulateSmart(typed, selfg, offset(s.smartDueAt), s.smartIntervalDays ?? s.intervalDays, c.smartM, c.maxInt, c.smartThreshold, remOpts)
+              if (dormantDay == null) dormantDay = sd
+            }
+            if (c.selfgOn && s.recallDueAt) {
+              const recallOpts = dormantDay != null ? { stopDay: dormantDay } : remOpts
+              const rd = simulate(selfg, offset(s.recallDueAt), s.recallIntervalDays ?? s.intervalDays, c.selfgM, c.maxInt, recallOpts)
               if (dormantDay == null) dormantDay = rd
             }
             if (dormantDay != null) dormantDayByCard.set(s.cardId, dormantDay)
@@ -161,8 +195,16 @@ export function DueForecastProjection() {
         for (let t = 0; t <= HORIZON; t++) {
           for (const c of cfg.values()) {
             if (c.dailyGoal <= 0) continue
-            if (c.typedOn)   prod[t]  = (prod[t]  ?? 0) + (c.dailyGoal / c.typedP)   * stages(t, c.typedM,   c.maxInt)
-            if (c.recallOn)  prod[t]  = (prod[t]  ?? 0) + (c.dailyGoal / c.recallP)  * stages(t, c.recallM,  c.maxInt)
+            if (c.typedOn)  typed[t] = (typed[t] ?? 0) + (c.dailyGoal / c.typedP) * stages(t, c.typedM, c.maxInt)
+            if (c.smartOn) {
+              // Smart: reviews below the threshold are typed, the rest self-graded.
+              const thr = Math.min(c.smartThreshold, c.maxInt)
+              const typedStages = stages(t, c.smartM, thr)
+              const fullStages  = stages(t, c.smartM, c.maxInt)
+              typed[t] = (typed[t] ?? 0) + (c.dailyGoal / c.smartP) * typedStages
+              selfg[t] = (selfg[t] ?? 0) + (c.dailyGoal / c.smartP) * Math.max(0, fullStages - typedStages)
+            }
+            if (c.selfgOn)   selfg[t] = (selfg[t] ?? 0) + (c.dailyGoal / c.selfgP)   * stages(t, c.selfgM,   c.maxInt)
             if (c.reverseOn) recog[t] = (recog[t] ?? 0) + (c.dailyGoal / c.reverseP) * stages(t, c.reverseM, c.maxInt)
           }
         }
@@ -170,9 +212,9 @@ export function DueForecastProjection() {
         // Downsample to STEP-day points, averaging each window to smooth spikes.
         const pts: ChartPoint[] = []
         for (let s = 0; s <= HORIZON; s += STEP) {
-          let sp = 0, sr = 0, n = 0
-          for (let d = s; d < Math.min(s + STEP, HORIZON + 1); d++) { sp += prod[d]!; sr += recog[d]!; n++ }
-          pts.push({ day: s, prod: sp / n, recog: sr / n, total: (sp + sr) / n })
+          let st = 0, sg = 0, sr = 0, n = 0
+          for (let d = s; d < Math.min(s + STEP, HORIZON + 1); d++) { st += typed[d]!; sg += selfg[d]!; sr += recog[d]!; n++ }
+          pts.push({ day: s, typed: st / n, selfg: sg / n, recog: sr / n, total: (st + sg + sr) / n })
         }
         if (!cancelled) { setPoints(pts); setHasGoals(anyGoal) }
       } catch (e) {
@@ -188,7 +230,7 @@ export function DueForecastProjection() {
     const maxY = Math.max(10, ...points.map(p => p.total)) * 1.1
     const x = (day: number) => mL + (day / HORIZON) * (W - mL - mR)
     const y = (v: number) => H - mB - (v / maxY) * (H - mT - mB)
-    const path = (key: 'prod' | 'recog' | 'total') =>
+    const path = (key: 'typed' | 'selfg' | 'recog' | 'total') =>
       points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.day).toFixed(1)},${y(p[key]).toFixed(1)}`).join(' ')
     const yTicks = 4
     return { W, H, mL, mR, mT, mB, maxY, x, y, path, yTicks }
@@ -225,28 +267,30 @@ export function DueForecastProjection() {
         ))}
         {/* series */}
         <path d={path('total')} fill="none" stroke="#7c6af7" strokeWidth={2.5} />
-        <path d={path('prod')} fill="none" stroke="#6366f1" strokeWidth={2} strokeDasharray="1 0" opacity={0.9} />
+        <path d={path('typed')} fill="none" stroke="#6366f1" strokeWidth={2} opacity={0.9} />
+        <path d={path('selfg')} fill="none" stroke="#f59e0b" strokeWidth={2} opacity={0.9} />
         <path d={path('recog')} fill="none" stroke="#10b981" strokeWidth={2} opacity={0.9} />
       </svg>
       {/* legend + readouts */}
       <div className="flex flex-wrap gap-4 text-xs">
         {([
           { c: '#7c6af7', label: 'Total' },
-          { c: '#6366f1', label: 'Production (typed)' },
-          { c: '#10b981', label: 'Recognition (reverse)' },
+          { c: '#6366f1', label: 'Typed' },
+          { c: '#f59e0b', label: 'Self-graded' },
+          { c: '#10b981', label: 'Reverse' },
         ]).map(l => (
           <span key={l.label} className="flex items-center gap-1.5 text-ink-muted">
             <span className="inline-block w-3 h-0.5 rounded" style={{ backgroundColor: l.c }} />{l.label}
           </span>
         ))}
       </div>
-      <div className="grid grid-cols-3 gap-2 text-xs text-ink-muted mt-1">
+      <div className="grid grid-cols-2 gap-2 text-xs text-ink-muted mt-1">
         {[{ day: 365, label: '1 year' }, { day: 730, label: '2 years' }].map(mk => {
           const p = points.reduce((best, cur) => Math.abs(cur.day - mk.day) < Math.abs(best.day - mk.day) ? cur : best)
           return (
-            <div key={mk.day} className="col-span-3 sm:col-span-1">
+            <div key={mk.day}>
               <span className="text-ink">At {mk.label}:</span> ~{Math.round(p.total)}/day
-              <span className="text-ink-faint"> ({Math.round(p.prod)} prod · {Math.round(p.recog)} recog)</span>
+              <span className="text-ink-faint"> ({Math.round(p.typed)} typed · {Math.round(p.selfg)} self · {Math.round(p.recog)} reverse)</span>
             </div>
           )
         })}

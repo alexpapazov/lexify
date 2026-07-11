@@ -790,9 +790,17 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   **Typed ⊕ Smart** mutual exclusivity (enabling one disables the other). The
   graduation-interval-by-error-count table + its handlers/`GradIntervalCell` were
   **removed** (dead with the ladder).
+- **Charts**: the study-dashboard "Coming up" forecast REVIEW TYPE filter is now
+  **Typed / Self-graded** (was Typed production / Recall) — a smart card's next due is
+  classified typed if its interval < threshold, else self-graded; reverse counts as
+  self-graded. `buildForecastDays`/`forecastCards` take a per-pair `thresholds` map.
+  `components/analytics/DueForecastProjection.tsx` now draws **4 lines** (Total, Typed,
+  Self-graded, Reverse); it reads the `forward_smart` row and routes each simulated
+  smart review to typed-or-self-graded by interval vs threshold (new-card renewal splits
+  via `stages(t, m, min(threshold, maxInt))` for the typed portion).
 - **Not yet wired (peripheral, non-breaking)**: `components/session/CardEditModal`'s
-  per-track "i" schedule panel and `components/analytics/DueForecastProjection.tsx`
-  don't yet special-case the smart track (they'll under-display it, not error).
+  per-track "i" schedule panel still labels the smart schedule as "Typed production"
+  (cosmetic mislabel in the card-info popover; doesn't error).
 
 ## Known backlog / open issues
 
