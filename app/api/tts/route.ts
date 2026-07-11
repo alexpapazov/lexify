@@ -42,12 +42,16 @@ function cleanForSpeech(text: string): string {
   return cleaned || text.trim()
 }
 
-async function ttsElevenLabs(text: string, language: string, apiKey: string): Promise<string> {
-  // A trailing period gives the model a phrase boundary — short isolated words
-  // otherwise get their onset clipped or come out as garbled nonsense.
-  const padded = /[.!?…。]$/.test(text) ? text : `${text}.`
+// mp3_44100_128 is constant-bitrate 128 kbps, so audio duration ≈ bytes·8 / 128000.
+const ELEVEN_BITRATE = 128_000
+// Per-attempt stability so retries actually differ (a fixed request can repeat a clip).
+const ELEVEN_ATTEMPTS = [0.6, 0.45, 0.8]
+
+async function ttsElevenLabsOnce(
+  paddedText: string, language: string, apiKey: string, stability: number, seed: number,
+): Promise<{ base64: string; durationSec: number }> {
   const res = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}`,
+    `https://api.elevenlabs.io/v1/text-to-speech/${ELEVENLABS_VOICE_ID}?output_format=mp3_44100_128`,
     {
       method: 'POST',
       headers: {
@@ -56,12 +60,12 @@ async function ttsElevenLabs(text: string, language: string, apiKey: string): Pr
         'Accept':       'audio/mpeg',
       },
       body: JSON.stringify({
-        text: padded,
+        text: paddedText,
         // Turbo v2.5 honours language_code (multilingual_v2 ignores it and guesses).
         model_id:      'eleven_turbo_v2_5',
         language_code: language,
-        // Higher stability = steadier, less-hallucinated output on very short inputs.
-        voice_settings: { stability: 0.6, similarity_boost: 0.8, use_speaker_boost: true },
+        seed,
+        voice_settings: { stability, similarity_boost: 0.8, use_speaker_boost: true },
       }),
     }
   )
@@ -70,7 +74,31 @@ async function ttsElevenLabs(text: string, language: string, apiKey: string): Pr
     throw new Error(`ElevenLabs ${res.status}: ${errText}`)
   }
   const buffer = await res.arrayBuffer()
-  return Buffer.from(buffer).toString('base64')
+  return { base64: Buffer.from(buffer).toString('base64'), durationSec: (buffer.byteLength * 8) / ELEVEN_BITRATE }
+}
+
+/**
+ * Generates speech, guarding against ElevenLabs' habit of clipping short isolated
+ * words (rendering only the start or only the end). Generation is non-deterministic,
+ * so we try a few times (varying stability/seed) and keep the first clip whose
+ * duration is plausible for the text length — or, failing that, the longest one
+ * (the complete rendering is longer than any clipped half).
+ */
+async function ttsElevenLabs(text: string, language: string, apiKey: string): Promise<string> {
+  // A trailing period gives the model a phrase boundary; a leading pause inflates the
+  // duration signal, so we only pad the end and lean on the duration guard for onset clips.
+  const padded = /[.!?…。]$/.test(text) ? text : `${text}.`
+  // Expected minimum seconds for a complete rendering (~50 ms per non-space character).
+  const minSec = Math.max(0.35, text.replace(/\s+/g, '').length * 0.05)
+
+  let best: { base64: string; durationSec: number } | null = null
+  for (let i = 0; i < ELEVEN_ATTEMPTS.length; i++) {
+    const out = await ttsElevenLabsOnce(padded, language, apiKey, ELEVEN_ATTEMPTS[i]!, i + 1)
+    if (out.durationSec >= minSec) return out.base64         // plausible length → accept
+    if (!best || out.durationSec > best.durationSec) best = out
+  }
+  // Every attempt came back short (likely clipped) — return the longest we got.
+  return best!.base64
 }
 
 async function ttsOpenAI(text: string, apiKey: string): Promise<string> {
