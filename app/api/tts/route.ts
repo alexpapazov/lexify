@@ -27,6 +27,21 @@ interface RequestBody {
   language: string
 }
 
+/**
+ * Strips annotations that shouldn't be spoken — gender/number markers like "(f)",
+ * "(m)", "(pl)", bracketed notes, and surrounding whitespace. Sending these to TTS
+ * makes it try to vocalise the "(f)", garbling short words into nonsense. Falls back
+ * to the original text if cleaning would empty it out.
+ */
+function cleanForSpeech(text: string): string {
+  const cleaned = text
+    .replace(/\([^)]*\)/g, ' ')   // (f), (m), (pl), inline notes
+    .replace(/\[[^\]]*\]/g, ' ')  // [notes]
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned || text.trim()
+}
+
 async function ttsElevenLabs(text: string, language: string, apiKey: string): Promise<string> {
   // A trailing period gives the model a phrase boundary — short isolated words
   // otherwise get their onset clipped or come out as garbled nonsense.
@@ -105,9 +120,10 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    const speakText = cleanForSpeech(text)
     const audioData = elevenKey
-      ? await ttsElevenLabs(text.trim(), language, elevenKey)
-      : await ttsOpenAI(text.trim(), openaiKey!)
+      ? await ttsElevenLabs(speakText, language, elevenKey)
+      : await ttsOpenAI(speakText, openaiKey!)
     return NextResponse.json({ ok: true, audioData })
   } catch (err) {
     console.error('[TTS] error', err)
