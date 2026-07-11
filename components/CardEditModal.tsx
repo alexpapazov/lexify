@@ -15,7 +15,7 @@ import type { Card, CardState, CardChoices, CardConfusion, CardConfusionLink, Pi
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
-import { speak, fetchAudioSource } from '@/lib/speak'
+import { speak, fetchAudioSource, playAudioClip } from '@/lib/speak'
 import type { AudioSource } from '@/domain'
 import { classifyReviewMode, MULTIPLIER_RANGE } from '@/engine/scheduler'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
@@ -289,9 +289,19 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   async function playSource(source: AudioSource) {
     setAudioError(null)
     if (source === 'browser') { speak(card.front, sourceLanguage, null); return }
-    setBusySource(source)
-    try { const clip = await fetchAndCache(source); if (clip) speak(card.front, sourceLanguage, clip) }
-    finally { setBusySource(null) }
+    // Play a cached clip immediately (stays inside the click gesture); otherwise fetch
+    // it first. Surface play failures (autoplay blocks, decode errors) rather than swallow.
+    const cached = cachedClip(source)
+    try {
+      let clip = cached
+      if (!clip) {
+        setBusySource(source)
+        try { clip = await fetchAndCache(source) } finally { setBusySource(null) }
+      }
+      if (clip) await playAudioClip(clip)
+    } catch {
+      setAudioError('Couldn’t play this audio in the browser.')
+    }
   }
 
   /** Makes a source the active one (fetching its clip first if needed). */
@@ -840,19 +850,17 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
               const hasClip  = s.key === 'browser' ? true : cachedClip(s.key) != null
               const busy     = busySource === s.key
               return (
-                <div key={s.key} className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-white/10'}`}>
+                <div key={s.key} className={`flex items-center gap-1 rounded-lg border pr-3 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-white/10'}`}>
                   <button
                     onClick={() => playSource(s.key)}
                     disabled={busy}
-                    className="text-ink-muted hover:text-ink disabled:opacity-40 shrink-0"
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left px-3 py-2 hover:bg-white/5 rounded-l-lg disabled:opacity-40 transition-colors"
                     title={hasClip ? 'Play' : 'Fetch & play'}
                   >
-                    {busy ? '…' : '🔊'}
-                  </button>
-                  <div className="flex-1 min-w-0">
+                    <span className="shrink-0 text-ink-muted">{busy ? '…' : '🔊'}</span>
                     <span className="text-sm text-ink">{s.label}</span>
-                    <span className="text-xs text-ink-faint ml-1.5">{s.hint}{s.key !== 'browser' && !hasClip ? ' · not fetched' : ''}</span>
-                  </div>
+                    <span className="text-xs text-ink-faint truncate">{s.hint}{s.key !== 'browser' && !hasClip ? ' · tap to fetch' : ''}</span>
+                  </button>
                   {isActive ? (
                     <span className="text-xs text-accent font-medium shrink-0">Active</span>
                   ) : (

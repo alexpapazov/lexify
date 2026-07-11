@@ -13,13 +13,19 @@ export function setAudioPlaybackRate(rate: number): void {
   audioPlaybackRate = Number.isFinite(rate) && rate > 0 ? rate : 1
 }
 
-function playClip(src: string): void {
+function playClip(src: string): Promise<void> {
   const audio = new Audio(src)
   audio.playbackRate = audioPlaybackRate
   // Keep pitch natural when slowed/sped (Safari uses the webkit-prefixed flag).
   audio.preservesPitch = true
   ;(audio as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = true
-  audio.play().catch(() => {})
+  return audio.play()
+}
+
+/** Plays a base64 mp3 clip at the current deck speed. Returns the play promise so
+ *  callers can surface autoplay/decoding errors. */
+export function playAudioClip(base64: string): Promise<void> {
+  return playClip(`data:audio/mp3;base64,${base64}`)
 }
 
 /**
@@ -32,7 +38,7 @@ export function speak(text: string, langCode: string, audioData?: string | null)
   if (typeof window === 'undefined') return
 
   if (audioData) {
-    playClip(`data:audio/mp3;base64,${audioData}`)
+    playClip(`data:audio/mp3;base64,${audioData}`).catch(() => {})
     return
   }
 
@@ -79,7 +85,7 @@ export async function speakViaTts(text: string, language: string): Promise<strin
     })
     const data = await res.json()
     if (data.ok && data.audioData) {
-      playClip(`data:audio/mp3;base64,${data.audioData}`)
+      playClip(`data:audio/mp3;base64,${data.audioData}`).catch(() => {})
       return data.audioData as string
     }
   } catch { /* fall through to caller's fallback */ }
