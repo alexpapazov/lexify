@@ -123,14 +123,15 @@ function buildForecastDays(
         const recallEff = recallRef ? effDate(recallRef) : null
         if (showSelfGraded && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
       } else {
-        // Production track (typed / smart / legacy-dueAt) — mutually exclusive per pair.
-        // Smart cards are typed while their interval is below the pair's threshold,
-        // else self-graded; typed/legacy are always typed; recall is always self-graded.
+        // Production track (typed / smart / legacy-dueAt) — one logical lane, so it's
+        // visible if EITHER production mode is enabled (smart defaults off, so gating on
+        // it alone would hide migrated production). Smart cards are typed while their
+        // interval is below the pair's threshold, else self-graded; typed/legacy always typed.
         const threshold = thresholds.get(pairKey) ?? 20
         const onSmart   = !!s.smartDueAt
+        const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
         const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
-        const prodGate  = onSmart ? trackEnabled(en, 'smart', false) : trackEnabled(en, 'typed', false)
-        const prodEff   = (prodRef && prodGate) ? effDate(prodRef) : null
+        const prodEff   = (prodRef && prodEnabled) ? effDate(prodRef) : null
         const prodTyped = onSmart ? ((s.smartIntervalDays ?? s.intervalDays ?? 0) < threshold) : true
         const recallEff = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
 
@@ -233,10 +234,15 @@ export default function StudyPage() {
       const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
       const isDueByDate = (dateStr: string | null | undefined) =>
         !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
-      // Track-aware due checks — a disabled track never counts as due.
-      // Legacy cards (no typed/smart due date) fall back to dueAt under the typed gate.
-      const typedDueOn  = (s: CardState) => !s.dormant && trackEnabled(en, 'typed', false)  && (s.typedDueAt ? isDueByDate(s.typedDueAt) : (!s.smartDueAt && isDueByDate(s.dueAt)))
-      const smartDueOn  = (s: CardState) => !s.dormant && trackEnabled(en, 'smart', false)  && isDueByDate(s.smartDueAt)
+      // Track-aware due checks — a disabled track never counts as due. Production is one
+      // lane (typed/smart mutually exclusive), visible if EITHER production mode is enabled
+      // (smart defaults off, so gating on it alone would hide migrated production). Legacy
+      // cards (no typed/smart due date) fall back to dueAt.
+      const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
+      const prodDueOn   = (s: CardState) => !s.dormant && prodEnabled && (
+        s.smartDueAt ? isDueByDate(s.smartDueAt)
+        : s.typedDueAt ? isDueByDate(s.typedDueAt)
+        : isDueByDate(s.dueAt))
       const recallDueOn = (s: CardState) => !s.dormant && trackEnabled(en, 'recall', false) && isDueByDate(s.recallDueAt)
       // Reverse rows are scheduled by recall_due_at; their due_at is often stale in the
       // past. Prefer recall_due_at (fall back to due_at only when recall is null) so a
@@ -247,13 +253,12 @@ export default function StudyPage() {
       // How a due forward card is presented (mirrors dedupe: production wins over recall).
       const threshold = thresholdMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`) ?? 20
       const forwardPresentedTyping = (s: CardState) => {
-        const prodDue = typedDueOn(s) || smartDueOn(s)
-        if (prodDue) return forwardProductionMode(s, s.smartDueAt ? 'smart' : 'typed', threshold) === 'typed'
+        if (prodDueOn(s)) return forwardProductionMode(s, s.smartDueAt ? 'smart' : 'typed', threshold) === 'typed'
         return false  // recall-only due → self-graded
       }
       const dueNowReverse = states.filter(s => s.graduated && s.reviewDirection === 'reverse' && reverseDueOn(s)).length
-      const dueNowTyping = forwardStates.filter(s => s.graduated && (typedDueOn(s) || smartDueOn(s) || recallDueOn(s)) && forwardPresentedTyping(s)).length
-      const dueNowForward = forwardStates.filter(s => s.graduated && (typedDueOn(s) || smartDueOn(s) || recallDueOn(s))).length
+      const dueNowTyping = forwardStates.filter(s => s.graduated && (prodDueOn(s) || recallDueOn(s)) && forwardPresentedTyping(s)).length
+      const dueNowForward = forwardStates.filter(s => s.graduated && (prodDueOn(s) || recallDueOn(s))).length
       return {
         deck, cards, states,
         unlearned: cards.filter(c => !stateMap.has(c.id)).length,
@@ -262,7 +267,7 @@ export default function StudyPage() {
         dueNow:        states.filter(s => {
           if (!s.graduated) return false
           if (s.reviewDirection === 'reverse') return reverseDueOn(s)
-          return typedDueOn(s) || smartDueOn(s) || recallDueOn(s)
+          return prodDueOn(s) || recallDueOn(s)
         }).length,
         dueNowForward,
         dueNowReverse,
@@ -616,9 +621,9 @@ export default function StudyPage() {
           if (showSelfGraded && recallEff === selectedForecastDate) due = true
         } else {
           const onSmart   = !!s.smartDueAt
+          const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
           const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
-          const prodGate  = onSmart ? trackEnabled(en, 'smart', false) : trackEnabled(en, 'typed', false)
-          const prodEff: string | null  = (prodRef && prodGate) ? effDate(prodRef) : null
+          const prodEff: string | null  = (prodRef && prodEnabled) ? effDate(prodRef) : null
           const prodTyped = onSmart ? ((s.smartIntervalDays ?? s.intervalDays ?? 0) < threshold) : true
           const recallEff: string | null = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
           if (prodEff === selectedForecastDate && (prodTyped ? showTyped : showSelfGraded)) due = true
