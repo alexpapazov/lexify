@@ -35,6 +35,8 @@ function LadderStudyInner() {
   const [total, setTotal] = useState(0)
   const [states, setStates] = useState<Map<string, ClimbState>>(new Map())
   const [graduated, setGraduated] = useState(0)
+  const [answered, setAnswered] = useState(0)    // questions answered this batch (drives round checkpoints)
+  const [paused, setPaused] = useState(false)    // showing the "round complete — continue?" checkpoint
   const [hasMore, setHasMore] = useState(false)  // more cards to learn beyond this batch
   const progressPctRef = useRef(0)               // monotonic progress % (never regresses on drop-back)
   const [loading, setLoading] = useState(true)
@@ -138,6 +140,7 @@ function LadderStudyInner() {
       }
       const items: QueueItem[] = q.map(cardId => ({ cardId, readyAt: 0, ratedAt: 0 }))
       progressPctRef.current = 0
+      setAnswered(0); setPaused(false)
       setQueue(items); setTotal(items.length)
       setHasMore((fresh.length + learning.length) > items.length)  // cards left over beyond this batch
       setCurrentId(pickNextCard(items, Date.now())?.cardId ?? null)
@@ -187,7 +190,15 @@ function LadderStudyInner() {
         : e)
     }
     setQueue(nextQueue)
-    setCurrentId(pickNextCard(nextQueue, now, currentId)?.cardId ?? null)
+    const nextId = pickNextCard(nextQueue, now, currentId)?.cardId ?? null
+    setCurrentId(nextId)
+
+    // Round checkpoint: after every `total` answered questions (the batch size), pause and
+    // offer a continue-next-round screen — but only if cards still remain (else the normal
+    // "Session complete" screen takes over).
+    const nextAnswered = answered + 1
+    setAnswered(nextAnswered)
+    if (nextId && total > 0 && nextAnswered % total === 0) setPaused(true)
   }
 
   // Repeat: don't advance or redo in place — re-queue the current card at the same rung
@@ -212,6 +223,20 @@ function LadderStudyInner() {
           {hasMore && (
             <button onClick={() => window.location.reload()} className="btn-primary">Continue — next round</button>
           )}
+          <a href={`/study/${deckId}`} className="btn-ghost">Back to deck</a>
+        </div>
+      </div>
+    )
+  }
+
+  // Round checkpoint — a breather every `total` answered questions, resuming the same batch.
+  if (paused) {
+    return (
+      <div className="max-w-md mx-auto pt-16 text-center space-y-6">
+        <h1 className="text-xl font-semibold text-ink">Round complete</h1>
+        <p className="text-ink-muted">{graduated}/{total} card{total === 1 ? '' : 's'} graduated so far. Keep going?</p>
+        <div className="flex flex-wrap justify-center gap-3">
+          <button onClick={() => setPaused(false)} className="btn-primary">Continue — next round</button>
           <a href={`/study/${deckId}`} className="btn-ghost">Back to deck</a>
         </div>
       </div>
