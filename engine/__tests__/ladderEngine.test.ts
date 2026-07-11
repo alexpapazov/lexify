@@ -74,6 +74,17 @@ describe('self-rated non-init rung', () => {
     expect(reviewRung(l, initialClimbState(), 'easy', NOW).state.rungIndex).toBe(1) // Easy advances
   })
 
+  it('auto-checked OR rules: "2 pass in a row OR 3 total" advances on either', () => {
+    const l: Ladder = { rungs: [rung({ selfRated: false, advanceRules: [
+      { times: 2, inARow: true },
+      { times: 3, inARow: false },
+    ] }), rung()] }
+    expect(run(l, ['pass']).rungIndex).toBe(0)              // one pass — not yet
+    expect(run(l, ['pass', 'pass']).rungIndex).toBe(1)      // two in a row → advance
+    expect(run(l, ['pass', 'miss', 'pass', 'pass']).rungIndex).toBe(1)  // streak → advance
+    expect(run(l, ['pass', 'miss', 'pass', 'miss', 'pass']).rungIndex).toBe(1) // 3 total → advance
+  })
+
   it('OR rules: "1 Easy OR 2 Good in a row" advances on either', () => {
     const l: Ladder = { rungs: [rung({ selfRated: true, advanceRules: [
       { times: 1, inARow: true, minRating: 'easy' },

@@ -78,15 +78,19 @@ function resetPerRung(s: ClimbState): ClimbState {
 
 const RATING_RANK: Record<Rating, number> = { again: 0, hard: 1, good: 2, easy: 3 }
 
-/** A self-rated rung's effective advance rules (legacy single rule when none set). */
-function advanceRulesFor(rung: Ladder['rungs'][number]): { times: number; inARow: boolean; minRating: Rating }[] {
+/** A rung's effective advance rules (legacy single rule when none set). */
+function advanceRulesFor(rung: Ladder['rungs'][number]): { times: number; inARow: boolean; minRating?: Rating }[] {
   if (rung.advanceRules && rung.advanceRules.length > 0) return rung.advanceRules
-  return [{ times: rung.advanceTimes, inARow: rung.advanceInARow, minRating: rung.advanceRating ?? 'good' }]
+  return [{ times: rung.advanceTimes, inARow: rung.advanceInARow, minRating: rung.advanceRating }]
 }
 
-/** Whether one OR-clause is satisfied by the rung's rating history (most recent last). */
-function ruleMet(history: Rating[], rule: { times: number; inARow: boolean; minRating: Rating }): boolean {
-  const min = RATING_RANK[rule.minRating]
+/**
+ * Whether one OR-clause is satisfied by the rung's outcome history (most recent last).
+ * Auto-checked rungs record pass → 'easy' / fail → 'again', so an omitted minRating
+ * ('good') means "any clean pass qualifies".
+ */
+function ruleMet(history: Rating[], rule: { times: number; inARow: boolean; minRating?: Rating }): boolean {
+  const min = RATING_RANK[rule.minRating ?? 'good']
   const qualifies = (r: Rating) => RATING_RANK[r] >= min
   if (rule.inARow) return history.length >= rule.times && history.slice(-rule.times).every(qualifies)
   return history.filter(qualifies).length >= rule.times
@@ -166,13 +170,12 @@ export function reviewRung(ladder: Ladder, state: ClimbState, outcome: RungAttem
     return { state: { ...s, ratingHistory: history, messUps, lastRating: rating }, reshow: RESHOW_BY_RATING[rating], advanced: false, droppedBackTo: null }
   }
 
-  // ── Auto-checked rung: advance on clean passes ──
-  if (outcome === 'pass') {
-    const progress = s.progress + 1
-    if (progress >= rung.advanceTimes) return { state: advance(s, ladder, now, s.rungIndex), reshow: 'advanced', advanced: true, droppedBackTo: null }
-    return { state: { ...s, progress }, reshow: 'medium', advanced: false, droppedBackTo: null }
+  // ── Auto-checked rung (MCQ/typing/dictation): advance when ANY rule is met (OR) ──
+  // A clean pass records as 'easy' (qualifies any clause); almost/miss records as 'again'.
+  const passRating: Rating = outcome === 'pass' ? 'easy' : 'again'
+  const history = [...(s.ratingHistory ?? []), passRating].slice(-10)
+  if (advanceRulesFor(rung).some(rule => ruleMet(history, rule))) {
+    return { state: advance({ ...s, ratingHistory: history }, ladder, now, s.rungIndex), reshow: 'advanced', advanced: true, droppedBackTo: null }
   }
-  // almost / miss → retry; an in-a-row rung loses its streak.
-  const progress = rung.advanceInARow ? 0 : s.progress
-  return { state: { ...s, progress }, reshow: 'soon', advanced: false, droppedBackTo: null }
+  return { state: { ...s, ratingHistory: history }, reshow: outcome === 'pass' ? 'medium' : 'soon', advanced: false, droppedBackTo: null }
 }

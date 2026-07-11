@@ -124,11 +124,13 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
           <div className="flex flex-wrap items-center gap-2 text-sm">
             {r.intervalInit ? (
               <span className="text-xs text-ink-muted">Advances by rating (Good twice in a row, or Easy) — this graduates the card.</span>
-            ) : (r.selfRated || r.type === 'self_graded') ? (() => {
-              // Self-rated: any of these rules advances (OR). Editing switches to advanceRules.
+            ) : (() => {
+              // OR-able advance rules for every non-interval rung. Self-rated rungs pick a
+              // minimum rating per clause; auto-checked ones just need a clean "correct".
+              const isSelf = r.selfRated || r.type === 'self_graded'
               const rules: AdvanceRule[] = (r.advanceRules && r.advanceRules.length > 0)
                 ? r.advanceRules
-                : [{ times: r.advanceTimes, inARow: r.advanceInARow, minRating: (r.advanceRating ?? 'good') }]
+                : [{ times: r.advanceTimes, inARow: r.advanceInARow, ...(isSelf ? { minRating: (r.advanceRating ?? 'good') } : {}) }]
               const setRules = (next: AdvanceRule[]) => update(r.id, { advanceRules: next })
               return (
                 <div className="flex flex-wrap items-center gap-2">
@@ -144,11 +146,13 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                         <option value="row">in a row</option>
                         <option value="total">total</option>
                       </select>
-                      <select className="input py-1 w-auto" value={rule.minRating}
-                        onChange={e => setRules(rules.map((x, k) => k === i ? { ...x, minRating: e.target.value as AdvanceRule['minRating'] } : x))}>
-                        <option value="good">Good</option>
-                        <option value="easy">Easy</option>
-                      </select>
+                      {isSelf ? (
+                        <select className="input py-1 w-auto" value={rule.minRating ?? 'good'}
+                          onChange={e => setRules(rules.map((x, k) => k === i ? { ...x, minRating: e.target.value as AdvanceRule['minRating'] } : x))}>
+                          <option value="good">Good</option>
+                          <option value="easy">Easy</option>
+                        </select>
+                      ) : <span className="text-xs text-ink-faint">correct</span>}
                       {rules.length > 1 && (
                         <button className="text-ink-faint hover:text-danger text-base leading-none" title="Remove rule"
                           onClick={() => setRules(rules.filter((_, k) => k !== i))}>×</button>
@@ -156,22 +160,10 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                     </div>
                   ))}
                   <button className="text-xs text-accent hover:underline"
-                    onClick={() => setRules([...rules, { times: 1, inARow: true, minRating: 'good' }])}>+ or</button>
+                    onClick={() => setRules([...rules, isSelf ? { times: 1, inARow: true, minRating: 'good' } : { times: 1, inARow: true }])}>+ or</button>
                 </div>
               )
-            })() : (
-              <>
-                <span className="text-xs text-ink-faint">Advance after</span>
-                <input type="number" min={1} value={r.advanceTimes} onChange={e => update(r.id, { advanceTimes: Math.max(1, Number(e.target.value)) })}
-                  className="input py-1 w-16 text-center" />
-                <select className="input py-1 w-auto" value={r.advanceInARow ? 'row' : 'total'}
-                  onChange={e => update(r.id, { advanceInARow: e.target.value === 'row' })}>
-                  <option value="row">in a row</option>
-                  <option value="total">total</option>
-                </select>
-                <span className="text-xs text-ink-faint">correct</span>
-              </>
-            )}
+            })()}
           </div>
 
           {/* Drop-back rules */}

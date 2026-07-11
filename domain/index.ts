@@ -263,14 +263,17 @@ export interface Rung {
   dropBacks:         DropBackRule[]
 }
 
-/** One OR-clause of a self-rated rung's advance condition. */
+/** One OR-clause of a rung's advance condition (rungs advance when ANY clause is met). */
 export interface AdvanceRule {
-  /** How many qualifying ratings are needed. */
+  /** How many qualifying attempts are needed. */
   times:     number
   /** In a row (streak) vs. total across this rung sitting. */
   inARow:    boolean
-  /** The minimum rating that counts (Easy counts toward a Good rule). */
-  minRating: 'again' | 'hard' | 'good' | 'easy'
+  /**
+   * Self-rated rungs: the minimum rating that counts (Easy counts toward a Good rule).
+   * Auto-checked rungs (MCQ/typing/dictation): omitted — any clean pass qualifies.
+   */
+  minRating?: 'again' | 'hard' | 'good' | 'easy'
 }
 
 export interface Ladder { rungs: Rung[] }
