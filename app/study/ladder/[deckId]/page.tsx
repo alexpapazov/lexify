@@ -54,6 +54,23 @@ function LadderStudyInner() {
     op.catch(err => console.error('Failed to save typed-answer override:', err))
   }, [userId])
 
+  // Edit a multiple-choice option in place (empty newText deletes a distractor).
+  const handleChoiceEdit = useCallback(async (cardId: string, answerSide: CardSide, originalChoice: string, newText: string, isCorrect: boolean) => {
+    const cardRepo = new SupabaseCardRepository()
+    const card = cardsById.get(cardId)
+    if (!card) return
+    let updated: Card
+    if (isCorrect) {
+      updated = await cardRepo.update(cardId, answerSide === 'front' ? { front: newText } : { back: newText })
+    } else {
+      const existing = card.choices ?? { front: [], back: [] }
+      const pool = existing[answerSide] ?? []
+      const newPool = !newText ? pool.filter(d => d !== originalChoice) : pool.map(d => d === originalChoice ? newText : d)
+      updated = await cardRepo.update(cardId, { choices: { ...existing, [answerSide]: newPool } })
+    }
+    setCardsById(prev => new Map(prev).set(cardId, updated))
+  }, [cardsById])
+
   useEffect(() => {
     ;(async () => {
       const { data: { session } } = await createClient().auth.getSession()
@@ -211,7 +228,7 @@ function LadderStudyInner() {
         key={`${currentId}:${currentClimb.rungIndex}`}
         card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
         sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage} gradingSettings={deck.gradingSettings}
-        overrides={overrides} onOverrideAnswer={handleOverrideAnswer}
+        overrides={overrides} onOverrideAnswer={handleOverrideAnswer} onChoiceEdit={handleChoiceEdit}
         onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
       />
 
