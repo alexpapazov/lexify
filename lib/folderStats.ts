@@ -1,5 +1,6 @@
 import type { Folder, Deck, UserId } from '@/domain'
 import type { CardRepository, CardStateRepository } from '@/lib/data/interfaces'
+import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 
 export interface FolderCounts {
   unlearned: number
@@ -71,23 +72,31 @@ export async function computeDeckCounts(
   if (deckIds.length === 0) return { ...EMPTY_COUNTS }
 
   const now = new Date()
+  const climbRepo = new SupabaseLadderClimbRepository()
   const perDeck = await Promise.all(deckIds.map(async deckId => {
     const [cards, states] = await Promise.all([
       cardRepo.listByDeck(deckId),
       stateRepo.listByDeck(userId, deckId),
     ])
+    const climb = await climbRepo.listForCards(userId, cards.map(c => c.id)).catch(() => new Map())
     const fwd = states.filter(s => s.reviewDirection !== 'reverse')
     const stateMap = new Map(fwd.map(s => [s.cardId, s]))
-    // Anchor every count to the deck's current cards so orphaned states (from
-    // deleted/moved cards) don't inflate learning/graduated/dormant/due — this
-    // mirrors the deck-detail page's `activeForwardStates` filter.
     const activeCardIds = new Set(cards.map(c => c.id))
-    const activeFwd = fwd.filter(s => activeCardIds.has(s.cardId))
+    // Mirror the deck-detail page's statusOf: a card climbing the ladder (rung ≥ 1,
+    // not graduated) counts as Learning even without a card_state row.
+    const statusOf = (cardId: string): 'graduated' | 'dormant' | 'learning' | 'new' => {
+      const s = stateMap.get(cardId)
+      if (s?.dormant) return 'dormant'
+      if (s?.graduated) return 'graduated'
+      const cl = climb.get(cardId)
+      if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) return 'learning'
+      return 'new'
+    }
     return {
-      unlearned: cards.filter(c => !stateMap.has(c.id)).length,
-      learning:  activeFwd.filter(s => !s.graduated).length,
-      graduated: activeFwd.filter(s => s.graduated && !s.dormant).length,
-      dormant:   activeFwd.filter(s => s.dormant).length,
+      unlearned: cards.filter(c => statusOf(c.id) === 'new').length,
+      learning:  cards.filter(c => statusOf(c.id) === 'learning').length,
+      graduated: cards.filter(c => statusOf(c.id) === 'graduated').length,
+      dormant:   cards.filter(c => statusOf(c.id) === 'dormant').length,
       dueNow:    states.filter(s =>
         activeCardIds.has(s.cardId) &&
         s.graduated && !stateMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now &&

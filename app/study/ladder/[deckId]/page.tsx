@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
@@ -35,6 +35,8 @@ function LadderStudyInner() {
   const [total, setTotal] = useState(0)
   const [states, setStates] = useState<Map<string, ClimbState>>(new Map())
   const [graduated, setGraduated] = useState(0)
+  const [hasMore, setHasMore] = useState(false)  // more cards to learn beyond this batch
+  const progressPctRef = useRef(0)               // monotonic progress % (never regresses on drop-back)
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
   const [repeatNonce, setRepeatNonce] = useState(0)  // bump to re-mount the current card (Repeat)
@@ -136,7 +138,9 @@ function LadderStudyInner() {
         }
       }
       const items: QueueItem[] = q.map(cardId => ({ cardId, readyAt: 0, ratedAt: 0 }))
+      progressPctRef.current = 0
       setQueue(items); setTotal(items.length)
+      setHasMore((fresh.length + learning.length) > items.length)  // cards left over beyond this batch
       setCurrentId(pickNextCard(items, Date.now())?.cardId ?? null)
       setLoading(false)
     })()
@@ -193,27 +197,31 @@ function LadderStudyInner() {
   if (!currentCard || !currentRung || !currentClimb) {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-6">
-        <h1 className="text-xl font-semibold text-ink">Learning complete</h1>
+        <h1 className="text-xl font-semibold text-ink">Session complete</h1>
         <p className="text-ink-muted">{graduated > 0 ? `Graduated ${graduated} card${graduated === 1 ? '' : 's'}.` : 'Nothing to learn right now.'}</p>
-        <div className="flex justify-center gap-3">
-          <a href={`/study/${deckId}/session?category=due`} className="btn-primary">Review due cards</a>
+        <div className="flex flex-wrap justify-center gap-3">
+          {hasMore && (
+            <button onClick={() => window.location.reload()} className="btn-primary">Continue — next round</button>
+          )}
           <a href={`/study/${deckId}`} className="btn-ghost">Back to deck</a>
         </div>
       </div>
     )
   }
 
-      // Progress bar = fraction of ALL rung-steps completed (so it moves as cards climb,
-      // not only when they graduate); the number = cards fully graduated this batch.
+      // Progress = fraction of ALL rung-steps completed, clamped so a drop-back never
+      // walks the bar backwards. The header shows the same % so they always agree.
       const ladderLen = Math.max(1, ladder.rungs.length)
       const stepsDone = graduated * ladderLen + queue.reduce((sum, e) => sum + Math.min(states.get(e.cardId)?.rungIndex ?? 0, ladderLen), 0)
       const totalSteps = total * ladderLen
-      const pct = totalSteps ? Math.round((stepsDone / totalSteps) * 100) : 0
+      const rawPct = totalSteps ? (stepsDone / totalSteps) * 100 : 0
+      progressPctRef.current = Math.max(progressPctRef.current, rawPct)
+      const pct = Math.round(progressPctRef.current)
       return (
     <div className="space-y-8 max-w-2xl mx-auto">
       <div className="relative flex items-center justify-between">
         <a href={`/study/${deckId}`} className="text-sm text-ink-muted hover:text-ink">✕ End session</a>
-        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{graduated} / {total} done</div>
+        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{pct}% · {graduated}/{total} graduated</div>
         <div className="text-xs text-ink-muted">Rung {currentClimb.rungIndex + 1} · {RUNG_LABEL[currentRung.type]}</div>
       </div>
       <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
