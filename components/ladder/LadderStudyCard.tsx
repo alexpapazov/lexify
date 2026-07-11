@@ -94,8 +94,10 @@ function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
 function Dictation({ card, rung, deckName, onOutcome, onInfo }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome) => void; onInfo?: () => void }) {
   const [input, setInput] = useState('')
   const [rating, setRating] = useState(false)
+  const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean } | null>(null)
   const [audio, setAudio] = useState<string | null>(card.audioData ?? null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const continueRef = useRef<HTMLButtonElement>(null)
 
   async function play() {
     if (audio) { speak(card.front, card.sourceLanguage, audio); return }
@@ -105,16 +107,29 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo }: { card: Card; ru
     }
     speak(card.front, card.sourceLanguage, null)
   }
-  useEffect(() => { play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Reset per card, replay audio, focus the input.
+  useEffect(() => { setInput(''); setResult(null); setRating(false); play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function check() {
     const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: true, slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: card.sourceLanguage }
     const res = gradeTyping(input, card.front, settings)
     const status: 'pass' | 'almost' | 'miss' = res.status === 'correct' ? 'pass'
       : res.status === 'almost' ? (resolveTypedPenalty(res, rung.strictness ?? DEFAULT_TYPED_STRICTNESS).requiresRetype ? 'almost' : 'pass') : 'miss'
-    if (rung.selfRated && status === 'pass') { setRating(true); return }
-    onOutcome(typedOutcome(status, rung.selfRated))
+    setResult({ status, overridden: false })
+    // Focus Continue after the result renders (delayed so the Enter that triggered
+    // this check doesn't immediately fire the newly-focused button).
+    setTimeout(() => continueRef.current?.focus(), 100)
   }
+
+  // Advance with the confirmed outcome (Continue). Self-rated rungs still self-rate on a pass.
+  function proceed() {
+    if (!result) return
+    const finalStatus: 'pass' | 'almost' | 'miss' = result.overridden ? 'pass' : result.status
+    if (rung.selfRated && finalStatus === 'pass') { setRating(true); setResult(null); return }
+    onOutcome(typedOutcome(finalStatus, rung.selfRated))
+  }
+
+  const isCorrect = result != null && (result.overridden || result.status === 'pass')
 
   return (
     <div className="space-y-6 w-full max-w-xl mx-auto">
@@ -132,6 +147,19 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo }: { card: Card; ru
         <>
           <div className="panel text-center font-mono text-lg text-success">{displayText(card.front)}</div>
           <RatingButtons onRate={r => onOutcome(r)} suggestedRating="good" />
+        </>
+      ) : result ? (
+        <>
+          <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>{displayText(card.front)}</div>
+          {!isCorrect && (
+            <p className="text-center text-sm text-ink-muted">You typed: <span className="font-mono text-ink">{input || '—'}</span></p>
+          )}
+          <div className="flex flex-col items-center gap-2">
+            <button ref={continueRef} className="btn-primary px-10" onClick={proceed}>Continue</button>
+            {!isCorrect && (
+              <button onClick={() => setResult(r => r ? { ...r, overridden: true } : r)} className="text-sm text-ink-muted hover:text-ink">Override as correct</button>
+            )}
+          </div>
         </>
       ) : (
         <>
