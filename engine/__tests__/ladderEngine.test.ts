@@ -73,6 +73,20 @@ describe('self-rated non-init rung', () => {
     expect(reviewRung(l, initialClimbState(), 'good', NOW).state.rungIndex).toBe(0) // Good doesn't advance
     expect(reviewRung(l, initialClimbState(), 'easy', NOW).state.rungIndex).toBe(1) // Easy advances
   })
+
+  it('OR rules: "1 Easy OR 2 Good in a row" advances on either', () => {
+    const l: Ladder = { rungs: [rung({ selfRated: true, advanceRules: [
+      { times: 1, inARow: true, minRating: 'easy' },
+      { times: 2, inARow: true, minRating: 'good' },
+    ] }), rung()] }
+    // One Easy → advance immediately.
+    expect(reviewRung(l, initialClimbState(), 'easy', NOW).state.rungIndex).toBe(1)
+    // One Good → not yet; two Goods in a row → advance.
+    expect(run(l, ['good']).rungIndex).toBe(0)
+    expect(run(l, ['good', 'good']).rungIndex).toBe(1)
+    // A Hard breaks the Good streak → still on rung 0.
+    expect(run(l, ['good', 'hard', 'good']).rungIndex).toBe(0)
+  })
 })
 
 describe('drop-back rules', () => {

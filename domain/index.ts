@@ -254,7 +254,23 @@ export interface Rung {
   advanceInARow:     boolean
   /** For self-rated non-init rungs: which rating advances (default 'good'). */
   advanceRating?:    'good' | 'easy'
+  /**
+   * Self-rated rungs only: advance when ANY of these rules is met (OR), e.g.
+   * "1 Easy OR 2 Good in a row". Each rule counts ratings at or above `minRating`.
+   * When absent, the legacy single rule (advanceTimes/advanceInARow/advanceRating) is used.
+   */
+  advanceRules?:     AdvanceRule[]
   dropBacks:         DropBackRule[]
+}
+
+/** One OR-clause of a self-rated rung's advance condition. */
+export interface AdvanceRule {
+  /** How many qualifying ratings are needed. */
+  times:     number
+  /** In a row (streak) vs. total across this rung sitting. */
+  inARow:    boolean
+  /** The minimum rating that counts (Easy counts toward a Good rule). */
+  minRating: 'again' | 'hard' | 'good' | 'easy'
 }
 
 export interface Ladder { rungs: Rung[] }

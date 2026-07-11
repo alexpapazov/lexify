@@ -27,6 +27,7 @@ export interface ClimbState {
   progress:       number                              // count toward the advance requirement
   messUps:        number                              // Again/Hard this sitting (for Easy interval)
   lastRating:     Rating | null                       // last self-rating on this rung
+  ratingHistory?: Rating[]                            // ratings on the current rung (for OR advance rules)
   outcomeCounts:  Partial<Record<RungOutcome, number>> // per-rung tally, for drop-back thresholds
   startedAt:      number | null                       // ms when the first rung was cleared
   graduated:      boolean
@@ -72,7 +73,23 @@ export function easyInterval(messUps: number, lastRating: Rating | null): Interv
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function resetPerRung(s: ClimbState): ClimbState {
-  return { ...s, progress: 0, messUps: 0, lastRating: null, outcomeCounts: {} }
+  return { ...s, progress: 0, messUps: 0, lastRating: null, ratingHistory: [], outcomeCounts: {} }
+}
+
+const RATING_RANK: Record<Rating, number> = { again: 0, hard: 1, good: 2, easy: 3 }
+
+/** A self-rated rung's effective advance rules (legacy single rule when none set). */
+function advanceRulesFor(rung: Ladder['rungs'][number]): { times: number; inARow: boolean; minRating: Rating }[] {
+  if (rung.advanceRules && rung.advanceRules.length > 0) return rung.advanceRules
+  return [{ times: rung.advanceTimes, inARow: rung.advanceInARow, minRating: rung.advanceRating ?? 'good' }]
+}
+
+/** Whether one OR-clause is satisfied by the rung's rating history (most recent last). */
+function ruleMet(history: Rating[], rule: { times: number; inARow: boolean; minRating: Rating }): boolean {
+  const min = RATING_RANK[rule.minRating]
+  const qualifies = (r: Rating) => RATING_RANK[r] >= min
+  if (rule.inARow) return history.length >= rule.times && history.slice(-rule.times).every(qualifies)
+  return history.filter(qualifies).length >= rule.times
 }
 
 /** Move to an earlier/later rung by index (drop-back), clearing per-rung state. */
@@ -138,17 +155,15 @@ export function reviewRung(ladder: Ladder, state: ClimbState, outcome: RungAttem
     return { state: { ...s, messUps: s.messUps + 1, lastRating: 'again' }, reshow: 'soon', advanced: false, droppedBackTo: null }
   }
 
-  // ── Self-rated (non-init) rung: advance on the chosen rating ──
+  // ── Self-rated (non-init) rung: advance when ANY advance rule is met (OR) ──
   if (rung.selfRated && isRating) {
-    const advanceRating = rung.advanceRating ?? 'good'
-    if (outcome === advanceRating) {
-      const progress = s.progress + 1
-      if (progress >= rung.advanceTimes) return { state: advance(s, ladder, now, s.rungIndex), reshow: 'advanced', advanced: true, droppedBackTo: null }
-      return { state: { ...s, progress, lastRating: outcome }, reshow: RESHOW_BY_RATING[outcome], advanced: false, droppedBackTo: null }
+    const rating = outcome as Rating
+    const history = [...(s.ratingHistory ?? []), rating].slice(-10)  // bounded
+    const messUps = (rating === 'again' || rating === 'hard') ? s.messUps + 1 : s.messUps
+    if (advanceRulesFor(rung).some(rule => ruleMet(history, rule))) {
+      return { state: advance({ ...s, ratingHistory: history }, ladder, now, s.rungIndex), reshow: 'advanced', advanced: true, droppedBackTo: null }
     }
-    const progress = rung.advanceInARow ? 0 : s.progress
-    const messUps = (outcome === 'again' || outcome === 'hard') ? s.messUps + 1 : s.messUps
-    return { state: { ...s, progress, messUps, lastRating: outcome }, reshow: RESHOW_BY_RATING[outcome], advanced: false, droppedBackTo: null }
+    return { state: { ...s, ratingHistory: history, messUps, lastRating: rating }, reshow: RESHOW_BY_RATING[rating], advanced: false, droppedBackTo: null }
   }
 
   // ── Auto-checked rung: advance on clean passes ──

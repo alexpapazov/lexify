@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { Ladder, Rung, RungType, RungOutcome, RungDirection, DistractorSource, TypedStrictnessLevel } from '@/domain'
+import type { Ladder, Rung, RungType, RungOutcome, RungDirection, DistractorSource, TypedStrictnessLevel, AdvanceRule } from '@/domain'
 import { newRung, validateLadder, canInitInterval } from '@/lib/ladder'
 
 const TYPE_LABEL: Record<RungType, string> = {
@@ -124,7 +124,42 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
           <div className="flex flex-wrap items-center gap-2 text-sm">
             {r.intervalInit ? (
               <span className="text-xs text-ink-muted">Advances by rating (Good twice in a row, or Easy) — this graduates the card.</span>
-            ) : (
+            ) : (r.selfRated || r.type === 'self_graded') ? (() => {
+              // Self-rated: any of these rules advances (OR). Editing switches to advanceRules.
+              const rules: AdvanceRule[] = (r.advanceRules && r.advanceRules.length > 0)
+                ? r.advanceRules
+                : [{ times: r.advanceTimes, inARow: r.advanceInARow, minRating: (r.advanceRating ?? 'good') }]
+              const setRules = (next: AdvanceRule[]) => update(r.id, { advanceRules: next })
+              return (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-ink-faint">Advance after</span>
+                  {rules.map((rule, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      {i > 0 && <span className="text-xs text-accent font-medium">or</span>}
+                      <input type="number" min={1} value={rule.times}
+                        onChange={e => setRules(rules.map((x, k) => k === i ? { ...x, times: Math.max(1, Number(e.target.value)) } : x))}
+                        className="input py-1 w-14 text-center" />
+                      <select className="input py-1 w-auto" value={rule.inARow ? 'row' : 'total'}
+                        onChange={e => setRules(rules.map((x, k) => k === i ? { ...x, inARow: e.target.value === 'row' } : x))}>
+                        <option value="row">in a row</option>
+                        <option value="total">total</option>
+                      </select>
+                      <select className="input py-1 w-auto" value={rule.minRating}
+                        onChange={e => setRules(rules.map((x, k) => k === i ? { ...x, minRating: e.target.value as AdvanceRule['minRating'] } : x))}>
+                        <option value="good">Good</option>
+                        <option value="easy">Easy</option>
+                      </select>
+                      {rules.length > 1 && (
+                        <button className="text-ink-faint hover:text-danger text-base leading-none" title="Remove rule"
+                          onClick={() => setRules(rules.filter((_, k) => k !== i))}>×</button>
+                      )}
+                    </div>
+                  ))}
+                  <button className="text-xs text-accent hover:underline"
+                    onClick={() => setRules([...rules, { times: 1, inARow: true, minRating: 'good' }])}>+ or</button>
+                </div>
+              )
+            })() : (
               <>
                 <span className="text-xs text-ink-faint">Advance after</span>
                 <input type="number" min={1} value={r.advanceTimes} onChange={e => update(r.id, { advanceTimes: Math.max(1, Number(e.target.value)) })}
@@ -134,13 +169,7 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                   <option value="row">in a row</option>
                   <option value="total">total</option>
                 </select>
-                {(r.selfRated || r.type === 'self_graded') ? (
-                  <select className="input py-1 w-auto" value={r.advanceRating ?? 'good'}
-                    onChange={e => update(r.id, { advanceRating: e.target.value as 'good' | 'easy' })}>
-                    <option value="good">Good</option>
-                    <option value="easy">Easy</option>
-                  </select>
-                ) : <span className="text-xs text-ink-faint">correct</span>}
+                <span className="text-xs text-ink-faint">correct</span>
               </>
             )}
           </div>
