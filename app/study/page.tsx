@@ -69,7 +69,7 @@ function addDays(dateStr: string, n: number): string {
 
 interface ForecastFilters {
   langPairs:  string[]  // 'src|tgt'; empty = all
-  directions: string[]  // 'forward' | 'reverse'; empty = all
+  directions: string[]  // 'forward-typed' | 'forward-selfgraded' | 'reverse'; empty = all
   modes:      string[]  // 'typed' | 'smart' | 'selfgraded'; empty = all
   accel:      string[]  // 'accelerated' | 'normal'; empty = all
 }
@@ -110,7 +110,9 @@ function buildForecastDays(
       if (dormantCards.has(s.cardId)) continue
 
       const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
-      if (filters.directions.length > 0 && !filters.directions.includes(dir)) continue
+      // Direction is per-review now: forward production splits into typed vs self-graded
+      // presentation, so classify each review and check it against the filter individually.
+      const dirAllows = (d: string) => filters.directions.length === 0 || filters.directions.includes(d)
 
       const isAccel = s.acceleratedMode === 'import_known'
       if (filters.accel.length > 0) {
@@ -119,6 +121,7 @@ function buildForecastDays(
       }
 
       if (dir === 'reverse') {
+        if (!dirAllows('reverse')) continue
         // Reverse rows are recognition (Target → Native) — inherently self-graded.
         if (!trackEnabled(en, 'recall', true)) continue
         const recallRef = s.recallDueAt ?? s.dueAt
@@ -126,17 +129,20 @@ function buildForecastDays(
         if (showSelfGraded && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
       } else {
         // Production is one logical lane (typed/smart mutually exclusive), visible if EITHER
-        // mode is enabled. Classify by TRACK for the filter: smart_due_at → Smart typing,
-        // else → Typed production (legacy dueAt counts as typed). Recall → Self-graded.
+        // mode is enabled. Classify by TRACK for REVIEW TYPE (smart_due_at → Smart typing) and
+        // by PRESENTATION for DIRECTION (typed below the threshold / accelerated-unconfirmed).
         const onSmart   = !!s.smartDueAt
         const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
         const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
         const prodEff   = (prodRef && prodEnabled) ? effDate(prodRef) : null
         const prodShow  = onSmart ? showSmart : showTyped
+        const prodTyped = forwardProductionMode(s, onSmart ? 'smart' : 'typed', thresholds.get(pairKey) ?? 20) === 'typed'
+        const prodDir   = prodTyped ? 'forward-typed' : 'forward-selfgraded'
         const recallEff = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
 
-        if (prodEff && prodEff >= startDate && prodEff <= endDate && prodShow) bump(prodEff)
-        if (showSelfGraded && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== prodEff) bump(recallEff)
+        if (prodEff && prodEff >= startDate && prodEff <= endDate && prodShow && dirAllows(prodDir)) bump(prodEff)
+        // Forward recall is self-graded production.
+        if (showSelfGraded && dirAllows('forward-selfgraded') && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== prodEff) bump(recallEff)
       }
     }
   }
@@ -600,7 +606,7 @@ export default function StudyPage() {
         if (!s.graduated) continue
 
         const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
-        if (forecastFilters.directions.length > 0 && !forecastFilters.directions.includes(dir)) continue
+        const dirAllows = (d: string) => forecastFilters.directions.length === 0 || forecastFilters.directions.includes(d)
 
         const isAccel = s.acceleratedMode === 'import_known'
         if (forecastFilters.accel.length > 0) {
@@ -614,6 +620,7 @@ export default function StudyPage() {
         const effDate   = (raw: string): string => { const d = localDate(raw); return d <= todayStr ? todayStr : d }
         let due = false
         if (dir === 'reverse') {
+          if (!dirAllows('reverse')) continue
           // Reverse rows are recognition — inherently self-graded.
           if (!trackEnabled(en, 'recall', true)) continue
           const recallRef = s.recallDueAt ?? s.dueAt
@@ -625,9 +632,11 @@ export default function StudyPage() {
           const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
           const prodEff: string | null  = (prodRef && prodEnabled) ? effDate(prodRef) : null
           const prodShow  = onSmart ? showSmart : showTyped
+          const prodTyped = forwardProductionMode(s, onSmart ? 'smart' : 'typed', smartThresholds.get(pairKey) ?? 20) === 'typed'
+          const prodDir   = prodTyped ? 'forward-typed' : 'forward-selfgraded'
           const recallEff: string | null = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
-          if (prodEff === selectedForecastDate && prodShow) due = true
-          if (!due && showSelfGraded && recallEff === selectedForecastDate && recallEff !== prodEff) due = true
+          if (prodEff === selectedForecastDate && prodShow && dirAllows(prodDir)) due = true
+          if (!due && showSelfGraded && dirAllows('forward-selfgraded') && recallEff === selectedForecastDate && recallEff !== prodEff) due = true
         }
         if (!due) continue
 
@@ -884,7 +893,7 @@ export default function StudyPage() {
                     <div className="space-y-1.5">
                       <p className="text-[11px] font-medium text-ink-muted uppercase tracking-wider">Direction</p>
                       <div className="space-y-1">
-                        {([['forward', 'Native → Target (typed production)'], ['reverse', 'Target → Native (recall)']] as const).map(([val, label]) => (
+                        {([['forward-typed', 'Native → Target (typed)'], ['forward-selfgraded', 'Native → Target (self-graded)'], ['reverse', 'Target → Native (recall)']] as const).map(([val, label]) => (
                           <label key={val} className="flex items-center gap-2 cursor-pointer group">
                             <input
                               type="checkbox"
