@@ -50,6 +50,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         key={`${card.id}-${rung.id}`}
         card={card} promptSide={promptSide} answerSide={answerSide}
         deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
+        autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
         onChoicesCached={onChoicesCached} onInfo={onInfo}
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
@@ -79,6 +80,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         promptLanguage={promptSide === 'front' ? sourceLanguage : undefined}
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         gradingSettings={gradingSettings} gradedReview={rung.selfRated}
+        autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
         strictness={rung.strictness ?? DEFAULT_TYPED_STRICTNESS} deckName={deckName} onInfo={onInfo}
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}

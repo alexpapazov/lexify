@@ -287,7 +287,9 @@ export function TypingMode({
     })
     setOverride(null)
     setRetype('')
-    if (autoPlayAudio && effectivelyCorrect && answerLanguage) {
+    // Play the target word after grading — on a WRONG answer too, so the learner hears the
+    // correct pronunciation (in their chosen audio source) before retyping.
+    if (autoPlayAudio && answerLanguage) {
       speak(card.front, answerLanguage, card.audioData)
     }
   }
