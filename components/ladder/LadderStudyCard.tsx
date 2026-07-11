@@ -100,6 +100,9 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo }: { card: Card; ru
   const continueRef = useRef<HTMLButtonElement>(null)
 
   async function play() {
+    // Respect the card's chosen audio source. 'browser' (Robotic) → on-device speech,
+    // never fetch. Otherwise play the active clip (audioData), or fetch it if missing.
+    if (card.audioSource === 'browser') { speak(card.front, card.sourceLanguage, null); return }
     if (audio) { speak(card.front, card.sourceLanguage, audio); return }
     if (TTS_SUPPORTED_LANGUAGES.has(card.sourceLanguage)) {
       const b64 = await speakViaTts(card.front, card.sourceLanguage)
