@@ -814,6 +814,27 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   deduped queue by `productionMode` (`filterByPresent`). Typing = forward production
   shown typed (one direction); Self-graded = forward self-graded + recall + reverse.
 
+## Audio: TTS hardening + multi-source + per-deck speed (2026-07-10)
+
+- **TTS route** (`app/api/tts/route.ts`): ElevenLabs `eleven_turbo_v2_5` with enforced
+  `language_code` (multilingual_v2 auto-detected and mis-read Cyrillic as Russian);
+  `cleanForSpeech()` strips `(f)`/`[notes]` annotations (they were being vocalised into
+  nonsense); **anti-clip retry** — generates up to 3× (varying stability/seed) and keeps
+  the first clip whose duration (bytes·8/128000, CBR 128k) is plausible for the text,
+  else the longest (self-corrects onset/offset clipping of short words).
+- **Multi-source audio** (migration `081_card_audio_sources.sql`): `Card.audioSource`
+  (`'elevenlabs'|'forvo'|'browser'`) + `Card.audioSources` (base64 per provider). The
+  `/api/tts` route takes a `source` param; **Forvo** (`ttsForvo`, real native recordings)
+  needs `FORVO_API_KEY` (+ optional `FORVO_API_BASE`, default apifree.forvo.com). The
+  card-info "i" panel (`components/CardEditModal.tsx`) has a **source picker** — play/fetch
+  each of ElevenLabs / Forvo / Robotic and "Use this" to set the active one (mirrored into
+  `audio_data` so all playback call sites keep working). `lib/speak.ts: fetchAudioSource`
+  fetches a source without playing. Clear-audio reset wipes all sources.
+- **Per-deck audio speed** (migration `080_deck_audio_speed.sql`): `DeckPreferences.audioSpeed`;
+  applied at playback time via `lib/speak.ts: setAudioPlaybackRate` (playbackRate +
+  preservesPitch), set from deck prefs by the ladder/session pages; control in Deck
+  settings → Audio. (Cross-deck all/folder sessions use normal speed.)
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

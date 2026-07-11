@@ -25,6 +25,26 @@ const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8i
 interface RequestBody {
   text:     string
   language: string
+  /** Which provider to fetch from. Defaults to 'elevenlabs' (falls back to OpenAI). */
+  source?:  'elevenlabs' | 'forvo'
+}
+
+// Forvo (real native-speaker recordings). Free/legacy host is apifree.forvo.com;
+// commercial is apicommercial.forvo.com — override with FORVO_API_BASE.
+const FORVO_API_BASE = process.env.FORVO_API_BASE || 'https://apifree.forvo.com'
+
+/** Fetches the top-rated Forvo pronunciation for a word and returns it as base64 mp3. */
+async function ttsForvo(text: string, language: string, apiKey: string): Promise<string> {
+  const url = `${FORVO_API_BASE}/key/${apiKey}/format/json/action/word-pronunciations`
+    + `/word/${encodeURIComponent(text)}/language/${encodeURIComponent(language)}/order/rate-desc/limit/1/`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Forvo ${res.status}: ${await res.text().catch(() => '')}`)
+  const data = await res.json().catch(() => null)
+  const mp3 = data?.items?.[0]?.pathmp3 as string | undefined
+  if (!mp3) throw new Error('forvo-no-pronunciation')
+  const audioRes = await fetch(mp3)
+  if (!audioRes.ok) throw new Error(`Forvo audio ${audioRes.status}`)
+  return Buffer.from(await audioRes.arrayBuffer()).toString('base64')
 }
 
 /**
@@ -131,7 +151,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, reason: 'bad-request' }, { status: 400 })
   }
 
-  const { text, language } = body
+  const { text, language, source = 'elevenlabs' } = body
   if (!text?.trim()) {
     return NextResponse.json({ ok: false, reason: 'bad-request' }, { status: 400 })
   }
@@ -140,19 +160,34 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, reason: 'unsupported-language' })
   }
 
+  const speakText = cleanForSpeech(text)
+
+  // ── Forvo: real native-speaker recordings (coverage varies by language/word) ──
+  if (source === 'forvo') {
+    const forvoKey = process.env.FORVO_API_KEY
+    if (!forvoKey) return NextResponse.json({ ok: false, reason: 'no-forvo-key' })
+    try {
+      const audioData = await ttsForvo(speakText, language, forvoKey)
+      return NextResponse.json({ ok: true, audioData, source: 'forvo' })
+    } catch (err) {
+      const reason = err instanceof Error && err.message === 'forvo-no-pronunciation' ? 'forvo-no-pronunciation' : 'forvo-error'
+      if (reason !== 'forvo-no-pronunciation') console.error('[TTS] forvo error', err)
+      return NextResponse.json({ ok: false, reason })
+    }
+  }
+
+  // ── ElevenLabs (default), falling back to OpenAI ──
   const elevenKey = process.env.ELEVENLABS_API_KEY
   const openaiKey = process.env.OPENAI_API_KEY
-
   if (!elevenKey && !openaiKey) {
     return NextResponse.json({ ok: false, reason: 'no-api-key' })
   }
 
   try {
-    const speakText = cleanForSpeech(text)
     const audioData = elevenKey
       ? await ttsElevenLabs(speakText, language, elevenKey)
       : await ttsOpenAI(speakText, openaiKey!)
-    return NextResponse.json({ ok: true, audioData })
+    return NextResponse.json({ ok: true, audioData, source: 'elevenlabs' })
   } catch (err) {
     console.error('[TTS] error', err)
     return NextResponse.json({ ok: false, reason: 'api-error' })

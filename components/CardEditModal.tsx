@@ -15,7 +15,8 @@ import type { Card, CardState, CardChoices, CardConfusion, CardConfusionLink, Pi
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
-import { speak } from '@/lib/speak'
+import { speak, fetchAudioSource } from '@/lib/speak'
+import type { AudioSource } from '@/domain'
 import { classifyReviewMode, MULTIPLIER_RANGE } from '@/engine/scheduler'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
 import { batchFastTrackDueDates } from '@/engine/density'
@@ -162,8 +163,8 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [linkConfusionError, setLinkConfusionError] = useState<string | null>(null)
   const [overrides,        setOverrides]        = useState<TypedAnswerOverride[]>([])
   const [pipeline,         setPipeline]         = useState<Pipeline | null>(null)
-  const [generatingAudio,  setGeneratingAudio]  = useState(false)
   const [audioError,       setAudioError]       = useState<string | null>(null)
+  const [busySource,       setBusySource]       = useState<AudioSource | null>(null)
   const frontRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { frontRef.current?.focus() }, [])
@@ -235,10 +236,10 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     }
   }
 
-  /** Clears audio so it will be regenerated on the next session. */
+  /** Clears all cached audio (every source) so it will be re-fetched fresh. */
   async function resetAudio() {
     const cardRepo = new SupabaseCardRepository()
-    const updated  = await cardRepo.update(card.id, { audioGenerated: false, audioData: null })
+    const updated  = await cardRepo.update(card.id, { audioGenerated: false, audioData: null, audioSource: null, audioSources: null })
     onCardChange(updated)
   }
 
@@ -256,30 +257,54 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     )
   }
 
-  /** Fetches AI TTS audio for the card's front (source language) and saves it. */
-  async function generateAudio() {
-    setGeneratingAudio(true)
+  // ── Multi-source audio ──────────────────────────────────────────────────────
+  // The active source ('browser' = on-device Web Speech). Legacy cards with audio
+  // but no explicit source are treated as ElevenLabs.
+  const activeSource: AudioSource = card.audioSource ?? (card.audioData ? 'elevenlabs' : 'browser')
+  // The cached clip for a provider (legacy audioData counts as the ElevenLabs clip).
+  function cachedClip(source: AudioSource): string | null {
+    if (source === 'browser') return null
+    return card.audioSources?.[source] ?? (source === 'elevenlabs' ? (card.audioData ?? null) : null)
+  }
+
+  function audioReason(reason?: string): string {
+    if (reason === 'forvo-no-pronunciation') return 'Forvo has no recording for this word.'
+    if (reason === 'no-forvo-key')           return 'Forvo isn’t configured (missing API key).'
+    if (reason === 'unsupported-language')   return 'This language isn’t supported.'
+    return 'Couldn’t fetch this audio. Try again.'
+  }
+
+  /** Fetches a provider's clip (caching it on the card) unless already cached. */
+  async function fetchAndCache(source: 'elevenlabs' | 'forvo'): Promise<string | null> {
+    const existing = cachedClip(source)
+    if (existing) return existing
+    const { audioData, reason } = await fetchAudioSource(card.front, sourceLanguage, source)
+    if (!audioData) { setAudioError(audioReason(reason)); return null }
+    const newSources = { ...(card.audioSources ?? {}), [source]: audioData }
+    const updated = await new SupabaseCardRepository().update(card.id, { audioSources: newSources, audioGenerated: true })
+    onCardChange(updated)
+    return audioData
+  }
+
+  async function playSource(source: AudioSource) {
     setAudioError(null)
-    try {
-      const res  = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: card.front, language: sourceLanguage }),
-      })
-      const data = await res.json()
-      if (!data.ok || !data.audioData) {
-        console.error('[TTS] generation failed:', data.reason)
-        setAudioError('Audio generation failed. Try again.')
-        return
-      }
-      const cardRepo = new SupabaseCardRepository()
-      const updated  = await cardRepo.update(card.id, { audioGenerated: true, audioData: data.audioData })
-      onCardChange(updated)
-    } catch {
-      setAudioError('Audio generation failed. Try again.')
-    } finally {
-      setGeneratingAudio(false)
+    if (source === 'browser') { speak(card.front, sourceLanguage, null); return }
+    setBusySource(source)
+    try { const clip = await fetchAndCache(source); if (clip) speak(card.front, sourceLanguage, clip) }
+    finally { setBusySource(null) }
+  }
+
+  /** Makes a source the active one (fetching its clip first if needed). */
+  async function selectSource(source: AudioSource) {
+    setAudioError(null)
+    let clip: string | null = null
+    if (source !== 'browser') {
+      setBusySource(source)
+      try { clip = await fetchAndCache(source) } finally { setBusySource(null) }
+      if (!clip) return
     }
+    const updated = await new SupabaseCardRepository().update(card.id, { audioSource: source, audioData: clip })
+    onCardChange(updated)
   }
 
   /** Wipes spaced-repetition progress back to "never studied", preserving when the card was first introduced. */
@@ -802,34 +827,47 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
           <p className="text-success text-xs bg-success/10 border border-success/20 rounded-lg px-3 py-2">✓ {resetDone}</p>
         )}
 
-        {/* Audio generation — only for supported source languages */}
+        {/* Audio sources — pick which recording plays for this card */}
         {TTS_SUPPORTED_LANGUAGES.has(sourceLanguage) && (
           <div className="space-y-1.5">
-            {!card.audioGenerated ? (
-              <button
-                onClick={generateAudio}
-                disabled={generatingAudio}
-                className="w-full text-left px-3 py-2 rounded-lg border border-white/10 hover:bg-surface-raised/50 text-ink-muted text-xs transition-colors disabled:opacity-40"
-              >
-                {generatingAudio ? 'Generating audio…' : '🔊 Generate Audio'}
-                <span className="block text-ink-faint font-normal mt-0.5">
-                  Fetch AI-generated pronunciation for &ldquo;{card.front}&rdquo;
-                </span>
-              </button>
-            ) : (
-              <button
-                onClick={() => speak(card.front, sourceLanguage, card.audioData)}
-                className="w-full text-left px-3 py-2 rounded-lg border border-white/10 hover:bg-surface-raised/50 text-ink-muted text-xs transition-colors"
-              >
-                🔊 Play audio
-                <span className="block text-ink-faint font-normal mt-0.5">
-                  &ldquo;{card.front}&rdquo;
-                </span>
-              </button>
-            )}
-            {audioError && (
-              <p className="text-danger text-xs">{audioError}</p>
-            )}
+            <p className="text-xs text-ink-faint">Audio for &ldquo;{card.front}&rdquo; — pick the one that sounds best:</p>
+            {([
+              { key: 'elevenlabs' as const, label: 'ElevenLabs', hint: 'AI voice' },
+              { key: 'forvo' as const,      label: 'Forvo',      hint: 'native speaker' },
+              { key: 'browser' as const,    label: 'Robotic',    hint: 'on-device' },
+            ]).map(s => {
+              const isActive = activeSource === s.key
+              const hasClip  = s.key === 'browser' ? true : cachedClip(s.key) != null
+              const busy     = busySource === s.key
+              return (
+                <div key={s.key} className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-white/10'}`}>
+                  <button
+                    onClick={() => playSource(s.key)}
+                    disabled={busy}
+                    className="text-ink-muted hover:text-ink disabled:opacity-40 shrink-0"
+                    title={hasClip ? 'Play' : 'Fetch & play'}
+                  >
+                    {busy ? '…' : '🔊'}
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm text-ink">{s.label}</span>
+                    <span className="text-xs text-ink-faint ml-1.5">{s.hint}{s.key !== 'browser' && !hasClip ? ' · not fetched' : ''}</span>
+                  </div>
+                  {isActive ? (
+                    <span className="text-xs text-accent font-medium shrink-0">Active</span>
+                  ) : (
+                    <button
+                      onClick={() => selectSource(s.key)}
+                      disabled={busy}
+                      className="text-xs text-ink-muted hover:text-accent disabled:opacity-40 shrink-0"
+                    >
+                      Use this
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+            {audioError && <p className="text-danger text-xs">{audioError}</p>}
           </div>
         )}
 

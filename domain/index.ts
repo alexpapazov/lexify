@@ -430,6 +430,9 @@ export interface CardChoices {
 
 export type Register = 'neutral' | 'informal' | 'formal' | 'regional' | 'vulgar'
 
+/** Where a card's audio comes from. 'browser' = on-device Web Speech (robotic). */
+export type AudioSource = 'elevenlabs' | 'forvo' | 'browser'
+
 export interface Card {
   id:             CardId
   /** Cards are owned by a user (within a target/native language direction), not by a deck. */
@@ -465,8 +468,12 @@ export interface Card {
   // ── AI-generated audio (source/target language only) ─────────────────────
   /** True once OpenAI TTS audio has been fetched and stored for this card's front (source language). */
   audioGenerated?: boolean
-  /** Base64-encoded mp3 for card.front, produced by OpenAI TTS. Null until generated. */
+  /** Base64-encoded mp3 for card.front — the ACTIVE audio source's clip (what plays). Null = none/browser. */
   audioData?:      string | null
+  /** Which audio source is active for this card: 'elevenlabs' | 'forvo' | 'browser'. Null = default. */
+  audioSource?:    AudioSource | null
+  /** Cached base64 mp3 per provider so switching sources doesn't re-fetch, e.g. { elevenlabs, forvo }. */
+  audioSources?:   Partial<Record<AudioSource, string>> | null
   /** IPA transcription for card.front (source language). Null until generated. */
   ipa?:            string | null
 }

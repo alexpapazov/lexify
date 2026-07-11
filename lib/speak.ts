@@ -49,6 +49,27 @@ export function speak(text: string, langCode: string, audioData?: string | null)
  * returns the base64 so the caller can cache it on the card. Returns null if the
  * language isn't supported or generation fails (caller should fall back to `speak`).
  */
+/**
+ * Fetches a specific audio source's clip (base64 mp3) WITHOUT playing it — used by
+ * the card audio picker to fetch/cache each provider's candidate. Returns null (with
+ * a reason) when unavailable (e.g. Forvo has no recording for the word).
+ */
+export async function fetchAudioSource(
+  text: string, language: string, source: 'elevenlabs' | 'forvo',
+): Promise<{ audioData: string | null; reason?: string }> {
+  try {
+    const res = await fetch('/api/tts', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, language, source }),
+    })
+    const data = await res.json()
+    if (data.ok && data.audioData) return { audioData: data.audioData as string }
+    return { audioData: null, reason: data.reason as string | undefined }
+  } catch {
+    return { audioData: null, reason: 'network-error' }
+  }
+}
+
 export async function speakViaTts(text: string, language: string): Promise<string | null> {
   if (typeof window === 'undefined') return null
   try {
