@@ -288,9 +288,13 @@ export function TypingMode({
     setOverride(null)
     setRetype('')
     // Play the target word after grading — on a WRONG answer too, so the learner hears the
-    // correct pronunciation (in their chosen audio source) before retyping.
-    if (autoPlayAudio && answerLanguage) {
-      speak(card.front, answerLanguage, card.audioData)
+    // correct pronunciation (in their chosen audio source) before retyping. card.front is
+    // always the learned/source word, so speak it in the SOURCE language (promptLanguage when
+    // the prompt is the front, else answerLanguage) — not the answer's language, which for a
+    // target→native card is the native tongue and would give an American accent.
+    const frontLanguage = promptLanguage ?? answerLanguage
+    if (autoPlayAudio && frontLanguage) {
+      speak(card.front, frontLanguage, card.audioData)
     }
   }
 
