@@ -233,6 +233,8 @@ export type RungOutcome = 'almost' | 'miss' | 'again' | 'hard' | 'good' | 'easy'
 export interface DropBackRule {
   on:       RungOutcome
   times:    number
+  /** Count N in a row (streak, broken by any other outcome) vs. N total this rung sitting. */
+  inARow?:  boolean
   toRungId: string
 }
 

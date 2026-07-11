@@ -28,7 +28,8 @@ export interface ClimbState {
   messUps:        number                              // Again/Hard this sitting (for Easy interval)
   lastRating:     Rating | null                       // last self-rating on this rung
   ratingHistory?: Rating[]                            // ratings on the current rung (for OR advance rules)
-  outcomeCounts:  Partial<Record<RungOutcome, number>> // per-rung tally, for drop-back thresholds
+  outcomeCounts:  Partial<Record<RungOutcome, number>> // per-rung tally, for total drop-back thresholds
+  outcomeHistory?: RungAttemptOutcome[]                // per-rung outcome sequence, for in-a-row drop-backs
   startedAt:      number | null                       // ms when the first rung was cleared
   graduated:      boolean
   targetInterval: IntervalRange | null
@@ -73,7 +74,7 @@ export function easyInterval(messUps: number, lastRating: Rating | null): Interv
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function resetPerRung(s: ClimbState): ClimbState {
-  return { ...s, progress: 0, messUps: 0, lastRating: null, ratingHistory: [], outcomeCounts: {} }
+  return { ...s, progress: 0, messUps: 0, lastRating: null, ratingHistory: [], outcomeCounts: {}, outcomeHistory: [] }
 }
 
 const RATING_RANK: Record<Rating, number> = { again: 0, hard: 1, good: 2, easy: 3 }
@@ -126,15 +127,23 @@ export function reviewRung(ladder: Ladder, state: ClimbState, outcome: RungAttem
   const rung = ladder.rungs[state.rungIndex]
   if (!rung || state.graduated) return { state, reshow: 'advanced', advanced: false, droppedBackTo: null }
 
-  // Tally the outcome for drop-back thresholds ('pass' isn't a drop-back trigger).
+  // Record the outcome: a total tally + a bounded sequence (for in-a-row drop-backs).
+  // 'pass' isn't a drop-back trigger but still enters the sequence (it breaks streaks).
   const outcomeKey: RungOutcome | null = outcome === 'pass' ? null : outcome
-  const s: ClimbState = outcomeKey
-    ? { ...state, outcomeCounts: { ...state.outcomeCounts, [outcomeKey]: (state.outcomeCounts[outcomeKey] ?? 0) + 1 } }
-    : { ...state }
+  const outcomeHistory = [...(state.outcomeHistory ?? []), outcome].slice(-10)
+  const s: ClimbState = {
+    ...state,
+    outcomeHistory,
+    ...(outcomeKey ? { outcomeCounts: { ...state.outcomeCounts, [outcomeKey]: (state.outcomeCounts[outcomeKey] ?? 0) + 1 } } : {}),
+  }
 
-  // Drop-back rules take priority.
+  // Drop-back rules take priority. `times` counts N in a row (streak) or N total.
   if (outcomeKey) {
-    const rule = rung.dropBacks.find(r => r.on === outcomeKey && (s.outcomeCounts[outcomeKey] ?? 0) >= r.times)
+    const rule = rung.dropBacks.find(r => {
+      if (r.on !== outcomeKey) return false
+      if (r.inARow) return outcomeHistory.length >= r.times && outcomeHistory.slice(-r.times).every(o => o === r.on)
+      return (s.outcomeCounts[outcomeKey] ?? 0) >= r.times
+    })
     if (rule) {
       const idx = ladder.rungs.findIndex(r => r.id === rule.toRungId)
       if (idx >= 0) return { state: toRung(s, idx), reshow: 'soon', advanced: true, droppedBackTo: idx }

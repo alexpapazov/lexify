@@ -39,7 +39,6 @@ function LadderStudyInner() {
   const progressPctRef = useRef(0)               // monotonic progress % (never regresses on drop-back)
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
-  const [repeatNonce, setRepeatNonce] = useState(0)  // bump to re-mount the current card (Repeat)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
@@ -191,6 +190,16 @@ function LadderStudyInner() {
     setCurrentId(pickNextCard(nextQueue, now, currentId)?.cardId ?? null)
   }
 
+  // Repeat: don't advance or redo in place — re-queue the current card at the same rung
+  // (available again, but not the immediate next) and move on to the next card.
+  function handleRepeat() {
+    if (!currentId) return
+    const now = Date.now()
+    const nextQueue = queue.map(e => e.cardId === currentId ? { cardId: currentId, readyAt: 0, ratedAt: 0 } : e)
+    setQueue(nextQueue)
+    setCurrentId(pickNextCard(nextQueue, now, currentId)?.cardId ?? null)
+  }
+
   if (loading) return <p className="p-6 text-sm text-ink-faint">Loading…</p>
   if (!deck || !ladder) return <p className="p-6 text-sm text-danger">Deck not found.</p>
 
@@ -234,11 +243,11 @@ function LadderStudyInner() {
       )}
 
       <LadderStudyCard
-        key={`${currentId}:${currentClimb.rungIndex}:${repeatNonce}`}
+        key={`${currentId}:${currentClimb.rungIndex}`}
         card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
         sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage} gradingSettings={deck.gradingSettings}
         overrides={overrides} onOverrideAnswer={handleOverrideAnswer} onChoiceEdit={handleChoiceEdit}
-        onRepeat={() => setRepeatNonce(n => n + 1)}
+        onRepeat={handleRepeat}
         onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
       />
 

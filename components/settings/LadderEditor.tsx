@@ -179,7 +179,12 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                 <input type="number" min={1} value={rule.times} title="after this many times"
                   onChange={e => update(r.id, { dropBacks: r.dropBacks.map((x, k) => k === ri ? { ...x, times: Math.max(1, Number(e.target.value)) } : x) })}
                   className="input py-1 w-14 text-center" />
-                <span className="text-ink-faint text-xs">× → go to</span>
+                <select className="input py-1 w-auto" value={rule.inARow ? 'row' : 'total'}
+                  onChange={e => update(r.id, { dropBacks: r.dropBacks.map((x, k) => k === ri ? { ...x, inARow: e.target.value === 'row' } : x) })}>
+                  <option value="total">total</option>
+                  <option value="row">in a row</option>
+                </select>
+                <span className="text-ink-faint text-xs">→ go to</span>
                 <select className="input py-1 w-auto" value={rule.toRungId}
                   onChange={e => update(r.id, { dropBacks: r.dropBacks.map((x, k) => k === ri ? { ...x, toRungId: e.target.value } : x) })}>
                   {rungs.map((rr, k) => <option key={rr.id} value={rr.id}>Rung {k + 1}</option>)}
