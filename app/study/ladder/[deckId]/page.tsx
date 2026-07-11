@@ -7,6 +7,7 @@ import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
+import { setAudioPlaybackRate } from '@/lib/speak'
 import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { resolveEffectiveLadder } from '@/lib/ladder'
@@ -62,13 +63,15 @@ function LadderStudyInner() {
         (climb.has(c.id) ? learning : fresh).push(c.id)
       }
 
+      const prefsRepo = new SupabaseDeckPreferencesRepository()
+      const prefs = await prefsRepo.get(uid, deckId)
+      setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
+
       let q: string[]
       if (category === 'new')          q = shuffle(fresh)
       else if (category === 'learning') q = shuffle(learning)
       else {
         // Normal intake: apply the deck's card-intake settings.
-        const prefsRepo = new SupabaseDeckPreferencesRepository()
-        const prefs = await prefsRepo.get(uid, deckId)
         const cap = prefs?.cardsPerSession ?? null  // "Limit cards in learning" → the cap
         if (cap != null && cap > 0) {
           if (prefs!.learningBatchMode) {

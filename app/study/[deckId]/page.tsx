@@ -8,6 +8,7 @@ import { SupabaseDeckRepository }            from '@/lib/data/decks'
 import { SupabaseCardRepository }            from '@/lib/data/cards'
 import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
+import { setAudioPlaybackRate } from '@/lib/speak'
 import { SupabaseFolderRepository }          from '@/lib/data/folders'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseSynonymGroupRepository }    from '@/lib/data/synonymGroups'
@@ -776,6 +777,9 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   const [cardsPerSessionOn,  setCardsPerSessionOn]  = useState((initialPrefs?.cardsPerSession ?? 0) > 0)
   const [cardsPerSession,    setCardsPerSession]    = useState(initialPrefs?.cardsPerSession || 12)
   const [learningBatchMode,  setLearningBatchMode]  = useState(initialPrefs?.learningBatchMode ?? false)
+  const [audioSpeed,         setAudioSpeed]         = useState(initialPrefs?.audioSpeed ?? 1)
+  // Apply speed immediately so the "Play audio" preview reflects the slider live.
+  useEffect(() => { setAudioPlaybackRate(audioSpeed) }, [audioSpeed])
   const [saving,            setSaving]            = useState(false)
   const [saved,             setSaved]             = useState(false)
   const [saveError,         setSaveError]         = useState<string | null>(null)
@@ -814,6 +818,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
           cardsPerSession:      cardsPerSessionOn ? cardsPerSession : null,
           electiveSessionLimit: cardsPerSessionOn ? cardsPerSession : 0,
           learningBatchMode:    cardsPerSessionOn ? learningBatchMode : false,
+          audioSpeed,
         }),
         new SupabaseDeckRepository().update(deckId, { gradingSettings: newGradingSettings }),
       ])
@@ -1095,6 +1100,18 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                 <input type="checkbox" checked={autoPlayAudio} onChange={e => setAutoPlayAudio(e.target.checked)} className="accent-accent w-4 h-4" />
                 <span className="text-sm text-ink">Auto-play target language audio</span>
               </label>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm text-ink">Playback speed</span>
+                <select
+                  value={audioSpeed}
+                  onChange={e => setAudioSpeed(Number(e.target.value))}
+                  className="input text-sm w-28"
+                >
+                  {[0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.25].map(v => (
+                    <option key={v} value={v}>{v === 1 ? 'Normal' : `${v}×`}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {resetError && (

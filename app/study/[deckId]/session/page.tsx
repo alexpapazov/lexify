@@ -11,6 +11,7 @@ import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabaseLadderClimbRepository }     from '@/lib/data/ladderClimb'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
+import { setAudioPlaybackRate } from '@/lib/speak'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
@@ -518,6 +519,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       const cardsPerSession   = prefs?.cardsPerSession   ?? null
       const learningBatchMode = prefs?.learningBatchMode ?? false
+      setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
 
       // Exclude states for soft-deleted cards so they don't skew budget math.
       const activeCardIdSet   = new Set(cards.map(c => c.id))

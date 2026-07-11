@@ -888,6 +888,8 @@ export interface DeckPreferences {
    * graduates a new one enters immediately to keep the pipeline full.
    */
   learningBatchMode:    boolean
+  /** Audio playback speed for this deck (applied at playback time; pitch preserved). 1 = normal. */
+  audioSpeed:           number
 }
 
 export const DEFAULT_DAILY_NEW_CARDS = 20

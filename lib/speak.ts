@@ -5,6 +5,23 @@ const SPEECH_LANG: Record<string, string> = {
   pt: 'pt-BR',
 }
 
+// Current audio playback speed (per-deck setting). Pages set this from the deck's
+// preferences when they load; `speak` applies it to both cached audio (via
+// playbackRate, pitch preserved) and the Web Speech fallback (via utterance rate).
+let audioPlaybackRate = 1
+export function setAudioPlaybackRate(rate: number): void {
+  audioPlaybackRate = Number.isFinite(rate) && rate > 0 ? rate : 1
+}
+
+function playClip(src: string): void {
+  const audio = new Audio(src)
+  audio.playbackRate = audioPlaybackRate
+  // Keep pitch natural when slowed/sped (Safari uses the webkit-prefixed flag).
+  audio.preservesPitch = true
+  ;(audio as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = true
+  audio.play().catch(() => {})
+}
+
 /**
  * Plays audio for `text` in `langCode`.
  * If `audioData` (base64 mp3 from ElevenLabs, cached on the card) is provided,
@@ -15,8 +32,7 @@ export function speak(text: string, langCode: string, audioData?: string | null)
   if (typeof window === 'undefined') return
 
   if (audioData) {
-    const audio = new Audio(`data:audio/mp3;base64,${audioData}`)
-    audio.play().catch(() => {})
+    playClip(`data:audio/mp3;base64,${audioData}`)
     return
   }
 
@@ -24,6 +40,7 @@ export function speak(text: string, langCode: string, audioData?: string | null)
   window.speechSynthesis.cancel()
   const utt = new SpeechSynthesisUtterance(text)
   utt.lang = SPEECH_LANG[langCode] ?? langCode
+  utt.rate = audioPlaybackRate
   window.speechSynthesis.speak(utt)
 }
 
@@ -41,7 +58,7 @@ export async function speakViaTts(text: string, language: string): Promise<strin
     })
     const data = await res.json()
     if (data.ok && data.audioData) {
-      new Audio(`data:audio/mp3;base64,${data.audioData}`).play().catch(() => {})
+      playClip(`data:audio/mp3;base64,${data.audioData}`)
       return data.audioData as string
     }
   } catch { /* fall through to caller's fallback */ }
