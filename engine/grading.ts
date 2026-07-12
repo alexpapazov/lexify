@@ -429,11 +429,25 @@ function gradeSmartAI(userAnswer: string, expected: string, settings: GradingSet
  *   almost    → Hard
  *   incorrect → Again
  */
+/**
+ * Grammatical gender/number tags — "(f)", "(m)", "(n)", "(pl)", "(f.)", "(masc)" … — are metadata,
+ * never part of the typed answer, so they're stripped before grading (unlike required parentheticals
+ * such as "(el) camello", whose content is a real word). Removes them from both sides regardless of
+ * the `requireParentheticalContent` setting.
+ */
+const GRAMMATICAL_TAG = /\(\s*(?:m|f|n|mf|fm|masc|fem|neut|neutre|pl|sg|sing|plural|singular|masculine|feminine|neuter)\.?\s*\)/gi
+export function stripGrammaticalTags(text: string): string {
+  const cleaned = text.replace(GRAMMATICAL_TAG, ' ').replace(/\s+/g, ' ').trim()
+  return cleaned || text.trim()
+}
+
 export function gradeTyping(
   userAnswer: string,
   expected:   string,
   settings:   GradingSettings,
 ): GradingResult {
+  userAnswer = stripGrammaticalTags(userAnswer)
+  expected   = stripGrammaticalTags(expected)
   // Strip surrounding quotes — quoted backs are literal phrases (no comma/slash splitting).
   const eff = expected.length >= 2 && expected.startsWith('"') && expected.endsWith('"')
     ? expected.slice(1, -1)

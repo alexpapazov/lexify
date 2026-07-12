@@ -814,6 +814,18 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   deduped queue by `productionMode` (`filterByPresent`). Typing = forward production
   shown typed (one direction); Self-graded = forward self-graded + recall + reverse.
 
+## Grammatical gender/number tags never graded (2026-07-11)
+
+Typing a target word without its "(f)"/"(m)"/"(pl)" gender-number tag was scored as an "almost"
+(spelling near-miss) when the deck had `requireParentheticalContent` on (the tag was treated as
+required content, e.g. "особеност" vs required "особеност f"). Fix: `engine/grading.ts:
+stripGrammaticalTags(text)` removes parentheticals whose content is a grammatical gender/number marker
+(`m|f|n|mf|masc|fem|neut|pl|sg|sing|…`, optional trailing period), and `gradeTyping` strips both the
+user answer and the expected answer up front — so these tags never count, regardless of
+`requireParentheticalContent`. A REQUIRED word parenthetical like "(el) camello" is left intact (its
+content isn't a grammatical marker). Applies to all typed grading (production/dictation/pre-grad).
+Tested in `engine/__tests__/grammaticalTags.test.ts`.
+
 ## Hint + Hard re-shows instead of advancing (2026-07-11)
 
 In Due Now reviews, if a hint was used (any number of times) and the card is then rated **Hard**, the
