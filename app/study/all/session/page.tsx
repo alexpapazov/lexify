@@ -143,7 +143,7 @@ function AllDueSessionInner() {
   const decksRef      = useRef<Deck[] | null>(null)
   const enabledMapRef = useRef<Map<string, EnabledTracks> | null>(null)
   const paramMapRef   = useRef<Map<string, SchedulerParamsRow> | null>(null)
-  const [moreDue, setMoreDue] = useState(0)
+  const [moreDue, setMoreDue] = useState(-1)   // -1 = not yet checked (avoids a wrong-state button flash)
   // Hint usage for the current card's review — consumed once in handleAnswer.
   const hintRef     = useRef<{ level: number; growthFactor: number } | null>(null)
   const handleHint  = useCallback((level: number, growthFactor: number) => {
@@ -1385,12 +1385,17 @@ function AllDueSessionInner() {
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}{pairLabel ? ` in ${pairLabel}` : ' across all decks'}.</p>
         <div className="flex gap-3 justify-center flex-wrap">
           {category === 'due' ? (
-            <>
-              {moreDue > 0 && (
-                <button onClick={() => window.location.reload()} className="btn-primary">Continue ({moreDue})</button>
-              )}
-              <Link href="/study" className={moreDue > 0 ? 'btn-ghost' : 'btn-primary'}>Back to study</Link>
-            </>
+            moreDue < 0 ? (
+              // Still checking for leftover cards — hold the buttons so we never flash a wrong state.
+              <p className="text-sm text-ink-faint">Checking for more…</p>
+            ) : (
+              <>
+                {moreDue > 0 && (
+                  <button onClick={() => window.location.reload()} className="btn-primary">Continue ({moreDue})</button>
+                )}
+                <Link href="/study" className={moreDue > 0 ? 'btn-ghost' : 'btn-primary'}>Back to study</Link>
+              </>
+            )
           ) : (
             <>
               <Link href={backHref} className="btn-primary">{backLabel}</Link>
