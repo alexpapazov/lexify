@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
-import { gatherScopedCards, analyzeBatch, applyProposal, undoEdit, chunk } from '@/lib/agents/cardEditor'
+import { gatherScopedCards, analyzeBatch, applyProposal, undoEdit, chunk, findDuplicates } from '@/lib/agents/cardEditor'
 import type { ScopedCard, EditProposal } from '@/lib/agents/cardEditor'
 import type { Deck, Grant } from '@/domain'
 
@@ -105,6 +105,27 @@ export default function AgentsPage() {
     }
   }
 
+  // Deterministic De-dupe (no AI): find TRUE duplicates (front AND back match) in the selected scope
+  // — or all decks if none selected — and queue a delete for all but one of each. Same approve/deny UI.
+  async function runDedupe() {
+    if (!userId || busy) return
+    const deckIds = scopedDeckIds().length ? scopedDeckIds() : decks.map(d => d.id)
+    if (deckIds.length === 0) return
+    taskRef.current = 'De-dupe'
+    setPhase('gathering'); setError(null); setScanned(0); setApproved(0); setDenied(0)
+    bufferRef.current = []; batchesRef.current = []; nextBatchRef.current = 0
+    try {
+      const grant: Grant = { operations: ['edit', 'create', 'delete'], languages: [], folderIds: [], deckIds, dryRunOnly: false }
+      const cards = await gatherScopedCards(userId, grant)
+      setTotal(cards.length); setScanned(cards.length)
+      const dups = findDuplicates(cards)
+      if (dups.length === 0) setPhase('done')
+      else { setQueue(dups); setPhase('review') }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e)); setPhase('setup')
+    }
+  }
+
   function advance() {
     const next = queue.slice(1)
     if (next.length > 0) { setQueue(next); prefetch() }   // keep buffering the next batch while reviewing
@@ -157,6 +178,25 @@ export default function AgentsPage() {
 
       {phase === 'setup' && (
         <div className="panel space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs text-ink-faint">Common tasks</label>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={runDedupe} disabled={!userId || busy}
+                className="text-xs px-3 py-1.5 rounded-full border border-danger/30 text-ink hover:bg-danger/10 disabled:opacity-40 transition-colors">
+                🧹 De-dupe
+              </button>
+              <button type="button" onClick={() => setTask("Remove the leading 'to ' from every verb gloss (the back), e.g. 'to run' → 'run'. Only touch verbs.")}
+                className="text-xs px-3 py-1.5 rounded-full border border-white/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
+                Strip “to ” from verbs
+              </button>
+              <button type="button" onClick={() => setTask('For every noun card, append the grammatical gender in parentheses to the gloss if it is missing, e.g. "el gato" gloss "cat" → "cat (m)".')}
+                className="text-xs px-3 py-1.5 rounded-full border border-white/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
+                Add noun gender
+              </button>
+            </div>
+            <p className="text-[10px] text-ink-faint">De-dupe runs instantly on the selected scope (or all decks if none selected) — it finds cards with the same front AND back and proposes deleting all but one. The others fill the box above; pick scope, then Start scanning.</p>
+          </div>
+
           <div className="space-y-1">
             <label className="text-xs text-ink-faint">What should the card editor do?</label>
             <textarea className="input min-h-[90px]" value={task} onChange={e => setTask(e.target.value)} placeholder={PLACEHOLDER} />

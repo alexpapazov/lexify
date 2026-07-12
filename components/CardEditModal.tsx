@@ -1180,6 +1180,8 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     ['Review mode',    reviewModeLabel],
                     ['Reps',           String(state.reps)],
                     ['Lapses',         String(state.lapses)],
+                    ['Difficulty',     state.difficulty != null ? `${state.difficulty.toFixed(1)} / 10` : '—'],
+                    ['Stability',      state.stability  != null ? `${state.stability.toFixed(1)}d` : '—'],
                     ['Last rating',    rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
                     ["I don't know",   String(state.iDontKnowCount)],
                   ]} />

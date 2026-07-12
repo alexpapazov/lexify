@@ -814,6 +814,23 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   deduped queue by `productionMode` (`filterByPresent`). Typing = forward production
   shown typed (one direction); Self-graded = forward self-graded + recall + reverse.
 
+## Card-editor agent: common-task buttons + deterministic De-dupe (2026-07-11)
+
+`app/agents/page.tsx` gained a "Common tasks" row in the setup phase:
+- **🧹 De-dupe** — deterministic, no AI. `lib/agents/cardEditor.ts: findDuplicates(cards)` groups cards
+  whose FRONT **and** BACK match (normalized: NFC + trim + whitespace-collapse + case-insensitive, joined
+  with a NUL separator so word-split can't collide) and proposes deleting all but the first of each group.
+  Shared cards (same cardId in multiple decks) are collapsed to one first, so a card never dupes itself.
+  Cards sharing only a gloss (세안하다 vs 세수하다, both "to wash face") are NOT duplicates. `runDedupe()`
+  gathers the selected scope (or all decks if none selected), queues the deletes, and reuses the existing
+  approve/deny review UI (`ProposalView` delete branch + `applyProposal` → soft `deleteCard`). Tested in
+  `lib/agents/__tests__/findDuplicates.test.ts`.
+- Two prefill buttons ("Strip 'to ' from verbs", "Add noun gender") that populate the instruction box for
+  the normal AI flow.
+
+Note: the agent's own "Duplicate of cardId…" delete reasons are free-form LLM rationale (matched on gloss,
+so prone to false positives like the above) — the De-dupe button is the deterministic front+back alternative.
+
 ## Grammatical gender/number tags never graded (2026-07-11)
 
 Typing a target word without its "(f)"/"(m)"/"(pl)" gender-number tag was scored as an "almost"
