@@ -833,6 +833,28 @@ gated on their own track flag. This matches the dashboard's `prodDueOn` exactly 
 `smart_*` columns). The deck page's `electiveCards` (early-review) fallback now triggers on
 `!prodDue && !isRecallDue`. Unit-tested in `lib/__tests__/activeProductionTrack.test.ts`.
 
+## Forecast: per-language difficulty + rating mix (2026-07-11)
+
+Extended the FSRS forecast (`components/analytics/DueForecastProjection.tsx`) to model each language's
+actual behaviour instead of an all-Good average-difficulty path:
+
+- **`lib/forecastFsrs.ts: fsrsScheduleMix(...)`** — mean-field FSRS stepper driven by a `RatingMix`
+  (`{again,hard,good,easy}` fractions). Expected stability blends the success curve (weighted by the
+  hard/good/easy mix) with the lapse curve (weighted by the again rate); difficulty drifts by the mix's
+  expected delta; each step's `weight` is `1 + again` to approximate relearn reviews. `normalizeRatingMix`,
+  `DEFAULT_RATING_MIX` added. Tested in `lib/__tests__/forecastFsrs.test.ts` (harder mix ⇒ more load).
+- **Per-language measurement (pass 1):** rating mix from every graduated forward card's `lastRating`
+  (proxy — review_events aren't cheaply aggregatable); **average difficulty** and **initial interval**
+  from the **NON-accelerated** population only (new cards go through the normal pipeline; we don't assume
+  future acceleration). **Existing accelerated cards keep their own real difficulty/stability** (pass 2
+  seeds each card from `s.difficulty`/`s.stability`), so their distinct D/S is modelled as-is.
+- New cards seed at the language's measured initial interval + average difficulty + rating mix; the old
+  `÷ retention` lapse fudge was dropped (lapses now live in the step weights). Load = `dailyGoal · cum(t)`.
+- The stat line now shows **initial interval AND average difficulty** per language; the progress-page
+  blurb was updated. Study-page "Study all due" popover: the **Typing** bucket's per-language rows now
+  read Native→Target (e.g. "English → Spanish") instead of the pair identity (which was backwards for a
+  typing review).
+
 ## Projected Due Now forecast rebuilt on FSRS (2026-07-11)
 
 `components/analytics/DueForecastProjection.tsx` was rebuilt to simulate the **live FSRS stability

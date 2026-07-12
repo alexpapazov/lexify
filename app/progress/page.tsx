@@ -349,7 +349,7 @@ export default function AnalyticsPage() {
       <div className="panel p-5 space-y-3">
         <div>
           <h2 className="text-sm font-semibold text-ink">Projected Due Now load</h2>
-          <p className="text-xs text-ink-faint">Your existing cards plus new cards from your daily goals, using each language&apos;s latest calibration. Split into typed, self-graded (recall + smart-typing past its threshold), and reverse recognition.</p>
+          <p className="text-xs text-ink-faint">Your existing cards plus new cards from your daily goals, simulated on the FSRS model per language — each language&apos;s measured initial interval, average difficulty, and rating mix (again/hard/good/easy). Existing accelerated cards use their own difficulty/stability. Split into typed, self-graded (recall + smart-typing past its threshold), and reverse recognition.</p>
         </div>
         <DueForecastProjection />
       </div>

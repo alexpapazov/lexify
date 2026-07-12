@@ -810,7 +810,7 @@ export default function StudyPage() {
                                 className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
                                 onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&present=${t.key}&source=${p.source}&target=${p.target}`) }}
                               >
-                                <span className="text-ink">{langName(p.source)} → {langName(p.target)}</span>
+                                <span className="text-ink">{t.key === 'typing' ? `${langName(p.target)} → ${langName(p.source)}` : `${langName(p.source)} → ${langName(p.target)}`}</span>
                                 <span className="chip text-xs ml-3">{t.key === 'typing' ? p.typing : p.selfgraded}</span>
                               </button>
                             ))}

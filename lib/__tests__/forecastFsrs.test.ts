@@ -1,4 +1,4 @@
-import { stabilityForInterval, fsrsSchedule, median, estimateInitialInterval } from '@/lib/forecastFsrs'
+import { stabilityForInterval, fsrsSchedule, fsrsScheduleMix, normalizeRatingMix, DEFAULT_RATING_MIX, median, estimateInitialInterval } from '@/lib/forecastFsrs'
 import { intervalForRetention } from '@/engine/fsrs'
 
 describe('stabilityForInterval', () => {
@@ -22,6 +22,31 @@ describe('fsrsSchedule', () => {
     const steps = fsrsSchedule({ stability: 3, difficulty: 5, firstReviewDay: 1, retention: 0.9, maxInt: 30, horizon: 365 })
     for (let i = 1; i < steps.length; i++) expect(steps[i]!.day - steps[i - 1]!.day).toBeLessThanOrEqual(31)
     expect(steps[steps.length - 1]!.day).toBeLessThanOrEqual(365)
+  })
+})
+
+describe('normalizeRatingMix', () => {
+  it('turns counts into fractions summing to 1', () => {
+    const m = normalizeRatingMix({ again: 1, hard: 1, good: 6, easy: 2 })
+    expect(m.again + m.hard + m.good + m.easy).toBeCloseTo(1, 6)
+    expect(m.good).toBeCloseTo(0.6, 6)
+  })
+  it('falls back to the default when empty', () => {
+    expect(normalizeRatingMix({})).toEqual(DEFAULT_RATING_MIX)
+  })
+})
+
+describe('fsrsScheduleMix', () => {
+  const base = { stability: 3, difficulty: 5, firstReviewDay: 3, retention: 0.9, maxInt: 1460, horizon: 730 }
+  it('a harder rating mix schedules MORE reviews than an easier one', () => {
+    const hard = fsrsScheduleMix({ ...base, mix: { again: 0.25, hard: 0.4, good: 0.35, easy: 0 } })
+    const easy = fsrsScheduleMix({ ...base, mix: { again: 0.02, hard: 0.05, good: 0.43, easy: 0.5 } })
+    const load = (s: ReturnType<typeof fsrsScheduleMix>) => s.reduce((sum, x) => sum + x.weight, 0)
+    expect(load(hard)).toBeGreaterThan(load(easy))
+  })
+  it('lapses inflate each step weight above 1', () => {
+    const steps = fsrsScheduleMix({ ...base, mix: { again: 0.2, hard: 0.1, good: 0.6, easy: 0.1 } })
+    expect(steps[0]!.weight).toBeCloseTo(1.2, 6)
   })
 })
 
