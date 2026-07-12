@@ -44,6 +44,7 @@ import { triggerSyncFill } from '@/lib/triggerSyncFill'
 
 const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
+const HINT_HARD_REQUEUE_OFFSET = 6   // hint-assisted "Hard" re-shows this session instead of advancing
 
 interface SessionCard {
   card: Card
@@ -791,6 +792,19 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
     try {
       const { card, state, pipeline, productionMode, reviewTrack, isReverse } = current
+
+      // Hint + "Hard" on a due card: the recall wasn't cold, so re-show it this session instead of
+      // granting a new interval. Only a hint-free Hard advances the schedule. (Any number of hints.)
+      if (state.graduated && rating === 'hard' && hintRef.current) {
+        hintRef.current = null
+        setQueue(prev => {
+          const at = Math.min(index + 1 + HINT_HARD_REQUEUE_OFFSET, prev.length)
+          const next = [...prev]; next.splice(at, 0, { ...current }); return next
+        })
+        setIndex(i => i + 1)
+        return
+      }
+
       const stateRepo  = new SupabaseCardStateRepository()
       const eventRepo  = new SupabaseReviewEventRepository()
       const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)

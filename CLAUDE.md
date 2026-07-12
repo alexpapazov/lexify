@@ -814,6 +814,17 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   deduped queue by `productionMode` (`filterByPresent`). Typing = forward production
   shown typed (one direction); Self-graded = forward self-graded + recall + reverse.
 
+## Hint + Hard re-shows instead of advancing (2026-07-11)
+
+In Due Now reviews, if a hint was used (any number of times) and the card is then rated **Hard**, the
+recall wasn't "cold" — so the card is **re-queued this session** (~6 cards ahead) instead of being granted
+a new interval. Only a hint-free Hard advances the FSRS schedule. Implemented as an early return at the top
+of `handleAnswer` in all 3 session pages, gated on `state.graduated && rating === 'hard' && hintRef.current`:
+it splices a copy of the current `SessionCard` `HINT_HARD_REQUEUE_OFFSET` (6) slots ahead and advances,
+leaving the card's schedule untouched (so it stays due until answered cold). No review event is recorded for
+the re-show — the graded review happens when it's answered without a hint. (`hintRef` is the existing
+per-card hint tracker; Again already relearns, Good/Easy still schedule with the hint's reduced growth.)
+
 ## Ghost due cards fix — production lane unification (2026-07-11)
 
 Bug: the dashboard counted a language as having N due cards, but studying it showed "Session complete,
