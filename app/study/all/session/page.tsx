@@ -38,7 +38,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { partitionRelearnPool } from '@/lib/relearnPool'
 import { CardEditModal } from '@/components/CardEditModal'
 
@@ -298,14 +298,12 @@ function AllDueSessionInner() {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated && !state.dormant && dirParam !== 'reverse') {
               const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
-              const isLegacyDue = !state.typedDueAt && !state.smartDueAt && isDueByDate(state.dueAt)
-              const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
-              const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
-              const isRecallDue = isDueByDate(state.recallDueAt)
-              if (isTypedDue  && trackEnabled(en, 'typed',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'typed',  productionMode: forwardProductionMode(state, 'typed', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
-              if (isSmartDue  && trackEnabled(en, 'smart',  false)) categoryCards.push({ ...common, card, state, reviewTrack: 'smart',  productionMode: forwardProductionMode(state, 'smart', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
-              if (isRecallDue && trackEnabled(en, 'recall', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
-              if (isLegacyDue && trackEnabled(en, 'legacy', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'legacy', productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+              // Production is one lane (typed/smart mutually exclusive): the due date may sit in the
+              // typed OR smart column, but it's reviewed on whichever lane is enabled.
+              const prodTrack = activeProductionTrack(en)
+              const prodDueDate = state.smartDueAt ?? state.typedDueAt ?? state.dueAt
+              if (prodTrack && isDueByDate(prodDueDate)) categoryCards.push({ ...common, card, state, reviewTrack: prodTrack, productionMode: forwardProductionMode(state, prodTrack, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
+              if (isDueByDate(state.recallDueAt) && trackEnabled(en, 'recall', false)) categoryCards.push({ ...common, card, state, reviewTrack: 'recall', productionMode: 'self-graded' })
             }
           }
           if (category === 'due' && dirParam !== 'forward') {
@@ -399,14 +397,10 @@ function AllDueSessionInner() {
             // Dormant cards never become due automatically.
           } else if (state.graduated) {
             const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
-            const isLegacyDue = !state.typedDueAt && !state.smartDueAt && isDueByDate(state.dueAt)
-            const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
-            const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
-            const isRecallDue = isDueByDate(state.recallDueAt)
-            if (isTypedDue  && trackEnabled(en, 'typed',  false)) allCards.push({ ...common, state, productionMode: forwardProductionMode(state, 'typed', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'typed' })
-            if (isSmartDue  && trackEnabled(en, 'smart',  false)) allCards.push({ ...common, state, productionMode: forwardProductionMode(state, 'smart', smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)), reviewTrack: 'smart' })
-            if (isRecallDue && trackEnabled(en, 'recall', false)) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
-            if (isLegacyDue && trackEnabled(en, 'legacy', false)) allCards.push({ ...common, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
+            const prodTrack = activeProductionTrack(en)
+            const prodDueDate = state.smartDueAt ?? state.typedDueAt ?? state.dueAt
+            if (prodTrack && isDueByDate(prodDueDate)) allCards.push({ ...common, state, reviewTrack: prodTrack, productionMode: forwardProductionMode(state, prodTrack, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
+            if (isDueByDate(state.recallDueAt) && trackEnabled(en, 'recall', false)) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
           }
         }
 

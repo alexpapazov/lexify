@@ -814,6 +814,25 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   deduped queue by `productionMode` (`filterByPresent`). Typing = forward production
   shown typed (one direction); Self-graded = forward self-graded + recall + reverse.
 
+## Ghost due cards fix — production lane unification (2026-07-11)
+
+Bug: the dashboard counted a language as having N due cards, but studying it showed "Session complete,
+0 reviewed." Root cause: after the smart-typing migration (078), a pair has typed **off** / smart **on**,
+but ladder graduation writes `typed_due_at` (not `smart_due_at`). The dashboard counts production-due if
+EITHER production track is enabled, but the session queue only surfaced a `typed_due_at` card when the
+**typed** track was enabled — so those cards were counted yet never queued (ghosts).
+
+Fix: `lib/sessionLimits.ts: activeProductionTrack(tracks)` → the single enabled production lane
+(`'smart'` if smart on, else `'typed'`, else null), since typed/smart are mutually exclusive. All three
+session pages' due-queue builders (`study/all`, `study/[deckId]`, `study/folder/[folderId]`, both the
+category-`due` branch and the top-up/refill branch) now compute production due generically:
+`prodDueDate = smart_due_at ?? typed_due_at ?? due_at`, and push one production entry on
+`activeProductionTrack(en)` when that date is due — instead of separate typed/smart/legacy branches each
+gated on their own track flag. This matches the dashboard's `prodDueOn` exactly (same date priority, same
+`typed||smart` enable gate), and self-heals mis-placed cards (first review on the smart lane writes the
+`smart_*` columns). The deck page's `electiveCards` (early-review) fallback now triggers on
+`!prodDue && !isRecallDue`. Unit-tested in `lib/__tests__/activeProductionTrack.test.ts`.
+
 ## Projected Due Now forecast rebuilt on FSRS (2026-07-11)
 
 `components/analytics/DueForecastProjection.tsx` was rebuilt to simulate the **live FSRS stability

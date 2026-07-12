@@ -167,6 +167,20 @@ export function buildEnabledTracksMap(rows: TrackFlagRow[]): Map<string, Enabled
 }
 
 /**
+ * The single enabled forward-production lane. Typed and smart are mutually exclusive per pair, but a
+ * card's production due date can live in either the `typed_due_at` or `smart_due_at` column depending
+ * on when/how it graduated (e.g. the ladder writes typed_due_at). Either way it must be reviewable on
+ * whichever lane is currently enabled — otherwise the dashboard counts it as due while the session
+ * silently drops it ("ghost" cards). Returns null when neither production track is enabled.
+ */
+export function activeProductionTrack(tracks: EnabledTracks | undefined): 'smart' | 'typed' | null {
+  const t = tracks ?? DEFAULT_ENABLED_TRACKS
+  if (t.smart) return 'smart'
+  if (t.typed) return 'typed'
+  return null
+}
+
+/**
  * Whether a specific due review should surface, given the pair's enabled tracks.
  * Legacy (pre-dual-track) reviews count as typed production.
  */

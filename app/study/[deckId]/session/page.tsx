@@ -35,7 +35,7 @@ import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { partitionRelearnPool } from '@/lib/relearnPool'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
@@ -493,15 +493,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
               cards.flatMap(card => {
                 const state = stateMap.get(card.id)
                 if (!state?.graduated || state.dormant) return []
-                const isLegacyDue = !state.typedDueAt && !state.smartDueAt && isDueByDate(state.dueAt)
-                const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
-                const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
-                const isRecallDue = isDueByDate(state.recallDueAt)
+                // Production is one lane (typed/smart mutually exclusive): the due date may sit in the
+                // typed OR smart column, but it's reviewed on whichever lane is enabled.
+                const prodTrack = activeProductionTrack(enabledTracks)
+                const prodDueDate = state.smartDueAt ?? state.typedDueAt ?? state.dueAt
                 const items: (typeof categoryQueue)[number][] = []
-                if (isTypedDue  && trackEnabled(enabledTracks, 'typed',  false)) items.push({ card, state, pipeline, productionMode: forwardProductionMode(state, 'typed', schedulerParams.smartTypingThresholdDays), reviewTrack: 'typed' })
-                if (isSmartDue  && trackEnabled(enabledTracks, 'smart',  false)) items.push({ card, state, pipeline, productionMode: forwardProductionMode(state, 'smart', schedulerParams.smartTypingThresholdDays), reviewTrack: 'smart' })
-                if (isRecallDue && trackEnabled(enabledTracks, 'recall', false)) items.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
-                if (isLegacyDue && trackEnabled(enabledTracks, 'legacy', false)) items.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
+                if (prodTrack && isDueByDate(prodDueDate)) items.push({ card, state, pipeline, reviewTrack: prodTrack, productionMode: forwardProductionMode(state, prodTrack, schedulerParams.smartTypingThresholdDays) })
+                if (isDueByDate(state.recallDueAt) && trackEnabled(enabledTracks, 'recall', false)) items.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
                 return items
               })
             )
@@ -585,23 +583,18 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         } else if (state.graduated && state.dormant) {
           // Dormant cards never become due automatically (studyable via ?category=dormant).
         } else if (state.graduated) {
-          const isLegacyDue = !state.typedDueAt && !state.smartDueAt && isDueByDate(state.dueAt)
-          const isTypedDue  = !!state.typedDueAt && isDueByDate(state.typedDueAt)
-          const isSmartDue  = !!state.smartDueAt && isDueByDate(state.smartDueAt)
+          const prodTrack = activeProductionTrack(enabledTracks)
+          const prodDueDate = state.smartDueAt ?? state.typedDueAt ?? state.dueAt
+          const prodDue = isDueByDate(prodDueDate)
           const isRecallDue = isDueByDate(state.recallDueAt)
-          if (isTypedDue && trackEnabled(enabledTracks, 'typed', false)) {
-            dueCards.push({ card, state, pipeline, productionMode: forwardProductionMode(state, 'typed', schedulerParams.smartTypingThresholdDays), reviewTrack: 'typed' })
-          }
-          if (isSmartDue && trackEnabled(enabledTracks, 'smart', false)) {
-            dueCards.push({ card, state, pipeline, productionMode: forwardProductionMode(state, 'smart', schedulerParams.smartTypingThresholdDays), reviewTrack: 'smart' })
+          if (prodTrack && prodDue) {
+            dueCards.push({ card, state, pipeline, reviewTrack: prodTrack, productionMode: forwardProductionMode(state, prodTrack, schedulerParams.smartTypingThresholdDays) })
           }
           if (isRecallDue && trackEnabled(enabledTracks, 'recall', false)) {
             dueCards.push({ card, state, pipeline, productionMode: 'self-graded', reviewTrack: 'recall' })
           }
-          if (isLegacyDue && trackEnabled(enabledTracks, 'legacy', false)) {
-            dueCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams), reviewTrack: 'legacy' })
-          }
-          if (!isTypedDue && !isSmartDue && !isRecallDue && !isLegacyDue) {
+          if (!prodDue && !isRecallDue) {
+            // Graduated but nothing due yet → early-review (elective) pool.
             electiveCards.push({ card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
           }
         }
