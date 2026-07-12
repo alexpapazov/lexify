@@ -837,7 +837,7 @@ export function TypingMode({
                           Override as incorrect
                         </button>
                       )}
-                      {result.correct && softWrongEnabled && (
+                      {result.correct && softWrongEnabled && result.status !== 'almost' && (
                         <button onClick={() => setOverrideAsAlmost(true)} className="text-xs text-ink-faint hover:text-warning transition-colors">
                           Override as almost
                         </button>
@@ -847,7 +847,13 @@ export function TypingMode({
                           Override as correct
                         </button>
                       )}
-                      {!result.correct && gradedReview && (
+                      {/* Already "almost" → offer the other two verdicts (incorrect), not "almost" again. */}
+                      {!result.correct && result.status === 'almost' && (
+                        <button onClick={() => setOverrideAndPersist(false)} className="text-xs text-ink-faint hover:text-danger transition-colors">
+                          Override as incorrect
+                        </button>
+                      )}
+                      {!result.correct && gradedReview && result.status !== 'almost' && (
                         <button onClick={() => setForceAlmost(true)} className="text-xs text-ink-faint hover:text-warning transition-colors">
                           Override as almost
                         </button>
