@@ -28,7 +28,7 @@ import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/eng
 import { scheduleGraduatedFsrs, RELEARN_MINUTES } from '@/engine/dueNow'
 import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
-import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
+import type { Card, CardState, Deck, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
@@ -139,6 +139,11 @@ function AllDueSessionInner() {
 
   const tzRef       = useRef('UTC')
   const turnoverRef = useRef(0)
+  // Persisted load context, reused by the on-complete "more due?" re-check.
+  const decksRef      = useRef<Deck[] | null>(null)
+  const enabledMapRef = useRef<Map<string, EnabledTracks> | null>(null)
+  const paramMapRef   = useRef<Map<string, SchedulerParamsRow> | null>(null)
+  const [moreDue, setMoreDue] = useState(0)
   // Hint usage for the current card's review — consumed once in handleAnswer.
   const hintRef     = useRef<{ level: number; growthFactor: number } | null>(null)
   const handleHint  = useCallback((level: number, growthFactor: number) => {
@@ -270,6 +275,8 @@ function AllDueSessionInner() {
         enabledTracksMap.get(`${src}|${tgt}`)
       const smartThresholdFor = (src: string, tgt: string): number =>
         pMap.get(`${src}|${tgt}`)?.smartTypingThresholdDays ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays
+      // Persist for the on-complete "more due?" re-check (Continue button).
+      decksRef.current = decks; enabledMapRef.current = enabledTracksMap; paramMapRef.current = pMap
 
       // ?category= elective study: build queue from only that category across
       // all decks (or, when source/target are given, just that language pair).
@@ -486,6 +493,49 @@ function AllDueSessionInner() {
     if (index >= queue.length) setDone(true)  // exhausted + nothing due → end; waiting cards roll over
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, queue.length, done, loading, relearnPool])
+
+  // On completion of a Due Now session, re-check whether more cards are due in this same scope +
+  // present filter (e.g. new cards became due, or a relearn's timer elapsed) → show "Continue".
+  useEffect(() => {
+    if (!done || category !== 'due' || !decksRef.current) return
+    let cancelled = false
+    ;(async () => {
+      const decks = decksRef.current!, tz = tzRef.current
+      const today = getToday(tz, turnoverRef.current)
+      const dueByDate = (d?: string | null) => !!d && new Date(d).toLocaleDateString('en-CA', { timeZone: tz }) <= today
+      const wantTyping = presentParam === 'typing', wantSelf = presentParam === 'selfgraded'
+      const stateRepo = new SupabaseCardStateRepository()
+      let count = 0
+      for (const deck of decks) {
+        if (sourceLang && targetLang && (deck.sourceLanguage !== sourceLang || deck.targetLanguage !== targetLang)) continue
+        if (dirParam) { /* dir-scoped sessions: keep simple, count all directions */ }
+        const en = enabledMapRef.current?.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
+        const threshold = paramMapRef.current?.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)?.smartTypingThresholdDays ?? 20
+        const states = await stateRepo.listByDeck(userId, deck.id).catch(() => [] as CardState[])
+        const fwdMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
+        for (const s of states) {
+          if (!s.graduated) continue
+          if (s.reviewDirection === 'reverse') {
+            if (wantTyping || dirParam === 'forward') continue                 // reverse is self-graded
+            if (!trackEnabled(en, 'recall', true) || fwdMap.get(s.cardId)?.dormant) continue
+            if (dueByDate(s.recallDueAt ?? s.dueAt)) count++
+          } else {
+            if (s.dormant || dirParam === 'reverse') continue
+            const prodTrack = activeProductionTrack(en)
+            const prodDue = !!prodTrack && dueByDate(s.smartDueAt ?? s.typedDueAt ?? s.dueAt)
+            const recallDue = dueByDate(s.recallDueAt) && trackEnabled(en, 'recall', false)
+            if (prodDue) {
+              const typed = forwardProductionMode(s, prodTrack!, threshold) === 'typed'
+              if (wantTyping ? typed : wantSelf ? !typed : true) count++
+            } else if (recallDue && !wantTyping) count++          // recall is self-graded
+          }
+        }
+      }
+      if (!cancelled) setMoreDue(count)
+    })()
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done])
 
   useEffect(() => {
     localStorage.setItem('lexify_ipa', showIPA ? '1' : '0')
@@ -1334,18 +1384,29 @@ function AllDueSessionInner() {
         <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}{pairLabel ? ` in ${pairLabel}` : ' across all decks'}.</p>
         <div className="flex gap-3 justify-center flex-wrap">
-          <Link href={backHref} className="btn-primary">{backLabel}</Link>
-          {electiveSession && category && category !== 'due' && (
-            <button
-              onClick={() => router.push(
-                sourceLang && targetLang
-                  ? `/study/all/session?category=${category}&source=${sourceLang}&target=${targetLang}`
-                  : `/study/all/session?category=${category}`
+          {category === 'due' ? (
+            <>
+              {moreDue > 0 && (
+                <button onClick={() => window.location.reload()} className="btn-primary">Continue ({moreDue})</button>
               )}
-              className="btn-ghost"
-            >
-              Study ahead ({CATEGORY_LABELS[category]})
-            </button>
+              <Link href="/study" className={moreDue > 0 ? 'btn-ghost' : 'btn-primary'}>Back to study</Link>
+            </>
+          ) : (
+            <>
+              <Link href={backHref} className="btn-primary">{backLabel}</Link>
+              {electiveSession && category && (
+                <button
+                  onClick={() => router.push(
+                    sourceLang && targetLang
+                      ? `/study/all/session?category=${category}&source=${sourceLang}&target=${targetLang}`
+                      : `/study/all/session?category=${category}`
+                  )}
+                  className="btn-ghost"
+                >
+                  Study ahead ({CATEGORY_LABELS[category]})
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

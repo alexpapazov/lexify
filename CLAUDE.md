@@ -826,6 +826,20 @@ user answer and the expected answer up front — so these tags never count, rega
 content isn't a grammatical marker). Applies to all typed grading (production/dictation/pre-grad).
 Tested in `engine/__tests__/grammaticalTags.test.ts`.
 
+## Scoped Due Now done screen: Back to study + Continue (2026-07-11)
+
+The "Study all due → Typing / Self-graded" scoped sessions' completion screen now shows **Back to study**
+(→ `/study`, was "Back to <pair>" → `/library`) and a conditional **Continue (N)** button when more cards
+are due in the same scope + present filter. `app/study/all/session/page.tsx`: on `done` (for
+`category === 'due'`) a re-check effect re-fetches the scoped decks' card states and counts still-due
+cards (production via `activeProductionTrack` + `forwardProductionMode`, recall/reverse gated on
+`trackEnabled`, filtered by `present`), stored in `moreDue`. Continue does `window.location.reload()`
+(re-runs the load). Load context (`decksRef`/`enabledMapRef`/`paramMapRef`) is persisted for the re-check.
+Applies to typing, self-graded, and reverse (all are `category=due` present buckets). Non-due elective
+categories keep their "Back to <pair>" + "Study ahead" screen. (Usually `moreDue` is 0 right after
+finishing, since a scoped session loads all due cards uncapped — Continue appears only when new cards
+became due or a relearn timer elapsed.)
+
 ## Hint + Hard re-shows instead of advancing (2026-07-11)
 
 In Due Now reviews, if a hint was used (any number of times) and the card is then rated **Hard**, the
