@@ -814,6 +814,28 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   deduped queue by `productionMode` (`filterByPresent`). Typing = forward production
   shown typed (one direction); Self-graded = forward self-graded + recall + reverse.
 
+## Relearn resurfacing by real clock time (2026-07-11)
+
+The Due Now relearn pool (graduated card rated Again/Hard → 5/10/20-min loop) no longer
+always flushes at the end of the session. New behavior, in all 3 session pages
+(`study/[deckId]/session`, `study/folder/[folderId]/session`, `study/all/session`):
+
+- **`lib/relearnPool.ts: partitionRelearnPool(pool, reviewCount, batchSize, now)`** — pure
+  helper returning `{ due, keep, dropped }`. `due` = dueAt has elapsed (real clock) → resurface;
+  `dropped` = not due but `reviewCount - relearnLapsedAt >= batchSize` → roll to a later session;
+  `keep` = still waiting. Unit-tested in `lib/__tests__/relearnPool.test.ts`.
+- **SessionCard gained `relearnLapsedAt?: number`** — the session's answer counter when the card
+  lapsed. Each page keeps `reviewCountRef` (incremented at the top of `handleAnswer` +
+  `handleIDontKnow`) and `batchSizeRef` (set in `load()` = `cardsPerSession` or the page's elective
+  limit — 20 for all/folder). All four relearn-pool pushes stamp `relearnLapsedAt: reviewCountRef.current`.
+- **The old "inject most-elapsed relearn card when the queue runs out" useEffect was replaced** with
+  a real-clock effect (deps `[index, queue.length, done, loading, relearnPool]`; deck page also guards
+  `showElectivePicker`). It splices `due` cards ~3 ahead of the current index, drops window-expired
+  ones, and ends the session when the main queue is exhausted with nothing due (waiting cards roll
+  to a future session via their persisted `dueAt`).
+- Consequence: short sessions (few cards) will typically roll relearn cards to the next session
+  rather than re-show them minutes later — intended trade-off of real-clock timing.
+
 ## Audio: TTS hardening + multi-source + per-deck speed (2026-07-10)
 
 - **TTS route** (`app/api/tts/route.ts`): ElevenLabs `eleven_turbo_v2_5` with enforced

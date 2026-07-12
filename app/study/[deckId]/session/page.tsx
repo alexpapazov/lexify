@@ -36,6 +36,7 @@ import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblin
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { partitionRelearnPool } from '@/lib/relearnPool'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, unmarkSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
@@ -56,6 +57,8 @@ interface SessionCard {
   isReverse?: boolean
   /** Marks a copy of a card re-inserted after "I don't know" — used for undo cleanup. */
   idontknow?: true
+  /** Answer counter when this card lapsed into the relearn pool (drives the batch-size resurface window). */
+  relearnLapsedAt?: number
 }
 
 /** A single elective study category, chosen either via a deck-stat "Study" button (?category=) or the elective picker. */
@@ -153,6 +156,8 @@ export default function SessionPage() {
   const [overrides,       setOverrides]       = useState<Map<string, Set<string>>>(new Map())
   /** Graduated cards in the 10-minute relearn loop — held out of the main queue until their dueAt passes (or the queue runs out). */
   const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
+  const reviewCountRef = useRef(0)                    // monotonic count of answers given this session
+  const batchSizeRef   = useRef(20)                   // resurface window = the session's batch size
   /** Synonym groups for all cards in this session (loaded at session start). */
   const [synonymGroups,           setSynonymGroups]           = useState<Map<string, SynonymGroup>>(new Map())
   /** The "today" date key used for synonym pre-fill localStorage (accounts for day turnover hour). */
@@ -518,6 +523,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       }
 
       const cardsPerSession   = prefs?.cardsPerSession   ?? null
+      batchSizeRef.current = cardsPerSession && cardsPerSession > 0 ? cardsPerSession : 20
       const learningBatchMode = prefs?.learningBatchMode ?? false
       setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
 
@@ -648,20 +654,24 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     loadSession()
   }, [loadSession])
 
-  // When the main queue runs out, inject the most-elapsed relearn card so the
-  // session continues. Cards are sorted by dueAt ASC (soonest due = most of
-  // their relearn interval has already elapsed).
+  // Relearn resurfacing, by REAL CLOCK time. A lapsed (Again/Hard) graduated card waits in the
+  // pool until its dueAt actually passes, then it's spliced back in a few cards ahead. If the
+  // batch-size window elapses first (that many cards answered without its time coming) it drops
+  // to a later session; likewise, when the main queue runs out and nothing is due yet, the
+  // session ends and the waiting cards roll over (their dueAt is already saved).
   useEffect(() => {
-    if (loading || showElectivePicker || done || index < queue.length) return
-    if (relearnPool.length === 0) { setDone(true); return }
-    const sorted = [...relearnPool].sort((a, b) =>
-      (a.state.dueAt ? new Date(a.state.dueAt).getTime() : 0) -
-      (b.state.dueAt ? new Date(b.state.dueAt).getTime() : 0)
-    )
-    setQueue(prev => [...prev, sorted[0]!])
-    setRelearnPool(sorted.slice(1))
+    if (loading || done || showElectivePicker) return
+    if (relearnPool.length === 0) { if (index >= queue.length) setDone(true); return }
+    const { due, keep, dropped } = partitionRelearnPool(relearnPool, reviewCountRef.current, batchSizeRef.current, Date.now())
+    if (due.length > 0) {
+      setQueue(prev => { const at = Math.min(prev.length, index + 3); const next = [...prev]; next.splice(at, 0, ...due); return next })
+      setRelearnPool(keep)
+      return
+    }
+    if (dropped.length > 0) setRelearnPool(keep)
+    if (index >= queue.length) setDone(true)  // exhausted + nothing due → end; waiting cards roll over
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, queue.length, done, loading, showElectivePicker])
+  }, [index, queue.length, done, loading, relearnPool, showElectivePicker])
 
   // Auto-advance past a synonym-group representative only when EVERY member of
   // its group is already answered for the current round (nothing left to type).
@@ -784,6 +794,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
     setSubmitting(true)
     setAnswerError(null)
+    reviewCountRef.current += 1
 
     try {
       const { card, state, pipeline, productionMode, reviewTrack, isReverse } = current
@@ -942,7 +953,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         // in this closure, so checking relearnPool.length here would read the old value.
         // The relearnPool useEffect handles re-injection once the main queue is exhausted.
         if (recallNewState.relearningStep > 0) {
-          setRelearnPool(prev => [...prev, { ...current, state: recallNewState }])
+          setRelearnPool(prev => [...prev, { ...current, state: recallNewState, relearnLapsedAt: reviewCountRef.current }])
           setIndex(i => i + 1)
           return
         }
@@ -1051,7 +1062,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: smartNewState } : item))
         if (smartNewState.relearningStep > 0) {
-          setRelearnPool(prev => [...prev, { ...current, state: smartNewState }])
+          setRelearnPool(prev => [...prev, { ...current, state: smartNewState, relearnLapsedAt: reviewCountRef.current }])
           setIndex(i => i + 1)
           return
         }
@@ -1328,7 +1339,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // its dueAt passes. The pool-injection useEffect above reintroduces it
       // once the main queue runs out, ordered by elapsed percentage.
       if (newState.graduated && newState.relearningStep > 0) {
-        const requeued: SessionCard = { card, state: newState, pipeline, productionMode: decideProductionMode(newState, nowDate) }
+        const requeued: SessionCard = { card, state: newState, pipeline, productionMode: decideProductionMode(newState, nowDate), relearnLapsedAt: reviewCountRef.current }
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: newState } : item))
         setRelearnPool(prev => [...prev, requeued])
         setIndex(i => i + 1)
@@ -1589,6 +1600,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     if (!current || submitting) return
     setSubmitting(true)
     setAnswerError(null)
+    reviewCountRef.current += 1
 
     try {
       const { card, state, pipeline, productionMode, isReverse } = current
@@ -1636,7 +1648,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // True when the penalty sent the card backwards in the pipeline (e.g. typing-streak reset to step 0).
       const wasReset = counted.currentStepOrder < prevState.currentStepOrder
 
-      const requeued: SessionCard = { card, state: counted, pipeline, productionMode, idontknow: true }
+      const requeued: SessionCard = { card, state: counted, pipeline, productionMode, idontknow: true, relearnLapsedAt: reviewCountRef.current }
       if (counted.graduated && counted.relearningStep > 0) {
         // Graduated card entered relearn loop — hold in pool until timer elapses
         setQueue(prev => prev.map((item, i) => i === index ? { ...current, state: counted } : item))
