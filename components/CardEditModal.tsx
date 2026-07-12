@@ -165,6 +165,8 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [pipeline,         setPipeline]         = useState<Pipeline | null>(null)
   const [audioError,       setAudioError]       = useState<string | null>(null)
   const [busySource,       setBusySource]       = useState<AudioSource | null>(null)
+  const [trackBusy,        setTrackBusy]        = useState(false)
+  const [trackMsg,         setTrackMsg]         = useState<{ ok: boolean; text: string } | null>(null)
   const frontRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => { frontRef.current?.focus() }, [])
@@ -402,6 +404,44 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
       setResetError(err instanceof Error ? err.message : 'Graduate failed')
     } finally {
       setGraduating(false)
+    }
+  }
+
+  /**
+   * Move this card between the normal track (`acceleratedMode: 'none'`) and the accelerated,
+   * import-known fast-track. Switching to accelerated on an un-graduated card fast-track-graduates
+   * it; on an already-graduated card it just flips the mode + resets the boost counters (and asks
+   * for one typed confirmation). Switching to normal clears the accel flags but keeps the schedule.
+   */
+  async function setTrack(accel: boolean) {
+    setTrackBusy(true)
+    setTrackMsg(null)
+    try {
+      const stateRepo = new SupabaseCardStateRepository()
+      let pipelineId = state?.pipelineId
+      if (!pipelineId) pipelineId = (await new SupabasePipelineRepository().getDefault()).id
+      const now = new Date()
+      const nowIso = now.toISOString()
+      let next: CardState
+      if (accel) {
+        if (!state || !state.graduated) {
+          const [dueAt] = await batchFastTrackDueDates(userId, 1, now, stateRepo)
+          next = fastTrackCardState(userId, card.id, pipelineId, dueAt ?? nowIso, now)
+        } else {
+          next = { ...state, acceleratedMode: 'import_known', acceleratedLocked: false, acceleratedWrongStreak: 0, acceleratedPenalty: 0, acceleratedTypedConfirmed: false, postAccelRestartWindow: 0, postAccelWrongCount: 0, forcedTypedRemaining: 3 }
+        }
+      } else {
+        if (!state) { setTrackMsg({ ok: true, text: 'Already on the normal track.' }); setTrackBusy(false); return }
+        next = { ...state, acceleratedMode: 'none', acceleratedTypedConfirmed: false, acceleratedWrongStreak: 0, acceleratedPenalty: 0, postAccelRestartWindow: 0, postAccelWrongCount: 0 }
+      }
+      const saved = await stateRepo.upsert(next)
+      onStateChange(saved)
+      setTrackMsg({ ok: true, text: accel ? 'Moved to the accelerated track.' : 'Moved to the normal track.' })
+      setTimeout(() => setTrackMsg(null), 2500)
+    } catch (err: unknown) {
+      setTrackMsg({ ok: false, text: err instanceof Error ? err.message : 'Failed to change track' })
+    } finally {
+      setTrackBusy(false)
     }
   }
 
@@ -837,6 +877,31 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
           <p className="text-success text-xs bg-success/10 border border-success/20 rounded-lg px-3 py-2">✓ {resetDone}</p>
         )}
 
+        {/* Learning track — normal pipeline vs accelerated (import-known) fast-track */}
+        <div className="space-y-1.5">
+          <p className="text-xs text-ink-faint">Learning track:</p>
+          <div className="flex gap-1.5">
+            {([
+              { accel: false, label: 'Normal', hint: 'full pipeline' },
+              { accel: true,  label: 'Accelerated', hint: 'already known — fast-track' },
+            ]).map(t => {
+              const isActive = (state?.acceleratedMode === 'import_known') === t.accel
+              return (
+                <button
+                  key={t.label}
+                  onClick={() => { if (!isActive) void setTrack(t.accel) }}
+                  disabled={trackBusy || isActive}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-default ${isActive ? 'border-accent/40 bg-accent/5' : 'border-white/10 hover:bg-white/5'}`}
+                >
+                  <span className="block text-sm text-ink">{t.label}{isActive && <span className="text-xs text-accent font-medium"> · Active</span>}</span>
+                  <span className="block text-xs text-ink-faint">{t.hint}</span>
+                </button>
+              )
+            })}
+          </div>
+          {trackMsg && <p className={`text-xs ${trackMsg.ok ? 'text-success' : 'text-danger'}`}>{trackMsg.text}</p>}
+        </div>
+
         {/* Audio sources — pick which recording plays for this card */}
         {TTS_SUPPORTED_LANGUAGES.has(sourceLanguage) && (
           <div className="space-y-1.5">
@@ -1115,7 +1180,6 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     ['Review mode',    reviewModeLabel],
                     ['Reps',           String(state.reps)],
                     ['Lapses',         String(state.lapses)],
-                    ['Ease',           state.ease.toFixed(2)],
                     ['Last rating',    rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
                     ["I don't know",   String(state.iDontKnowCount)],
                   ]} />
