@@ -505,13 +505,16 @@ function AllDueSessionInner() {
       const dueByDate = (d?: string | null) => !!d && new Date(d).toLocaleDateString('en-CA', { timeZone: tz }) <= today
       const wantTyping = presentParam === 'typing', wantSelf = presentParam === 'selfgraded'
       const stateRepo = new SupabaseCardStateRepository()
+      // Only the in-scope decks, fetched IN PARALLEL (sequential per-deck round-trips were the latency).
+      const scopedDecks = decks.filter(d => !(sourceLang && targetLang) || (d.sourceLanguage === sourceLang && d.targetLanguage === targetLang))
+      const perDeck = await Promise.all(scopedDecks.map(d => stateRepo.listByDeck(userId, d.id).catch(() => [] as CardState[])))
+      if (cancelled) return
       let count = 0
-      for (const deck of decks) {
-        if (sourceLang && targetLang && (deck.sourceLanguage !== sourceLang || deck.targetLanguage !== targetLang)) continue
-        if (dirParam) { /* dir-scoped sessions: keep simple, count all directions */ }
+      for (let di = 0; di < scopedDecks.length; di++) {
+        const deck = scopedDecks[di]!
         const en = enabledMapRef.current?.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
         const threshold = paramMapRef.current?.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)?.smartTypingThresholdDays ?? 20
-        const states = await stateRepo.listByDeck(userId, deck.id).catch(() => [] as CardState[])
+        const states = perDeck[di]!
         const fwdMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
         for (const s of states) {
           if (!s.graduated) continue
@@ -1390,10 +1393,10 @@ function AllDueSessionInner() {
               <p className="text-sm text-ink-faint">Checking for more…</p>
             ) : (
               <>
+                <Link href="/study" className={moreDue > 0 ? 'btn-ghost' : 'btn-primary'}>Back to study</Link>
                 {moreDue > 0 && (
                   <button onClick={() => window.location.reload()} className="btn-primary">Continue ({moreDue})</button>
                 )}
-                <Link href="/study" className={moreDue > 0 ? 'btn-ghost' : 'btn-primary'}>Back to study</Link>
               </>
             )
           ) : (
