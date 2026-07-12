@@ -814,6 +814,32 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
   deduped queue by `productionMode` (`filterByPresent`). Typing = forward production
   shown typed (one direction); Self-graded = forward self-graded + recall + reverse.
 
+## Projected Due Now forecast rebuilt on FSRS (2026-07-11)
+
+`components/analytics/DueForecastProjection.tsx` was rebuilt to simulate the **live FSRS stability
+model** instead of the old fixed interval multiplier (`goodIdeal`). New pure helper
+`lib/forecastFsrs.ts` (unit-tested in `lib/__tests__/forecastFsrs.test.ts`):
+
+- `fsrsSchedule({stability,difficulty,firstReviewDay,retention,maxInt,horizon})` — clean all-Good
+  FSRS review-day sequence (each step also carries the `intervalDays` that led to it, for smart
+  typed-vs-self-graded routing). Uses `reviewCard`/`intervalForRetention` from `engine/fsrs.ts`.
+- `stabilityForInterval(intervalDays, retention)` — inverse of `intervalForRetention`, to seed a
+  stability from a known interval.
+- `estimateInitialInterval(intervalsByReps, fallback)` — **measured per-language initial interval**:
+  median interval of the freshest graduated cards (`reps<=1`, widening to `<=3`, else fallback 3).
+
+Component behavior:
+- Existing graduated cards are simulated from their real per-track due dates, seeded from stored
+  `stability`/`difficulty` (or derived from the stored interval when null), preserving dormancy
+  (`maxReviews`), reverse-ghosting (`stopDay`), smart routing, and per-pair retention/maxInt.
+- New cards (daily goals) seed at the **measured initial interval** per pair and contribute via
+  `(dailyGoal / retention) · cumulativeReviews(t)`.
+- **Language filter** (pill buttons: All + one per pair, keyed by source language) filters the whole
+  chart. **Per-language pie on hover** of the chart line (only when no filter) — slices = each
+  language's projected cards/day at the hovered day, labeled `flag Name N/day` (`PieChart` subcomponent).
+- The **measured initial interval is displayed** as a stat line under the legend (all languages, or
+  the filtered one).
+
 ## Relearn resurfacing by real clock time (2026-07-11)
 
 The Due Now relearn pool (graduated card rated Again/Hard → 5/10/20-min loop) no longer

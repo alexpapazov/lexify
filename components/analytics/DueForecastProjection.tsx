@@ -1,47 +1,42 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
+import { langName, langFlag } from '@/lib/languages'
+import { fsrsSchedule, stabilityForInterval, estimateInitialInterval, type ReviewStep } from '@/lib/forecastFsrs'
 
-// Forward projection of daily "Due Now" load, split into four lines: Typed
-// production, Self-graded production (recall + smart-typing past its threshold),
-// Reverse recognition, and Total. Blends:
-//   • existing graduated cards — simulated forward from their real due dates
-//     and intervals, growing by each pair's calibrated multiplier;
-//   • new cards — added at each pair's average daily goal (from Settings),
-//     contributing via the renewal model N·(1/p)·stages(t).
-// Smart-typing cards are typed while their interval is below the pair's threshold,
-// then self-graded — each simulated review is routed accordingly.
+// Forward projection of daily "Due Now" load, split into Typed / Self-graded / Reverse / Total,
+// simulated on the live FSRS stability model. Each card's future reviews follow a clean all-Good
+// path (reviewed on its due date, stability grows by the FSRS success curve, next interval = that
+// stability scaled to the pair's retention). New cards from daily goals seed from a per-language
+// MEASURED initial interval (estimated from freshly-graduated cards) rather than a fixed constant.
 
 const HORIZON = 730          // 2 years
 const STEP = 14              // chart sampling / smoothing window (days)
-const I0 = 3                 // assumed post-graduation interval for new cards
 
 interface PairCfg {
-  typedM: number; selfgM: number; smartM: number; reverseM: number
   typedP: number; selfgP: number; smartP: number; reverseP: number
   typedOn: boolean; selfgOn: boolean; smartOn: boolean; reverseOn: boolean
   smartThreshold: number
   maxInt: number; dailyGoal: number
+  src: string; tgt: string
 }
 
-interface ChartPoint { day: number; typed: number; selfg: number; recog: number; total: number }
+interface PairSeries { key: string; label: string; flag: string; typed: number[]; selfg: number[]; recog: number[] }
+interface Forecast { pairs: PairSeries[]; sampleDays: number[]; initI0: { key: string; label: string; flag: string; days: number }[]; hasGoals: boolean }
 
-function stages(t: number, m: number, maxInt: number): number {
-  if (t <= 0 || m <= 1) return 0
-  const s = Math.log(1 + (t * (m - 1)) / I0) / Math.log(m)
-  const cap = Math.log(maxInt / I0) / Math.log(m)
-  return Math.min(s, cap)
-}
+const DEFAULT_I0 = 3
 
 export function DueForecastProjection() {
-  const [points, setPoints] = useState<ChartPoint[] | null>(null)
-  const [hasGoals, setHasGoals] = useState(true)
+  const [data, setData] = useState<Forecast | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [filterKey, setFilterKey] = useState<string | null>(null)   // selected pair, or null = all
+  const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -60,23 +55,24 @@ export function DueForecastProjection() {
 
         // Per-pair config keyed `${src}|${tgt}`.
         const cfg = new Map<string, PairCfg>()
-        const ensure = (k: string): PairCfg => {
+        const ensure = (src: string, tgt: string): PairCfg => {
+          const k = `${src}|${tgt}`
           let c = cfg.get(k)
-          if (!c) { c = { typedM: 2.25, selfgM: 2.25, smartM: 2.25, reverseM: 2.25, typedP: 0.85, selfgP: 0.9, smartP: 0.85, reverseP: 0.9, typedOn: true, selfgOn: true, smartOn: false, reverseOn: true, smartThreshold: 20, maxInt: 1460, dailyGoal: 0 }; cfg.set(k, c) }
+          if (!c) { c = { typedP: 0.85, selfgP: 0.9, smartP: 0.85, reverseP: 0.9, typedOn: true, selfgOn: true, smartOn: false, reverseOn: true, smartThreshold: 20, maxInt: 1460, dailyGoal: 0, src, tgt }; cfg.set(k, c) }
           return c
         }
         for (const r of paramRows) {
-          const c = ensure(`${r.sourceLanguage}|${r.targetLanguage}`)
+          const c = ensure(r.sourceLanguage, r.targetLanguage)
           c.maxInt = r.maxIntervalDays
           const p = r.recentRetentionRate ?? undefined
-          if (r.answerField === 'forward_typed')  { c.typedM = r.goodIdeal;  c.typedOn = r.forwardTypedEnabled;  c.smartThreshold = r.smartTypingThresholdDays; if (p) c.typedP = p }
-          if (r.answerField === 'forward_recall') { c.selfgM = r.goodIdeal;  c.selfgOn = r.forwardRecallEnabled; if (p) c.selfgP = p }
-          if (r.answerField === 'forward_smart')  { c.smartM = r.goodIdeal;  c.smartOn = r.forwardSmartEnabled;  if (p) c.smartP = p }
-          if (r.answerField === 'reverse_recall') { c.reverseM = r.goodIdeal; c.reverseOn = r.reverseRecallEnabled; if (p) c.reverseP = p }
+          if (r.answerField === 'forward_typed')  { c.typedOn = r.forwardTypedEnabled;  c.smartThreshold = r.smartTypingThresholdDays; if (p) c.typedP = p }
+          if (r.answerField === 'forward_recall') { c.selfgOn = r.forwardRecallEnabled; if (p) c.selfgP = p }
+          if (r.answerField === 'forward_smart')  { c.smartOn = r.forwardSmartEnabled;  if (p) c.smartP = p }
+          if (r.answerField === 'reverse_recall') { c.reverseOn = r.reverseRecallEnabled; if (p) c.reverseP = p }
         }
         let anyGoal = false
         for (const pr of pairs) {
-          const c = ensure(`${pr.sourceLanguage}|${pr.targetLanguage}`)
+          const c = ensure(pr.sourceLanguage, pr.targetLanguage)
           const g = pr.goals
           if (g) {
             const sum = [0, 1, 2, 3, 4, 5, 6].reduce((s, d) => s + (g[String(d)] ?? 0), 0)
@@ -85,146 +81,165 @@ export function DueForecastProjection() {
           }
         }
 
-        const typed = new Float64Array(HORIZON + 1)
-        const selfg = new Float64Array(HORIZON + 1)
-        const recog = new Float64Array(HORIZON + 1)
         const now = Date.now()
         const DAY = 86_400_000
         const offset = (iso: string | null | undefined) => iso ? Math.max(0, Math.round((new Date(iso).getTime() - now) / DAY)) : null
 
-        // Simulates a card's future reviews into `arr`. `maxReviews` caps how many
-        // future reviews it emits before going dormant (returns the day it went
-        // dormant); `stopDay` halts it once dormant (from another track). Returns the
-        // dormant day when `maxReviews` was hit, else null.
-        const simulate = (
-          arr: Float64Array, startDay: number | null, interval: number | null | undefined,
-          m: number, maxInt: number, opts?: { maxReviews?: number; stopDay?: number },
-        ): number | null => {
-          if (startDay === null || m <= 1) return null
-          let day = startDay
-          let intv = Math.max(0.5, interval || 1)
-          let guard = 0
-          let count = 0
-          while (day <= HORIZON && guard++ < 300) {
-            if (opts?.stopDay != null && day > opts.stopDay) break
-            arr[day] = (arr[day] ?? 0) + 1
-            count++
-            if (opts?.maxReviews != null && count >= opts.maxReviews) return day
-            intv = Math.min(intv * m, maxInt)
-            day += Math.max(1, Math.round(intv))
-          }
-          return null
+        // Per-pair per-track daily-load accumulators.
+        const series = new Map<string, { typed: Float64Array; selfg: Float64Array; recog: Float64Array }>()
+        const seriesFor = (k: string) => {
+          let x = series.get(k)
+          if (!x) { x = { typed: new Float64Array(HORIZON + 1), selfg: new Float64Array(HORIZON + 1), recog: new Float64Array(HORIZON + 1) }; series.set(k, x) }
+          return x
         }
 
-        // Smart-typing variant: routes each review to `typedArr` while the interval is
-        // below `threshold`, else `selfgArr`. Same maxReviews/stopDay semantics.
-        const simulateSmart = (
-          typedArr: Float64Array, selfgArr: Float64Array, startDay: number | null,
-          interval: number | null | undefined, m: number, maxInt: number, threshold: number,
+        const seedS = (stability: number | null | undefined, interval: number | null | undefined, retention: number) =>
+          stability != null && stability > 0 ? stability : stabilityForInterval(Math.max(0.5, interval || 1), retention)
+        const seedD = (difficulty: number | null | undefined) => difficulty != null && difficulty > 0 ? difficulty : 5
+
+        // Emit a card's FSRS review schedule into one array. Returns the day it hits `maxReviews`
+        // (dormancy), else null. Honors `stopDay` (a track ghosted by dormancy elsewhere).
+        const emit = (
+          arr: Float64Array, firstDay: number | null, S0: number, D0: number, retention: number, maxInt: number,
           opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
-          if (startDay === null || m <= 1) return null
-          let day = startDay
-          let intv = Math.max(0.5, interval || 1)
-          let guard = 0
+          if (firstDay === null) return null
+          const steps = fsrsSchedule({ stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON })
           let count = 0
-          while (day <= HORIZON && guard++ < 300) {
-            if (opts?.stopDay != null && day > opts.stopDay) break
-            const arr = intv < threshold ? typedArr : selfgArr
-            arr[day] = (arr[day] ?? 0) + 1
+          for (const st of steps) {
+            if (opts?.stopDay != null && st.day > opts.stopDay) break
+            arr[st.day] = (arr[st.day] ?? 0) + 1
             count++
-            if (opts?.maxReviews != null && count >= opts.maxReviews) return day
-            intv = Math.min(intv * m, maxInt)
-            day += Math.max(1, Math.round(intv))
+            if (opts?.maxReviews != null && count >= opts.maxReviews) return st.day
+          }
+          return null
+        }
+        // Smart variant: each review is typed while its interval is below `threshold`, else self-graded.
+        const emitSmart = (
+          typedArr: Float64Array, selfgArr: Float64Array, firstDay: number | null, S0: number, D0: number,
+          retention: number, maxInt: number, threshold: number, opts?: { maxReviews?: number; stopDay?: number },
+        ): number | null => {
+          if (firstDay === null) return null
+          const steps = fsrsSchedule({ stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON })
+          let count = 0
+          for (const st of steps) {
+            if (opts?.stopDay != null && st.day > opts.stopDay) break
+            const arr = st.intervalDays < threshold ? typedArr : selfgArr
+            arr[st.day] = (arr[st.day] ?? 0) + 1
+            count++
+            if (opts?.maxReviews != null && count >= opts.maxReviews) return st.day
           }
           return null
         }
 
-        // Existing graduated cards — simulate their real schedules forward.
-        // Dormancy: already-dormant cards are excluded entirely; a card with a
-        // future dormancy_threshold stops contributing once its remaining
-        // production reviews run out (and its reverse row stops the same day).
+        // Existing graduated cards. Also gather freshly-graduated intervals for the initial-interval stat.
+        const initSamples = new Map<string, { reps: number; intervalDays: number }[]>()
         const stateRepo = new SupabaseCardStateRepository()
         const deckStates = await Promise.all(decks.map(d => stateRepo.listByDeck(uid, d.id)))
         for (let di = 0; di < decks.length; di++) {
           const deck = decks[di]!
           const states = deckStates[di]!
-          const c = ensure(`${deck.sourceLanguage}|${deck.targetLanguage}`)
+          const c = ensure(deck.sourceLanguage, deck.targetLanguage)
+          const key = `${deck.sourceLanguage}|${deck.targetLanguage}`
+          const sr = seriesFor(key)
           const fwd = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
-          // The day each card goes dormant (production threshold reached), so the
-          // reverse row can be stopped at the same point.
           const dormantDayByCard = new Map<string, number>()
 
-          // Forward (production) pass first, so reverse rows can read dormant days.
           for (const s of states) {
             if (s.reviewDirection === 'reverse' || !s.graduated || s.dormant) continue
-            // remaining production reviews before dormancy (null = never goes dormant).
+            // Sample the graduation interval from the freshest cards (fewest reps).
+            const initInt = s.scheduledIntervalDays ?? s.typedIntervalDays ?? s.smartIntervalDays ?? s.intervalDays
+            if (initInt && initInt > 0) (initSamples.get(key) ?? initSamples.set(key, []).get(key)!).push({ reps: s.reps, intervalDays: initInt })
+
             const remaining = s.dormancyThreshold != null ? s.dormancyThreshold - s.reps : null
-            if (remaining != null && remaining <= 0) continue   // already at/over threshold → treat as dormant
+            if (remaining != null && remaining <= 0) continue
             const remOpts = remaining != null ? { maxReviews: remaining } : undefined
             let dormantDay: number | null = null
-            // Production is one lane (typed/smart mutually exclusive); show it if EITHER
-            // mode is enabled (smart defaults off, so gating on it alone hides migrated cards).
             const prodOn = c.typedOn || c.smartOn
+            const dS = seedD(s.difficulty)
             if (prodOn && s.typedDueAt) {
-              dormantDay = simulate(typed, offset(s.typedDueAt ?? s.dueAt), s.typedIntervalDays ?? s.intervalDays, c.typedM, c.maxInt, remOpts)
+              dormantDay = emit(sr.typed, offset(s.typedDueAt ?? s.dueAt), seedS(s.stability, s.typedIntervalDays ?? s.intervalDays, c.typedP), dS, c.typedP, c.maxInt, remOpts)
             }
             if (prodOn && s.smartDueAt) {
-              const sd = simulateSmart(typed, selfg, offset(s.smartDueAt), s.smartIntervalDays ?? s.intervalDays, c.smartM, c.maxInt, c.smartThreshold, remOpts)
+              const sd = emitSmart(sr.typed, sr.selfg, offset(s.smartDueAt), seedS(s.stability, s.smartIntervalDays ?? s.intervalDays, c.smartP), dS, c.smartP, c.maxInt, c.smartThreshold, remOpts)
               if (dormantDay == null) dormantDay = sd
             }
             if (c.selfgOn && s.recallDueAt) {
               const recallOpts = dormantDay != null ? { stopDay: dormantDay } : remOpts
-              const rd = simulate(selfg, offset(s.recallDueAt), s.recallIntervalDays ?? s.intervalDays, c.selfgM, c.maxInt, recallOpts)
+              const rd = emit(sr.selfg, offset(s.recallDueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.selfgP), dS, c.selfgP, c.maxInt, recallOpts)
               if (dormantDay == null) dormantDay = rd
             }
             if (dormantDay != null) dormantDayByCard.set(s.cardId, dormantDay)
           }
 
-          // Reverse (recognition) pass.
           for (const s of states) {
             if (s.reviewDirection !== 'reverse' || !s.graduated) continue
             const fwdState = fwd.get(s.cardId)
-            if (fwdState?.dormant) continue                     // forward already dormant → reverse ghosted
+            if (fwdState?.dormant) continue
             if (!(c.reverseOn && fwdState?.graduated)) continue
             const stopDay = dormantDayByCard.get(s.cardId)
-            simulate(recog, offset(s.recallDueAt ?? s.dueAt), s.recallIntervalDays ?? s.intervalDays, c.reverseM, c.maxInt,
+            emit(sr.recog, offset(s.recallDueAt ?? s.dueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.reverseP), seedD(s.difficulty), c.reverseP, c.maxInt,
               stopDay != null ? { stopDay } : undefined)
           }
         }
 
-        // New cards — renewal contribution from daily goals.
-        for (let t = 0; t <= HORIZON; t++) {
-          for (const c of cfg.values()) {
-            if (c.dailyGoal <= 0) continue
-            if (c.typedOn)  typed[t] = (typed[t] ?? 0) + (c.dailyGoal / c.typedP) * stages(t, c.typedM, c.maxInt)
-            if (c.smartOn) {
-              // Smart: reviews below the threshold are typed, the rest self-graded.
-              const thr = Math.min(c.smartThreshold, c.maxInt)
-              const typedStages = stages(t, c.smartM, thr)
-              const fullStages  = stages(t, c.smartM, c.maxInt)
-              typed[t] = (typed[t] ?? 0) + (c.dailyGoal / c.smartP) * typedStages
-              selfg[t] = (selfg[t] ?? 0) + (c.dailyGoal / c.smartP) * Math.max(0, fullStages - typedStages)
-            }
-            if (c.selfgOn)   selfg[t] = (selfg[t] ?? 0) + (c.dailyGoal / c.selfgP)   * stages(t, c.selfgM,   c.maxInt)
-            if (c.reverseOn) recog[t] = (recog[t] ?? 0) + (c.dailyGoal / c.reverseP) * stages(t, c.reverseM, c.maxInt)
-          }
+        // Measured initial interval per pair (freshest cards; falls back to DEFAULT_I0).
+        const initI0Map = new Map<string, number>()
+        for (const [k] of cfg) initI0Map.set(k, estimateInitialInterval(initSamples.get(k) ?? [], DEFAULT_I0))
+
+        // New cards — renewal contribution from daily goals, seeded at the measured initial interval.
+        // Precompute a fresh card's cumulative reviews-by-day, then daily load = (dailyGoal / p) · cum(t).
+        const cumulative = (steps: ReviewStep[], splitBelow?: number): { t: Float64Array; g: Float64Array } => {
+          const t = new Float64Array(HORIZON + 1), g = new Float64Array(HORIZON + 1)
+          for (const st of steps) { if (st.day > HORIZON) continue; const arr = splitBelow != null && st.intervalDays >= splitBelow ? g : t; arr[st.day] = (arr[st.day] ?? 0) + 1 }
+          let ct = 0, cg = 0
+          for (let d = 0; d <= HORIZON; d++) { ct += t[d]!; cg += g[d]!; t[d] = ct; g[d] = cg }
+          return { t, g }
+        }
+        for (const [k, c] of cfg) {
+          if (c.dailyGoal <= 0) continue
+          const sr = seriesFor(k)
+          const i0 = initI0Map.get(k) ?? DEFAULT_I0
+          const seed = (retention: number) => ({ stability: stabilityForInterval(i0, retention), difficulty: 5, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt: c.maxInt, horizon: HORIZON })
+          if (c.typedOn)  { const { t } = cumulative(fsrsSchedule(seed(c.typedP)));  for (let d = 0; d <= HORIZON; d++) sr.typed[d]! += (c.dailyGoal / c.typedP) * t[d]! }
+          if (c.smartOn)  { const { t, g } = cumulative(fsrsSchedule(seed(c.smartP)), Math.min(c.smartThreshold, c.maxInt)); for (let d = 0; d <= HORIZON; d++) { sr.typed[d]! += (c.dailyGoal / c.smartP) * t[d]!; sr.selfg[d]! += (c.dailyGoal / c.smartP) * g[d]! } }
+          if (c.selfgOn)  { const { t } = cumulative(fsrsSchedule(seed(c.selfgP)));  for (let d = 0; d <= HORIZON; d++) sr.selfg[d]! += (c.dailyGoal / c.selfgP) * t[d]! }
+          if (c.reverseOn) { const { t } = cumulative(fsrsSchedule(seed(c.reverseP))); for (let d = 0; d <= HORIZON; d++) sr.recog[d]! += (c.dailyGoal / c.reverseP) * t[d]! }
         }
 
-        // Downsample to STEP-day points, averaging each window to smooth spikes.
-        const pts: ChartPoint[] = []
-        for (let s = 0; s <= HORIZON; s += STEP) {
-          let st = 0, sg = 0, sr = 0, n = 0
-          for (let d = s; d < Math.min(s + STEP, HORIZON + 1); d++) { st += typed[d]!; sg += selfg[d]!; sr += recog[d]!; n++ }
-          pts.push({ day: s, typed: st / n, selfg: sg / n, recog: sr / n, total: (st + sg + sr) / n })
-        }
-        if (!cancelled) { setPoints(pts); setHasGoals(anyGoal) }
+        // Downsample each pair's series to STEP-day points (windowed average).
+        const sampleDays: number[] = []
+        for (let s = 0; s <= HORIZON; s += STEP) sampleDays.push(s)
+        const downsample = (arr: Float64Array): number[] => sampleDays.map(s => {
+          let sum = 0, n = 0
+          for (let d = s; d < Math.min(s + STEP, HORIZON + 1); d++) { sum += arr[d]!; n++ }
+          return n ? sum / n : 0
+        })
+        const pairSeries: PairSeries[] = [...series.entries()]
+          .map(([k, v]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), typed: downsample(v.typed), selfg: downsample(v.selfg), recog: downsample(v.recog) }))
+          .filter(p => p.typed.some(x => x > 0) || p.selfg.some(x => x > 0) || p.recog.some(x => x > 0))
+        const initI0 = [...initI0Map.entries()]
+          .filter(([k]) => pairSeries.some(p => p.key === k))
+          .map(([k, days]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), days }))
+
+        if (!cancelled) setData({ pairs: pairSeries, sampleDays, initI0, hasGoals: anyGoal })
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       }
     })()
     return () => { cancelled = true }
   }, [])
+
+  // Points for the currently-selected filter (all pairs, or one).
+  const points = useMemo(() => {
+    if (!data) return null
+    const chosen = filterKey ? data.pairs.filter(p => p.key === filterKey) : data.pairs
+    return data.sampleDays.map((day, i) => {
+      let typed = 0, selfg = 0, recog = 0
+      for (const p of chosen) { typed += p.typed[i]!; selfg += p.selfg[i]!; recog += p.recog[i]! }
+      return { day, typed, selfg, recog, total: typed + selfg + recog }
+    })
+  }, [data, filterKey])
 
   const svg = useMemo(() => {
     if (!points) return null
@@ -234,12 +249,11 @@ export function DueForecastProjection() {
     const y = (v: number) => H - mB - (v / maxY) * (H - mT - mB)
     const path = (key: 'typed' | 'selfg' | 'recog' | 'total') =>
       points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.day).toFixed(1)},${y(p[key]).toFixed(1)}`).join(' ')
-    const yTicks = 4
-    return { W, H, mL, mR, mT, mB, maxY, x, y, path, yTicks }
+    return { W, H, mL, mR, mT, mB, maxY, x, y, path, yTicks: 4 }
   }, [points])
 
   if (error) return <p className="text-sm text-danger">Couldn&apos;t build projection: {error}</p>
-  if (!points || !svg) return <p className="text-sm text-ink-faint">Building projection…</p>
+  if (!data || !points || !svg) return <p className="text-sm text-ink-faint">Building projection…</p>
 
   const { W, H, mL, mB, maxY, x, y, path, yTicks } = svg
   const xTicks = [
@@ -247,33 +261,85 @@ export function DueForecastProjection() {
     { day: 365, label: '1 yr' }, { day: 547, label: '18 mo' }, { day: 730, label: '2 yr' },
   ]
 
+  // Hover → nearest sample index (for the guide line + per-language pie).
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const el = svgRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const relX = ((e.clientX - rect.left) / rect.width) * W
+    const day = ((relX - mL) / (W - mL - svg.mR)) * HORIZON
+    if (day < 0 || day > HORIZON) { setHover(null); return }
+    let bi = 0
+    for (let i = 1; i < points.length; i++) if (Math.abs(points[i]!.day - day) < Math.abs(points[bi]!.day - day)) bi = i
+    setHover({ i: bi, x: e.clientX - rect.left, y: e.clientY - rect.top })
+  }
+
+  const hoverPt = hover ? points[hover.i] : null
+  const pieSlices = hover && !filterKey
+    ? data.pairs.map(p => ({ label: p.label, flag: p.flag, value: p.typed[hover.i]! + p.selfg[hover.i]! + p.recog[hover.i]! }))
+        .filter(s => s.value > 0.05).sort((a, b) => b.value - a.value)
+    : []
+
   return (
     <div className="flex flex-col gap-2">
-      {!hasGoals && (
+      {/* Language filter */}
+      {data.pairs.length > 1 && (
+        <div className="flex flex-wrap gap-1.5 text-xs">
+          <button onClick={() => setFilterKey(null)}
+            className={`px-2 py-0.5 rounded-full border ${filterKey === null ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`}>All languages</button>
+          {data.pairs.map(p => (
+            <button key={p.key} onClick={() => setFilterKey(p.key)}
+              className={`px-2 py-0.5 rounded-full border ${filterKey === p.key ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`}>
+              {p.flag} {p.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {!data.hasGoals && (
         <p className="text-xs text-warning">No daily goals set — the projection only reflects your existing cards. Set per-language goals in Settings to include future learning.</p>
       )}
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 320 }}>
-        {/* y gridlines + labels */}
-        {Array.from({ length: yTicks + 1 }, (_, i) => {
-          const v = (maxY / yTicks) * i
-          return (
-            <g key={i}>
-              <line x1={mL} y1={y(v)} x2={W - 12} y2={y(v)} stroke="currentColor" className="text-surface-border" strokeWidth={1} opacity={0.4} />
-              <text x={mL - 6} y={y(v) + 3} textAnchor="end" className="fill-ink-faint" fontSize={10}>{Math.round(v)}</text>
+
+      <div className="relative">
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 320 }}
+          onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+          {/* y gridlines + labels */}
+          {Array.from({ length: yTicks + 1 }, (_, i) => {
+            const v = (maxY / yTicks) * i
+            return (
+              <g key={i}>
+                <line x1={mL} y1={y(v)} x2={W - 12} y2={y(v)} stroke="currentColor" className="text-surface-border" strokeWidth={1} opacity={0.4} />
+                <text x={mL - 6} y={y(v) + 3} textAnchor="end" className="fill-ink-faint" fontSize={10}>{Math.round(v)}</text>
+              </g>
+            )
+          })}
+          {/* x labels */}
+          {xTicks.map(t => (
+            <text key={t.day} x={x(t.day)} y={H - mB + 16} textAnchor="middle" className="fill-ink-faint" fontSize={10}>{t.label}</text>
+          ))}
+          {/* hover guide */}
+          {hoverPt && (
+            <g>
+              <line x1={x(hoverPt.day)} y1={svg.mT} x2={x(hoverPt.day)} y2={H - mB} stroke="currentColor" className="text-ink-faint" strokeWidth={1} opacity={0.5} strokeDasharray="3 3" />
+              <circle cx={x(hoverPt.day)} cy={y(hoverPt.total)} r={3} fill="#7c6af7" />
             </g>
-          )
-        })}
-        {/* x labels */}
-        {xTicks.map(t => (
-          <text key={t.day} x={x(t.day)} y={H - mB + 16} textAnchor="middle" className="fill-ink-faint" fontSize={10}>{t.label}</text>
-        ))}
-        {/* series */}
-        <path d={path('total')} fill="none" stroke="#7c6af7" strokeWidth={2.5} />
-        <path d={path('typed')} fill="none" stroke="#6366f1" strokeWidth={2} opacity={0.9} />
-        <path d={path('selfg')} fill="none" stroke="#f59e0b" strokeWidth={2} opacity={0.9} />
-        <path d={path('recog')} fill="none" stroke="#10b981" strokeWidth={2} opacity={0.9} />
-      </svg>
-      {/* legend + readouts */}
+          )}
+          {/* series */}
+          <path d={path('total')} fill="none" stroke="#7c6af7" strokeWidth={2.5} />
+          <path d={path('typed')} fill="none" stroke="#6366f1" strokeWidth={2} opacity={0.9} />
+          <path d={path('selfg')} fill="none" stroke="#f59e0b" strokeWidth={2} opacity={0.9} />
+          <path d={path('recog')} fill="none" stroke="#10b981" strokeWidth={2} opacity={0.9} />
+        </svg>
+
+        {/* Per-language pie on hover (only with no filter active). */}
+        {hover && hoverPt && pieSlices.length > 0 && (
+          <div className="absolute pointer-events-none z-10 rounded-lg border border-surface-border bg-surface-raised/95 backdrop-blur px-3 py-2 shadow-lg"
+            style={{ left: Math.min(hover.x + 12, 520), top: Math.max(4, hover.y - 60) }}>
+            <PieChart slices={pieSlices} />
+          </div>
+        )}
+      </div>
+
+      {/* legend */}
       <div className="flex flex-wrap gap-4 text-xs">
         {([
           { c: '#7c6af7', label: 'Total' },
@@ -286,6 +352,16 @@ export function DueForecastProjection() {
           </span>
         ))}
       </div>
+
+      {/* measured initial-interval stat */}
+      {data.initI0.length > 0 && (
+        <p className="text-xs text-ink-faint">
+          <span className="text-ink-muted">Typical initial interval</span> (measured from freshly-graduated cards, fed into the forecast):{' '}
+          {(filterKey ? data.initI0.filter(s => s.key === filterKey) : data.initI0)
+            .map(s => `${s.flag} ${s.label} ${s.days % 1 === 0 ? s.days : s.days.toFixed(1)}d`).join(' · ')}
+        </p>
+      )}
+
       <div className="grid grid-cols-2 gap-2 text-xs text-ink-muted mt-1">
         {[{ day: 365, label: '1 year' }, { day: 730, label: '2 years' }].map(mk => {
           const p = points.reduce((best, cur) => Math.abs(cur.day - mk.day) < Math.abs(best.day - mk.day) ? cur : best)
@@ -296,6 +372,41 @@ export function DueForecastProjection() {
             </div>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+/** Small SVG pie with per-slice labels ("🇪🇸 Spanish 12/day"). */
+function PieChart({ slices }: { slices: { label: string; flag: string; value: number }[] }) {
+  const total = slices.reduce((s, x) => s + x.value, 0)
+  const R = 46, C = 52
+  const colors = ['#7c6af7', '#f59e0b', '#10b981', '#6366f1', '#ec4899', '#14b8a6', '#f43f5e', '#a3e635']
+  let ang = -Math.PI / 2
+  const arcs = slices.map((s, i) => {
+    const frac = total > 0 ? s.value / total : 0
+    const a0 = ang, a1 = ang + frac * Math.PI * 2
+    ang = a1
+    const large = a1 - a0 > Math.PI ? 1 : 0
+    const p0 = [C + R * Math.cos(a0), C + R * Math.sin(a0)]
+    const p1 = [C + R * Math.cos(a1), C + R * Math.sin(a1)]
+    const d = frac >= 0.999
+      ? `M${C - R},${C} A${R},${R} 0 1 1 ${C + R},${C} A${R},${R} 0 1 1 ${C - R},${C}Z`
+      : `M${C},${C} L${p0[0]!.toFixed(1)},${p0[1]!.toFixed(1)} A${R},${R} 0 ${large} 1 ${p1[0]!.toFixed(1)},${p1[1]!.toFixed(1)} Z`
+    return { d, color: colors[i % colors.length]! }
+  })
+  return (
+    <div className="flex items-center gap-3">
+      <svg width={104} height={104} viewBox="0 0 104 104">
+        {arcs.map((a, i) => <path key={i} d={a.d} fill={a.color} stroke="var(--surface-raised, #1a1a1a)" strokeWidth={1} />)}
+      </svg>
+      <div className="flex flex-col gap-0.5 text-[11px] whitespace-nowrap">
+        {slices.map((s, i) => (
+          <span key={s.label + i} className="flex items-center gap-1.5 text-ink-muted">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: colors[i % colors.length] }} />
+            {s.flag} {s.label} <span className="text-ink font-medium">{Math.round(s.value)}/day</span>
+          </span>
+        ))}
       </div>
     </div>
   )
