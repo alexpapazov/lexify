@@ -36,6 +36,18 @@ interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairMode
 const DEFAULT_I0 = 3
 const DEFAULT_DIFFICULTY = 5
 
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+function ordinal(n: number): string {
+  const t = n % 100
+  if (t >= 11 && t <= 13) return `${n}th`
+  return `${n}${(['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`
+}
+/** Calendar date `dayOffset` days from today, e.g. "July 13th, 2026". */
+function forecastDate(dayOffset: number): string {
+  const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + dayOffset)
+  return `${MONTHS[d.getMonth()]} ${ordinal(d.getDate())}, ${d.getFullYear()}`
+}
+
 export function DueForecastProjection() {
   const [data, setData] = useState<Forecast | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -365,21 +377,23 @@ export function DueForecastProjection() {
         {hover && hoverPt && pieSlices.length > 0 && (
           <div className="absolute pointer-events-none z-10 rounded-lg border border-surface-border bg-surface-raised/95 backdrop-blur px-3 py-2 shadow-lg"
             style={{ left: Math.min(hover.x + 12, 520), top: Math.max(4, hover.y - 60) }}>
+            <div className="text-xs text-ink-muted text-center mb-1.5 pb-1.5 border-b border-surface-border">{forecastDate(hoverPt.day)}</div>
             <PieChart slices={pieSlices} />
           </div>
         )}
       </div>
 
-      {/* legend */}
+      {/* legend — appends the hovered day's counts, e.g. "Total (378)" */}
       <div className="flex flex-wrap gap-4 text-xs">
         {([
-          { c: '#7c6af7', label: 'Total' },
-          { c: '#6366f1', label: 'Typed' },
-          { c: '#f59e0b', label: 'Self-graded' },
-          { c: '#10b981', label: 'Reverse' },
-        ]).map(l => (
+          { c: '#7c6af7', label: 'Total', key: 'total' },
+          { c: '#6366f1', label: 'Typed', key: 'typed' },
+          { c: '#f59e0b', label: 'Self-graded', key: 'selfg' },
+          { c: '#10b981', label: 'Reverse', key: 'recog' },
+        ] as const).map(l => (
           <span key={l.label} className="flex items-center gap-1.5 text-ink-muted">
-            <span className="inline-block w-3 h-0.5 rounded" style={{ backgroundColor: l.c }} />{l.label}
+            <span className="inline-block w-3 h-0.5 rounded" style={{ backgroundColor: l.c }} />
+            {l.label}{hoverPt ? ` (${Math.round(hoverPt[l.key])})` : ''}
           </span>
         ))}
       </div>
