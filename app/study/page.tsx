@@ -9,7 +9,7 @@ import { SupabaseCardRepository }        from '@/lib/data/cards'
 import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
-import { buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
@@ -257,10 +257,13 @@ export default function StudyPage() {
       const reverseDueOn = (s: CardState) => trackEnabled(en, 'recall', true) &&
         stateMap.get(s.cardId)?.graduated === true && !stateMap.get(s.cardId)?.dormant &&
         isDueByDate(s.recallDueAt ?? s.dueAt)
-      // How a due forward card is presented (mirrors dedupe: production wins over recall).
+      // How a due forward card is presented (mirrors the session: enabled production lane wins over
+      // recall). Uses the active lane (not the date column) so a legacy/ladder card scheduled on
+      // due_at/typed_due_at is classified the same way the session presents it.
       const threshold = thresholdMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`) ?? 20
+      const prodTrack = activeProductionTrack(en)
       const forwardPresentedTyping = (s: CardState) => {
-        if (prodDueOn(s)) return forwardProductionMode(s, s.smartDueAt ? 'smart' : 'typed', threshold) === 'typed'
+        if (prodTrack && prodDueOn(s)) return forwardProductionMode(s, prodTrack, threshold) === 'typed'
         return false  // recall-only due → self-graded
       }
       const dueNowReverse = states.filter(s => s.graduated && s.reviewDirection === 'reverse' && reverseDueOn(s)).length

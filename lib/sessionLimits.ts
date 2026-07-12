@@ -124,12 +124,17 @@ export function smartProductionMode(smartIntervalDays: number | null, thresholdD
  * always types.
  */
 export function forwardProductionMode(
-  state: { acceleratedMode: string; acceleratedTypedConfirmed: boolean; smartIntervalDays: number | null },
+  state: { acceleratedMode: string; acceleratedTypedConfirmed: boolean; smartIntervalDays: number | null; typedIntervalDays?: number | null; intervalDays?: number | null },
   reviewTrack: 'typed' | 'smart',
   thresholdDays: number,
 ): 'typed' | 'self-graded' {
   if (state.acceleratedMode === 'import_known' && state.acceleratedTypedConfirmed) return 'self-graded'
-  if (reviewTrack === 'smart') return smartProductionMode(state.smartIntervalDays, thresholdDays)
+  if (reviewTrack === 'smart') {
+    // A ladder-graduated or legacy card put on the smart lane may not have a smart_interval_days yet —
+    // fall back to its actual production interval so the typed/self-graded split is stable everywhere.
+    const iv = state.smartIntervalDays ?? state.typedIntervalDays ?? state.intervalDays ?? null
+    return smartProductionMode(iv, thresholdDays)
+  }
   return 'typed'
 }
 

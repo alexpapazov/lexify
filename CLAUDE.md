@@ -837,6 +837,26 @@ leaving the card's schedule untouched (so it stays due until answered cold). No 
 the re-show — the graded review happens when it's answered without a hint. (`hintRef` is the existing
 per-card hint tracker; Again already relearns, Good/Easy still schedule with the hint's reduced growth.)
 
+## Ghost due cards fix #2 — typed/self-graded presentation parity (2026-07-11)
+
+Follow-up to the production-lane unification: ghosts persisted in the **Typing** bucket specifically.
+Root cause (confirmed against live data): legacy dual-track cards with `smart_due_at` AND `typed_due_at`
+both NULL (production scheduled on `due_at`/`interval_days`, recall on `recall_due_at`) on a smart-enabled
+pair. The **dashboard** presented them typed (with `smart_due_at` null it used the typed lane, always typed),
+but the **session** queued them on the enabled smart lane where `smartProductionMode(smart_interval_days=NULL)`
+returned self-graded → `present=typing` filter dropped them.
+
+Fix — make the typed/self-graded decision use the card's **effective interval** and the **same lane** on
+both sides:
+- `lib/sessionLimits.ts: forwardProductionMode(...)` on the smart lane now falls back
+  `smart_interval_days ?? typed_interval_days ?? interval_days` (tested in
+  `lib/__tests__/forwardProductionMode.test.ts`).
+- `app/study/page.tsx: forwardPresentedTyping` now uses `activeProductionTrack(en)` (the enabled lane)
+  instead of `s.smartDueAt ? 'smart' : 'typed'` (the date column) — matching the session's queue logic.
+Sessions already route production on `activeProductionTrack` (fix #1), so with the effective-interval
+change both sides classify a `due_at`/`typed_due_at`-only card identically. (The forecast-day drilldown
+block in study/page.tsx still uses the date-column pick — separate display feature, not a ghost path.)
+
 ## Ghost due cards fix — production lane unification (2026-07-11)
 
 Bug: the dashboard counted a language as having N due cards, but studying it showed "Session complete,
