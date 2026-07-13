@@ -188,7 +188,7 @@ export default function StudyPage() {
   const [langPairs,         setLangPairs]         = useState<LanguagePair[]>([])
   const [todayGradCounts,   setTodayGradCounts]   = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
-  const [expandedDueType, setExpandedDueType] = useState<'typing' | 'selfgraded' | null>(null)
+  const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
   const forecastSettingsRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
@@ -570,13 +570,16 @@ export default function StudyPage() {
   }
 
   // Per-pair typing / self-graded due counts, for nesting languages under each card type.
-  interface PairTypeDue { source: string; target: string; typing: number; selfgraded: number }
+  // Self-graded is split by direction: sgForward = native→target (forward production shown self-graded
+  // + recall), sgReverse = target→native (reverse recall).
+  interface PairTypeDue { source: string; target: string; typing: number; sgForward: number; sgReverse: number }
   const pairTypeDue: PairTypeDue[] = Object.values(
-    deckStats.reduce<Record<string, PairTypeDue>>((acc, { deck, dueNowTyping, dueNowSelfGraded }) => {
+    deckStats.reduce<Record<string, PairTypeDue>>((acc, { deck, dueNowTyping, dueNowForward, dueNowReverse }) => {
       const key = `${deck.sourceLanguage}|${deck.targetLanguage}`
-      if (!acc[key]) acc[key] = { source: deck.sourceLanguage, target: deck.targetLanguage, typing: 0, selfgraded: 0 }
-      acc[key]!.typing     += dueNowTyping
-      acc[key]!.selfgraded += dueNowSelfGraded
+      if (!acc[key]) acc[key] = { source: deck.sourceLanguage, target: deck.targetLanguage, typing: 0, sgForward: 0, sgReverse: 0 }
+      acc[key]!.typing    += dueNowTyping
+      acc[key]!.sgForward += dueNowForward - dueNowTyping
+      acc[key]!.sgReverse += dueNowReverse
       return acc
     }, {})
   )
@@ -778,14 +781,15 @@ export default function StudyPage() {
                   Study all due ({totalDue})
                 </button>
               )}
-              {showDuePicker && (global.dueNowTyping + global.dueNowSelfGraded) > 0 && (
+              {showDuePicker && pairTypeDue.some(p => p.typing + p.sgForward + p.sgReverse > 0) && (
                 <div className="absolute left-0 top-full mt-2 z-20 min-w-[260px] rounded-card border border-white/10 bg-surface-deep shadow-xl overflow-hidden">
                   {([
-                    { key: 'typing',     label: 'Typing',      count: global.dueNowTyping,     hint: 'native → target' },
-                    { key: 'selfgraded', label: 'Self-graded', count: global.dueNowSelfGraded, hint: 'both directions' },
-                  ] as const).filter(t => t.count > 0).map(t => {
+                    { key: 'typing',    label: 'Typing',      hint: 'native → target', query: 'present=typing',               n2t: true,  pick: (p: PairTypeDue) => p.typing },
+                    { key: 'sgForward', label: 'Self-graded', hint: 'native → target', query: 'present=selfgraded&dir=forward', n2t: true,  pick: (p: PairTypeDue) => p.sgForward },
+                    { key: 'sgReverse', label: 'Self-graded', hint: 'target → native', query: 'present=selfgraded&dir=reverse', n2t: false, pick: (p: PairTypeDue) => p.sgReverse },
+                  ] as const).map(t => ({ ...t, count: pairTypeDue.reduce((s, p) => s + t.pick(p), 0) })).filter(t => t.count > 0).map(t => {
                     const expanded = expandedDueType === t.key
-                    const pairs = pairTypeDue.filter(p => (t.key === 'typing' ? p.typing : p.selfgraded) > 0)
+                    const pairs = pairTypeDue.filter(p => t.pick(p) > 0)
                     return (
                       <div key={t.key} className="border-b border-white/10 last:border-b-0">
                         <button
@@ -802,7 +806,7 @@ export default function StudyPage() {
                           <div className="bg-surface-deep/60">
                             <button
                               className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
-                              onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&present=${t.key}`) }}
+                              onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&${t.query}`) }}
                             >
                               <span className="text-ink-muted">All languages</span>
                               <span className="chip text-xs ml-3">{t.count}</span>
@@ -811,10 +815,10 @@ export default function StudyPage() {
                               <button
                                 key={`${p.source}|${p.target}`}
                                 className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
-                                onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&present=${t.key}&source=${p.source}&target=${p.target}`) }}
+                                onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&${t.query}&source=${p.source}&target=${p.target}`) }}
                               >
-                                <span className="text-ink">{t.key === 'typing' ? `${langName(p.target)} → ${langName(p.source)}` : `${langName(p.source)} → ${langName(p.target)}`}</span>
-                                <span className="chip text-xs ml-3">{t.key === 'typing' ? p.typing : p.selfgraded}</span>
+                                <span className="text-ink">{t.n2t ? `${langName(p.target)} → ${langName(p.source)}` : `${langName(p.source)} → ${langName(p.target)}`}</span>
+                                <span className="chip text-xs ml-3">{t.pick(p)}</span>
                               </button>
                             ))}
                           </div>

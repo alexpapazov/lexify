@@ -831,6 +831,35 @@ FSRS schedule (`smart_due_at`/`smart_interval_days`), sharing the row's D/S.
 Note: the agent's own "Duplicate of cardId…" delete reasons are free-form LLM rationale (matched on gloss,
 so prone to false positives like the above) — the De-dupe button is the deterministic front+back alternative.
 
+## Production-confusion detection + linkage + penalty (2026-07-11) — foundation
+
+Typing a *different real word* (another card's target) on a typed production review is a discrimination
+failure. New handling, built on the existing `card_confusion_links` table (migration **052** — verify
+applied) + `SupabaseCardConfusionLinkRepository` (added `listForUser`):
+
+- **`engine/confusion.ts`** (pure, tested in `engine/__tests__/confusion.test.ts`):
+  - `findConfusedSibling(typed, expectedFront, currentCardId, siblings, settings)` → the matched card
+    id (B), only when `isDifferentWordMistake` says it's a genuine different word (not a typo) and it
+    exactly matches another card's `front`. `normalizeForMatch` (NFC, drop (f)/[note], lowercase).
+  - `confusionPenalty(state, retention)` → recognition-track penalty: `stability ×0.5`,
+    `difficulty +1` (clamped), and the resulting shorter interval. FSRS-native (persists), not a raw
+    interval cut.
+- **`lib/confusionResponse.ts: respondToProductionConfusion(...)`** — lazy whole-library {id,front}
+  index (`cards.listFrontsForUser` via `owner_id`), detect, **link A↔B**, and **penalize BOTH cards'
+  recognition (reverse) tracks** (cut D/S + pull recall due sooner). Never touches production. Returns
+  B's id (for the future drill). Fire-and-forget.
+- Wired into **`app/study/all/session`** `handleAnswer`: on a wrong typed production answer. **Not yet
+  replicated to deck/folder session pages.**
+
+Design decisions (from the user): respond **immediately, every time** (no escalation), **both A and B**,
+**recognition track only**, **whole-library any-language** match. Note: morphological pairs (same root,
+e.g. gato/gata) read as near-misses by `isDifferentWordMistake` and don't trigger.
+
+**STAGED next (all consumers of the link):** (1) immediate A-vs-B recognition drill queued a few cards
+ahead, before either recurs; (2) mutual distractors (B in A's MCQ + vice-versa); (3) interleave linked
+pairs' recognition in sessions; (4) replicate detection to deck/folder pages; (5) the standalone
+distinguish-confusable-cards tool (user-owned).
+
 ## Grammatical gender/number tags never graded (2026-07-11)
 
 Typing a target word without its "(f)"/"(m)"/"(pl)" gender-number tag was scored as an "almost"

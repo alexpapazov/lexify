@@ -40,6 +40,7 @@ import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { partitionRelearnPool } from '@/lib/relearnPool'
+import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -587,6 +588,16 @@ function AllDueSessionInner() {
         })
         setIndex(i => i + 1)
         return
+      }
+
+      // Production confusion: typing a *different real word* (another card's target) on a typed
+      // production review is a discrimination failure — link the pair + penalize both recognition
+      // tracks (fire-and-forget; the schedule for THIS card still runs normally below).
+      if (state.graduated && !wasCorrect && !isReverse && reviewTrack !== 'recall' && productionMode === 'typed' && userAnswer.trim()) {
+        void respondToProductionConfusion({
+          userId, cardAId: card.id, typed: userAnswer, expectedFront: card.front,
+          gradingSettings, tz: tzRef.current, turnover: turnoverRef.current,
+        })
       }
 
       // This card's own language-pair scheduler constants (retention, graduation

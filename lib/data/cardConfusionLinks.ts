@@ -26,6 +26,17 @@ export class SupabaseCardConfusionLinkRepository {
     if (error) throw new Error(error.message)
   }
 
+  /** Return every confusion link for the user (for interleaving, distractors, the distinguish tool). */
+  async listForUser(userId: UserId): Promise<CardConfusionLink[]> {
+    const { data, error } = await this.db
+      .from('card_confusion_links')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+    if (error) throw new Error(error.message)
+    return (data as Record<string, unknown>[]).map(rowToLink)
+  }
+
   /** Return all confusion links that involve the given card. */
   async listForCard(userId: UserId, cardId: CardId): Promise<CardConfusionLink[]> {
     const { data, error } = await this.db

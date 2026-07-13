@@ -103,15 +103,21 @@ function LadderStudyInner() {
       const cardStates = await new SupabaseCardStateRepository().listByDeck(uid, deckId)
       const gradSet = new Set(cardStates.filter(s => s.reviewDirection !== 'reverse' && s.graduated).map(s => s.cardId))
       const climb = await new SupabaseLadderClimbRepository().listForCards(uid, cards.map(c => c.id))
-      setStates(climb)
 
       const shuffle = <T,>(a: T[]) => a.sort(() => Math.random() - 0.5)
       const learning: string[] = []  // already climbing the ladder
-      const fresh: string[] = []      // never started
+      const fresh: string[] = []      // never started / restarting from rung 1
+      // The FORWARD card_state's graduation is the source of truth. A card that was booted back to
+      // learning (un-graduated) but whose old climb row still says "graduated" (e.g. the climb-row
+      // delete failed) must restart from rung 1 — otherwise it would be skipped entirely.
+      const reconciled = new Map(climb)
       for (const c of cards) {
-        if (gradSet.has(c.id) || climb.get(c.id)?.graduated) continue
-        (climb.has(c.id) ? learning : fresh).push(c.id)
+        if (gradSet.has(c.id)) continue                       // truly graduated → not in learning
+        const cl = climb.get(c.id)
+        if (cl && !cl.graduated) { learning.push(c.id) }       // mid-climb → resume where it is
+        else { if (cl) reconciled.set(c.id, initialClimbState()); fresh.push(c.id) }  // no climb or stale → rung 1
       }
+      setStates(reconciled)
 
       const prefsRepo = new SupabaseDeckPreferencesRepository()
       const prefs = await prefsRepo.get(uid, deckId)

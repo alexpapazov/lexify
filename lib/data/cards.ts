@@ -63,6 +63,14 @@ export class SupabaseCardRepository implements CardRepository {
     return rowToCard(data)
   }
 
+  /** Lightweight {id, front} for every card the user owns — for library-wide confusion matching. */
+  async listFrontsForUser(ownerId: UserId): Promise<{ id: string; front: string }[]> {
+    const { data, error } = await this.db.from('cards').select('id, front')
+      .eq('owner_id', ownerId).is('deleted_at', null)
+    if (error) throw new Error(error.message)
+    return (data ?? []).map(r => ({ id: r.id as string, front: r.front as string }))
+  }
+
   async listOwned(ownerId: UserId, sourceLanguage: string, targetLanguage: string): Promise<Card[]> {
     const { data, error } = await this.db.from('cards').select('*')
       .eq('owner_id', ownerId)
