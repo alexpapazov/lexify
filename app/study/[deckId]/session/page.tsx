@@ -37,6 +37,7 @@ import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
+import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { partitionRelearnPool } from '@/lib/relearnPool'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
@@ -46,6 +47,7 @@ import { triggerSyncFill } from '@/lib/triggerSyncFill'
 const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
 const HINT_HARD_REQUEUE_OFFSET = 6   // hint-assisted "Hard" re-shows this session instead of advancing
+const DRILL_OFFSET             = 3   // A-vs-B confusion drill lands this many cards ahead (before A/B recur)
 
 interface SessionCard {
   card: Card
@@ -61,6 +63,8 @@ interface SessionCard {
   idontknow?: true
   /** Answer counter when this card lapsed into the relearn pool (drives the batch-size resurface window). */
   relearnLapsedAt?: number
+  /** When set, this queue item is an A-vs-B discrimination drill (card is A; otherFront is B's word). */
+  drill?: { otherFront: string; otherId: string }
 }
 
 /** A single elective study category, chosen either via a deck-stat "Study" button (?category=) or the elective picker. */
@@ -174,6 +178,7 @@ export default function SessionPage() {
   const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
   const [redoStack, setRedoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([]);
 
+  const indexRef       = useRef(0)   // current queue index (for async drill insertion)
   const tzRef          = useRef('UTC')
   const turnoverRef    = useRef(0)
   // Hint usage for the current card's review — consumed once in handleAnswer.
@@ -707,6 +712,24 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [done])
 
+  useEffect(() => { indexRef.current = index }, [index])
+
+  // Insert an A-vs-B discrimination drill a few cards ahead — but before card A or B recurs.
+  function queueDrill(source: SessionCard, otherId: string, otherFront: string) {
+    setQueue(prev => {
+      const cur = indexRef.current
+      let bound = prev.length
+      for (let i = cur + 1; i < prev.length; i++) {
+        const id = prev[i]!.card.id
+        if (id === source.card.id || id === otherId) { bound = i; break }
+      }
+      const at = Math.min(cur + 1 + DRILL_OFFSET, bound)
+      const next = [...prev]
+      next.splice(at, 0, { ...source, drill: { otherFront, otherId } })
+      return next
+    })
+  }
+
   // Persist IPA toggle preference.
   useEffect(() => {
     localStorage.setItem('lexify_ipa', showIPA ? '1' : '0')
@@ -810,10 +833,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // production review is a discrimination failure — link the pair + penalize both recognition
       // tracks (fire-and-forget; the schedule for THIS card still runs normally below).
       if (gradingSettings && state.graduated && !wasCorrect && !isReverse && reviewTrack !== 'recall' && productionMode === 'typed' && userAnswer.trim()) {
+        const drillSource = current
         void respondToProductionConfusion({
           userId, cardAId: card.id, sourceLanguageA: sourceLanguage, typed: userAnswer, expectedFront: card.front,
           gradingSettings, tz: tzRef.current, turnover: turnoverRef.current,
-        })
+        }).then(d => { if (d) queueDrill(drillSource, d.cardBId, d.cardBFront) })
       }
 
       const stateRepo  = new SupabaseCardStateRepository()
@@ -1816,6 +1840,22 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
   const current = queue[index]
   if (!current) return null // pool-injection useEffect will add a card momentarily
+
+  // A-vs-B discrimination drill (pure practice — advancing schedules nothing).
+  if (current.drill) {
+    return (
+      <div className="space-y-8 max-w-2xl mx-auto">
+        <div className="relative flex items-center justify-between">
+          <Link href={deckUrl} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
+          <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>
+          <div className="text-xs text-warning">Confusion drill</div>
+        </div>
+        <ConfusionDrill card={current.card} otherFront={current.drill.otherFront} deckName={deckName}
+          onDone={() => setIndex(i => i + 1)} />
+      </div>
+    )
+  }
+
   const { card, state, pipeline, isReverse: currentIsReverse } = current
   const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!

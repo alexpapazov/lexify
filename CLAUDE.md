@@ -865,10 +865,18 @@ e.g. gato/gata) read as near-misses by `isDifferentWordMistake` and don't trigge
   AI/embedding tagger); **other** is left for that tagger too. Empty tags = not yet fully classified.
   Multiple of phonetic/semantic/temporal may apply; 'other' is exclusive. Tested in confusion.test.ts.
 
-**STAGED next (all consumers of the link):** (1) immediate A-vs-B recognition drill queued a few cards
-ahead, before either recurs; (2) mutual distractors (B in A's MCQ + vice-versa); (3) interleave linked
-pairs' recognition in sessions; (4) replicate detection to deck/folder pages; (5) the standalone
-distinguish-confusable-cards tool (user-owned).
+**Stage 2 (DONE):** detection wired into all 3 session pages (`all`, `[deckId]`, `folder/[folderId]`).
+
+**Stage 3 — immediate A-vs-B drill (DONE):** on an INTRA confusion, `respondToProductionConfusion`
+returns `{cardBId, cardBFront}`; the session `queueDrill`s a `components/session/ConfusionDrill.tsx`
+(shows A's meaning, pick A's word vs B's word) `DRILL_OFFSET=3` cards ahead but before A or B recurs
+(bounded scan). SessionCard gains `drill?: {otherFront, otherId}`; an `indexRef` tracks the live index
+for the async insertion; a render branch shows the drill (pure practice — advancing schedules nothing).
+Wired in all 3 session pages.
+
+**STAGED next (all consumers of the link):** (1) mutual distractors (B in A's MCQ + vice-versa);
+(2) interleave linked pairs' recognition in sessions; (3) the standalone distinguish-confusable-cards
+tool + semantic tagging (user-owned).
 
 ## Grammatical gender/number tags never graded (2026-07-11)
 

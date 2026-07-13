@@ -42,12 +42,14 @@ import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblin
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
+import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { partitionRelearnPool } from '@/lib/relearnPool'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
 const HINT_HARD_REQUEUE_OFFSET = 6   // hint-assisted "Hard" re-shows this session instead of advancing
+const DRILL_OFFSET             = 3   // A-vs-B confusion drill lands this many cards ahead (before A/B recur)
 
 interface SessionCard {
   card:            Card
@@ -69,6 +71,8 @@ interface SessionCard {
   idontknow?: true
   /** Answer counter when this card lapsed into the relearn pool (drives the batch-size resurface window). */
   relearnLapsedAt?: number
+  /** When set, this queue item is an A-vs-B discrimination drill (card is A; otherFront is B's word). */
+  drill?: { otherFront: string; otherId: string }
 }
 
 function shuffle<T>(arr: T[]): T[] {
@@ -126,6 +130,7 @@ function FolderSessionInner() {
   const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
   const reviewCountRef = useRef(0)                       // monotonic count of answers given this session
   const batchSizeRef   = useRef(FOLDER_ELECTIVE_LIMIT)   // resurface window = the session's batch size
+  const indexRef       = useRef(0)                       // current queue index (for async drill insertion)
   const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
   const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
@@ -463,9 +468,27 @@ function FolderSessionInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, queue.length, done, loading, relearnPool])
 
+  useEffect(() => { indexRef.current = index }, [index])
+
   useEffect(() => {
     localStorage.setItem('lexify_ipa', showIPA ? '1' : '0')
   }, [showIPA])
+
+  // Insert an A-vs-B discrimination drill a few cards ahead — but before card A or B recurs.
+  function queueDrill(source: SessionCard, otherId: string, otherFront: string) {
+    setQueue(prev => {
+      const cur = indexRef.current
+      let bound = prev.length
+      for (let i = cur + 1; i < prev.length; i++) {
+        const id = prev[i]!.card.id
+        if (id === source.card.id || id === otherId) { bound = i; break }
+      }
+      const at = Math.min(cur + 1 + DRILL_OFFSET, bound)
+      const next = [...prev]
+      next.splice(at, 0, { ...source, drill: { otherFront, otherId } })
+      return next
+    })
+  }
 
   useEffect(() => {
     if (!showIPA) return
@@ -516,10 +539,11 @@ function FolderSessionInner() {
       // production review is a discrimination failure — link the pair + penalize both recognition
       // tracks (fire-and-forget; the schedule for THIS card still runs normally below).
       if (state.graduated && !wasCorrect && !isReverse && reviewTrack !== 'recall' && productionMode === 'typed' && userAnswer.trim()) {
+        const drillSource = current
         void respondToProductionConfusion({
           userId, cardAId: card.id, sourceLanguageA: sourceLanguage, typed: userAnswer, expectedFront: card.front,
           gradingSettings, tz: tzRef.current, turnover: turnoverRef.current,
-        })
+        }).then(d => { if (d) queueDrill(drillSource, d.cardBId, d.cardBFront) })
       }
       // This card's own language-pair scheduler constants (retention, graduation
       // ranges, max interval) — a folder session may span several pairs.
@@ -1336,6 +1360,22 @@ function FolderSessionInner() {
 
   const current = queue[index]
   if (!current) return null // pool-injection useEffect will add a card momentarily
+
+  // A-vs-B discrimination drill (pure practice — advancing schedules nothing).
+  if (current.drill) {
+    return (
+      <div className="space-y-8 max-w-2xl mx-auto">
+        <div className="relative flex items-center justify-between">
+          <Link href={backHref} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
+          <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>
+          <div className="text-xs text-warning">Confusion drill</div>
+        </div>
+        <ConfusionDrill card={current.card} otherFront={current.drill.otherFront} deckName={current.deckName}
+          onDone={() => setIndex(i => i + 1)} />
+      </div>
+    )
+  }
+
   const { card, state, pipeline, gradingSettings, deckId, deckName, deckCards, sourceLanguage, targetLanguage, isReverse: currentIsReverse } = current
   const sortedSteps = [...pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
   const step = sortedSteps.find(s => s.stepOrder === state.currentStepOrder) ?? sortedSteps[0]!

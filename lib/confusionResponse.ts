@@ -45,14 +45,16 @@ async function penalizeReverse(userId: string, cardId: string, tz: string, turno
  * Full response to a wrong typed PRODUCTION answer. If the typed word is a genuine different word
  * that matches another card (B):
  *   • INTRA-language (A & B same learned language) → link (tagged intra + similarity) AND penalize
- *     both recognition tracks. Returns B's id (for the future A-vs-B drill).
+ *     both recognition tracks. Returns {cardBId, cardBFront} for the immediate A-vs-B drill.
  *   • INTER-language (different languages) → just store the link (kind='inter'), no penalty, returns null.
  * Never throws.
  */
+export interface ConfusionDrillTarget { cardBId: string; cardBFront: string }
+
 export async function respondToProductionConfusion(args: {
   userId: string; cardAId: string; sourceLanguageA: string; typed: string; expectedFront: string
   gradingSettings: GradingSettings; tz: string; turnover: number
-}): Promise<string | null> {
+}): Promise<ConfusionDrillTarget | null> {
   try {
     const sibs = await library(args.userId)
     const cardBId = findConfusedSibling(args.typed, args.expectedFront, args.cardAId, sibs, args.gradingSettings)
@@ -82,6 +84,6 @@ export async function respondToProductionConfusion(args: {
       penalizeReverse(args.userId, args.cardAId, args.tz, args.turnover).catch(() => {}),
       penalizeReverse(args.userId, cardBId, args.tz, args.turnover).catch(() => {}),
     ])
-    return cardBId
+    return { cardBId, cardBFront: cardB.front }
   } catch { return null }
 }
