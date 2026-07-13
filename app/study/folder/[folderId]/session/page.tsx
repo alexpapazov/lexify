@@ -41,6 +41,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { partitionRelearnPool } from '@/lib/relearnPool'
 import { CardEditModal } from '@/components/CardEditModal'
 
@@ -509,6 +510,16 @@ function FolderSessionInner() {
         })
         setIndex(i => i + 1)
         return
+      }
+
+      // Production confusion: typing a *different real word* (another card's target) on a typed
+      // production review is a discrimination failure — link the pair + penalize both recognition
+      // tracks (fire-and-forget; the schedule for THIS card still runs normally below).
+      if (state.graduated && !wasCorrect && !isReverse && reviewTrack !== 'recall' && productionMode === 'typed' && userAnswer.trim()) {
+        void respondToProductionConfusion({
+          userId, cardAId: card.id, sourceLanguageA: sourceLanguage, typed: userAnswer, expectedFront: card.front,
+          gradingSettings, tz: tzRef.current, turnover: turnoverRef.current,
+        })
       }
       // This card's own language-pair scheduler constants (retention, graduation
       // ranges, max interval) — a folder session may span several pairs.

@@ -36,6 +36,7 @@ import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblin
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { partitionRelearnPool } from '@/lib/relearnPool'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
@@ -803,6 +804,16 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         })
         setIndex(i => i + 1)
         return
+      }
+
+      // Production confusion: typing a *different real word* (another card's target) on a typed
+      // production review is a discrimination failure — link the pair + penalize both recognition
+      // tracks (fire-and-forget; the schedule for THIS card still runs normally below).
+      if (gradingSettings && state.graduated && !wasCorrect && !isReverse && reviewTrack !== 'recall' && productionMode === 'typed' && userAnswer.trim()) {
+        void respondToProductionConfusion({
+          userId, cardAId: card.id, sourceLanguageA: sourceLanguage, typed: userAnswer, expectedFront: card.front,
+          gradingSettings, tz: tzRef.current, turnover: turnoverRef.current,
+        })
       }
 
       const stateRepo  = new SupabaseCardStateRepository()
