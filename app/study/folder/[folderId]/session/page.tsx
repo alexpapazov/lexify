@@ -42,6 +42,8 @@ import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblin
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
+import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
+import { interleaveConfusablePairs } from '@/engine/confusion'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { partitionRelearnPool } from '@/lib/relearnPool'
 import { CardEditModal } from '@/components/CardEditModal'
@@ -264,6 +266,8 @@ function FolderSessionInner() {
       const smartThresholdFor = (src: string, tgt: string): number =>
         pMap.get(`${src}|${tgt}`)?.smartTypingThresholdDays ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays
 
+      const intraLinks = (await new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => [])).filter(l => l.kind === 'intra')
+
       // ?category= elective study: build queue from only that category across
       // all decks in the folder, capped at FOLDER_ELECTIVE_LIMIT cards.
       if (category) {
@@ -296,7 +300,7 @@ function FolderSessionInner() {
             }
           }
         }
-        const finalQueue = shuffle(dedupeDueReviews(categoryCards)).slice(0, FOLDER_ELECTIVE_LIMIT)
+        const finalQueue = interleaveConfusablePairs(shuffle(dedupeDueReviews(categoryCards)).slice(0, FOLDER_ELECTIVE_LIMIT), intraLinks)
         if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
         setElectiveSession(true)
         setQueue(finalQueue)
@@ -406,7 +410,7 @@ function FolderSessionInner() {
       // Shuffle all seen cards; keep new cards in order at the start
       const newCards  = dedupedAll.filter(c => !c.state.lastReviewedAt)
       const seenCards = shuffle(dedupedAll.filter(c => c.state.lastReviewedAt))
-      const finalQueue = [...newCards, ...seenCards]
+      const finalQueue = interleaveConfusablePairs([...newCards, ...seenCards], intraLinks)
       setQueue(finalQueue)
       setLoading(false)
 

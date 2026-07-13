@@ -78,6 +78,57 @@ export function classifyIntraTags(opts: {
   return tags
 }
 
+// ─── Interleaving confusable pairs in a session ─────────────────────────────
+
+/**
+ * Reorder a session queue so that confusable cards (linked A↔B) that are BOTH due this session sit
+ * next to each other — forcing the learner to contrast them. Connected groups (A↔B↔C…) are clustered
+ * at the position of the group's first member; non-confusable items keep their order. Stable, pure.
+ */
+export function interleaveConfusablePairs<T extends { card: { id: string } }>(
+  queue: T[], links: { cardAId: string; cardBId: string }[],
+): T[] {
+  if (links.length === 0 || queue.length === 0) return queue
+  const present = new Set(queue.map(q => q.card.id))
+  const adj = new Map<string, Set<string>>()
+  const add = (x: string, y: string) => { (adj.get(x) ?? adj.set(x, new Set()).get(x)!).add(y) }
+  for (const l of links) {
+    if (!present.has(l.cardAId) || !present.has(l.cardBId) || l.cardAId === l.cardBId) continue
+    add(l.cardAId, l.cardBId); add(l.cardBId, l.cardAId)
+  }
+  if (adj.size === 0) return queue
+
+  // Connected components over the confusable cards.
+  const groupOf = new Map<string, number>()
+  let g = 0
+  for (const id of adj.keys()) {
+    if (groupOf.has(id)) continue
+    const stack = [id]; groupOf.set(id, g)
+    while (stack.length) {
+      const cur = stack.pop()!
+      for (const nb of adj.get(cur) ?? []) if (!groupOf.has(nb)) { groupOf.set(nb, g); stack.push(nb) }
+    }
+    g++
+  }
+
+  // Bucket every queue item by its group (items keep their relative order within a group).
+  const byGroup = new Map<number, T[]>()
+  for (const item of queue) {
+    const gi = groupOf.get(item.card.id)
+    if (gi !== undefined) (byGroup.get(gi) ?? byGroup.set(gi, []).get(gi)!).push(item)
+  }
+
+  const emitted = new Set<T>()
+  const out: T[] = []
+  for (const item of queue) {
+    if (emitted.has(item)) continue
+    const gi = groupOf.get(item.card.id)
+    if (gi === undefined) { out.push(item); emitted.add(item); continue }
+    for (const m of byGroup.get(gi)!) if (!emitted.has(m)) { out.push(m); emitted.add(m) }  // whole group, contiguous
+  }
+  return out
+}
+
 // Recognition-track FSRS penalty for a confusion — cut stability (comes back sooner), bump difficulty
 // (grows slower). Persistent, unlike a raw interval cut which the next review would recompute away.
 export const CONFUSION_STABILITY_FACTOR = 0.5

@@ -880,8 +880,13 @@ tested). On an intra confusion, `respondToProductionConfusion` loads A and B and
 other's `choices.front` (the "pick the target word" recognition pool) — best-effort, skipped if choices
 aren't generated yet.
 
-**STAGED next (consumers of the link):** (1) interleave linked pairs' recognition in sessions;
-(2) the standalone distinguish-confusable-cards tool + semantic tagging (user-owned).
+**Stage 5 — interleave confusable pairs (DONE):** `engine/confusion.ts: interleaveConfusablePairs(queue, links)`
+(pure, tested) reorders a session queue so linked cards that are BOTH due cluster contiguously (connected
+components at the first member's position; non-confusable items keep order). All 3 session pages load the
+user's INTRA links once in `load()` and wrap their built due queue(s) with it (learning/new-card queues
+untouched).
+
+**STAGED next:** the standalone distinguish-confusable-cards tool + semantic tagging (user-owned).
 
 ## Grammatical gender/number tags never graded (2026-07-11)
 

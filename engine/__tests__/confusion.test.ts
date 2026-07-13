@@ -1,4 +1,4 @@
-import { findConfusedSibling, confusionPenalty, normalizeForMatch, confusionKind, classifyIntraTags, editRatio, CONFUSION_STABILITY_FACTOR } from '@/engine/confusion'
+import { findConfusedSibling, confusionPenalty, normalizeForMatch, confusionKind, classifyIntraTags, editRatio, interleaveConfusablePairs, CONFUSION_STABILITY_FACTOR } from '@/engine/confusion'
 import type { GradingSettings } from '@/domain'
 
 const settings = (): GradingSettings => ({
@@ -82,5 +82,27 @@ describe('classifyIntraTags', () => {
   })
   it('returns empty (unclassified) when nothing deterministic applies', () => {
     expect(classifyIntraTags({ frontA: 'la manta', frontB: 'la sábana', introducedA: '2026-01-01', introducedB: '2026-07-01' })).toEqual([])
+  })
+})
+
+describe('interleaveConfusablePairs', () => {
+  const q = (id: string) => ({ card: { id } })
+  it('pulls a confusable pair adjacent (at the first member position)', () => {
+    const queue = [q('A'), q('X'), q('Y'), q('B'), q('Z')]
+    const out = interleaveConfusablePairs(queue, [{ cardAId: 'A', cardBId: 'B' }])
+    expect(out.map(i => i.card.id)).toEqual(['A', 'B', 'X', 'Y', 'Z'])
+  })
+  it('clusters a connected group A-B-C together', () => {
+    const queue = [q('A'), q('X'), q('B'), q('Y'), q('C')]
+    const out = interleaveConfusablePairs(queue, [{ cardAId: 'A', cardBId: 'B' }, { cardAId: 'B', cardBId: 'C' }])
+    expect(out.map(i => i.card.id)).toEqual(['A', 'B', 'C', 'X', 'Y'])
+  })
+  it('ignores links whose other card is not in the queue', () => {
+    const queue = [q('A'), q('X')]
+    expect(interleaveConfusablePairs(queue, [{ cardAId: 'A', cardBId: 'B' }]).map(i => i.card.id)).toEqual(['A', 'X'])
+  })
+  it('no links → unchanged', () => {
+    const queue = [q('A'), q('B')]
+    expect(interleaveConfusablePairs(queue, [])).toBe(queue)
   })
 })

@@ -42,6 +42,8 @@ import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trac
 import { partitionRelearnPool } from '@/lib/relearnPool'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
+import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
+import { interleaveConfusablePairs } from '@/engine/confusion'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -283,6 +285,8 @@ function AllDueSessionInner() {
         pMap.get(`${src}|${tgt}`)?.smartTypingThresholdDays ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays
       // Persist for the on-complete "more due?" re-check (Continue button).
       decksRef.current = decks; enabledMapRef.current = enabledTracksMap; paramMapRef.current = pMap
+      // Intra-language confusion links → interleave confusable pairs so they land next to each other.
+      const intraLinks = (await new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => [])).filter(l => l.kind === 'intra')
 
       // ?category= elective study: build queue from only that category across
       // all decks (or, when source/target are given, just that language pair).
@@ -331,7 +335,7 @@ function AllDueSessionInner() {
           }
         }
         const dedupedCards = filterByPresent(dedupeDueReviews(categoryCards))
-        const finalQueue = hasLangFilter ? shuffle(dedupedCards) : shuffle(dedupedCards).slice(0, ALL_ELECTIVE_LIMIT)
+        const finalQueue = interleaveConfusablePairs(hasLangFilter ? shuffle(dedupedCards) : shuffle(dedupedCards).slice(0, ALL_ELECTIVE_LIMIT), intraLinks)
         if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
         setElectiveSession(true)
         setQueue(finalQueue)
@@ -438,7 +442,7 @@ function AllDueSessionInner() {
       // Shuffle all seen cards; keep new cards in order at the start
       const newCards  = dedupedAll.filter(c => !c.state.lastReviewedAt)
       const seenCards = shuffle(dedupedAll.filter(c => c.state.lastReviewedAt))
-      const finalQueue = [...newCards, ...seenCards]
+      const finalQueue = interleaveConfusablePairs([...newCards, ...seenCards], intraLinks)
       setQueue(finalQueue)
       setLoading(false)
 

@@ -15,6 +15,7 @@ import { setAudioPlaybackRate } from '@/lib/speak'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
+import { interleaveConfusablePairs } from '@/engine/confusion'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import type { CardSide } from '@/domain'
 import { progressAfterReview, initialCardState } from '@/engine/pipeline'
@@ -465,6 +466,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         return new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= today
       }
 
+      // Intra-language confusion links → interleave confusable pairs so they land next to each other.
+      const intraLinks = (await new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => [])).filter(l => l.kind === 'intra')
+
       // ?category= elective study: build a queue from exactly that category
       // (matching the deck-detail page's stat counts) and skip the normal
       // new/due budgeting entirely.
@@ -514,6 +518,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         }
         // Collapse multiple due tracks for the same card+direction into one review.
         categoryQueue = dedupeDueReviews(categoryQueue)
+        // Cluster confusable due-review pairs so they land next to each other (due case only).
+        if (category === 'due') categoryQueue = interleaveConfusablePairs(categoryQueue, intraLinks)
         // Slice to the elective batch limit; store the rest for "Study ahead".
         // Exception: when the learner explicitly picks the "learning" category,
         // run through every in-pipeline card (no cap) and never pull in
@@ -622,7 +628,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       // New cards: keep in deck order (first session = ordered introduction)
       // In-pipeline + due: shuffle so session feels varied
-      const finalQueue = [...newCards, ...shuffle(inPipeline), ...shuffle(dedupedDue)]
+      const finalQueue = [...newCards, ...shuffle(inPipeline), ...interleaveConfusablePairs(shuffle(dedupedDue), intraLinks)]
 
       if (finalQueue.length === 0) {
         // Nothing new/due. Offer a picker to elect into studying unlearned
