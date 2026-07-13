@@ -1,4 +1,4 @@
-import { findConfusedSibling, confusionPenalty, normalizeForMatch, CONFUSION_STABILITY_FACTOR } from '@/engine/confusion'
+import { findConfusedSibling, confusionPenalty, normalizeForMatch, confusionKind, classifyIntraTags, editRatio, CONFUSION_STABILITY_FACTOR } from '@/engine/confusion'
 import type { GradingSettings } from '@/domain'
 
 const settings = (): GradingSettings => ({
@@ -52,5 +52,35 @@ describe('confusionPenalty', () => {
 describe('normalizeForMatch', () => {
   it('drops gender tags and case', () => {
     expect(normalizeForMatch('Занаятчия (m)')).toBe(normalizeForMatch('занаятчия'))
+  })
+})
+
+describe('confusionKind', () => {
+  it('same learned language → intra, different → inter', () => {
+    expect(confusionKind('ko', 'ko')).toBe('intra')
+    expect(confusionKind('es', 'ko')).toBe('inter')
+  })
+})
+
+describe('editRatio (NFD, phoneme-level)', () => {
+  it('rates Hangul 발/팔 as close (differ by one jamo)', () => {
+    expect(editRatio('발', '팔')).toBeGreaterThanOrEqual(0.6)
+  })
+  it('rates unrelated words as far', () => {
+    expect(editRatio('la manta', 'la sabana')).toBeLessThan(0.6)
+  })
+})
+
+describe('classifyIntraTags', () => {
+  it('tags phonetically-close pairs "phonetic"', () => {
+    expect(classifyIntraTags({ frontA: '발', frontB: '팔' })).toContain('phonetic')
+  })
+  it('tags cards learned within the window "temporal"', () => {
+    const tags = classifyIntraTags({ frontA: 'la manta', frontB: 'la sábana', introducedA: '2026-07-10', introducedB: '2026-07-11' })
+    expect(tags).toContain('temporal')
+    expect(tags).not.toContain('phonetic')   // semantically similar, not orthographically
+  })
+  it('returns empty (unclassified) when nothing deterministic applies', () => {
+    expect(classifyIntraTags({ frontA: 'la manta', frontB: 'la sábana', introducedA: '2026-01-01', introducedB: '2026-07-01' })).toEqual([])
   })
 })

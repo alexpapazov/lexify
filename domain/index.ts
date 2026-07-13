@@ -611,6 +611,11 @@ export interface CardConfusion {
 
 // ─── CardConfusionLink ────────────────────────────────────────────────────────
 
+export type ConfusionKind = 'intra' | 'inter'
+/** Similarity categories for an intra-language confusion (for the future practice mode). Multiple of
+ *  phonetic/semantic/temporal may apply; 'other' is exclusive; empty = not yet fully classified. */
+export type ConfusionSimilarityTag = 'phonetic' | 'semantic' | 'temporal' | 'other'
+
 /** A bidirectional "I confuse these two cards" link, either set manually or
  *  auto-created when a typed answer exactly matches another card. */
 export interface CardConfusionLink {
@@ -618,6 +623,10 @@ export interface CardConfusionLink {
   userId:    UserId
   cardAId:   CardId
   cardBId:   CardId
+  /** 'intra' = same learned language (full response); 'inter' = cross-language (stored only for now). */
+  kind:      ConfusionKind
+  /** Similarity tags for intra links; empty for inter or not-yet-classified. */
+  tags:      ConfusionSimilarityTag[]
   createdAt: string
 }
 

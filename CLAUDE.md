@@ -855,6 +855,16 @@ Design decisions (from the user): respond **immediately, every time** (no escala
 **recognition track only**, **whole-library any-language** match. Note: morphological pairs (same root,
 e.g. gato/gata) read as near-misses by `isDifferentWordMistake` and don't trigger.
 
+**Intra- vs inter-language (migration 083 — adds `kind`, `tags` to card_confusion_links):**
+- `confusionKind(srcA, srcB)` — **intra** = same learned language (`source_language`) → the full response
+  above; **inter** = different languages → link stored with `kind='inter'`, **no penalty** (a future
+  cross-linguistic feature acts on these). `listFrontsForUser` now returns `sourceLanguage` too.
+- **Similarity tags** on intra links (for the future intra-language practice mode): `classifyIntraTags`
+  computes the deterministic ones now — **phonetic** (NFD phoneme-level `editRatio ≥ 0.6`, e.g. 발/팔) and
+  **temporal** (both cards' `introducedDate` within 2 days). **semantic** is NOT auto-detected (future
+  AI/embedding tagger); **other** is left for that tagger too. Empty tags = not yet fully classified.
+  Multiple of phonetic/semantic/temporal may apply; 'other' is exclusive. Tested in confusion.test.ts.
+
 **STAGED next (all consumers of the link):** (1) immediate A-vs-B recognition drill queued a few cards
 ahead, before either recurs; (2) mutual distractors (B in A's MCQ + vice-versa); (3) interleave linked
 pairs' recognition in sessions; (4) replicate detection to deck/folder pages; (5) the standalone

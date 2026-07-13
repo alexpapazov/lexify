@@ -595,7 +595,7 @@ function AllDueSessionInner() {
       // tracks (fire-and-forget; the schedule for THIS card still runs normally below).
       if (state.graduated && !wasCorrect && !isReverse && reviewTrack !== 'recall' && productionMode === 'typed' && userAnswer.trim()) {
         void respondToProductionConfusion({
-          userId, cardAId: card.id, typed: userAnswer, expectedFront: card.front,
+          userId, cardAId: card.id, sourceLanguageA: sourceLanguage, typed: userAnswer, expectedFront: card.front,
           gradingSettings, tz: tzRef.current, turnover: turnoverRef.current,
         })
       }

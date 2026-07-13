@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
-import type { CardConfusionLink, UserId, CardId } from '@/domain'
+import type { CardConfusionLink, ConfusionKind, ConfusionSimilarityTag, UserId, CardId } from '@/domain'
 
 function rowToLink(row: Record<string, unknown>): CardConfusionLink {
   return {
@@ -7,6 +7,8 @@ function rowToLink(row: Record<string, unknown>): CardConfusionLink {
     userId:    row.user_id    as string,
     cardAId:   row.card_a_id  as string,
     cardBId:   row.card_b_id  as string,
+    kind:      (row.kind as ConfusionKind) ?? 'intra',
+    tags:      (row.tags as ConfusionSimilarityTag[]) ?? [],
     createdAt: row.created_at as string,
   }
 }
@@ -14,13 +16,13 @@ function rowToLink(row: Record<string, unknown>): CardConfusionLink {
 export class SupabaseCardConfusionLinkRepository {
   private get db() { return createClient() }
 
-  /** Create a bidirectional confusion link. Normalises order; ignores duplicate. */
-  async link(userId: UserId, cardIdX: CardId, cardIdY: CardId): Promise<void> {
+  /** Create a bidirectional confusion link. Normalises order; ignores duplicate (first tags/kind win). */
+  async link(userId: UserId, cardIdX: CardId, cardIdY: CardId, kind: ConfusionKind = 'intra', tags: ConfusionSimilarityTag[] = []): Promise<void> {
     const [a, b] = [cardIdX, cardIdY].sort() as [CardId, CardId]
     const { error } = await this.db
       .from('card_confusion_links')
       .upsert(
-        { user_id: userId, card_a_id: a, card_b_id: b },
+        { user_id: userId, card_a_id: a, card_b_id: b, kind, tags },
         { onConflict: 'user_id,card_a_id,card_b_id', ignoreDuplicates: true },
       )
     if (error) throw new Error(error.message)

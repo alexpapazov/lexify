@@ -11,7 +11,7 @@
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseCardRepository } from '@/lib/data/cards'
-import { findConfusedSibling, confusionPenalty, type SiblingCard } from '@/engine/confusion'
+import { findConfusedSibling, confusionPenalty, confusionKind, classifyIntraTags, type SiblingCard } from '@/engine/confusion'
 import { snapDueAtToStartOfDay } from '@/lib/dates'
 import type { GradingSettings } from '@/domain'
 
@@ -22,7 +22,7 @@ let cache: { userId: string; sibs: SiblingCard[] } | null = null
 async function library(userId: string): Promise<SiblingCard[]> {
   if (cache?.userId === userId) return cache.sibs
   const rows = await new SupabaseCardRepository().listFrontsForUser(userId)
-  const sibs = rows.map(r => ({ cardId: r.id, front: r.front }))
+  const sibs = rows.map(r => ({ cardId: r.id, front: r.front, sourceLanguage: r.sourceLanguage }))
   cache = { userId, sibs }
   return sibs
 }
@@ -43,18 +43,41 @@ async function penalizeReverse(userId: string, cardId: string, tz: string, turno
 
 /**
  * Full response to a wrong typed PRODUCTION answer. If the typed word is a genuine different word
- * that matches another card (B), link A↔B and penalize both recognition tracks. Returns B's id (for
- * the caller to queue the A-vs-B drill), or null if it wasn't a confusion. Never throws.
+ * that matches another card (B):
+ *   • INTRA-language (A & B same learned language) → link (tagged intra + similarity) AND penalize
+ *     both recognition tracks. Returns B's id (for the future A-vs-B drill).
+ *   • INTER-language (different languages) → just store the link (kind='inter'), no penalty, returns null.
+ * Never throws.
  */
 export async function respondToProductionConfusion(args: {
-  userId: string; cardAId: string; typed: string; expectedFront: string
+  userId: string; cardAId: string; sourceLanguageA: string; typed: string; expectedFront: string
   gradingSettings: GradingSettings; tz: string; turnover: number
 }): Promise<string | null> {
   try {
     const sibs = await library(args.userId)
     const cardBId = findConfusedSibling(args.typed, args.expectedFront, args.cardAId, sibs, args.gradingSettings)
     if (!cardBId) return null
-    await new SupabaseCardConfusionLinkRepository().link(args.userId, args.cardAId, cardBId).catch(() => {})
+    const cardB = sibs.find(s => s.cardId === cardBId)!
+    const linkRepo = new SupabaseCardConfusionLinkRepository()
+    const kind = confusionKind(args.sourceLanguageA, cardB.sourceLanguage)
+
+    if (kind === 'inter') {
+      // Store only — a future cross-linguistic feature will act on inter-language mix-ups.
+      await linkRepo.link(args.userId, args.cardAId, cardBId, 'inter', []).catch(() => {})
+      return null
+    }
+
+    // Intra: tag by similarity (phonetic/temporal now; semantic is future), link, penalize both.
+    const stateRepo = new SupabaseCardStateRepository()
+    const [fwdA, fwdB] = await Promise.all([
+      stateRepo.get(args.userId, args.cardAId, 'forward').catch(() => null),
+      stateRepo.get(args.userId, cardBId, 'forward').catch(() => null),
+    ])
+    const tags = classifyIntraTags({
+      frontA: args.expectedFront, frontB: cardB.front,
+      introducedA: fwdA?.introducedDate, introducedB: fwdB?.introducedDate,
+    })
+    await linkRepo.link(args.userId, args.cardAId, cardBId, 'intra', tags).catch(() => {})
     await Promise.all([
       penalizeReverse(args.userId, args.cardAId, args.tz, args.turnover).catch(() => {}),
       penalizeReverse(args.userId, cardBId, args.tz, args.turnover).catch(() => {}),
