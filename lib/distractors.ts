@@ -320,6 +320,26 @@ export function promoteConfusionDistractor(
   return { ...base, [side]: updated }
 }
 
+/**
+ * Force a SPECIFIC word into `card.choices[side]` as a distractor — used for confusion links, so the
+ * confused partner word shows up in this card's recognition MCQ. Swaps into the last slot when the
+ * pool is full, else appends. Returns updated `CardChoices`, or `null` if it's already a distractor,
+ * equals the correct answer, or is blank. Pure — caller persists.
+ */
+export function injectForcedDistractor(card: Card, side: CardSide, word: string): CardChoices | null {
+  const correct = side === 'front' ? card.front : card.back
+  const w = word.trim()
+  if (!w || norm(w) === norm(correct)) return null
+  const distractorsNeeded = OPTIONS_NEEDED - 1
+  const current = dedupeAgainst(correct, card.choices?.[side] ?? [])
+  if (current.some(x => norm(x) === norm(w))) return null            // already a distractor
+  const base: CardChoices = card.choices ?? { front: [], back: [] }
+  const updated = current.length < distractorsNeeded
+    ? [...current, w]                                                 // partial pool → append
+    : [...current.slice(0, distractorsNeeded - 1), w]                 // full pool → swap last
+  return { ...base, [side]: updated }
+}
+
 export interface ConfusionPromotionItem {
   card: Card
   side: CardSide

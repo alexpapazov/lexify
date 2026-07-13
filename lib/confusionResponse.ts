@@ -12,6 +12,7 @@ import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLin
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { findConfusedSibling, confusionPenalty, confusionKind, classifyIntraTags, type SiblingCard } from '@/engine/confusion'
+import { injectForcedDistractor } from '@/lib/distractors'
 import { snapDueAtToStartOfDay } from '@/lib/dates'
 import type { GradingSettings } from '@/domain'
 
@@ -39,6 +40,15 @@ async function penalizeReverse(userId: string, cardId: string, tz: string, turno
     ...rev, difficulty: pen.difficulty, stability: pen.stability,
     recallIntervalDays: pen.intervalDays, recallDueAt: dueAt, intervalDays: pen.intervalDays, dueAt,
   })
+}
+
+/** Add `word` as a distractor in `cardId`'s recognition MCQ (the "pick the target word" pool). */
+async function mutualDistractor(cardId: string, word: string): Promise<void> {
+  const repo = new SupabaseCardRepository()
+  const card = await repo.get(cardId).catch(() => null)
+  if (!card) return
+  const choices = injectForcedDistractor(card, 'front', word)
+  if (choices) await repo.update(cardId, { choices }).catch(() => {})
 }
 
 /**
@@ -83,6 +93,10 @@ export async function respondToProductionConfusion(args: {
     await Promise.all([
       penalizeReverse(args.userId, args.cardAId, args.tz, args.turnover).catch(() => {}),
       penalizeReverse(args.userId, cardBId, args.tz, args.turnover).catch(() => {}),
+      // Mutual distractors: make each word a distractor in the other's recognition MCQ (choices.front
+      // = the "pick the target word" pool). Best-effort — skips if choices aren't generated yet.
+      mutualDistractor(args.cardAId, cardB.front),
+      mutualDistractor(cardBId, args.expectedFront),
     ])
     return { cardBId, cardBFront: cardB.front }
   } catch { return null }

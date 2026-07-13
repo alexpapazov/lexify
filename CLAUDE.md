@@ -874,9 +874,14 @@ returns `{cardBId, cardBFront}`; the session `queueDrill`s a `components/session
 for the async insertion; a render branch shows the drill (pure practice — advancing schedules nothing).
 Wired in all 3 session pages.
 
-**STAGED next (all consumers of the link):** (1) mutual distractors (B in A's MCQ + vice-versa);
-(2) interleave linked pairs' recognition in sessions; (3) the standalone distinguish-confusable-cards
-tool + semantic tagging (user-owned).
+**Stage 4 — mutual distractors (DONE):** `lib/distractors.ts: injectForcedDistractor(card, side, word)`
+forces a specific word into `choices[side]` (swap last when full, else append; skips dupes/correct/blank;
+tested). On an intra confusion, `respondToProductionConfusion` loads A and B and injects each into the
+other's `choices.front` (the "pick the target word" recognition pool) — best-effort, skipped if choices
+aren't generated yet.
+
+**STAGED next (consumers of the link):** (1) interleave linked pairs' recognition in sessions;
+(2) the standalone distinguish-confusable-cards tool + semantic tagging (user-owned).
 
 ## Grammatical gender/number tags never graded (2026-07-11)
 
