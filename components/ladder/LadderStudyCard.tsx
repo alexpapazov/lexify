@@ -177,10 +177,12 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
         </>
       ) : result ? (
         <>
-          <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>{displayText(card.front)}</div>
+          {/* Correct → show the answer (green). Wrong → show what the LEARNER typed (red), with the
+              correct answer spelled out below. */}
+          <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>{isCorrect ? displayText(card.front) : (input || '—')}</div>
           <p className="text-center text-sm text-ink-muted">{card.back}</p>
           {!isCorrect && (
-            <p className="text-center text-sm text-ink-muted">You typed: <span className="font-mono text-ink">{input || '—'}</span></p>
+            <p className="text-center text-sm text-ink-muted">Correct answer: <span className="font-mono text-ink">{displayText(card.front)}</span></p>
           )}
           <div className="flex flex-col items-center gap-2">
             <button ref={continueRef} className="btn-primary px-10" onClick={proceed}>Continue</button>
