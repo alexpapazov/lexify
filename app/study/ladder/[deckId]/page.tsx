@@ -237,10 +237,10 @@ function LadderStudyInner() {
         <h1 className="text-xl font-semibold text-ink">Session complete</h1>
         <p className="text-ink-muted">{graduated > 0 ? `Graduated ${graduated} card${graduated === 1 ? '' : 's'}.` : 'Nothing to learn right now.'}</p>
         <div className="flex flex-wrap justify-center gap-3">
-          {hasMore && (
-            <button onClick={() => window.location.reload()} className="btn-primary">Continue — next round</button>
-          )}
           <a href={`/study/${deckId}`} className="btn-ghost">Back to deck</a>
+          {hasMore && (
+            <button onClick={() => window.location.reload()} className="btn-primary">Continue</button>
+          )}
         </div>
       </div>
     )
@@ -253,8 +253,8 @@ function LadderStudyInner() {
         <h1 className="text-xl font-semibold text-ink">Round complete</h1>
         <p className="text-ink-muted">{graduated}/{total} card{total === 1 ? '' : 's'} graduated so far. Keep going?</p>
         <div className="flex flex-wrap justify-center gap-3">
-          <button onClick={() => setPaused(false)} className="btn-primary">Continue — next round</button>
           <a href={`/study/${deckId}`} className="btn-ghost">Back to deck</a>
+          <button onClick={() => setPaused(false)} className="btn-primary">Continue</button>
         </div>
       </div>
     )
