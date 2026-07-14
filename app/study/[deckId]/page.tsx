@@ -1581,12 +1581,16 @@ export default function DeckDetailPage() {
   const learning  = cards.filter(c => statusOf(c.id) === 'learning').length
   const graduated = cards.filter(c => statusOf(c.id) === 'graduated').length
   const dormant   = cards.filter(c => statusOf(c.id) === 'dormant').length
-  const dueNow    = states.filter(s =>
+  // A state (forward production OR reverse recall) is due when it's graduated, its date has arrived
+  // (turnover-aware), it isn't dormant, and — for reverse rows — its forward counterpart graduated.
+  const dueStates = states.filter(s =>
     activeCardIds.has(s.cardId) &&
     s.graduated && isDueByDate(s.dueAt) &&
     !stateMap.get(s.cardId)?.dormant &&
     (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
-  ).length
+  )
+  const dueNow      = dueStates.length
+  const dueCardIds  = new Set(dueStates.map(s => s.cardId))   // cards with ANY due review (incl. reverse)
 
   const visibleCards = cards.filter(card => {
     if (!activeFilter) return true
@@ -1594,7 +1598,7 @@ export default function DeckDetailPage() {
     if (activeFilter === 'learning')  return statusOf(card.id) === 'learning'
     if (activeFilter === 'graduated') return statusOf(card.id) === 'graduated'
     if (activeFilter === 'dormant')   return statusOf(card.id) === 'dormant'
-    if (activeFilter === 'due')       { const s = stateMap.get(card.id); return !!s?.graduated && !s.dormant && isDueByDate(s.dueAt) }
+    if (activeFilter === 'due')       return dueCardIds.has(card.id)   // forward OR reverse due — matches the count
     return true
   })
   const allVisibleSelected = visibleCards.length > 0 && visibleCards.every(c => selectedCardIds.has(c.id))
