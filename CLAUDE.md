@@ -1020,6 +1020,20 @@ Component behavior:
 - The **measured initial interval is displayed** as a stat line under the legend (all languages, or
   the filtered one).
 
+## Ladder: "Learning" card_states count as pipeline + honest progress bar (2026-07-14)
+
+Two ladder fixes in `app/study/ladder/[deckId]/page.tsx`:
+- **Pipeline over-growth.** A card with a forward `card_state` that's `!graduated` but NO climb row (booted
+  from Due Now, or a legacy learner — shows "Learning" in deck detail) was treated as **fresh** by the
+  ladder, so batch mode saw an empty pipeline and introduced a whole new group of `cap` on top of it
+  (13 learners with a cap of 12). Fix: a `learningStateSet` (forward `card_state`, `!graduated`) is now
+  pushed to `learning` at the **initial rung** (`initialClimbState`), not `fresh`. So "Learning" = start
+  of the pipeline, and the batch cap counts them.
+- **Progress bar showed phantom %.** It counted the *absolute* rung positions of resumed cards, so it read
+  ~48% before you'd done anything with only 1/7 graduated. Now it baselines the rung-steps already done at
+  session start (`startStepsRef`) and reports `(stepsDone − start) / (totalSteps − start)` — 0% at start,
+  100% when all graduate. Still monotonic.
+
 ## Relearn resurfacing — never slip a difficult card (updated 2026-07-14)
 
 **Superseded the earlier "roll to a later session" behavior.** A lapsed graduated card (rated Again/Hard →

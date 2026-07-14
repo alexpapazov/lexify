@@ -39,6 +39,7 @@ function LadderStudyInner() {
   const [paused, setPaused] = useState(false)    // showing the "round complete — continue?" checkpoint
   const [hasMore, setHasMore] = useState(false)  // more cards to learn beyond this batch
   const progressPctRef = useRef(0)               // monotonic progress % (never regresses on drop-back)
+  const startStepsRef  = useRef(0)               // rung-steps already done when the session started (baseline)
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
@@ -98,24 +99,30 @@ function LadderStudyInner() {
       setOverrides(overrideMap)
       const ladderRepo = new SupabaseLadderRepository()
       const [pair, def] = await Promise.all([ladderRepo.getForPair(uid, d.sourceLanguage, d.targetLanguage), ladderRepo.getDefault(uid)])
-      setLadder(resolveEffectiveLadder(pair, def))
+      const effLadder = resolveEffectiveLadder(pair, def)
+      setLadder(effLadder)
 
       const cardStates = await new SupabaseCardStateRepository().listByDeck(uid, deckId)
       const gradSet = new Set(cardStates.filter(s => s.reviewDirection !== 'reverse' && s.graduated).map(s => s.cardId))
+      // Cards already IN the pipeline via a card_state (booted back from Due Now, or a legacy learner)
+      // but WITHOUT a climb row. They are "Learning" — they belong in the pipeline at the initial rung,
+      // NOT treated as fresh new cards (otherwise the batch cap ignores them and over-fills the pipeline).
+      const learningStateSet = new Set(cardStates.filter(s => s.reviewDirection !== 'reverse' && !s.graduated).map(s => s.cardId))
       const climb = await new SupabaseLadderClimbRepository().listForCards(uid, cards.map(c => c.id))
 
       const shuffle = <T,>(a: T[]) => a.sort(() => Math.random() - 0.5)
-      const learning: string[] = []  // already climbing the ladder
-      const fresh: string[] = []      // never started / restarting from rung 1
-      // The FORWARD card_state's graduation is the source of truth. A card that was booted back to
-      // learning (un-graduated) but whose old climb row still says "graduated" (e.g. the climb-row
-      // delete failed) must restart from rung 1 — otherwise it would be skipped entirely.
+      const learning: string[] = []  // already in the pipeline (climbing, or a state-learner at rung 1)
+      const fresh: string[] = []      // never started
       const reconciled = new Map(climb)
       for (const c of cards) {
-        if (gradSet.has(c.id)) continue                       // truly graduated → not in learning
+        if (gradSet.has(c.id)) continue                        // truly graduated → not in learning
         const cl = climb.get(c.id)
-        if (cl && !cl.graduated) { learning.push(c.id) }       // mid-climb → resume where it is
-        else { if (cl) reconciled.set(c.id, initialClimbState()); fresh.push(c.id) }  // no climb or stale → rung 1
+        if (cl && !cl.graduated) { learning.push(c.id); continue }   // mid-climb → resume where it is
+        // No active climb (none, or a stale "graduated" one). A card_state learner starts the ladder at
+        // its initial rung and counts as learning; a stale climb is reset; a truly fresh card stays fresh.
+        const alreadyLearning = learningStateSet.has(c.id)
+        if (cl || alreadyLearning) reconciled.set(c.id, initialClimbState())
+        ;(alreadyLearning ? learning : fresh).push(c.id)
       }
       setStates(reconciled)
 
@@ -145,6 +152,10 @@ function LadderStudyInner() {
         }
       }
       const items: QueueItem[] = q.map(cardId => ({ cardId, readyAt: 0, ratedAt: 0 }))
+      // Baseline: rung-steps already completed by resumed cards, so the bar measures progress made
+      // THIS session (starts at 0%) rather than counting cards that resumed partway up the ladder.
+      const ladderLen0 = Math.max(1, effLadder.rungs.length)
+      startStepsRef.current = items.reduce((s, it) => s + Math.min(reconciled.get(it.cardId)?.rungIndex ?? 0, ladderLen0), 0)
       progressPctRef.current = 0
       setAnswered(0); setPaused(false)
       setQueue(items); setTotal(items.length)
@@ -249,13 +260,15 @@ function LadderStudyInner() {
     )
   }
 
-      // Progress = fraction of ALL rung-steps completed, clamped so a drop-back never
-      // walks the bar backwards. The header shows the same % so they always agree.
+      // Progress = fraction of the rung-steps REMAINING at session start that are now done — so the
+      // bar starts at 0% (not counting cards that resumed partway up) and hits 100% when all graduate.
+      // Monotonic so a drop-back never walks it backwards.
       const ladderLen = Math.max(1, ladder.rungs.length)
       const stepsDone = graduated * ladderLen + queue.reduce((sum, e) => sum + Math.min(states.get(e.cardId)?.rungIndex ?? 0, ladderLen), 0)
       const totalSteps = total * ladderLen
-      const rawPct = totalSteps ? (stepsDone / totalSteps) * 100 : 0
-      progressPctRef.current = Math.max(progressPctRef.current, rawPct)
+      const remaining = Math.max(1, totalSteps - startStepsRef.current)
+      const rawPct = ((stepsDone - startStepsRef.current) / remaining) * 100
+      progressPctRef.current = Math.max(progressPctRef.current, Math.max(0, rawPct))
       const pct = Math.round(progressPctRef.current)
       return (
     <div className="space-y-8 max-w-2xl mx-auto">
