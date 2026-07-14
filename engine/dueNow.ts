@@ -35,7 +35,9 @@ export interface DueNowResult { state: DueNowState; action: DueNowAction }
 function scheduled(difficulty: number, stability: number, cfg: FsrsConfig): DueNowResult {
   return {
     state: { difficulty, stability, relearning: false, goodStreak: 0, againStreak: 0 },
-    action: { kind: 'schedule', intervalDays: intervalForRetention(stability, cfg.requestRetention) },
+    // Floor at 1 day: a *scheduled* (non-relearn) review must never be sub-day, or snapping the due
+    // date to the start of the day lands it back on today → the card is perpetually "due now".
+    action: { kind: 'schedule', intervalDays: Math.max(1, intervalForRetention(stability, cfg.requestRetention)) },
   }
 }
 

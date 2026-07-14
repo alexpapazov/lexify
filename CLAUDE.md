@@ -1020,6 +1020,16 @@ Component behavior:
 - The **measured initial interval is displayed** as a stat line under the legend (all languages, or
   the filtered one).
 
+## FSRS: floor scheduled interval at 1 day (2026-07-14)
+
+A hard card (maxed difficulty 10, tiny stability ~0.34) got a sub-day FSRS interval; `snapDueAtToStartOfDay`
+then snapped it to **today's** start → the card was perpetually "due now" and reappeared every session despite
+correct answers (looked like a stuck relearn loop, but `relearning=false`). Fix: `engine/dueNow.ts: scheduled()`
+now floors the schedule interval at `Math.max(1, intervalForRetention(...))`, so a clean advance is always ≥1
+day (due tomorrow, not today). Propagates to all 3 session pages via `scheduleGraduatedFsrs`. Note: difficulty
+pinned at 10 still makes stability grow slowly (only Easy walks difficulty down) — a genuinely hard card reviews
+daily until it stabilizes; that's expected, not a bug.
+
 ## Ladder: "Learning" card_states count as pipeline + honest progress bar (2026-07-14)
 
 Two ladder fixes in `app/study/ladder/[deckId]/page.tsx`:
