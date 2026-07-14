@@ -1003,6 +1003,11 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             { field: 'reverse_recall', label: 'Reverse recall',      row: rrRow, dbToggle: 'reverse_recall_enabled', toggleKey: 'reverseRecallEnabled' },
           ]
 
+          // Smart typing isn't its own coefficient bucket: a smart card due typed uses the Typed
+          // constants, and once past its threshold (self-graded) it uses the Self-graded constants.
+          // So the constants table / calibration history show only Typed / Self-graded / Reverse.
+          const CONST_BUCKETS = BUCKETS.filter(b => b.field !== 'forward_smart')
+
           const CONST_KEYS: { key: keyof typeof DEFAULT_SCHEDULER_PARAMS; label: string }[] = [
             { key: 'hardIdeal', label: 'Hard ×' },
             { key: 'goodIdeal', label: 'Good ×' },
@@ -1200,7 +1205,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                               <thead>
                                 <tr className="text-ink-muted">
                                   <th className="text-left py-1 pr-2 font-medium">Constant</th>
-                                  {BUCKETS.map(b => (
+                                  {CONST_BUCKETS.map(b => (
                                     <th key={b.field} className="text-right py-1 px-1 font-medium">{b.label.split(' ')[0]}</th>
                                   ))}
                                   <th className="text-right py-1 pl-1 font-medium text-ink-faint">Default</th>
@@ -1210,7 +1215,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                                 {CONST_KEYS.map(({ key, label }) => (
                                   <tr key={key} className="border-t border-surface-border/50">
                                     <td className="py-1 pr-2 text-ink-muted">{label}</td>
-                                    {BUCKETS.map(b => {
+                                    {CONST_BUCKETS.map(b => {
                                       const val = b.row?.[key as keyof SchedulerParamsRow] as number | undefined
                                       const def = DEFAULT_SCHEDULER_PARAMS[key]
                                       const changed = val !== undefined && val !== def
@@ -1245,7 +1250,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                           {srsHistoryOpen && (
                             <div className="mt-2 flex flex-col gap-2">
                               {srsHistoryLoading && <p className="text-xs text-ink-faint">Loading…</p>}
-                              {!srsHistoryLoading && BUCKETS.map(b => {
+                              {!srsHistoryLoading && CONST_BUCKETS.map(b => {
                                 const rows = srsHistory[b.field] ?? []
                                 if (rows.length === 0) return null
                                 return (
