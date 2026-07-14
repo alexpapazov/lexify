@@ -28,6 +28,14 @@ Current feature files:
   future practice modes. **Fully wired for Due Now typed reviews (TypingMode +
   all 3 session pages). Needs migration 066.** Pre-grad typing + synonym-group
   typed production not yet covered.
+- `features/Confusion Handling.md` — production-confusion detection (typed a
+  different real word), intra/inter split, link storage + similarity tags, the
+  recognition penalty, A-vs-B drill, mutual distractors, interleaving. Stages 0–5
+  built; Stage 6 (standalone distinguish mode + semantic tagging) + open items
+  documented as remaining.
+- `features/Agent Platform.md` — AI agent infra (shared gateway + scoped grants +
+  agents-as-configs). Phases 1–2 built; Phases 3+ (grants UI, job queue/dispatch,
+  triggers) planned. See its status header for what's live vs remaining.
 
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
@@ -1012,27 +1020,24 @@ Component behavior:
 - The **measured initial interval is displayed** as a stat line under the legend (all languages, or
   the filtered one).
 
-## Relearn resurfacing by real clock time (2026-07-11)
+## Relearn resurfacing — never slip a difficult card (updated 2026-07-14)
 
-The Due Now relearn pool (graduated card rated Again/Hard → 5/10/20-min loop) no longer
-always flushes at the end of the session. New behavior, in all 3 session pages
-(`study/[deckId]/session`, `study/folder/[folderId]/session`, `study/all/session`):
+**Superseded the earlier "roll to a later session" behavior.** A lapsed graduated card (rated Again/Hard →
+5/10/20-min relearn loop) **keeps coming back THIS session until it exits the relearn loop** (Good×2 /
+Easy, or 3 Agains → ladder) — it is never deferred to a later session, so difficult cards can't slip by.
+The relearn *gate* itself is in `engine/dueNow.ts: reviewDueNow` (Again keeps relearning, needs two Goods
+in a row or one Easy to escape; the gate state — `relearning`/`goodStreak`/`againStreak` — persists on the
+row so it continues correctly across sessions).
 
-- **`lib/relearnPool.ts: partitionRelearnPool(pool, reviewCount, batchSize, now)`** — pure
-  helper returning `{ due, keep, dropped }`. `due` = dueAt has elapsed (real clock) → resurface;
-  `dropped` = not due but `reviewCount - relearnLapsedAt >= batchSize` → roll to a later session;
-  `keep` = still waiting. Unit-tested in `lib/__tests__/relearnPool.test.ts`.
-- **SessionCard gained `relearnLapsedAt?: number`** — the session's answer counter when the card
-  lapsed. Each page keeps `reviewCountRef` (incremented at the top of `handleAnswer` +
-  `handleIDontKnow`) and `batchSizeRef` (set in `load()` = `cardsPerSession` or the page's elective
-  limit — 20 for all/folder). All four relearn-pool pushes stamp `relearnLapsedAt: reviewCountRef.current`.
-- **The old "inject most-elapsed relearn card when the queue runs out" useEffect was replaced** with
-  a real-clock effect (deps `[index, queue.length, done, loading, relearnPool]`; deck page also guards
-  `showElectivePicker`). It splices `due` cards ~3 ahead of the current index, drops window-expired
-  ones, and ends the session when the main queue is exhausted with nothing due (waiting cards roll
-  to a future session via their persisted `dueAt`).
-- Consequence: short sessions (few cards) will typically roll relearn cards to the next session
-  rather than re-show them minutes later — intended trade-off of real-clock timing.
+The relearn *effect* (all 3 session pages, deps `[index, queue.length, done, loading, relearnPool]`; deck
+page also guards `showElectivePicker`):
+- Resurfaces a relearn card mid-session once its real-clock `dueAt` has passed (spliced ~3 ahead).
+- When the main queue empties while relearns are still pending, it **flushes the soonest-due relearn card
+  to the end** (regardless of clock) instead of ending — the session doesn't finish with unresolved
+  relearns.
+
+`lib/relearnPool.ts: partitionRelearnPool` and `SessionCard.relearnLapsedAt`/`batchSizeRef` are now unused
+(the batch-size "roll over after N cards" window was removed); left in place but dead.
 
 ## Audio: TTS hardening + multi-source + per-deck speed (2026-07-10)
 

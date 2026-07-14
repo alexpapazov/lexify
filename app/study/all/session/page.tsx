@@ -39,7 +39,6 @@ import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblin
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
-import { partitionRelearnPool } from '@/lib/relearnPool'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
@@ -485,22 +484,28 @@ function AllDueSessionInner() {
     load()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Relearn resurfacing, by REAL CLOCK time. A lapsed (Again/Hard) graduated card waits in the
-  // pool until its dueAt actually passes, then it's spliced back in a few cards ahead. If the
-  // batch-size window elapses first (that many cards answered without its time coming) it drops
-  // to a later session; likewise, when the main queue runs out and nothing is due yet, the
-  // session ends and the waiting cards roll over (their dueAt is already saved).
+  // Relearn resurfacing. A lapsed (Again/Hard) graduated card KEEPS coming back THIS session until it
+  // exits the relearn loop (Good×2 / Easy, or 3 Agains → ladder) — it is never deferred to a later
+  // session, so difficult cards can't slip by. It resurfaces mid-session once its real-clock time has
+  // passed; and if the main queue empties while relearns are still pending, the soonest is flushed to
+  // the end (so the session doesn't end with unresolved relearns).
   useEffect(() => {
     if (loading || done) return
     if (relearnPool.length === 0) { if (index >= queue.length) setDone(true); return }
-    const { due, keep, dropped } = partitionRelearnPool(relearnPool, reviewCountRef.current, batchSizeRef.current, Date.now())
+    const now = Date.now()
+    const dueMs = (c: SessionCard) => c.state.dueAt ? new Date(c.state.dueAt).getTime() : 0
+    const due = relearnPool.filter(c => dueMs(c) <= now)
     if (due.length > 0) {
       setQueue(prev => { const at = Math.min(prev.length, index + 3); const next = [...prev]; next.splice(at, 0, ...due); return next })
-      setRelearnPool(keep)
+      setRelearnPool(prev => prev.filter(c => !due.includes(c)))
       return
     }
-    if (dropped.length > 0) setRelearnPool(keep)
-    if (index >= queue.length) setDone(true)  // exhausted + nothing due → end; waiting cards roll over
+    if (index >= queue.length) {
+      // Queue exhausted but relearns still pending → flush the soonest (never roll over to a later session).
+      const soonest = [...relearnPool].sort((a, b) => dueMs(a) - dueMs(b))[0]!
+      setQueue(prev => [...prev, soonest])
+      setRelearnPool(prev => prev.filter(c => c !== soonest))
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, queue.length, done, loading, relearnPool])
 
