@@ -312,6 +312,7 @@ export default function SettingsPage() {
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
   const [spilloverDue,        setSpilloverDue]        = useState(false)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
+  const [preferForvo,         setPreferForvoState]    = useState(false)
   const [timezone,            setTimezone]            = useState('')
   const [turnoverHour,        setTurnoverHour]        = useState(0)
   const [loading,       setLoading]       = useState(true)
@@ -344,7 +345,7 @@ export default function SettingsPage() {
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, prefer_forvo')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -358,6 +359,7 @@ export default function SettingsPage() {
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
+        setPreferForvoState((profile.prefer_forvo as boolean | null) ?? false)
       } else {
         setTimezone(detectBrowserTimezone())
       }
@@ -393,6 +395,7 @@ export default function SettingsPage() {
       timezone:                  timezone || null,
       day_turnover_hour:         turnoverHour,
       study_mode_autoplay:       studyModeAutoplay,
+      prefer_forvo:              preferForvo,
     }).eq('user_id', session.user.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -664,6 +667,17 @@ export default function SettingsPage() {
           </label>
           <p className="text-xs text-ink-faint pl-6">
             When on, target language audio plays automatically during Study sessions (due now cards from the Study page).
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" checked={preferForvo} onChange={e => setPreferForvoState(e.target.checked)} className="accent-accent w-4 h-4" />
+            <span className="text-sm text-ink">Prefer Forvo (real native-speaker recordings)</span>
+          </label>
+          <p className="text-xs text-ink-faint pl-6">
+            When on, newly generated audio uses real Forvo recordings, automatically falling back to ElevenLabs
+            when Forvo has no recording for a word. Existing cards keep their current audio until you clear/refetch it.
           </p>
         </div>
       </div>

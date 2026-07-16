@@ -20,6 +20,12 @@ export function setAudioPlaybackRate(rate: number): void {
   audioPlaybackRate = Number.isFinite(rate) && rate > 0 ? rate : 1
 }
 
+// Global "prefer Forvo" setting (profile-level). When on, on-demand audio fetches
+// (speakViaTts) try Forvo — real native-speaker recordings — first and fall back to
+// ElevenLabs when Forvo has no recording. Pages set this from the profile on load.
+let preferForvo = false
+export function setPreferForvo(on: boolean): void { preferForvo = !!on }
+
 function playClip(src: string): Promise<void> {
   const audio = new Audio(src)
   audio.playbackRate = audioPlaybackRate
@@ -70,14 +76,17 @@ export function speak(text: string, langCode: string, audioData?: string | null)
  */
 export async function fetchAudioSource(
   text: string, language: string, source: 'elevenlabs' | 'forvo',
-): Promise<{ audioData: string | null; reason?: string }> {
+  fallback = false,
+): Promise<{ audioData: string | null; source?: 'elevenlabs' | 'forvo'; fellBackFrom?: string; reason?: string }> {
   try {
     const res = await fetch('/api/tts', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text, language, source }),
+      body: JSON.stringify({ text, language, source, fallback }),
     })
     const data = await res.json()
-    if (data.ok && data.audioData) return { audioData: data.audioData as string }
+    if (data.ok && data.audioData) {
+      return { audioData: data.audioData as string, source: data.source, fellBackFrom: data.fellBackFrom }
+    }
     return { audioData: null, reason: data.reason as string | undefined }
   } catch {
     return { audioData: null, reason: 'network-error' }
@@ -89,7 +98,9 @@ export async function speakViaTts(text: string, language: string): Promise<strin
   try {
     const res = await fetch('/api/tts', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text, language }),
+      // Prefer Forvo (real recordings) when the global setting is on; the route
+      // auto-falls back to ElevenLabs when Forvo has no recording for the word.
+      body: JSON.stringify(preferForvo ? { text, language, source: 'forvo', fallback: true } : { text, language }),
     })
     const data = await res.json()
     if (data.ok && data.audioData) {

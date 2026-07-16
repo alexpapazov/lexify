@@ -27,6 +27,8 @@ interface RequestBody {
   language: string
   /** Which provider to fetch from. Defaults to 'elevenlabs' (falls back to OpenAI). */
   source?:  'elevenlabs' | 'forvo'
+  /** When source is 'forvo', fall through to ElevenLabs on any Forvo miss instead of failing. */
+  fallback?: boolean
 }
 
 // Forvo (real native-speaker recordings). Free/legacy host is apifree.forvo.com;
@@ -179,7 +181,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, reason: 'bad-request' }, { status: 400 })
   }
 
-  const { text, language, source = 'elevenlabs' } = body
+  const { text, language, source = 'elevenlabs', fallback = false } = body
   if (!text?.trim()) {
     return NextResponse.json({ ok: false, reason: 'bad-request' }, { status: 400 })
   }
@@ -191,28 +193,37 @@ export async function POST(req: NextRequest) {
   const speakText = cleanForSpeech(text)
 
   // ── Forvo: real native-speaker recordings (coverage varies by language/word) ──
+  // `fallback` (opt-in): on any Forvo miss, fall through to ElevenLabs instead of
+  // failing, so a "prefer Forvo" request always returns audio. Without it (e.g. the
+  // per-provider picker), a miss is reported honestly as `forvo-no-pronunciation`.
+  let forvoMissReason: string | null = null
   if (source === 'forvo') {
     const forvoKey = process.env.FORVO_API_KEY
-    if (!forvoKey) return NextResponse.json({ ok: false, reason: 'no-forvo-key' })
-    // Try the full phrase first (in case Forvo has it), then the bare headword
-    // with any leading article stripped — Forvo indexes words, not "article + noun".
-    const candidates = [speakText]
-    const bare = stripLeadingArticle(speakText, language)
-    if (bare && bare !== speakText) candidates.push(bare)
-    for (const candidate of candidates) {
-      try {
-        const audioData = await ttsForvo(candidate, language, forvoKey)
-        return NextResponse.json({ ok: true, audioData, source: 'forvo' })
-      } catch (err) {
-        if (err instanceof Error && err.message === 'forvo-no-pronunciation') continue  // try the next candidate
-        console.error('[TTS] forvo error', err)
-        return NextResponse.json({ ok: false, reason: 'forvo-error' })
+    if (!forvoKey) {
+      if (!fallback) return NextResponse.json({ ok: false, reason: 'no-forvo-key' })
+      forvoMissReason = 'no-forvo-key'
+    } else {
+      // Try the full phrase first (in case Forvo has it), then the bare headword
+      // with any leading article stripped — Forvo indexes words, not "article + noun".
+      const candidates = [speakText]
+      const bare = stripLeadingArticle(speakText, language)
+      if (bare && bare !== speakText) candidates.push(bare)
+      for (const candidate of candidates) {
+        try {
+          const audioData = await ttsForvo(candidate, language, forvoKey)
+          return NextResponse.json({ ok: true, audioData, source: 'forvo' })
+        } catch (err) {
+          if (err instanceof Error && err.message === 'forvo-no-pronunciation') { forvoMissReason = 'forvo-no-pronunciation'; continue }
+          console.error('[TTS] forvo error', err)
+          forvoMissReason = 'forvo-error'
+          break  // network/API error → stop trying Forvo
+        }
       }
+      if (!fallback) return NextResponse.json({ ok: false, reason: forvoMissReason ?? 'forvo-no-pronunciation' })
     }
-    return NextResponse.json({ ok: false, reason: 'forvo-no-pronunciation' })
   }
 
-  // ── ElevenLabs (default), falling back to OpenAI ──
+  // ── ElevenLabs (default, and the Forvo fallback target), falling back to OpenAI ──
   const elevenKey = process.env.ELEVENLABS_API_KEY
   const openaiKey = process.env.OPENAI_API_KEY
   if (!elevenKey && !openaiKey) {
@@ -223,7 +234,8 @@ export async function POST(req: NextRequest) {
     const audioData = elevenKey
       ? await ttsElevenLabs(speakText, language, elevenKey)
       : await ttsOpenAI(speakText, openaiKey!)
-    return NextResponse.json({ ok: true, audioData, source: 'elevenlabs' })
+    // Tag when this clip is a Forvo→ElevenLabs fallback so the caller can label it.
+    return NextResponse.json({ ok: true, audioData, source: 'elevenlabs', ...(forvoMissReason ? { fellBackFrom: 'forvo', forvoMissReason } : {}) })
   } catch (err) {
     console.error('[TTS] error', err)
     return NextResponse.json({ ok: false, reason: 'api-error' })
