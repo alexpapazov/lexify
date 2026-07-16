@@ -59,17 +59,22 @@ export function pickIntervalDay(range: IntervalRange, dueInDays: Map<number, num
 /** A card waiting in the session queue. `readyAt` = 0 means no timer (free to show). */
 export interface QueueItem { cardId: string; readyAt: number; ratedAt: number }
 
+/** Wait after advancing to the next rung, so a card spaces out between rungs
+ *  instead of climbing back-to-back. Same soft-timer mechanism as Again/Hard/Good. */
+export const BETWEEN_RUNG_DELAY_MS = 180_000  // 3 min
+
 /**
- * How long a card that STAYED on a rung should be held before reappearing — we
- * want to burn as much of the window as possible: Again ≤ 1 min, Hard ≤ 5 min,
- * Good (first) ≤ 10 min. Advancing/other outcomes have no timer (0).
+ * How long a card should be held before reappearing. When it STAYED on a rung we
+ * burn as much of its window as possible: Again ≤ 1 min, Hard ≤ 5 min, Good (first)
+ * ≤ 10 min. When it ADVANCED to the next rung, a 3-minute between-rung wait applies.
  */
 export function reshowDelayMs(hint: ReshowHint): number {
   switch (hint) {
-    case 'soon':   return 60_000    // Again
-    case 'short':  return 300_000   // Hard
-    case 'medium': return 600_000   // Good (first)
-    default:       return 0
+    case 'soon':     return 60_000                  // Again
+    case 'short':    return 300_000                 // Hard
+    case 'medium':   return 600_000                 // Good (first)
+    case 'advanced': return BETWEEN_RUNG_DELAY_MS   // moved up a rung → 3-min wait
+    default:         return 0
   }
 }
 

@@ -53,11 +53,11 @@ describe('pickIntervalDay', () => {
 })
 
 describe('reshowDelayMs', () => {
-  it('Again ~1 min, Hard ~5 min, Good ~10 min, advanced 0', () => {
+  it('Again ~1 min, Hard ~5 min, Good ~10 min, advanced 3 min (between-rung wait)', () => {
     expect(reshowDelayMs('soon')).toBe(60_000)
     expect(reshowDelayMs('short')).toBe(300_000)
     expect(reshowDelayMs('medium')).toBe(600_000)
-    expect(reshowDelayMs('advanced')).toBe(0)
+    expect(reshowDelayMs('advanced')).toBe(180_000)
   })
 })
 
