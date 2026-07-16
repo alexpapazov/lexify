@@ -53,6 +53,34 @@ async function ttsForvo(text: string, language: string, apiKey: string): Promise
  * makes it try to vocalise the "(f)", garbling short words into nonsense. Falls back
  * to the original text if cleaning would empty it out.
  */
+// Leading articles to drop for a Forvo *word* lookup: Forvo indexes the bare
+// headword ("tos"), not "article + noun" ("la tos"), so an article card would
+// otherwise almost always miss. Keyed by the language code's first two letters.
+const LEADING_ARTICLES: Record<string, string[]> = {
+  es: ['el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas'],
+  fr: ['le', 'la', 'les', 'un', 'une', 'des', "l'"],
+  it: ['il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'uno', 'una', "l'", "gl'"],
+  pt: ['o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas'],
+  ca: ['el', 'la', 'els', 'les', 'un', 'una', "l'"],
+  de: ['der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einen', 'einem', 'einer'],
+}
+
+/** Strips a single leading definite/indefinite article for the given language, else returns the text unchanged. */
+function stripLeadingArticle(text: string, language: string): string {
+  const arts = LEADING_ARTICLES[language.slice(0, 2).toLowerCase()]
+  if (!arts) return text
+  const t = text.trim()
+  for (const a of arts) {
+    if (a.endsWith("'")) {                                   // elided: l'ufficio → ufficio
+      const re = new RegExp(`^${a}`, 'i')
+      if (re.test(t)) return t.replace(re, '').trim()
+    }
+  }
+  const m = t.match(/^(\S+)\s+(.+)$/)                         // spaced: la tos → tos
+  if (m && arts.includes(m[1]!.toLowerCase())) return m[2]!.trim()
+  return t
+}
+
 function cleanForSpeech(text: string): string {
   const cleaned = text
     .replace(/\([^)]*\)/g, ' ')   // (f), (m), (pl), inline notes
@@ -166,14 +194,22 @@ export async function POST(req: NextRequest) {
   if (source === 'forvo') {
     const forvoKey = process.env.FORVO_API_KEY
     if (!forvoKey) return NextResponse.json({ ok: false, reason: 'no-forvo-key' })
-    try {
-      const audioData = await ttsForvo(speakText, language, forvoKey)
-      return NextResponse.json({ ok: true, audioData, source: 'forvo' })
-    } catch (err) {
-      const reason = err instanceof Error && err.message === 'forvo-no-pronunciation' ? 'forvo-no-pronunciation' : 'forvo-error'
-      if (reason !== 'forvo-no-pronunciation') console.error('[TTS] forvo error', err)
-      return NextResponse.json({ ok: false, reason })
+    // Try the full phrase first (in case Forvo has it), then the bare headword
+    // with any leading article stripped — Forvo indexes words, not "article + noun".
+    const candidates = [speakText]
+    const bare = stripLeadingArticle(speakText, language)
+    if (bare && bare !== speakText) candidates.push(bare)
+    for (const candidate of candidates) {
+      try {
+        const audioData = await ttsForvo(candidate, language, forvoKey)
+        return NextResponse.json({ ok: true, audioData, source: 'forvo' })
+      } catch (err) {
+        if (err instanceof Error && err.message === 'forvo-no-pronunciation') continue  // try the next candidate
+        console.error('[TTS] forvo error', err)
+        return NextResponse.json({ ok: false, reason: 'forvo-error' })
+      }
     }
+    return NextResponse.json({ ok: false, reason: 'forvo-no-pronunciation' })
   }
 
   // ── ElevenLabs (default), falling back to OpenAI ──
