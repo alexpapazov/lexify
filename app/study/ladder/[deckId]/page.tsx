@@ -293,6 +293,24 @@ function LadderStudyInner() {
         card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
         sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage} gradingSettings={deck.gradingSettings}
         overrides={overrides} onOverrideAnswer={handleOverrideAnswer} onChoiceEdit={handleChoiceEdit}
+        onCardEdit={async (id, side, newText) => {
+          const cardRepo = new SupabaseCardRepository()
+          const existing = cardsById.get(id)
+          if (!existing) return
+          if (!newText) {   // blank → delete the card
+            await cardRepo.softDelete(id)
+            setCardsById(prev => { const m = new Map(prev); m.delete(id); return m })
+            setQueue(q => q.filter(x => x.cardId !== id))
+            if (currentId === id) setCurrentId(pickNextCard(queue.filter(x => x.cardId !== id), Date.now())?.cardId ?? null)
+            return
+          }
+          if (newText === (side === 'front' ? existing.front : existing.back)) return
+          const patch = side === 'front'
+            ? { front: newText, audioGenerated: false as const, audioData: null, choices: null }
+            : { back: newText, choices: null }
+          const updated = await cardRepo.update(id, patch)
+          setCardsById(prev => new Map(prev).set(id, updated))
+        }}
         onRepeat={handleRepeat}
         onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
       />

@@ -52,13 +52,15 @@ export function EditablePromptPanel({
   if (editing) {
     const isEmpty = !value.trim()
     return (
-      // data-editing flattens the surrounding `.panel` (see globals.css) so inline
-      // editing reads as flat text, not a raised/floating box.
-      <div data-editing className="w-full flex flex-col items-center gap-1.5">
+      // The textarea keeps the same single-line height as the static <p> and its
+      // background stays transparent (the surrounding panel shows through), so
+      // entering edit doesn't resize or re-center the block ("lift"). The helper
+      // line is absolutely positioned so it adds no height to the flow.
+      <div className="relative w-full flex justify-center">
         <textarea
           ref={ref}
           value={value}
-          rows={2}
+          rows={1}
           onChange={e => setValue(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit() }
@@ -67,7 +69,7 @@ export function EditablePromptPanel({
           onBlur={submit}
           className="text-2xl font-medium text-ink bg-transparent border-none outline-none resize-none text-center w-full leading-tight"
         />
-        <p className="text-xs">
+        <p className="absolute top-full mt-1 left-0 right-0 text-center text-xs">
           {isEmpty
             ? <span className="text-danger/80">Leave blank to delete this card</span>
             : <span className="text-ink-faint">Enter to save · Esc to cancel</span>}

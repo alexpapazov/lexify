@@ -23,9 +23,6 @@
 
 @layer components {
   .panel       { @apply bg-surface rounded-card border border-white/5 p-6; }
-  /* While a prompt is being edited inline, flatten the panel so the text sits
-     inline instead of in a raised/floating box (marker: [data-editing]). */
-  .panel:has([data-editing]) { @apply bg-transparent border-transparent; }
   .btn-primary { @apply bg-accent hover:bg-accent-soft text-white font-medium px-5 py-2.5 rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed; }
   .btn-ghost   { @apply border border-white/10 hover:border-white/20 text-ink-muted hover:text-ink font-medium px-5 py-2.5 rounded-lg transition-colors duration-150; }
   .input       { @apply bg-surface-raised border border-white/10 focus:border-accent/60 text-ink placeholder:text-ink-faint rounded-lg px-4 py-2.5 w-full outline-none transition-colors duration-150; }

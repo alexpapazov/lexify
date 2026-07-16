@@ -21,7 +21,7 @@ import { displayText } from '@/lib/cardText'
  * is a small custom screen (no existing equivalent). Each screen's result is
  * mapped to a single ladder outcome via `onOutcome`.
  */
-export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onRepeat, onOutcome, onChoicesCached, onInfo }: {
+export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onCardEdit, onRepeat, onOutcome, onChoicesCached, onInfo }: {
   card:           Card
   rung:           Rung
   deckCards:      Card[]
@@ -32,6 +32,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   overrides?:      Map<string, Set<string>>
   onOverrideAnswer?: (cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => void
   onChoiceEdit?:   (cardId: string, answerSide: CardSide, originalChoice: string, newText: string, isCorrect: boolean) => Promise<void>
+  /** Inline edit of the card's prompt/answer text (empty string = delete the card). */
+  onCardEdit?:     (cardId: string, side: CardSide, newText: string) => void
   onRepeat?:       () => void
   onOutcome:      (o: RungAttemptOutcome) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
@@ -56,6 +58,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
         onChoiceEdit={onChoiceEdit ? ((orig, newText, isCorrect) => onChoiceEdit(card.id, answerSide, orig, newText, isCorrect)) : undefined}
+        onPromptEdit={onCardEdit ? (t => onCardEdit(card.id, promptSide, t)) : undefined}
         onRepeat={onRepeat}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
         onRate={(r, wasCorrect) => onOutcome(mcqOutcome(wasCorrect, rung.selfRated, r))}
@@ -71,6 +74,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         promptLanguage={promptSide === 'front' ? sourceLanguage : undefined}
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
+        onPromptEdit={onCardEdit ? (t => onCardEdit(card.id, promptSide, t)) : undefined}
+        onAnswerEdit={onCardEdit ? (t => onCardEdit(card.id, answerSide, t)) : undefined}
         {...ipaProps}
         onRate={r => onOutcome(r)}
       />
@@ -89,6 +94,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         strictness={rung.strictness ?? DEFAULT_TYPED_STRICTNESS} deckName={deckName} onInfo={onInfo}
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
+        onPromptEdit={onCardEdit ? (t => onCardEdit(card.id, promptSide, t)) : undefined}
+        onAnswerEdit={onCardEdit ? (t => onCardEdit(card.id, answerSide, t)) : undefined}
         synonyms={answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
         onRepeat={onRepeat}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
