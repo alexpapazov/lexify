@@ -35,9 +35,18 @@ export const DEFAULT_FSRS_CONFIG: FsrsConfig = {
   growth: 1,
 }
 
-/** Lexify's custom, cumulative difficulty deltas (persistent — only Easy walks it back). */
+/** Lexify's custom, cumulative difficulty deltas. */
 export const DIFFICULTY_DELTA: Record<Rating, number> = { again: 2.0, hard: 0.6, good: 0, easy: -2.0 }
 export const BASE_DIFFICULTY = 5
+/**
+ * Mean-reversion pull toward BASE_DIFFICULTY applied on every review (FSRS-5 style).
+ * Without it, Good's 0 delta means a card that ratchets up to difficulty 10 is frozen
+ * there (only Easy lowers it) — and at difficulty 10 the stability-growth factor
+ * `(11 − D)` bottoms out, so the card is pinned at ~1-day intervals no matter how many
+ * times you rate it Good ("difficulty hell"). The gentle pull lets a run of Goods walk a
+ * maxed-out card back down, while Again still climbs and Easy still drops fast.
+ */
+export const DIFFICULTY_REVERSION = 0.1
 
 /**
  * Anki-style interval fuzz: given a scheduled interval (days), returns the
@@ -76,7 +85,10 @@ export function intervalForRetention(stability: number, requestRetention: number
 // ─── Difficulty ──────────────────────────────────────────────────────────────
 
 export function nextDifficulty(difficulty: number, grade: Rating): number {
-  return clampD(difficulty + DIFFICULTY_DELTA[grade])
+  const afterDelta = difficulty + DIFFICULTY_DELTA[grade]
+  // Pull toward the baseline so difficulty can't get permanently stuck at the ceiling.
+  const reverted = afterDelta + DIFFICULTY_REVERSION * (BASE_DIFFICULTY - afterDelta)
+  return clampD(reverted)
 }
 
 /** Difficulty a card graduates with: base + the cumulative deltas of its learning history. */

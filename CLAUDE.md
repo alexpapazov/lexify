@@ -1030,6 +1030,27 @@ day (due tomorrow, not today). Propagates to all 3 session pages via `scheduleGr
 pinned at 10 still makes stability grow slowly (only Easy walks difficulty down) — a genuinely hard card reviews
 daily until it stabilizes; that's expected, not a bug.
 
+## FSRS: difficulty mean-reversion — escape "difficulty hell" (2026-07-16)
+
+Cards that ratcheted up to difficulty 10 were frozen there: `DIFFICULTY_DELTA.good = 0`
+(only Easy lowered difficulty), and at difficulty 10 the `stabilityAfterSuccess` growth factor
+`(11 − D)` bottoms out at 1, so stability crawled and `intervalForRetention ≈ stability < 1 day`
+→ floored to 1 → the card was due **every day forever**, no matter how many times you rated it Good.
+(Confirmed from live data: e.g. `la tos` difficulty 10, stability 0.76, reps 11, last_rating hard.)
+This is what the earlier "floor at 1 day" note called out as "expected" — it is NOT; it's now fixed.
+
+Fix: `engine/fsrs.ts: nextDifficulty` now applies FSRS-5 **mean reversion** toward `BASE_DIFFICULTY`
+(`DIFFICULTY_REVERSION = 0.1`): `D' = clamp((D + delta) + 0.1·(5 − (D + delta)))`. So a run of Goods
+walks a maxed-out card back down (10 → 9.5 → 9.05 → …), which raises the `(11 − D)` factor and lets
+stability — and the interval — grow. Again still climbs (5→6.8), Easy still drops fast (10→7.7), Hard
+roughly holds near the top. Tests updated (difficulty assertions now mean-reverted, `toBeCloseTo`).
+Already-stored difficulty-10 cards self-heal over subsequent Goods; a one-time SQL can lower pinned
+`difficulty` (e.g. ≥9 → 7) to accelerate recovery.
+
+Secondary observation (not yet changed): `isDueByDate` in the session pages compares the card's due
+date via plain `toLocaleDateString` (no turnover) against a turnover-adjusted `today` — an asymmetry
+that can make an early-morning (pre-turnover) review feel same-day. Left as-is for now.
+
 ## Ladder: "Learning" card_states count as pipeline + honest progress bar (2026-07-14)
 
 Two ladder fixes in `app/study/ladder/[deckId]/page.tsx`:

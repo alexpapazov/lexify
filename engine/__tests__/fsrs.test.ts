@@ -42,11 +42,13 @@ describe('difficulty', () => {
   it('deltas: Again +2, Hard +0.6, Good 0, Easy −2', () => {
     expect(DIFFICULTY_DELTA).toEqual({ again: 2.0, hard: 0.6, good: 0, easy: -2.0 })
   })
-  it('updates cumulatively and clamps to 1–10', () => {
-    expect(nextDifficulty(5, 'again')).toBe(7)
-    expect(nextDifficulty(5, 'easy')).toBe(3)
+  it('updates cumulatively (with mean reversion toward baseline) and clamps to 1–10', () => {
+    expect(nextDifficulty(5, 'again')).toBeCloseTo(6.8)   // 5+2, pulled 0.1 toward 5
+    expect(nextDifficulty(5, 'easy')).toBeCloseTo(3.2)    // 5−2, pulled 0.1 toward 5
     expect(nextDifficulty(9.5, 'again')).toBe(10)   // clamp high
     expect(nextDifficulty(2, 'easy')).toBe(1)       // clamp low
+    // Good above baseline is now walked back down (was frozen before) — escapes difficulty hell.
+    expect(nextDifficulty(10, 'good')).toBeCloseTo(9.5)
   })
   it('initializes from the whole learning history', () => {
     expect(initialDifficulty([])).toBe(BASE_DIFFICULTY)                       // 5
@@ -108,7 +110,7 @@ describe('reviewCard', () => {
   it('an Again drops stability and raises difficulty', () => {
     const r = reviewCard(state, 'again', 10)
     expect(r.stability).toBeLessThan(10)
-    expect(r.difficulty).toBe(7)
+    expect(r.difficulty).toBeCloseTo(6.8)   // 5+2, mean-reverted 0.1 toward baseline
   })
   it('an Easy graduates to a longer interval than a Good would', () => {
     const good = reviewCard(state, 'good', 10)

@@ -22,7 +22,7 @@ describe('reviewDueNow — clean card', () => {
     const r = reviewDueNow(clean(), 'again', 10)
     expect(r.action).toEqual({ kind: 'relearn', minutes: RELEARN_MINUTES.again })
     expect(r.state.relearning).toBe(true)
-    expect(r.state.difficulty).toBe(7)
+    expect(r.state.difficulty).toBeCloseTo(6.8)   // 5+2, mean-reverted 0.1 toward baseline
     expect(r.state.stability).toBeLessThan(10)
   })
 })
