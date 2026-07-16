@@ -12,16 +12,39 @@ const OUTCOME_LABEL: Record<RungOutcome, string> = {
 }
 const STRICT_CATS = ['spelling', 'accents', 'articles'] as const
 
-/** Width for a small integer input that grows with digit count (1–3 digits).
- *  Overrides the `.input` class's px-4: that 2rem of horizontal padding would
- *  otherwise swallow the whole content box and clip the digit out of view. */
-const numBoxStyle = (n: number): React.CSSProperties => ({
-  width: `calc(${Math.min(3, String(n).length || 1)}ch + 1.25rem)`,
-  paddingLeft: '0.5rem',
-  paddingRight: '0.5rem',
-})
 /** Clamp a typed count to 1–999 (3 digits max). */
 const clampCount = (v: string) => Math.min(999, Math.max(1, Math.floor(Number(v)) || 1))
+
+/**
+ * Small integer input (1–999) that keeps the digits fully visible.
+ * Uses a spinner-free text box (native `type=number` arrows sit *inside* the box
+ * and squeeze the digits out of view) with the up/down steppers placed *outside*.
+ */
+function NumberStepper({ value, onChange, title }: {
+  value: number
+  onChange: (n: number) => void
+  title?: string
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="text" inputMode="numeric" pattern="[0-9]*" title={title}
+        value={value}
+        onChange={e => onChange(clampCount(e.target.value))}
+        className="input py-1 text-center"
+        style={{ width: '3.25rem', paddingLeft: '0.4rem', paddingRight: '0.4rem' }}
+      />
+      <div className="flex flex-col leading-none">
+        <button type="button" tabIndex={-1} aria-label="Increase" title="Increase"
+          className="text-ink-faint hover:text-ink text-[10px] px-1 -mb-0.5"
+          onClick={() => onChange(clampCount(String(value + 1)))}>▲</button>
+        <button type="button" tabIndex={-1} aria-label="Decrease" title="Decrease"
+          className="text-ink-faint hover:text-ink text-[10px] px-1 -mt-0.5"
+          onClick={() => onChange(clampCount(String(value - 1)))}>▼</button>
+      </div>
+    </div>
+  )
+}
 
 /** Which outcomes can trigger a drop-back on this rung. */
 function availableOutcomes(r: Rung): RungOutcome[] {
@@ -149,9 +172,8 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                   {rules.map((rule, i) => (
                     <div key={i} className="flex items-center gap-2">
                       {i > 0 && <span className="text-xs text-accent font-medium">or</span>}
-                      <input type="number" min={1} max={999} value={rule.times}
-                        onChange={e => setRules(rules.map((x, k) => k === i ? { ...x, times: clampCount(e.target.value) } : x))}
-                        className="input py-1 text-center" style={numBoxStyle(rule.times)} />
+                      <NumberStepper value={rule.times} title="how many correct"
+                        onChange={n => setRules(rules.map((x, k) => k === i ? { ...x, times: n } : x))} />
                       <select className="input py-1 w-auto" value={rule.inARow ? 'row' : 'total'}
                         onChange={e => setRules(rules.map((x, k) => k === i ? { ...x, inARow: e.target.value === 'row' } : x))}>
                         <option value="row">in a row</option>
@@ -187,9 +209,8 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                   onChange={e => update(r.id, { dropBacks: r.dropBacks.map((x, k) => k === ri ? { ...x, on: e.target.value as RungOutcome } : x) })}>
                   {availableOutcomes(r).map(o => <option key={o} value={o}>{OUTCOME_LABEL[o]}</option>)}
                 </select>
-                <input type="number" min={1} max={999} value={rule.times} title="after this many times"
-                  onChange={e => update(r.id, { dropBacks: r.dropBacks.map((x, k) => k === ri ? { ...x, times: clampCount(e.target.value) } : x) })}
-                  className="input py-1 text-center" style={numBoxStyle(rule.times)} />
+                <NumberStepper value={rule.times} title="after this many times"
+                  onChange={n => update(r.id, { dropBacks: r.dropBacks.map((x, k) => k === ri ? { ...x, times: n } : x) })} />
                 <select className="input py-1 w-auto" value={rule.inARow ? 'row' : 'total'}
                   onChange={e => update(r.id, { dropBacks: r.dropBacks.map((x, k) => k === ri ? { ...x, inARow: e.target.value === 'row' } : x) })}>
                   <option value="total">total</option>
