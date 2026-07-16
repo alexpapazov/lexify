@@ -25,6 +25,7 @@ export function setAudioPlaybackRate(rate: number): void {
 // ElevenLabs when Forvo has no recording. Pages set this from the profile on load.
 let preferForvo = false
 export function setPreferForvo(on: boolean): void { preferForvo = !!on }
+export function getPreferForvo(): boolean { return preferForvo }
 
 function playClip(src: string): Promise<void> {
   const audio = new Audio(src)

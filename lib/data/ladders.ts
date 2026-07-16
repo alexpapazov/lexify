@@ -5,7 +5,10 @@ import type { Ladder, Rung, UserId } from '@/domain'
 const DEFAULT_KEY = { source: '', target: '' }
 
 function rowToLadder(row: Record<string, unknown>): Ladder {
-  return { rungs: (row.rungs as Rung[]) ?? [] }
+  return {
+    rungs: (row.rungs as Rung[]) ?? [],
+    betweenRungWaitSeconds: (row.between_rung_wait_seconds as number | null) ?? 180,
+  }
 }
 
 export class SupabaseLadderRepository {
@@ -33,7 +36,7 @@ export class SupabaseLadderRepository {
 
   async saveForPair(userId: UserId, source: string, target: string, ladder: Ladder): Promise<void> {
     const { error } = await this.db.from('learning_ladders').upsert(
-      { user_id: userId, source_language: source, target_language: target, rungs: ladder.rungs, updated_at: new Date().toISOString() },
+      { user_id: userId, source_language: source, target_language: target, rungs: ladder.rungs, between_rung_wait_seconds: ladder.betweenRungWaitSeconds ?? 180, updated_at: new Date().toISOString() },
       { onConflict: 'user_id,source_language,target_language' },
     )
     if (error) throw new Error(error.message)

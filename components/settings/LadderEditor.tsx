@@ -16,35 +16,37 @@ const STRICT_CATS = ['spelling', 'accents', 'articles'] as const
 const clampCount = (v: string) => Math.min(999, Math.max(1, Math.floor(Number(v)) || 1))
 
 /**
- * Small integer input (1–999) that keeps the digits fully visible.
+ * Small integer input (min–999) that keeps the digits fully visible.
  * Uses a spinner-free text box (native `type=number` arrows sit *inside* the box
  * and squeeze the digits out of view) with the up/down steppers placed *outside*.
  */
-function NumberStepper({ value, onChange, title }: {
+function NumberStepper({ value, onChange, title, min = 1 }: {
   value: number
   onChange: (n: number) => void
   title?: string
+  min?: number
 }) {
+  const clamp = (v: string | number) => Math.min(999, Math.max(min, Math.floor(Number(v)) || 0))
   return (
     <div className="flex items-center gap-1">
       <input
         type="text" inputMode="numeric" pattern="[0-9]*" title={title}
         value={value}
-        onChange={e => onChange(clampCount(e.target.value))}
+        onChange={e => onChange(clamp(e.target.value))}
         className="input py-1 text-center"
         style={{ width: '3.25rem', paddingLeft: '0.4rem', paddingRight: '0.4rem' }}
       />
       <div className="flex flex-col gap-1">
         <button type="button" tabIndex={-1} aria-label="Increase" title="Increase"
           className="text-ink-faint hover:text-ink"
-          onClick={() => onChange(clampCount(String(value + 1)))}>
+          onClick={() => onChange(clamp(value + 1))}>
           <svg viewBox="0 0 12 8" className="w-2.5 h-2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M1 6l5-4 5 4" />
           </svg>
         </button>
         <button type="button" tabIndex={-1} aria-label="Decrease" title="Decrease"
           className="text-ink-faint hover:text-ink"
-          onClick={() => onChange(clampCount(String(value - 1)))}>
+          onClick={() => onChange(clamp(value - 1))}>
           <svg viewBox="0 0 12 8" className="w-2.5 h-2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M1 2l5 4 5-4" />
           </svg>
@@ -68,6 +70,7 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
   saving?: boolean
 }) {
   const [rungs, setRungs] = useState<Rung[]>(initial.rungs)
+  const [betweenRungMin, setBetweenRungMin] = useState(Math.round((initial.betweenRungWaitSeconds ?? 180) / 60))
   const [errors, setErrors] = useState<string[]>([])
   const [savedNote, setSavedNote] = useState(false)
 
@@ -79,7 +82,7 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
   const add = (type: RungType) => setRungs(rs => [...rs, newRung(type)])
 
   function save() {
-    const ladder = { rungs }
+    const ladder = { rungs, betweenRungWaitSeconds: Math.max(0, betweenRungMin) * 60 }
     const errs = validateLadder(ladder)
     setErrors(errs)
     if (errs.length === 0) { onSave(ladder); setSavedNote(true); setTimeout(() => setSavedNote(false), 2000) }
@@ -87,6 +90,12 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
 
   return (
     <div className="space-y-4">
+      <div className="panel flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-ink">Wait between rungs</span>
+        <NumberStepper value={betweenRungMin} title="minutes" onChange={setBetweenRungMin} min={0} />
+        <span className="text-xs text-ink-faint">minutes — a card rests this long after advancing before it can reappear at the next rung (0 = no wait).</span>
+      </div>
+
       {rungs.length === 0 && <p className="text-sm text-ink-muted">No rungs yet — add one below.</p>}
 
       {rungs.map((r, i) => (

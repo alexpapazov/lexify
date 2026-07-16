@@ -26,6 +26,7 @@ import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { scheduleGraduatedFsrs, RELEARN_MINUTES } from '@/engine/dueNow'
+import { setPreferForvo } from '@/lib/speak'
 import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Deck, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
@@ -222,7 +223,7 @@ function AllDueSessionInner() {
       const [decks, pipeline, profileData] = await Promise.all([
         deckRepo.list(session.user.id),
         pipelineRepo.getDefault(),
-        supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, prefer_forvo').eq('user_id', session.user.id).single(),
       ])
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
@@ -230,6 +231,7 @@ function AllDueSessionInner() {
       tzRef.current       = tz
       turnoverRef.current = turnoverHour
       setStudyModeAutoplay((profileData.data?.study_mode_autoplay as boolean | null) ?? true)
+      setPreferForvo((profileData.data?.prefer_forvo as boolean | null) ?? false)
       const now   = new Date()
       const today = getToday(tz, turnoverHour)
 

@@ -278,7 +278,11 @@ export interface AdvanceRule {
   minRating?: 'again' | 'hard' | 'good' | 'easy'
 }
 
-export interface Ladder { rungs: Rung[] }
+export interface Ladder {
+  rungs: Rung[]
+  /** Seconds a card waits after advancing before it can reappear at the next rung (default 180 = 3 min). */
+  betweenRungWaitSeconds?: number
+}
 
 /** Built-in fallback ladder (used until a user defines a default or per-pair one). */
 export const DEFAULT_LADDER: Ladder = {

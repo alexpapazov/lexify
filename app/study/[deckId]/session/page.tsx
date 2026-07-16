@@ -11,7 +11,7 @@ import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabaseLadderClimbRepository }     from '@/lib/data/ladderClimb'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
-import { setAudioPlaybackRate } from '@/lib/speak'
+import { setAudioPlaybackRate, setPreferForvo } from '@/lib/speak'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
@@ -402,11 +402,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         cardRepo.listByDeck(deckId),
         pipelineRepo.getDefault(),
         prefRepo.get(session.user.id, deckId),
-        supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour, prefer_forvo').eq('user_id', session.user.id).single(),
       ])
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
+      setPreferForvo((profileData.data?.prefer_forvo as boolean | null) ?? false)
       tzRef.current       = tz
       turnoverRef.current = turnoverHour
 

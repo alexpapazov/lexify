@@ -23,6 +23,7 @@ import type { Card, CardSide, CardChoices, CardConfusion } from '@/domain'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
+import { getPreferForvo } from '@/lib/speak'
 
 export const OPTIONS_NEEDED = 4
 
@@ -390,7 +391,6 @@ export async function prefetchAudio(
   onAudioCached: (cardId: string, audioData: string) => void,
   concurrency = 2,
 ): Promise<void> {
-  return // TEMP: audio disabled for troubleshooting
   const toFetch = items.filter(it => !it.card.audioGenerated && TTS_SUPPORTED_LANGUAGES.has(it.sourceLanguage))
   if (toFetch.length === 0) return
   let next = 0
@@ -422,7 +422,11 @@ async function fetchAndCacheAudio(
     const res = await fetch('/api/tts', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: card.front, language: sourceLanguage }),
+      // Prefer Forvo (real recordings) when the global setting is on; the route
+      // auto-falls back to ElevenLabs when Forvo has no recording for the word.
+      body: JSON.stringify(getPreferForvo()
+        ? { text: card.front, language: sourceLanguage, source: 'forvo', fallback: true }
+        : { text: card.front, language: sourceLanguage }),
     })
     const data = await res.json()
     if (!data.ok || !data.audioData) return

@@ -15,6 +15,7 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
 import { pickNextCard, reshowDelayMs, type QueueItem } from '@/lib/ladderSession'
+import { prefetchAudio } from '@/lib/distractors'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
 import { CardEditModal } from '@/components/CardEditModal'
@@ -164,6 +165,16 @@ function LadderStudyInner() {
       setHasMore((fresh.length + learning.length) > items.length)  // cards left over beyond this batch
       setCurrentId(pickNextCard(items, Date.now())?.cardId ?? null)
       setLoading(false)
+
+      // Generate/cache audio for the queued cards (Forvo-preferred if the setting is on).
+      const qSet = new Set(q)
+      void prefetchAudio(
+        cards.filter(c => qSet.has(c.id)).map(c => ({ card: c, sourceLanguage: c.sourceLanguage })),
+        (cardId, audioData) => setCardsById(prev => {
+          const c = prev.get(cardId)
+          return c ? new Map(prev).set(cardId, { ...c, audioData, audioGenerated: true }) : prev
+        }),
+      )
     })()
   }, [deckId, category])
 
@@ -203,7 +214,10 @@ function LadderStudyInner() {
       nextQueue = queue.filter(e => e.cardId !== currentId)
     } else {
       // Hold the card until its Again/Hard/Good window is (nearly) up; 0 = show freely.
-      const delay = reshowDelayMs(res.reshow)
+      // Advancing a rung uses this ladder's configurable between-rung wait.
+      const delay = res.reshow === 'advanced'
+        ? (ladder.betweenRungWaitSeconds ?? 180) * 1000
+        : reshowDelayMs(res.reshow)
       nextQueue = queue.map(e => e.cardId === currentId
         ? { cardId: currentId, readyAt: delay > 0 ? now + delay : 0, ratedAt: delay > 0 ? now : 0 }
         : e)
@@ -221,11 +235,15 @@ function LadderStudyInner() {
   }
 
   // Repeat: don't advance or redo in place — re-queue the current card at the same rung
-  // (available again, but not the immediate next) and move on to the next card.
+  // and move on. Held for the ladder's between-rung wait (same 3-min-default timer) so it
+  // spaces out rather than reappearing right away.
   function handleRepeat() {
     if (!currentId) return
     const now = Date.now()
-    const nextQueue = queue.map(e => e.cardId === currentId ? { cardId: currentId, readyAt: 0, ratedAt: 0 } : e)
+    const waitMs = (ladder?.betweenRungWaitSeconds ?? 180) * 1000
+    const nextQueue = queue.map(e => e.cardId === currentId
+      ? { cardId: currentId, readyAt: waitMs > 0 ? now + waitMs : 0, ratedAt: waitMs > 0 ? now : 0 }
+      : e)
     setQueue(nextQueue)
     setCurrentId(pickNextCard(nextQueue, now, currentId)?.cardId ?? null)
   }
