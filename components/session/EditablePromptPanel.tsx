@@ -52,7 +52,9 @@ export function EditablePromptPanel({
   if (editing) {
     const isEmpty = !value.trim()
     return (
-      <div className="w-full flex flex-col items-center gap-1.5">
+      // data-editing flattens the surrounding `.panel` (see globals.css) so inline
+      // editing reads as flat text, not a raised/floating box.
+      <div data-editing className="w-full flex flex-col items-center gap-1.5">
         <textarea
           ref={ref}
           value={value}
