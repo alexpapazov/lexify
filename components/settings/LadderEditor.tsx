@@ -34,13 +34,21 @@ function NumberStepper({ value, onChange, title }: {
         className="input py-1 text-center"
         style={{ width: '3.25rem', paddingLeft: '0.4rem', paddingRight: '0.4rem' }}
       />
-      <div className="flex flex-col leading-none">
+      <div className="flex flex-col gap-1">
         <button type="button" tabIndex={-1} aria-label="Increase" title="Increase"
-          className="text-ink-faint hover:text-ink text-[10px] px-1 -mb-0.5"
-          onClick={() => onChange(clampCount(String(value + 1)))}>▲</button>
+          className="text-ink-faint hover:text-ink"
+          onClick={() => onChange(clampCount(String(value + 1)))}>
+          <svg viewBox="0 0 12 8" className="w-2.5 h-2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 6l5-4 5 4" />
+          </svg>
+        </button>
         <button type="button" tabIndex={-1} aria-label="Decrease" title="Decrease"
-          className="text-ink-faint hover:text-ink text-[10px] px-1 -mt-0.5"
-          onClick={() => onChange(clampCount(String(value - 1)))}>▼</button>
+          className="text-ink-faint hover:text-ink"
+          onClick={() => onChange(clampCount(String(value - 1)))}>
+          <svg viewBox="0 0 12 8" className="w-2.5 h-2" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M1 2l5 4 5-4" />
+          </svg>
+        </button>
       </div>
     </div>
   )
