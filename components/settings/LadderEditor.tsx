@@ -12,8 +12,14 @@ const OUTCOME_LABEL: Record<RungOutcome, string> = {
 }
 const STRICT_CATS = ['spelling', 'accents', 'articles'] as const
 
-/** Width for a small integer input that grows with digit count (1–3 digits). */
-const numBoxStyle = (n: number): React.CSSProperties => ({ width: `calc(${Math.min(3, String(n).length || 1)}ch + 1.9rem)` })
+/** Width for a small integer input that grows with digit count (1–3 digits).
+ *  Overrides the `.input` class's px-4: that 2rem of horizontal padding would
+ *  otherwise swallow the whole content box and clip the digit out of view. */
+const numBoxStyle = (n: number): React.CSSProperties => ({
+  width: `calc(${Math.min(3, String(n).length || 1)}ch + 1.25rem)`,
+  paddingLeft: '0.5rem',
+  paddingRight: '0.5rem',
+})
 /** Clamp a typed count to 1–999 (3 digits max). */
 const clampCount = (v: string) => Math.min(999, Math.max(1, Math.floor(Number(v)) || 1))
 
