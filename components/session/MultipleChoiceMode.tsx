@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Card, CardChoices, CardSide, Rating } from '@/domain'
 import { buildOptions, ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
-import { speak } from '@/lib/speak'
+import { speakCard } from '@/lib/speak'
 import { displayText, isQuoted } from '@/lib/cardText'
 import { EditablePromptPanel } from './EditablePromptPanel'
 import { CardInfoButton } from './CardInfoButton'
@@ -113,7 +113,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     setOverride(null)
 
     // Auto-play when source language is shown as the prompt (e.g. Korean on front).
-    if (autoPlayAudio && promptSide === 'front') speak(card.front, sourceLanguage, card.audioData)
+    if (autoPlayAudio && promptSide === 'front') speakCard(card, sourceLanguage)
 
     if (!needsChoices(card, answerSide)) return
     let cancelled = false
@@ -141,7 +141,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     const isExactMatch = norm(choice) === norm(displayCorrect)
     setViaSynonym(!isExactMatch && isSynonym(choice))
     // Play the card's target word aloud on selection, whichever direction this rung is.
-    if (autoPlayAudio) speak(card.front, sourceLanguage, card.audioData)
+    if (autoPlayAudio) speakCard(card, sourceLanguage)
   }
 
   function continueNext() {
@@ -220,7 +220,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
         <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />
         {promptSide === 'front' && (
           <button
-            onClick={() => speak(prompt, sourceLanguage, card.audioData)}
+            onClick={() => speakCard(card, sourceLanguage)}
             title="Listen"
             className="absolute bottom-3 left-1/2 -translate-x-1/2 text-ink-faint hover:text-ink-muted transition-colors"
           >

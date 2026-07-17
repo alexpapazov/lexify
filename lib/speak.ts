@@ -151,3 +151,29 @@ export async function speakViaTts(text: string, language: string): Promise<strin
   } catch { /* fall through to caller's fallback */ }
   return null
 }
+
+// In-session cache of on-demand clips so repeat plays of the same card don't re-fetch.
+const cardClipCache = new Map<string, string>()
+
+/**
+ * Plays a card's TARGET word (card.front) with the best available voice — the same path dictation
+ * uses, so MCQ/flashcard get a real native clip instead of the browser's wrong-language voice:
+ *   • audioSource 'browser' → on-device speech (for languages you set to Robotic);
+ *   • a cached clip (on the card, or fetched earlier this session) → play it;
+ *   • otherwise fetch a real clip via the TTS route (respecting the per-language source), cache it,
+ *     and fall back to on-device speech only if that fails / the language is set to Robotic.
+ */
+export function speakCard(
+  card: { id: string; front: string; audioData?: string | null; audioSource?: string | null },
+  language: string,
+): void {
+  if (typeof window === 'undefined') return
+  if (card.audioSource === 'browser') { speak(card.front, language, null); return }
+  if (card.audioData)                 { speak(card.front, language, card.audioData); return }
+  const cached = cardClipCache.get(card.id)
+  if (cached)                         { speak(card.front, language, cached); return }
+  void speakViaTts(card.front, language).then(b64 => {
+    if (b64) cardClipCache.set(card.id, b64)   // speakViaTts already played it
+    else speak(card.front, language, null)     // Robotic source or fetch failed → on-device voice
+  })
+}

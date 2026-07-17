@@ -776,6 +776,13 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   const [spillover,         setSpillover]         = useState(initialPrefs?.spilloverDue  ?? defaultSpillover)
   const [cardsPerSessionOn,  setCardsPerSessionOn]  = useState((initialPrefs?.cardsPerSession ?? 0) > 0)
   const [cardsPerSession,    setCardsPerSession]    = useState(initialPrefs?.cardsPerSession || 12)
+  // Free-typed draft for "Max cards in pipeline" — clamp only on commit (Enter/blur), not while typing.
+  const [cardsDraft,         setCardsDraft]         = useState(String(initialPrefs?.cardsPerSession || 12))
+  const clampCards = (raw: string): number => {
+    const n = parseInt(raw, 10)
+    return Number.isFinite(n) ? Math.min(maxCards, Math.max(1, n)) : 1   // ≤0 → 1, > deck size → deck size
+  }
+  const commitCards = () => { const c = clampCards(cardsDraft); setCardsPerSession(c); setCardsDraft(String(c)) }
   const [learningBatchMode,  setLearningBatchMode]  = useState(initialPrefs?.learningBatchMode ?? false)
   const [audioSpeed,         setAudioSpeed]         = useState(initialPrefs?.audioSpeed ?? 1)
   const [audioVolume,        setAudioVolumeState]   = useState(initialPrefs?.audioVolume ?? 1)
@@ -817,8 +824,8 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
           dailyOverride:     onlyToday ? todayOverride : null,
           dailyOverrideDate: onlyToday ? today         : null,
           spilloverDue:      spillover,
-          cardsPerSession:      cardsPerSessionOn ? cardsPerSession : null,
-          electiveSessionLimit: cardsPerSessionOn ? cardsPerSession : 0,
+          cardsPerSession:      cardsPerSessionOn ? clampCards(cardsDraft) : null,
+          electiveSessionLimit: cardsPerSessionOn ? clampCards(cardsDraft) : 0,
           learningBatchMode:    cardsPerSessionOn ? learningBatchMode : false,
           audioSpeed,
           audioVolume,
@@ -1006,9 +1013,11 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                 <div className="space-y-2 pl-6">
                   <div className="space-y-1">
                     <label className="text-sm text-ink-muted">Max cards in pipeline</label>
-                    <input type="number" min={1} max={500} className="input"
-                      value={cardsPerSession}
-                      onChange={e => setCardsPerSession(Math.min(maxCards, Math.max(1, parseInt(e.target.value) || 1)))} />
+                    <input type="number" min={1} max={maxCards} className="input"
+                      value={cardsDraft}
+                      onChange={e => setCardsDraft(e.target.value)}
+                      onBlur={commitCards}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitCards() } }} />
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input type="checkbox" checked={learningBatchMode} onChange={e => setLearningBatchMode(e.target.checked)} className="accent-accent w-4 h-4" />

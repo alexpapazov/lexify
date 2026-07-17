@@ -5,7 +5,7 @@ import { hintPlan, hintGrowthFactor } from '@/lib/hints'
 import type { Card, GradingSettings, GradingIssueType, GradingStatus, Rating, TypedStrictness, TypedErrorCategory } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
 import { gradeTyping, normalizeAnswer, resolveTypedPenalty } from '@/engine/grading'
-import { speak } from '@/lib/speak'
+import { speakCard } from '@/lib/speak'
 import { langNativeName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { RatingButtons } from './RatingButtons'
@@ -158,7 +158,7 @@ export function TypingMode({
 
   // Auto-play when the prompt IS the source language (e.g. Korean shown, type English).
   useEffect(() => {
-    if (autoPlayAudio && promptLanguage) speak(card.front, promptLanguage, card.audioData)
+    if (autoPlayAudio && promptLanguage) speakCard(card, promptLanguage)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id])
 
@@ -294,7 +294,7 @@ export function TypingMode({
     // target→native card is the native tongue and would give an American accent.
     const frontLanguage = promptLanguage ?? answerLanguage
     if (autoPlayAudio && frontLanguage) {
-      speak(card.front, frontLanguage, card.audioData)
+      speakCard(card, frontLanguage)
     }
   }
 
@@ -501,7 +501,7 @@ export function TypingMode({
             <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />
             {promptLanguage && (
               <button
-                onClick={() => speak(prompt, promptLanguage, card.audioData)}
+                onClick={() => speakCard(card, promptLanguage)}
                 title="Listen"
                 className="absolute bottom-3 left-1/2 -translate-x-1/2 text-ink-faint hover:text-ink-muted transition-colors"
               >
