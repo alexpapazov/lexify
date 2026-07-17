@@ -9,7 +9,7 @@ import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules
 import { SupabaseLanguagePairRepository }     from '@/lib/data/languagePairs'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import type { LanguagePair, LanguageSyncRule, CardState } from '@/domain'
-import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
+import { langName, langFlag, assignLanguageColors, LANG_COLOR_PALETTE } from '@/lib/languages'
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
 
@@ -24,13 +24,39 @@ function hslToHex(h: number, s: number, l: number): string {
   }
   return `#${f(0)}${f(8)}${f(4)}`
 }
-// Hand-picked hues (columns) so we hit a true yellow (~52°) instead of an even-spaced chartreuse.
-const HUE_STOPS = [0, 32, 52, 90, 145, 175, 205, 240, 280, 315]
-const LIGHTNESS_ROWS = [80, 68, 56, 45, 35, 26]
+function hexToHsl(hex: string): { h: number; s: number; l: number } {
+  const m = hex.replace('#', '')
+  const r = parseInt(m.slice(0, 2), 16) / 255
+  const g = parseInt(m.slice(2, 4), 16) / 255
+  const b = parseInt(m.slice(4, 6), 16) / 255
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min
+  const l = (max + min) / 2
+  let h = 0, s = 0
+  if (d !== 0) {
+    s = d / (1 - Math.abs(2 * l - 1))
+    if (max === r) h = ((g - b) / d) % 6
+    else if (max === g) h = (b - r) / d + 2
+    else h = (r - g) / d + 4
+    h *= 60; if (h < 0) h += 360
+  }
+  return { h, s: s * 100, l: l * 100 }
+}
+// Swatch grid derived from the LexiCard categorical palette (the per-language colors):
+// columns = the 12 palette hues sorted into a spectrum, each shown as a tint · base · shade,
+// then a grayscale row. The OS color wheel sits behind "Custom".
+const clampL = (l: number) => Math.max(8, Math.min(94, l))
+const PALETTE_COLS = [...LANG_COLOR_PALETTE]
+  .map(hex => ({ hex, ...hexToHsl(hex) }))
+  .sort((a, b) => a.h - b.h)
+const L_OFFSETS = [16, 0, -16] // tint · base (exact palette color) · shade
 const COLOR_SWATCHES: string[] = [
-  ...LIGHTNESS_ROWS.flatMap(l => HUE_STOPS.map(h => hslToHex(h, 70, l))),
+  ...L_OFFSETS.flatMap(dl => PALETTE_COLS.map(c =>
+    dl === 0 ? c.hex : hslToHex(c.h, c.s, clampL(c.l + dl)),
+  )),
   // grayscale row: white → black
-  ...Array.from({ length: HUE_STOPS.length }, (_, c) => hslToHex(0, 0, Math.round(96 - (c * 88) / (HUE_STOPS.length - 1)))),
+  ...Array.from({ length: PALETTE_COLS.length }, (_, i) =>
+    hslToHex(0, 0, Math.round(96 - (i * 88) / (PALETTE_COLS.length - 1))),
+  ),
 ]
 
 function LanguageColorPicker({ value, onChange }: { value: string; onChange: (hex: string) => void }) {
@@ -44,7 +70,7 @@ function LanguageColorPicker({ value, onChange }: { value: string; onChange: (he
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute z-20 mt-1 left-0 p-3 rounded-lg border border-white/10 bg-surface-raised shadow-lg">
-            <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(10, 1.5rem)' }}>
+            <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(12, 1.5rem)' }}>
               {COLOR_SWATCHES.map(hex => (
                 <button key={hex} type="button" title={hex} onClick={() => { onChange(hex); setOpen(false) }}
                   className={`w-6 h-6 rounded-md border border-white/10 transition-transform hover:scale-125 hover:z-10 ${value.toLowerCase() === hex.toLowerCase() ? 'ring-2 ring-white ring-offset-1 ring-offset-surface-raised' : ''}`}
