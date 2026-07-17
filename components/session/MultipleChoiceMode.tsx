@@ -140,6 +140,8 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
     setSelected(choice)
     const isExactMatch = norm(choice) === norm(displayCorrect)
     setViaSynonym(!isExactMatch && isSynonym(choice))
+    // Play the card's target word aloud on selection, whichever direction this rung is.
+    if (autoPlayAudio) speak(card.front, sourceLanguage, card.audioData)
   }
 
   function continueNext() {
