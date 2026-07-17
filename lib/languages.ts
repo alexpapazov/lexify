@@ -58,10 +58,11 @@ export function langFlag(code: string): string {
   return LANGUAGES.find(l => l.code === code)?.flag ?? '🌐'
 }
 
-/** Curated palette for per-language colors (analytics, etc.). */
+/** Categorical palette for per-language colors + chart series (LexiCard C01–C12,
+ *  ordered most-distinct-first; all legible on the dark app background). */
 export const LANG_COLOR_PALETTE = [
-  '#7c6af7', '#f59e0b', '#10b981', '#6366f1', '#ec4899', '#14b8a6',
-  '#f43f5e', '#a3e635', '#3b82f6', '#eab308', '#22c55e', '#a855f7',
+  '#6640FF', '#EB53B8', '#2CBCBC', '#9A54F0', '#5DCCFF', '#F07890',
+  '#7C4EF8', '#A8E04C', '#50E0CC', '#C9B8FF', '#6ABBFF', '#72DC7C',
 ]
 
 /** A stable default color for a language, derived deterministically from its code

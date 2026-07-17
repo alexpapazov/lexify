@@ -7,25 +7,28 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      // LexiCard dark-mode design system (cool blue-violet neutrals, blue→violet
+      // primary, yellow highlight accent). See the Figma "Dark Mode Color System".
       colors: {
         surface: {
-          DEFAULT: '#2d2d2d',
-          deep:    '#1e1e1e',
-          raised:  '#3a3a3a',
+          DEFAULT: '#19182E', // Card (N300)
+          deep:    '#13141F', // App BG (N200) — page/nav backdrop
+          raised:  '#202240', // Elevated (N400) — inputs, chips
         },
         accent: {
-          DEFAULT: '#7c6af7',
-          soft:    '#a89cf7',
-          muted:   '#4a3f9e',
+          DEFAULT: '#4A4BD8', // Primary P300 — main action / brand
+          soft:    '#868CF0', // P200 — hover fill / soft accent text
+          muted:   '#3432B0', // P400 — deep/pressed
         },
         ink: {
-          DEFAULT: '#f0ede8',
-          muted:   '#a0998f',
-          faint:   '#5a5550',
+          DEFAULT: '#E6E8F5', // N900 — primary text
+          muted:   '#A6A3C8', // N800 — secondary text
+          faint:   '#7D80A8', // N700 — muted/hint text
         },
-        success: '#4caf82',
-        warning: '#f5a623',
-        danger:  '#e05c5c',
+        highlight: '#F5C518', // warm-yellow accent — celebration / streaks only
+        success:   '#22C90A',
+        warning:   '#F07340', // orange (distinct from the yellow highlight)
+        danger:    '#F05068',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],

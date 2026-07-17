@@ -365,14 +365,14 @@ export function DueForecastProjection() {
           {hoverPt && (
             <g>
               <line x1={x(hoverPt.day)} y1={svg.mT} x2={x(hoverPt.day)} y2={H - mB} stroke="currentColor" className="text-ink-faint" strokeWidth={1} opacity={0.5} strokeDasharray="3 3" />
-              <circle cx={x(hoverPt.day)} cy={y(hoverPt.total)} r={3} fill="#7c6af7" />
+              <circle cx={x(hoverPt.day)} cy={y(hoverPt.total)} r={3} fill="#E6E8F5" />
             </g>
           )}
           {/* series */}
-          <path d={path('total')} fill="none" stroke="#7c6af7" strokeWidth={2.5} />
-          <path d={path('typed')} fill="none" stroke="#6366f1" strokeWidth={2} opacity={0.9} />
-          <path d={path('selfg')} fill="none" stroke="#f59e0b" strokeWidth={2} opacity={0.9} />
-          <path d={path('recog')} fill="none" stroke="#10b981" strokeWidth={2} opacity={0.9} />
+          <path d={path('total')} fill="none" stroke="#E6E8F5" strokeWidth={2.5} />
+          <path d={path('typed')} fill="none" stroke="#6640FF" strokeWidth={2} opacity={0.9} />
+          <path d={path('selfg')} fill="none" stroke="#F07890" strokeWidth={2} opacity={0.9} />
+          <path d={path('recog')} fill="none" stroke="#2CBCBC" strokeWidth={2} opacity={0.9} />
         </svg>
 
         {/* Per-language pie on hover (only with no filter active). */}
@@ -388,10 +388,10 @@ export function DueForecastProjection() {
       {/* legend — appends the hovered day's counts, e.g. "Total (378)" */}
       <div className="flex flex-wrap gap-4 text-xs">
         {([
-          { c: '#7c6af7', label: 'Total', key: 'total' },
-          { c: '#6366f1', label: 'Typed', key: 'typed' },
-          { c: '#f59e0b', label: 'Self-graded', key: 'selfg' },
-          { c: '#10b981', label: 'Reverse', key: 'recog' },
+          { c: '#E6E8F5', label: 'Total', key: 'total' },
+          { c: '#6640FF', label: 'Typed', key: 'typed' },
+          { c: '#F07890', label: 'Self-graded', key: 'selfg' },
+          { c: '#2CBCBC', label: 'Reverse', key: 'recog' },
         ] as const).map(l => (
           <span key={l.label} className="flex items-center gap-1.5 text-ink-muted">
             <span className="inline-block w-3 h-0.5 rounded" style={{ backgroundColor: l.c }} />
@@ -445,7 +445,7 @@ function PieChart({ slices }: { slices: { label: string; flag: string; value: nu
   return (
     <div className="flex items-center gap-3">
       <svg width={104} height={104} viewBox="0 0 104 104">
-        {arcs.map((a, i) => <path key={i} d={a.d} fill={a.color} stroke="var(--surface-raised, #1a1a1a)" strokeWidth={1} />)}
+        {arcs.map((a, i) => <path key={i} d={a.d} fill={a.color} stroke="var(--surface-raised, #202240)" strokeWidth={1} />)}
       </svg>
       <div className="flex flex-col gap-0.5 text-[11px] whitespace-nowrap">
         {slices.map((s, i) => (

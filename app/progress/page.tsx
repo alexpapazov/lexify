@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { displayText } from '@/lib/cardText'
-import { langName } from '@/lib/languages'
+import { langName, LANG_COLOR_PALETTE } from '@/lib/languages'
 import { ConnectionGraph } from '@/components/analytics/ConnectionGraph'
 import { DueForecastProjection } from '@/components/analytics/DueForecastProjection'
 import { getToday } from '@/lib/dates'
@@ -58,29 +58,14 @@ function totalGrad(day: DayData) {
   return day.graduated.reduce((s, g) => s + g.count, 0)
 }
 
-// 12 preset swatches for the color picker popover
-const PRESET_COLORS = [
-  '#ef4444', '#f97316', '#f59e0b', '#eab308',
-  '#84cc16', '#22c55e', '#10b981', '#06b6d4',
-  '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899',
-]
+// 12 preset swatches for the color picker popover — the shared LexiCard categorical set.
+const PRESET_COLORS = LANG_COLOR_PALETTE
 
-const DEFAULT_REVIEWS_COLOR = '#7c6af7'
-const DEFAULT_LAPSES_COLOR  = '#ef4444'
+const DEFAULT_REVIEWS_COLOR = '#4A4BD8' // primary
+const DEFAULT_LAPSES_COLOR  = '#F05068' // danger
 
-// Palette for up to 10 language pairs — stable order, works on dark bg
-const LANG_PALETTE = [
-  '#6366f1', // indigo
-  '#10b981', // emerald
-  '#f59e0b', // amber
-  '#ef4444', // red
-  '#8b5cf6', // violet
-  '#06b6d4', // cyan
-  '#f97316', // orange
-  '#84cc16', // lime
-  '#ec4899', // pink
-  '#14b8a6', // teal
-]
+// Per-language-pair series colors — the same shared categorical set (stable order, dark-legible).
+const LANG_PALETTE = LANG_COLOR_PALETTE
 
 export default function AnalyticsPage() {
   const [range,        setRange]        = useState<RangeDays>(30)
@@ -292,7 +277,7 @@ export default function AnalyticsPage() {
             <label className="flex items-center gap-1.5 text-xs text-ink-muted cursor-pointer pt-1 border-t border-white/10">
               <input
                 type="color"
-                value={/^#[0-9a-fA-F]{6}$/.test(displayColor) ? displayColor : '#6366f1'}
+                value={/^#[0-9a-fA-F]{6}$/.test(displayColor) ? displayColor : '#4A4BD8'}
                 onChange={e => setColor(colorKey, e.target.value)}
                 className="w-4 h-4 cursor-pointer rounded-sm border-0 p-0"
               />
@@ -496,7 +481,7 @@ export default function AnalyticsPage() {
               <p className="text-accent/80">Reviews due: <span className="font-medium text-ink">{tooltip.day.reviewed}</span></p>
             )}
             {tooltip.day.lapses > 0 && (
-              <p style={{ color: '#ef4444' }}>Lapsed: <span className="font-medium text-ink">{tooltip.day.lapses}</span></p>
+              <p style={{ color: '#F05068' }}>Lapsed: <span className="font-medium text-ink">{tooltip.day.lapses}</span></p>
             )}
             {tooltip.day.newCards.length > 0 && (
               <p className="text-ink-faint">New introduced: {tooltip.day.newCards.length}</p>
