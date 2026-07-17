@@ -115,6 +115,53 @@ export function fsrsScheduleMix(opts: {
   return steps
 }
 
+// ─── Shared seeding + language-model helpers (used by the analytics chart and
+//     the dashboard "Coming up" bars, so both project workload identically) ────
+
+/** Fallback initial post-graduation interval (days) when a language has no sample. */
+export const DEFAULT_I0 = 3
+/** Fallback FSRS difficulty when a card/language has none measured. */
+export const DEFAULT_DIFFICULTY = 5
+
+/**
+ * Seed stability for a forward projection: use the card's real FSRS stability when it has one,
+ * otherwise invert its current interval back to the stability that produced it (at `retention`).
+ */
+export function seedStability(
+  stability: number | null | undefined,
+  interval:  number | null | undefined,
+  retention: number,
+): number {
+  return stability != null && stability > 0
+    ? stability
+    : stabilityForInterval(Math.max(0.5, interval || 1), retention)
+}
+
+/** Seed difficulty for a forward projection: the card's real difficulty, else the default. */
+export function seedDifficulty(difficulty: number | null | undefined): number {
+  return difficulty != null && difficulty > 0 ? difficulty : DEFAULT_DIFFICULTY
+}
+
+/** Minimal per-card shape needed to measure a language's rating behaviour. */
+export interface RatingSampleState {
+  reviewDirection?: string
+  graduated:        boolean
+  lastRating:       Rating | null
+}
+
+/**
+ * Measure a language's rating mix from its graduated FORWARD cards' most-recent ratings
+ * (reverse rows are recognition and excluded). Falls back to DEFAULT_RATING_MIX when empty.
+ */
+export function measureRatingMix(states: RatingSampleState[]): RatingMix {
+  const counts: Partial<Record<Rating, number>> = {}
+  for (const s of states) {
+    if (s.reviewDirection === 'reverse' || !s.graduated || !s.lastRating) continue
+    counts[s.lastRating] = (counts[s.lastRating] ?? 0) + 1
+  }
+  return normalizeRatingMix(counts)
+}
+
 /** Median of a numeric list (0 if empty). */
 export function median(xs: number[]): number {
   if (xs.length === 0) return 0

@@ -15,6 +15,7 @@ import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
+import { fsrsScheduleMix, seedStability, seedDifficulty, measureRatingMix, DEFAULT_RATING_MIX, type RatingMix, type WeightedStep } from '@/lib/forecastFsrs'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
 
@@ -74,6 +75,134 @@ interface ForecastFilters {
   accel:      string[]  // 'accelerated' | 'normal'; empty = all
 }
 
+// Per-pair inputs for the FSRS forward simulation: request retention per track (drives interval
+// length), the max interval cap, and the language's measured rating mix.
+interface PairForecastCfg {
+  typedP: number; selfgP: number; smartP: number; reverseP: number
+  maxInt: number
+  mix:    RatingMix
+}
+
+const DEFAULT_PAIR_CFG: PairForecastCfg = { typedP: 0.9, selfgP: 0.9, smartP: 0.9, reverseP: 0.9, maxInt: 1460, mix: DEFAULT_RATING_MIX }
+
+/** Whole-day difference between two YYYY-MM-DD strings (b − a). */
+function daysBetween(a: string, b: string): number {
+  return Math.round((Date.parse(b + 'T00:00:00.000Z') - Date.parse(a + 'T00:00:00.000Z')) / 86400000)
+}
+
+/** Build per-pair forecast config from scheduler params (retention/maxInt) + measured rating mix. */
+function buildForecastCfg(
+  paramRows: { sourceLanguage: string; targetLanguage: string; maxIntervalDays: number; recentRetentionRate: number | null; answerField: string }[],
+  stats: DeckWithStats[],
+): Map<string, PairForecastCfg> {
+  const m = new Map<string, PairForecastCfg>()
+  const ensure = (key: string) => {
+    let c = m.get(key)
+    if (!c) { c = { ...DEFAULT_PAIR_CFG }; m.set(key, c) }
+    return c
+  }
+  for (const r of paramRows) {
+    const c = ensure(`${r.sourceLanguage}|${r.targetLanguage}`)
+    c.maxInt = r.maxIntervalDays
+    const p = r.recentRetentionRate ?? undefined
+    if (p) {
+      if (r.answerField === 'forward_typed')  c.typedP  = p
+      if (r.answerField === 'forward_recall') c.selfgP  = p
+      if (r.answerField === 'forward_smart')  c.smartP  = p
+      if (r.answerField === 'reverse_recall') c.reverseP = p
+    }
+  }
+  for (const { deck, states } of stats) {
+    ensure(`${deck.sourceLanguage}|${deck.targetLanguage}`).mix = measureRatingMix(states)
+  }
+  return m
+}
+
+/** Accelerated-vs-normal filter (shared by the bars and the click-to-expand list). */
+function accelFilterAllows(s: CardState, filters: ForecastFilters): boolean {
+  if (filters.accel.length === 0) return true
+  const isAccel = s.acceleratedMode === 'import_known'
+  return isAccel ? filters.accel.includes('accelerated') : filters.accel.includes('normal')
+}
+
+interface ProjectCtx {
+  en:        EnabledTracks | undefined
+  pc:        PairForecastCfg
+  threshold: number
+  filters:   ForecastFilters
+  todayStr:  string
+  startDate: string
+  endDate:   string
+  tz:        string
+}
+
+/**
+ * The set of dates (within [startDate, endDate]) a single card-state row is projected to be reviewed,
+ * simulating each of its tracks' clean FSRS schedule forward from its difficulty/stability. Dedupes to
+ * one date per row (a forward row's typed + recall reviews on the same day count once) so the "Coming
+ * up" bar counts and the click-to-expand list are always consistent. Respects the review-type and
+ * direction filters per simulated review.
+ */
+function projectStateReviewDays(s: CardState, ctx: ProjectCtx): string[] {
+  const { en, pc, threshold, filters, todayStr, startDate, endDate, tz } = ctx
+  const showTyped      = filters.modes.length === 0 || filters.modes.includes('typed')
+  const showSmart      = filters.modes.length === 0 || filters.modes.includes('smart')
+  const showSelfGraded = filters.modes.length === 0 || filters.modes.includes('selfgraded')
+  const dirAllows = (d: string) => filters.directions.length === 0 || filters.directions.includes(d)
+  const localDate = (d: string) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
+
+  const horizonDays = Math.max(0, daysBetween(todayStr, endDate))
+  const days = new Set<string>()
+  const emit = (
+    ref: string | null | undefined,
+    stability: number, difficulty: number, retention: number, mix: RatingMix,
+    accept: (st: WeightedStep) => boolean,
+  ) => {
+    if (!ref) return
+    const refLocal = localDate(ref)
+    // Overdue tracks are due today (offset 0); future ones start at their day offset.
+    const firstOffset = Math.max(0, daysBetween(todayStr, refLocal < todayStr ? todayStr : refLocal))
+    const steps = fsrsScheduleMix({ stability, difficulty, firstReviewDay: firstOffset, retention, maxInt: pc.maxInt, horizon: horizonDays, mix })
+    for (const st of steps) {
+      const dateStr = addDays(todayStr, st.day)
+      if (dateStr < startDate || dateStr > endDate) continue
+      if (accept(st)) days.add(dateStr)
+    }
+  }
+
+  const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
+  if (dir === 'reverse') {
+    // Reverse rows are recognition (Target → Native) — inherently self-graded.
+    if (!dirAllows('reverse') || !showSelfGraded || !trackEnabled(en, 'recall', true)) return []
+    emit(s.recallDueAt ?? s.dueAt,
+      seedStability(s.stability, s.recallIntervalDays ?? s.intervalDays, pc.reverseP),
+      seedDifficulty(s.difficulty), pc.reverseP, pc.mix, () => true)
+  } else {
+    // Production is one logical lane (typed/smart mutually exclusive), visible if EITHER mode is
+    // enabled. Classify by TRACK for REVIEW TYPE (smart_due_at → Smart typing) and by PRESENTATION
+    // for DIRECTION (typed below the threshold / accelerated-unconfirmed).
+    const onSmart     = !!s.smartDueAt
+    const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
+    const prodRef     = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
+    const prodShow    = onSmart ? showSmart : showTyped
+    if (prodRef && prodEnabled && prodShow) {
+      const interval   = onSmart ? (s.smartIntervalDays ?? s.intervalDays) : (s.typedIntervalDays ?? s.intervalDays)
+      const ret        = onSmart ? pc.smartP : pc.typedP
+      // Typed lane keeps its current presentation for the whole schedule; the smart lane re-classifies
+      // each simulated review by whether that interval is below the threshold.
+      const fixedTyped = forwardProductionMode(s, onSmart ? 'smart' : 'typed', threshold) === 'typed'
+      emit(prodRef, seedStability(s.stability, interval, ret), seedDifficulty(s.difficulty), ret, pc.mix,
+        (st) => dirAllows((onSmart ? st.intervalDays < threshold : fixedTyped) ? 'forward-typed' : 'forward-selfgraded'))
+    }
+    // Forward recall is a separate self-graded track (its own recall_due_at schedule).
+    if (showSelfGraded && dirAllows('forward-selfgraded') && s.recallDueAt && trackEnabled(en, 'recall', false)) {
+      emit(s.recallDueAt, seedStability(s.stability, s.recallIntervalDays ?? s.intervalDays, pc.selfgP),
+        seedDifficulty(s.difficulty), pc.selfgP, pc.mix, () => true)
+    }
+  }
+  return [...days]
+}
+
 function buildForecastDays(
   stats: DeckWithStats[],
   startDate: string,
@@ -83,16 +212,9 @@ function buildForecastDays(
   tz: string,
   enabledTracks: Map<string, EnabledTracks>,
   thresholds: Map<string, number>,
+  cfg: Map<string, PairForecastCfg>,
 ): ForecastDay[] {
   if (!startDate || !endDate || startDate > endDate) return []
-
-  // REVIEW TYPE filter is track-based: typed production, smart typing, self-graded.
-  const showTyped  = filters.modes.length === 0 || filters.modes.includes('typed')
-  const showSmart  = filters.modes.length === 0 || filters.modes.includes('smart')
-  const showSelfGraded = filters.modes.length === 0 || filters.modes.includes('selfgraded')
-
-  const localDate = (d: string) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
-  const effDate   = (raw: string) => { const d = localDate(raw); return d <= todayStr ? todayStr : d }
 
   const dayCounts = new Map<string, number>()
   const bump = (dateStr: string) =>
@@ -102,48 +224,18 @@ function buildForecastDays(
     const pairKey = `${deck.sourceLanguage}|${deck.targetLanguage}`
     if (filters.langPairs.length > 0 && !filters.langPairs.includes(pairKey)) continue
     const en = enabledTracks.get(pairKey)
+    const pc = cfg.get(pairKey) ?? DEFAULT_PAIR_CFG
+    const threshold = thresholds.get(pairKey) ?? 20
     // Dormant cards never become due — exclude both their forward and reverse rows.
     const dormantCards = new Set(states.filter(s => s.reviewDirection !== 'reverse' && s.dormant).map(s => s.cardId))
 
     for (const s of states) {
       if (!s.graduated) continue
       if (dormantCards.has(s.cardId)) continue
-
-      const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
-      // Direction is per-review now: forward production splits into typed vs self-graded
-      // presentation, so classify each review and check it against the filter individually.
-      const dirAllows = (d: string) => filters.directions.length === 0 || filters.directions.includes(d)
-
-      const isAccel = s.acceleratedMode === 'import_known'
-      if (filters.accel.length > 0) {
-        if (isAccel && !filters.accel.includes('accelerated')) continue
-        if (!isAccel && !filters.accel.includes('normal')) continue
-      }
-
-      if (dir === 'reverse') {
-        if (!dirAllows('reverse')) continue
-        // Reverse rows are recognition (Target → Native) — inherently self-graded.
-        if (!trackEnabled(en, 'recall', true)) continue
-        const recallRef = s.recallDueAt ?? s.dueAt
-        const recallEff = recallRef ? effDate(recallRef) : null
-        if (showSelfGraded && recallEff && recallEff >= startDate && recallEff <= endDate) bump(recallEff)
-      } else {
-        // Production is one logical lane (typed/smart mutually exclusive), visible if EITHER
-        // mode is enabled. Classify by TRACK for REVIEW TYPE (smart_due_at → Smart typing) and
-        // by PRESENTATION for DIRECTION (typed below the threshold / accelerated-unconfirmed).
-        const onSmart   = !!s.smartDueAt
-        const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
-        const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
-        const prodEff   = (prodRef && prodEnabled) ? effDate(prodRef) : null
-        const prodShow  = onSmart ? showSmart : showTyped
-        const prodTyped = forwardProductionMode(s, onSmart ? 'smart' : 'typed', thresholds.get(pairKey) ?? 20) === 'typed'
-        const prodDir   = prodTyped ? 'forward-typed' : 'forward-selfgraded'
-        const recallEff = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
-
-        if (prodEff && prodEff >= startDate && prodEff <= endDate && prodShow && dirAllows(prodDir)) bump(prodEff)
-        // Forward recall is self-graded production.
-        if (showSelfGraded && dirAllows('forward-selfgraded') && recallEff && recallEff >= startDate && recallEff <= endDate && recallEff !== prodEff) bump(recallEff)
-      }
+      if (!accelFilterAllows(s, filters)) continue
+      // One count per state-row per day (a forward row's typed+recall reviews on the same day are the
+      // same card to review); reverse is its own row. Matches the click-to-expand list exactly.
+      for (const d of projectStateReviewDays(s, { en, pc, threshold, filters, todayStr, startDate, endDate, tz })) bump(d)
     }
   }
 
@@ -170,6 +262,7 @@ export default function StudyPage() {
   const [forecast,     setForecast]     = useState<ForecastDay[]>([])
   const [enabledTracks, setEnabledTracks] = useState<Map<string, EnabledTracks>>(new Map())
   const [smartThresholds, setSmartThresholds] = useState<Map<string, number>>(new Map())
+  const [forecastCfg, setForecastCfg] = useState<Map<string, PairForecastCfg>>(new Map())
   const [loading,      setLoading]      = useState(true)
   const [authed,       setAuthed]       = useState(false)
   const [userId,       setUserId]       = useState('')
@@ -324,11 +417,15 @@ export default function StudyPage() {
     setTodayGradCounts(gradCounts)
 
     // ── Upcoming review forecast ────────────────────────────────────────
+    // Per-pair FSRS config (retention/maxInt from scheduler params + measured rating mix) so the
+    // "Coming up" bars simulate the same way the analytics projection does.
+    const forecastCfgMap = buildForecastCfg(paramRows, stats)
+    setForecastCfg(forecastCfgMap)
     const initStart = todayStr
     const initEnd   = addDays(todayStr, 13)
     setForecastStartDate(initStart)
     setForecastEndDate(initEnd)
-    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, tz, enabledMap, thresholdMap))
+    setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, tz, enabledMap, thresholdMap, forecastCfgMap))
 
     setLoading(false)
   }
@@ -502,10 +599,10 @@ export default function StudyPage() {
 
   useEffect(() => {
     if (!todayStr || !forecastStartDate || !forecastEndDate) return
-    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, tz, enabledTracks, smartThresholds))
+    setForecast(buildForecastDays(deckStats, forecastStartDate, forecastEndDate, todayStr, forecastFilters, tz, enabledTracks, smartThresholds, forecastCfg))
     setSelectedForecastDate(prev => prev && prev >= forecastStartDate && prev <= forecastEndDate ? prev : null)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forecastStartDate, forecastEndDate, forecastFilters, enabledTracks])
+  }, [forecastStartDate, forecastEndDate, forecastFilters, enabledTracks, forecastCfg])
 
   useEffect(() => {
     if (!showDuePicker) return
@@ -584,17 +681,16 @@ export default function StudyPage() {
     }, {})
   )
 
-  // Cards due on the selected forecast date (for the click-to-expand panel)
-  // Mirrors the same filter logic as buildForecastDays so what's counted = what's listed
+  // Cards projected to be reviewed on the selected forecast date (for the click-to-expand panel).
+  // Uses the SAME per-row FSRS projection as the bars, so the list length equals the bar count.
   const forecastCards: FilteredCard[] = selectedForecastDate ? deckStats.flatMap(({ deck, cards, states }) => {
     const pairKey = `${deck.sourceLanguage}|${deck.targetLanguage}`
     if (forecastFilters.langPairs.length > 0 && !forecastFilters.langPairs.includes(pairKey)) return []
 
-    const isToday    = selectedForecastDate === forecast[0]?.date
-    const showTyped  = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('typed')
-    const showSmart  = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('smart')
-    const showSelfGraded = forecastFilters.modes.length === 0 || forecastFilters.modes.includes('selfgraded')
     const en = enabledTracks.get(pairKey)
+    const pc = forecastCfg.get(pairKey) ?? DEFAULT_PAIR_CFG
+    const threshold = smartThresholds.get(pairKey) ?? 20
+    const dormantCards = new Set(states.filter(s => s.reviewDirection !== 'reverse' && s.dormant).map(s => s.cardId))
 
     const statesByCard = new Map<string, CardState[]>()
     for (const s of states) {
@@ -607,41 +703,11 @@ export default function StudyPage() {
     for (const card of cards) {
       for (const s of statesByCard.get(card.id) ?? []) {
         if (!s.graduated) continue
+        if (dormantCards.has(s.cardId)) continue
+        if (!accelFilterAllows(s, forecastFilters)) continue
 
-        const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
-        const dirAllows = (d: string) => forecastFilters.directions.length === 0 || forecastFilters.directions.includes(d)
-
-        const isAccel = s.acceleratedMode === 'import_known'
-        if (forecastFilters.accel.length > 0) {
-          if (isAccel  && !forecastFilters.accel.includes('accelerated')) continue
-          if (!isAccel && !forecastFilters.accel.includes('normal'))      continue
-        }
-
-        const localDate = (d: string): string => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
-        // Snap overdue cards to today (same as buildForecastDays), NOT to the clicked date —
-        // otherwise clicking a future bar pulls in all past-due cards too.
-        const effDate   = (raw: string): string => { const d = localDate(raw); return d <= todayStr ? todayStr : d }
-        let due = false
-        if (dir === 'reverse') {
-          if (!dirAllows('reverse')) continue
-          // Reverse rows are recognition — inherently self-graded.
-          if (!trackEnabled(en, 'recall', true)) continue
-          const recallRef = s.recallDueAt ?? s.dueAt
-          const recallEff = recallRef ? effDate(recallRef) : null
-          if (showSelfGraded && recallEff === selectedForecastDate) due = true
-        } else {
-          const onSmart   = !!s.smartDueAt
-          const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
-          const prodRef   = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
-          const prodEff: string | null  = (prodRef && prodEnabled) ? effDate(prodRef) : null
-          const prodShow  = onSmart ? showSmart : showTyped
-          const prodTyped = forwardProductionMode(s, onSmart ? 'smart' : 'typed', smartThresholds.get(pairKey) ?? 20) === 'typed'
-          const prodDir   = prodTyped ? 'forward-typed' : 'forward-selfgraded'
-          const recallEff: string | null = (s.recallDueAt && trackEnabled(en, 'recall', false)) ? effDate(s.recallDueAt) : null
-          if (prodEff === selectedForecastDate && prodShow && dirAllows(prodDir)) due = true
-          if (!due && showSelfGraded && dirAllows('forward-selfgraded') && recallEff === selectedForecastDate && recallEff !== prodEff) due = true
-        }
-        if (!due) continue
+        const reviewDays = projectStateReviewDays(s, { en, pc, threshold, filters: forecastFilters, todayStr, startDate: forecastStartDate, endDate: forecastEndDate, tz })
+        if (!reviewDays.includes(selectedForecastDate)) continue
 
         results.push({
           card, state: s, deckName: deck.name, deckId: deck.id, status: 'Graduated',

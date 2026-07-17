@@ -1,4 +1,4 @@
-import { stabilityForInterval, fsrsSchedule, fsrsScheduleMix, normalizeRatingMix, DEFAULT_RATING_MIX, median, estimateInitialInterval } from '@/lib/forecastFsrs'
+import { stabilityForInterval, fsrsSchedule, fsrsScheduleMix, normalizeRatingMix, DEFAULT_RATING_MIX, median, estimateInitialInterval, seedStability, seedDifficulty, measureRatingMix, DEFAULT_DIFFICULTY } from '@/lib/forecastFsrs'
 import { intervalForRetention } from '@/engine/fsrs'
 
 describe('stabilityForInterval', () => {
@@ -55,6 +55,37 @@ describe('median', () => {
     expect(median([3, 1, 2])).toBe(2)
     expect(median([4, 1, 2, 3])).toBe(2.5)
     expect(median([])).toBe(0)
+  })
+})
+
+describe('seedStability / seedDifficulty (shared by analytics + Coming-up bars)', () => {
+  it('uses the real stability when present, else inverts the interval', () => {
+    expect(seedStability(12, 3, 0.9)).toBe(12)                      // real S wins
+    expect(seedStability(null, 10, 0.9)).toBeCloseTo(stabilityForInterval(10, 0.9), 6)
+    expect(seedStability(0, 5, 0.9)).toBeCloseTo(stabilityForInterval(5, 0.9), 6)  // 0 is not a real S
+  })
+  it('difficulty falls back to the default when missing', () => {
+    expect(seedDifficulty(7)).toBe(7)
+    expect(seedDifficulty(null)).toBe(DEFAULT_DIFFICULTY)
+    expect(seedDifficulty(0)).toBe(DEFAULT_DIFFICULTY)
+  })
+})
+
+describe('measureRatingMix', () => {
+  it('counts only graduated FORWARD rows and ignores reverse / ungraduated', () => {
+    const mix = measureRatingMix([
+      { graduated: true,  lastRating: 'good' },
+      { graduated: true,  lastRating: 'good' },
+      { graduated: true,  lastRating: 'again' },
+      { graduated: true,  lastRating: 'hard', reviewDirection: 'reverse' }, // excluded (reverse)
+      { graduated: false, lastRating: 'easy' },                              // excluded (not graduated)
+    ])
+    expect(mix.good).toBeCloseTo(2 / 3, 6)
+    expect(mix.again).toBeCloseTo(1 / 3, 6)
+    expect(mix.hard).toBe(0)
+  })
+  it('falls back to the default mix when there is no forward history', () => {
+    expect(measureRatingMix([{ graduated: true, lastRating: null, reviewDirection: 'reverse' }])).toEqual(DEFAULT_RATING_MIX)
   })
 })
 

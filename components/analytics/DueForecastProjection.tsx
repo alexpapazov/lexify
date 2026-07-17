@@ -7,8 +7,7 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
-import { fsrsScheduleMix, stabilityForInterval, estimateInitialInterval, normalizeRatingMix, DEFAULT_RATING_MIX, type WeightedStep, type RatingMix } from '@/lib/forecastFsrs'
-import type { Rating } from '@/domain'
+import { fsrsScheduleMix, estimateInitialInterval, measureRatingMix, seedStability, seedDifficulty, DEFAULT_RATING_MIX, DEFAULT_I0, DEFAULT_DIFFICULTY, stabilityForInterval, type WeightedStep, type RatingMix } from '@/lib/forecastFsrs'
 
 // Forward projection of daily "Due Now" load, split into Typed / Self-graded / Reverse / Total,
 // simulated on the live FSRS stability model. Each card's future reviews are simulated per language
@@ -32,9 +31,6 @@ interface PairCfg {
 interface PairSeries { key: string; label: string; flag: string; typed: number[]; selfg: number[]; recog: number[] }
 interface PairModel { key: string; label: string; flag: string; days: number; difficulty: number }
 interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairModel[]; hasGoals: boolean }
-
-const DEFAULT_I0 = 3
-const DEFAULT_DIFFICULTY = 5
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 function ordinal(n: number): string {
@@ -114,9 +110,8 @@ export function DueForecastProjection() {
           return x
         }
 
-        const seedS = (stability: number | null | undefined, interval: number | null | undefined, retention: number) =>
-          stability != null && stability > 0 ? stability : stabilityForInterval(Math.max(0.5, interval || 1), retention)
-        const seedD = (difficulty: number | null | undefined) => difficulty != null && difficulty > 0 ? difficulty : DEFAULT_DIFFICULTY
+        const seedS = seedStability
+        const seedD = seedDifficulty
 
         // Emit a card's FSRS (rating-mix) schedule into one array, accumulating each step's expected
         // weight (>1 when lapses add relearn reviews). Returns the day it hits `maxReviews` (dormancy),
@@ -163,12 +158,12 @@ export function DueForecastProjection() {
         // the user will accelerate future cards). Accelerated cards keep their own real D/S below.
         const initSamples  = new Map<string, { reps: number; intervalDays: number }[]>()
         const diffSamples  = new Map<string, number[]>()
-        const ratingCounts = new Map<string, Partial<Record<Rating, number>>>()
+        const statesByPair = new Map<string, typeof deckStates[number]>()
         for (let di = 0; di < decks.length; di++) {
           const deck = decks[di]!, key = `${deck.sourceLanguage}|${deck.targetLanguage}`
+          ;(statesByPair.get(key) ?? statesByPair.set(key, []).get(key)!).push(...deckStates[di]!)
           for (const s of deckStates[di]!) {
             if (s.reviewDirection === 'reverse' || !s.graduated) continue
-            if (s.lastRating) { const rc = ratingCounts.get(key) ?? {}; rc[s.lastRating] = (rc[s.lastRating] ?? 0) + 1; ratingCounts.set(key, rc) }
             if (s.acceleratedMode === 'none') {
               if (s.difficulty != null && s.difficulty > 0) (diffSamples.get(key) ?? diffSamples.set(key, []).get(key)!).push(s.difficulty)
               const initInt = s.scheduledIntervalDays ?? s.typedIntervalDays ?? s.smartIntervalDays ?? s.intervalDays
@@ -180,7 +175,7 @@ export function DueForecastProjection() {
         const diffByPair = new Map<string, number>()
         const initI0Map  = new Map<string, number>()
         for (const [k] of cfg) {
-          mixByPair.set(k, normalizeRatingMix(ratingCounts.get(k) ?? {}))
+          mixByPair.set(k, measureRatingMix(statesByPair.get(k) ?? []))
           const ds = diffSamples.get(k) ?? []
           diffByPair.set(k, ds.length ? ds.reduce((a, b) => a + b, 0) / ds.length : DEFAULT_DIFFICULTY)
           initI0Map.set(k, estimateInitialInterval(initSamples.get(k) ?? [], DEFAULT_I0))
