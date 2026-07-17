@@ -328,8 +328,20 @@ export default function AnalyticsPage() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10 space-y-8">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
+      <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
+
+      {/* Forward projection: Due Now load over the next 2 years */}
+      <div className="panel p-5 space-y-3">
+        <div>
+          <h2 className="text-sm font-semibold text-ink">Projected Due Now load</h2>
+          <p className="text-xs text-ink-faint">Your existing cards plus new cards from your daily goals, simulated on the FSRS model per language — each language&apos;s measured initial interval, average difficulty, and rating mix (again/hard/good/easy). Existing accelerated cards use their own difficulty/stability. Split into typed, self-graded (recall + smart-typing past its threshold), and reverse recognition.</p>
+        </div>
+        <DueForecastProjection />
+      </div>
+
+      {/* Daily review history — this is what the range toggle controls */}
+      <div className="flex items-center justify-between flex-wrap gap-3 pt-2">
+        <h2 className="text-sm font-semibold text-ink">Daily review history</h2>
         <div className="flex items-center gap-1 bg-surface-raised rounded-card p-1">
           {RANGES.map(r => (
             <button
@@ -343,15 +355,6 @@ export default function AnalyticsPage() {
             >{r.label}</button>
           ))}
         </div>
-      </div>
-
-      {/* Forward projection: Due Now load over the next 2 years */}
-      <div className="panel p-5 space-y-3">
-        <div>
-          <h2 className="text-sm font-semibold text-ink">Projected Due Now load</h2>
-          <p className="text-xs text-ink-faint">Your existing cards plus new cards from your daily goals, simulated on the FSRS model per language — each language&apos;s measured initial interval, average difficulty, and rating mix (again/hard/good/easy). Existing accelerated cards use their own difficulty/stability. Split into typed, self-graded (recall + smart-typing past its threshold), and reverse recognition.</p>
-        </div>
-        <DueForecastProjection />
       </div>
 
       {/* Legend — per language pair + reviews + lapses, all color-pickable */}
