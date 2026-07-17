@@ -23,7 +23,7 @@ import type { Card, CardSide, CardChoices, CardConfusion } from '@/domain'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
-import { getAudioSourceDefault } from '@/lib/speak'
+import { getAudioSourceForLanguage } from '@/lib/speak'
 
 export const OPTIONS_NEEDED = 4
 
@@ -446,7 +446,7 @@ async function fetchAndCacheAudio(
   onAudioCached: (cardId: string, audioData: string) => void,
 ): Promise<void> {
   if (card.audioGenerated || !TTS_SUPPORTED_LANGUAGES.has(sourceLanguage)) return
-  const src = getAudioSourceDefault()
+  const src = getAudioSourceForLanguage(sourceLanguage)
   if (src === 'browser') return   // robotic default → nothing to pre-generate; playback uses on-device speech
   try {
     const res = await fetch('/api/tts', {

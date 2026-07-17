@@ -363,6 +363,7 @@ export default function SettingsPage() {
   const [spilloverDue,        setSpilloverDue]        = useState(false)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo'>('browser')
+  const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
   const [langColors,          setLangColors]          = useState<Record<string, string>>({})
   const [timezone,            setTimezone]            = useState('')
   const [turnoverHour,        setTurnoverHour]        = useState(0)
@@ -396,7 +397,7 @@ export default function SettingsPage() {
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, language_colors')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -411,6 +412,7 @@ export default function SettingsPage() {
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
         setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo')
+        setAudioSourceByLangState((profile.audio_source_by_language as Record<string, string> | null) ?? {})
         setLangColors((profile.language_colors as Record<string, string> | null) ?? {})
       } else {
         setTimezone(detectBrowserTimezone())
@@ -448,6 +450,7 @@ export default function SettingsPage() {
       day_turnover_hour:         turnoverHour,
       study_mode_autoplay:       studyModeAutoplay,
       audio_source_default:      audioSourceDefault,
+      audio_source_by_language:  audioSourceByLang,
       language_colors:           langColors,
     }).eq('user_id', session.user.id)
     setSaved(true)
@@ -739,6 +742,33 @@ export default function SettingsPage() {
             has no recording). You can still override the source per card from its ℹ panel. Existing cards keep their
             current audio until you clear/refetch it.
           </p>
+
+          {langPairs.length > 0 && (() => {
+            const codes = [...new Set(langPairs.map(p => p.sourceLanguage))]
+            return (
+              <div className="pt-2 space-y-1.5">
+                <div className="text-xs text-ink-muted">Per-language override</div>
+                {codes.map(code => (
+                  <div key={code} className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-ink">{langFlag(code)} {langName(code)}</span>
+                    <select
+                      value={audioSourceByLang[code] ?? ''}
+                      onChange={e => setAudioSourceByLangState(prev => {
+                        const next = { ...prev }
+                        if (e.target.value) next[code] = e.target.value; else delete next[code]
+                        return next
+                      })}
+                      className="input text-sm w-44">
+                      <option value="">Use default</option>
+                      <option value="browser">Robotic (device voice)</option>
+                      <option value="elevenlabs">AI voice (ElevenLabs)</option>
+                      <option value="forvo">Forvo (real recordings)</option>
+                    </select>
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
         </div>
       </div>
 

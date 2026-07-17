@@ -20,31 +20,56 @@ export function setAudioPlaybackRate(rate: number): void {
   audioPlaybackRate = Number.isFinite(rate) && rate > 0 ? rate : 1
 }
 
-// Per-deck audio volume (0–1). Pages set this from the deck's preferences on load;
-// `speak`/`playClip` apply it to cached-clip playback and the Web Speech fallback.
+// Per-deck audio volume as a GAIN: 0–2, where 1 = normal and 2 = twice as loud. Values above 1
+// can't be done with `audio.volume` (capped at 1), so `playClip` routes those through a Web Audio
+// gain node. Pages set this from the deck's preferences on load.
 let audioVolume = 1
 export function setAudioVolume(vol: number): void {
-  audioVolume = Number.isFinite(vol) ? Math.min(1, Math.max(0, vol)) : 1
+  audioVolume = Number.isFinite(vol) ? Math.min(2, Math.max(0, vol)) : 1
 }
 
-// Global default audio source (profile-level). 'browser' (robotic, the default) generates no
-// audio — playback uses the on-device speech synth. 'elevenlabs'/'forvo' pre-generate & play real
-// clips (forvo auto-falls back to ElevenLabs when it has no recording). Pages set this from the
-// profile on load; per-card audio choices still override this for individual cards.
+// Audio source config (profile-level). Global default + per-language overrides. 'browser' (robotic,
+// the default) generates no audio — playback uses the on-device speech synth. 'elevenlabs'/'forvo'
+// pre-generate & play real clips (forvo auto-falls back to ElevenLabs). Per-card choices still win.
 export type AudioSourceDefault = 'browser' | 'elevenlabs' | 'forvo'
+const isSource = (s: unknown): s is AudioSourceDefault => s === 'browser' || s === 'elevenlabs' || s === 'forvo'
 let audioSourceDefault: AudioSourceDefault = 'browser'
+let audioSourceByLanguage: Record<string, AudioSourceDefault> = {}
 export function setAudioSourceDefault(src: string | null | undefined): void {
-  audioSourceDefault = src === 'elevenlabs' || src === 'forvo' ? src : 'browser'
+  audioSourceDefault = isSource(src) ? src : 'browser'
 }
-export function getAudioSourceDefault(): AudioSourceDefault { return audioSourceDefault }
+export function setAudioSourceByLanguage(map: Record<string, string> | null | undefined): void {
+  const clean: Record<string, AudioSourceDefault> = {}
+  for (const [lang, src] of Object.entries(map ?? {})) if (isSource(src)) clean[lang] = src
+  audioSourceByLanguage = clean
+}
+/** The effective source for a language: its per-language override, else the global default. */
+export function getAudioSourceForLanguage(language: string): AudioSourceDefault {
+  return audioSourceByLanguage[language] ?? audioSourceDefault
+}
+
+// Reused across clips so we don't leak an AudioContext per play. Only created when gain > 1.
+let audioCtx: AudioContext | null = null
 
 function playClip(src: string): Promise<void> {
   const audio = new Audio(src)
   audio.playbackRate = audioPlaybackRate
-  audio.volume = audioVolume
   // Keep pitch natural when slowed/sped (Safari uses the webkit-prefixed flag).
   audio.preservesPitch = true
   ;(audio as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = true
+  if (audioVolume <= 1) {
+    audio.volume = audioVolume
+  } else {
+    try {
+      const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      audioCtx ??= new Ctx()
+      if (audioCtx.state === 'suspended') void audioCtx.resume()
+      const srcNode = audioCtx.createMediaElementSource(audio)
+      const gainNode = audioCtx.createGain()
+      gainNode.gain.value = audioVolume
+      srcNode.connect(gainNode).connect(audioCtx.destination)
+    } catch { audio.volume = 1 }
+  }
   return audio.play()
 }
 
@@ -74,7 +99,7 @@ export function speak(text: string, langCode: string, audioData?: string | null)
   const utt = new SpeechSynthesisUtterance(stripAnnotations(text))
   utt.lang = SPEECH_LANG[langCode] ?? langCode
   utt.rate = audioPlaybackRate
-  utt.volume = audioVolume
+  utt.volume = Math.min(1, audioVolume)   // Web Speech volume can't exceed 1 (no >100% for robotic)
   window.speechSynthesis.speak(utt)
 }
 
@@ -109,13 +134,14 @@ export async function fetchAudioSource(
 
 export async function speakViaTts(text: string, language: string): Promise<string | null> {
   if (typeof window === 'undefined') return null
+  const source = getAudioSourceForLanguage(language)
   // Robotic default → don't generate a clip; the caller falls back to on-device speech.
-  if (audioSourceDefault === 'browser') return null
+  if (source === 'browser') return null
   try {
     const res = await fetch('/api/tts', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      // Use the chosen default source; Forvo auto-falls back to ElevenLabs when it has no recording.
-      body: JSON.stringify({ text, language, source: audioSourceDefault, fallback: audioSourceDefault === 'forvo' }),
+      // Use the effective source for this language; Forvo auto-falls back to ElevenLabs when it has no recording.
+      body: JSON.stringify({ text, language, source, fallback: source === 'forvo' }),
     })
     const data = await res.json()
     if (data.ok && data.audioData) {

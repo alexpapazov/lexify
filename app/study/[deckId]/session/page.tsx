@@ -11,7 +11,7 @@ import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabaseLadderClimbRepository }     from '@/lib/data/ladderClimb'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
-import { setAudioPlaybackRate, setAudioVolume, setAudioSourceDefault } from '@/lib/speak'
+import { setAudioPlaybackRate, setAudioVolume, setAudioSourceDefault, setAudioSourceByLanguage } from '@/lib/speak'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
@@ -403,12 +403,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         cardRepo.listByDeck(deckId),
         pipelineRepo.getDefault(),
         prefRepo.get(session.user.id, deckId),
-        supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single(),
       ])
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
       setAudioSourceDefault(profileData.data?.audio_source_default as string | null)
+      setAudioSourceByLanguage(profileData.data?.audio_source_by_language as Record<string, string> | null)
       tzRef.current       = tz
       turnoverRef.current = turnoverHour
 

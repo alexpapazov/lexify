@@ -1117,16 +1117,17 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm text-ink">Volume</span>
-                <div className="flex items-center gap-2 w-40">
+                <div className="flex items-center gap-2 w-44">
                   <input
-                    type="range" min={0} max={100} step={5}
+                    type="range" min={0} max={200} step={10}
                     value={Math.round(audioVolume * 100)}
                     onChange={e => setAudioVolumeState(Number(e.target.value) / 100)}
                     className="accent-accent flex-1 cursor-pointer"
                   />
-                  <span className="text-xs text-ink-muted tabular-nums w-9 text-right">{Math.round(audioVolume * 100)}%</span>
+                  <span className="text-xs text-ink-muted tabular-nums w-10 text-right">{Math.round(audioVolume * 100)}%</span>
                 </div>
               </div>
+              <p className="text-xs text-ink-faint">100% is normal; up to 200% plays real clips louder (the robotic voice can&apos;t exceed 100%).</p>
             </div>
 
             {resetError && (
