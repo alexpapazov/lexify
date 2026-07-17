@@ -6,7 +6,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
-import { langName, langFlag, languageColor } from '@/lib/languages'
+import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 import { fsrsScheduleMix, stabilityForInterval, estimateInitialInterval, normalizeRatingMix, DEFAULT_RATING_MIX, type WeightedStep, type RatingMix } from '@/lib/forecastFsrs'
 import type { Rating } from '@/domain'
 
@@ -322,8 +322,10 @@ export function DueForecastProjection() {
   }
 
   const hoverPt = hover ? points[hover.i] : null
+  // Distinct color per language (honoring overrides), stable across snapshots regardless of slice order.
+  const colorMap = assignLanguageColors(data.pairs.map(p => p.key.split('|')[0]!), langColors)
   const pieSlices = hover && !filterKey
-    ? data.pairs.map(p => ({ label: p.label, flag: p.flag, value: p.typed[hover.i]! + p.selfg[hover.i]! + p.recog[hover.i]!, color: languageColor(p.key.split('|')[0]!, langColors) }))
+    ? data.pairs.map(p => ({ label: p.label, flag: p.flag, value: p.typed[hover.i]! + p.selfg[hover.i]! + p.recog[hover.i]!, color: colorMap[p.key.split('|')[0]!]! }))
         .filter(s => s.value > 0.05).sort((a, b) => b.value - a.value)
     : []
 
@@ -337,7 +339,7 @@ export function DueForecastProjection() {
           {data.pairs.map(p => (
             <button key={p.key} onClick={() => setFilterKey(p.key)}
               className={`px-2 py-0.5 rounded-full border inline-flex items-center gap-1.5 ${filterKey === p.key ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`}>
-              <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: languageColor(p.key.split('|')[0]!, langColors) }} />
+              <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: colorMap[p.key.split('|')[0]!] }} />
               {p.flag} {p.label}
             </button>
           ))}

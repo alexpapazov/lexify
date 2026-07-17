@@ -9,7 +9,7 @@ import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules
 import { SupabaseLanguagePairRepository }     from '@/lib/data/languagePairs'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import type { LanguagePair, LanguageSyncRule, CardState } from '@/domain'
-import { langName, langFlag, languageColor } from '@/lib/languages'
+import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
 
@@ -707,20 +707,26 @@ export default function SettingsPage() {
         <div className="panel space-y-3">
           <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Language colors</h2>
           <p className="text-xs text-ink-faint">Each language&apos;s color in the analytics charts (pie + filters). Changes save with the button below.</p>
-          <div className="flex flex-col gap-2">
-            {[...new Set(langPairs.map(p => p.sourceLanguage))].map(code => (
-              <div key={code} className="flex items-center gap-3 text-sm">
-                <input type="color" value={languageColor(code, langColors)} title={`${langName(code)} color`}
-                  onChange={e => setLangColors(prev => ({ ...prev, [code]: e.target.value }))}
-                  className="w-8 h-8 rounded cursor-pointer bg-transparent border border-white/10 p-0.5" />
-                <span className="text-ink">{langFlag(code)} {langName(code)}</span>
-                {langColors[code] && (
-                  <button onClick={() => setLangColors(prev => { const n = { ...prev }; delete n[code]; return n })}
-                    className="text-xs text-ink-faint hover:text-ink underline">Reset to default</button>
-                )}
+          {(() => {
+            const codes = [...new Set(langPairs.map(p => p.sourceLanguage))]
+            const colorMap = assignLanguageColors(codes, langColors)   // distinct defaults + overrides
+            return (
+              <div className="flex flex-col gap-2">
+                {codes.map(code => (
+                  <div key={code} className="flex items-center gap-3 text-sm">
+                    <input type="color" value={colorMap[code]} title={`${langName(code)} color`}
+                      onChange={e => setLangColors(prev => ({ ...prev, [code]: e.target.value }))}
+                      className="w-8 h-8 rounded cursor-pointer bg-transparent border border-white/10 p-0.5" />
+                    <span className="text-ink">{langFlag(code)} {langName(code)}</span>
+                    {langColors[code] && (
+                      <button onClick={() => setLangColors(prev => { const n = { ...prev }; delete n[code]; return n })}
+                        className="text-xs text-ink-faint hover:text-ink underline">Reset to default</button>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            )
+          })()}
         </div>
       )}
 

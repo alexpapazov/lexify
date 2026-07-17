@@ -77,3 +77,32 @@ export function languageColor(code: string, overrides?: Record<string, string> |
   const o = overrides?.[code]
   return o && /^#[0-9a-fA-F]{6}$/.test(o) ? o : defaultLanguageColor(code)
 }
+
+const isHex = (s?: string): s is string => !!s && /^#[0-9a-fA-F]{6}$/.test(s)
+
+/**
+ * Resolves a color for every language in `codes` such that no two get the same DEFAULT color
+ * (as far as the palette allows). Valid overrides are honored as-is; the rest are handed distinct
+ * palette colors (skipping any already taken by an override or an earlier assignment). Deterministic
+ * for a given set of codes + overrides (codes are sorted first), so the mapping is stable.
+ */
+export function assignLanguageColors(codes: string[], overrides?: Record<string, string> | null): Record<string, string> {
+  const sorted = [...new Set(codes)].sort()
+  const result: Record<string, string> = {}
+  const used = new Set<string>()
+  for (const code of sorted) {
+    if (isHex(overrides?.[code])) { result[code] = overrides![code]!; used.add(result[code]!.toLowerCase()) }
+  }
+  let idx = 0
+  for (const code of sorted) {
+    if (result[code]) continue
+    let color = LANG_COLOR_PALETTE[idx % LANG_COLOR_PALETTE.length]!
+    for (let t = 0; used.has(color.toLowerCase()) && t < LANG_COLOR_PALETTE.length; t++) {
+      idx++; color = LANG_COLOR_PALETTE[idx % LANG_COLOR_PALETTE.length]!
+    }
+    result[code] = color
+    used.add(color.toLowerCase())
+    idx++
+  }
+  return result
+}
