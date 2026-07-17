@@ -1520,7 +1520,7 @@ function AllDueSessionInner() {
     <div className="space-y-8 max-w-2xl mx-auto">
       <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
       {dormantNotice && (
-        <div className="fixed left-1/2 -translate-x-1/2 top-6 z-50 px-4 py-2 rounded-card bg-surface-raised border border-white/70 text-sm text-ink shadow-lg">
+        <div className="fixed left-1/2 -translate-x-1/2 top-6 z-50 px-4 py-2 rounded-card bg-surface-raised border border-line/70 text-sm text-ink shadow-lg">
           💤 Card is now dormant
         </div>
       )}

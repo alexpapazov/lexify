@@ -7,28 +7,30 @@ const config: Config = {
   ],
   theme: {
     extend: {
-      // LexiCard dark-mode design system (cool blue-violet neutrals, blue→violet
-      // primary, yellow highlight accent). See the Figma "Dark Mode Color System".
+      // LexiCard design system — tokens resolve to CSS variables (channel triplets)
+      // defined in globals.css, so they flip between dark (:root) and light (:root.light).
       colors: {
         surface: {
-          DEFAULT: '#19182E', // Card (N300)
-          deep:    '#13141F', // App BG (N200) — page/nav backdrop
-          raised:  '#202240', // Elevated (N400) — inputs, chips
+          DEFAULT: 'rgb(var(--c-surface) / <alpha-value>)',        // cards / panels
+          deep:    'rgb(var(--c-surface-deep) / <alpha-value>)',   // page / nav backdrop
+          raised:  'rgb(var(--c-surface-raised) / <alpha-value>)', // inputs / chips
         },
         accent: {
-          DEFAULT: '#4A4BD8', // Primary P300 — main action / brand
-          soft:    '#868CF0', // P200 — hover fill / soft accent text
-          muted:   '#3432B0', // P400 — deep/pressed
+          DEFAULT: 'rgb(var(--c-accent) / <alpha-value>)',         // main action / brand
+          soft:    'rgb(var(--c-accent-soft) / <alpha-value>)',    // soft accent text
+          muted:   'rgb(var(--c-accent-muted) / <alpha-value>)',   // hover / pressed
         },
         ink: {
-          DEFAULT: '#E6E8F5', // N900 — primary text
-          muted:   '#A6A3C8', // N800 — secondary text
-          faint:   '#7D80A8', // N700 — muted/hint text
+          DEFAULT: 'rgb(var(--c-ink) / <alpha-value>)',            // primary text
+          muted:   'rgb(var(--c-ink-muted) / <alpha-value>)',      // secondary text
+          faint:   'rgb(var(--c-ink-faint) / <alpha-value>)',      // muted / hint text
         },
-        highlight: '#F5C518', // warm-yellow accent — celebration / streaks only
-        success:   '#22C90A',
-        warning:   '#F07340', // orange (distinct from the yellow highlight)
-        danger:    '#F05068',
+        // Hairlines & subtle fills — white on dark, dark on light (see --c-line).
+        line:      'rgb(var(--c-line) / <alpha-value>)',
+        highlight: 'rgb(var(--c-highlight) / <alpha-value>)',      // warm-yellow accent
+        success:   'rgb(var(--c-success) / <alpha-value>)',
+        warning:   'rgb(var(--c-warning) / <alpha-value>)',
+        danger:    'rgb(var(--c-danger) / <alpha-value>)',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],

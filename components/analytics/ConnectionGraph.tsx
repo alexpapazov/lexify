@@ -321,7 +321,7 @@ export function ConnectionGraph({ userId }: { userId: string }) {
     <div className="h-32 flex items-center justify-center text-ink-faint text-sm">Loading graph…</div>
   )
   if (nodes.length === 0) return (
-    <div className="rounded-card border border-white/10 h-24 flex items-center justify-center text-ink-faint text-sm">
+    <div className="rounded-card border border-line/10 h-24 flex items-center justify-center text-ink-faint text-sm">
       No connections yet — synonym and confusion links will appear here.
     </div>
   )
@@ -364,7 +364,7 @@ export function ConnectionGraph({ userId }: { userId: string }) {
       <svg
         ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full rounded-card border border-white/10 bg-surface-deep/60 select-none"
+        className="w-full rounded-card border border-line/10 bg-surface-deep/60 select-none"
         style={{ height: Math.min(H, 480), cursor: dragRef.current ? 'grabbing' : 'default' }}
         onMouseMove={onSvgMouseMove}
         onMouseUp={onSvgMouseUp}

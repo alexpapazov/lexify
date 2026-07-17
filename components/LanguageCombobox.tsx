@@ -85,7 +85,7 @@ export function LanguageCombobox({ label, value, onChange, className, placeholde
           onKeyDown={handleKeyDown}
         />
         {open && (
-          <div className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-lg border border-white/10 bg-surface shadow-lg">
+          <div className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-lg border border-line/10 bg-surface shadow-lg">
             {filtered.length === 0 && (
               <div className="px-3 py-2 text-sm text-ink-faint">No matches</div>
             )}
@@ -97,7 +97,7 @@ export function LanguageCombobox({ label, value, onChange, className, placeholde
                 onMouseEnter={() => setHighlight(i)}
                 onClick={() => selectLanguage(l.code)}
                 className={`w-full text-left px-3 py-2 text-sm transition-colors ${
-                  i === highlight ? 'bg-white/10' : 'hover:bg-white/5'
+                  i === highlight ? 'bg-line/10' : 'hover:bg-line/5'
                 } ${l.code === value ? 'text-accent' : 'text-ink'}`}
               >
                 {l.name}

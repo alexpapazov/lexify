@@ -103,7 +103,7 @@ function CardRow({ card, index, onChange, onDelete, onActionChange }: {
 
       {/* Exact-duplicate flag (new cards only) */}
       {showExact && card.duplicate?.existingCard && (
-        <div className="pl-0 space-y-2 border-t border-white/10 pt-3">
+        <div className="pl-0 space-y-2 border-t border-line/10 pt-3">
           <p className="text-xs text-ink-muted">
             {card.existingCardDeckNames && card.existingCardDeckNames.length > 0
               ? <>Already in <span className="text-ink">{card.existingCardDeckNames.join(', ')}</span>.</>
@@ -114,7 +114,7 @@ function CardRow({ card, index, onChange, onDelete, onActionChange }: {
 
       {/* Near-duplicate flag (new cards only) */}
       {showNear && card.duplicate?.existingCard && (
-        <div className="pl-0 space-y-2 border-t border-white/10 pt-3">
+        <div className="pl-0 space-y-2 border-t border-line/10 pt-3">
           <p className="text-xs text-ink-muted">
             Similar to existing card: <span className="text-ink">&quot;{card.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{card.duplicate.existingCard.back}&quot;</span>
           </p>
@@ -451,7 +451,7 @@ export default function DeckEditPage() {
         <div className="flex items-center gap-2 shrink-0">
           <button
             onClick={() => { setDeleteError(null); setShowDeleteModal(true) }}
-            className="p-2.5 rounded-lg border border-white/10 hover:border-danger/40 text-ink-muted hover:text-danger transition-colors"
+            className="p-2.5 rounded-lg border border-line/10 hover:border-danger/40 text-ink-muted hover:text-danger transition-colors"
             title="Delete deck"
           >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -534,7 +534,7 @@ export default function DeckEditPage() {
       {/* Add new card */}
       <button
         onClick={addCard}
-        className="w-full panel border-dashed border-white/20 hover:border-accent/40 hover:bg-surface/50
+        className="w-full panel border-dashed border-line/20 hover:border-accent/40 hover:bg-surface/50
                    text-ink-muted hover:text-ink transition-colors text-sm py-5 text-center"
       >
         + New card

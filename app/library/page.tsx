@@ -791,7 +791,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                   <span className="text-xs text-ink-muted">Flag:</span>
                   <button
                     onClick={() => setShowNewPairFlagPicker(v => !v)}
-                    className="text-2xl hover:bg-white/10 rounded p-1 transition-colors leading-none"
+                    className="text-2xl hover:bg-line/10 rounded p-1 transition-colors leading-none"
                     title="Choose flag"
                   >
                     {newPairFlag || langFlag(newPairSource)}
@@ -801,13 +801,13 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                   )}
                 </div>
                 {showNewPairFlagPicker && (
-                  <div className="absolute left-0 top-10 z-30 bg-surface border border-white/10 rounded-lg p-3 shadow-xl w-72">
+                  <div className="absolute left-0 top-10 z-30 bg-surface border border-line/10 rounded-lg p-3 shadow-xl w-72">
                     <div className="grid grid-cols-8 gap-0.5 max-h-48 overflow-y-auto">
                       {FLAG_OPTIONS.map(({ flag, name }) => (
                         <button
                           key={flag}
                           onClick={() => { setNewPairFlag(flag); setShowNewPairFlagPicker(false) }}
-                          className="text-xl hover:bg-white/10 rounded p-1 transition-colors leading-none"
+                          className="text-xl hover:bg-line/10 rounded p-1 transition-colors leading-none"
                           title={name}
                         >
                           {flag}
@@ -834,7 +834,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
               No cards match &ldquo;{searchQuery}&rdquo;.
             </div>
           ) : (
-            <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+            <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
               {rootCardResults.map(({ card, deck }) => (
                 <Link
                   key={`${card.id}-${deck.id}`}
@@ -961,7 +961,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                   <button
                     key={f}
                     onClick={() => handleChangePairFlag(editFlagFor, f)}
-                    className="text-xl hover:bg-white/10 rounded p-1 transition-colors leading-none"
+                    className="text-xl hover:bg-line/10 rounded p-1 transition-colors leading-none"
                     title={name}
                   >
                     {f}
@@ -1333,7 +1333,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     { key: 'learning'  as FilterKey, label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: pairCounts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
-    { key: 'dormant'   as FilterKey, label: 'Dormant',   value: pairCounts.dormant,   color: 'text-ink',         border: 'border-white/70',  desc: 'Paused — manual'  },
+    { key: 'dormant'   as FilterKey, label: 'Dormant',   value: pairCounts.dormant,   color: 'text-ink',         border: 'border-line/70',  desc: 'Paused — manual'  },
   ]
 
   return (
@@ -1390,7 +1390,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
               key={key}
               onClick={() => setActiveFilter(isActive ? null : key)}
               className={`panel border-t-2 ${border} space-y-1 text-center transition-colors w-full
-                ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
+                ${isActive ? 'bg-surface-raised ring-1 ring-ink/10' : 'hover:bg-surface-raised/50'}`}
             >
               <div className={`text-2xl font-semibold ${color}`}>{value}</div>
               <div className="text-xs font-medium text-ink">{label}</div>
@@ -1427,7 +1427,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           {groupedCards.length === 0 ? (
             <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
           ) : (
-            <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+            <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
               {groupedCards.map(({ card, decks, status }) => (
                 <Link
                   key={card.id}
@@ -1478,7 +1478,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             No cards match &ldquo;{searchQuery}&rdquo;.
           </div>
         ) : (
-          <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+          <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
             {pairCardResults.map(({ card, deckId, deckName }) => (
               <Link
                 key={`${card.id}-${deckId}`}
@@ -1532,7 +1532,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
                     isDragging  ? 'opacity-40' :
                     dt?.pos === 'into' ? 'border-accent bg-accent/5 scale-[1.01]' :
-                    'hover:border-white/10'
+                    'hover:border-line/10'
                   }`}
                 >
                   <FolderIcon />
@@ -1593,7 +1593,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                   onTouchCancel={onItemTouchEnd}
                   style={{ WebkitTouchCallout: 'none' } as React.CSSProperties}
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
-                    isDragging ? 'opacity-40' : 'hover:border-white/10'
+                    isDragging ? 'opacity-40' : 'hover:border-line/10'
                   }`}
                 >
                   <DeckIcon />

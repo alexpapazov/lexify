@@ -760,7 +760,7 @@ export default function StudyPage() {
                   key={key}
                   onClick={() => { setActiveFilter(isActive ? null : key); setSelectedForecastDate(null) }}
                   className={`panel border-t-2 ${border} space-y-1 text-center transition-colors w-full
-                    ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
+                    ${isActive ? 'bg-surface-raised ring-1 ring-ink/10' : 'hover:bg-surface-raised/50'}`}
                 >
                   <div className={`text-2xl font-semibold ${color}`}>{value}</div>
                   <div className="text-xs font-medium text-ink">{label}</div>
@@ -788,7 +788,7 @@ export default function StudyPage() {
                         {count}/{goal}{done ? ' ✓' : ''}
                       </span>
                     </div>
-                    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                    <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all duration-500 ${done ? 'bg-success' : 'bg-accent'}`}
                         style={{ width: `${pct}%` }}
@@ -815,7 +815,7 @@ export default function StudyPage() {
               {filteredCards.length === 0 ? (
                 <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
               ) : (
-                <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+                <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
                   {filteredCards.map(({ card, deckName, deckId, status, sourceLanguage, targetLanguage }) => (
                     <Link
                       key={card.id}
@@ -848,7 +848,7 @@ export default function StudyPage() {
                 </button>
               )}
               {showDuePicker && pairTypeDue.some(p => p.typing + p.sgForward + p.sgReverse > 0) && (
-                <div className="absolute left-0 top-full mt-2 z-20 min-w-[260px] rounded-card border border-white/10 bg-surface-deep shadow-xl overflow-hidden">
+                <div className="absolute left-0 top-full mt-2 z-20 min-w-[260px] rounded-card border border-line/10 bg-surface-deep shadow-xl overflow-hidden">
                   {([
                     { key: 'typing',    label: 'Typing',      hint: 'native → target', query: 'present=typing',               n2t: true,  pick: (p: PairTypeDue) => p.typing },
                     { key: 'sgForward', label: 'Self-graded', hint: 'native → target', query: 'present=selfgraded&dir=forward', n2t: true,  pick: (p: PairTypeDue) => p.sgForward },
@@ -857,7 +857,7 @@ export default function StudyPage() {
                     const expanded = expandedDueType === t.key
                     const pairs = pairTypeDue.filter(p => t.pick(p) > 0)
                     return (
-                      <div key={t.key} className="border-b border-white/10 last:border-b-0">
+                      <div key={t.key} className="border-b border-line/10 last:border-b-0">
                         <button
                           className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
                           onClick={() => setExpandedDueType(v => v === t.key ? null : t.key)}
@@ -919,7 +919,7 @@ export default function StudyPage() {
                 </button>
 
                 {showForecastSettings && (
-                  <div className="absolute right-0 top-full mt-1.5 z-20 bg-surface-raised border border-white/10 rounded-card shadow-xl p-4 space-y-4 w-72">
+                  <div className="absolute right-0 top-full mt-1.5 z-20 bg-surface-raised border border-line/10 rounded-card shadow-xl p-4 space-y-4 w-72">
 
                     {/* Date range */}
                     <div className="space-y-1.5">
@@ -930,7 +930,7 @@ export default function StudyPage() {
                           value={forecastStartDate}
                           max={forecastEndDate || undefined}
                           onChange={e => setForecastStartDate(e.target.value)}
-                          className="flex-1 bg-surface border border-white/10 rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
+                          className="flex-1 bg-surface border border-line/10 rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
                         />
                         <span className="text-ink-faint text-xs">→</span>
                         <input
@@ -938,7 +938,7 @@ export default function StudyPage() {
                           value={forecastEndDate}
                           min={forecastStartDate || undefined}
                           onChange={e => setForecastEndDate(e.target.value)}
-                          className="flex-1 bg-surface border border-white/10 rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
+                          className="flex-1 bg-surface border border-line/10 rounded px-2 py-1 text-xs text-ink focus:outline-none focus:border-accent/50 [color-scheme:dark]"
                         />
                       </div>
                     </div>
@@ -1108,7 +1108,7 @@ export default function StudyPage() {
                 {forecastCards.length === 0 ? (
                   <div className="panel text-ink-muted text-sm text-center py-6">No cards found.</div>
                 ) : (
-                  <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+                  <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
                     {forecastCards.map(({ card, deckName, deckId, sourceLanguage, targetLanguage, reviewDirection }) => (
                       <Link
                         key={`${card.id}-${reviewDirection}`}

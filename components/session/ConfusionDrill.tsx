@@ -42,10 +42,10 @@ export function ConfusionDrill({ card, otherFront, deckName, onDone, onPromptEdi
           const isCorrect = opt === correct
           const chosen = picked === opt
           const tone = picked === null
-            ? 'border-white/15 hover:border-white/30 hover:bg-white/5'
+            ? 'border-line/15 hover:border-line/30 hover:bg-line/5'
             : isCorrect ? 'border-success/60 bg-success/10 text-ink'
             : chosen ? 'border-danger/60 bg-danger/10 text-ink-muted'
-            : 'border-white/10 text-ink-faint'
+            : 'border-line/10 text-ink-faint'
           return (
             <button
               key={opt}

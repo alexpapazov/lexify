@@ -403,8 +403,8 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
             row.uiStatus === 'approved'       ? 'border-success/30 bg-success/5' :
             row.uiStatus === 'already_active' ? 'border-accent/20 bg-accent/5 opacity-60' :
             row.uiStatus === 'error'          ? 'border-danger/30 bg-danger/5' :
-            !row.checked                      ? 'border-white/5 opacity-40' :
-            'border-white/10'
+            !row.checked                      ? 'border-line/5 opacity-40' :
+            'border-line/10'
           }`}>
             {/* Row header — checkbox + dest pair + status badge */}
             <div className="flex items-center justify-between gap-3">
@@ -675,8 +675,8 @@ function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguag
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-      <div className="bg-surface rounded-xl border border-white/10 w-full max-w-lg max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 shrink-0">
+      <div className="bg-surface rounded-xl border border-line/10 w-full max-w-lg max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-line/10 shrink-0">
           <h2 className="text-base font-semibold text-ink">Split multi-translation cards</h2>
           <button onClick={onClose} className="text-ink-muted hover:text-ink text-lg leading-none">✕</button>
         </div>
@@ -691,7 +691,7 @@ function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguag
               return ex && ex.id !== item.card.id
             })
             return (
-              <label key={item.card.id} className="flex items-start gap-3 cursor-pointer panel hover:border-white/20 transition-colors">
+              <label key={item.card.id} className="flex items-start gap-3 cursor-pointer panel hover:border-line/20 transition-colors">
                 <input
                   type="checkbox"
                   checked={item.split}
@@ -725,7 +725,7 @@ function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguag
           {error && <p className="text-sm text-danger">{error}</p>}
         </div>
 
-        <div className="flex gap-3 px-5 py-4 border-t border-white/10 shrink-0">
+        <div className="flex gap-3 px-5 py-4 border-t border-line/10 shrink-0">
           <button
             className="btn-primary"
             disabled={saving || splitCount === 0}
@@ -932,7 +932,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
         <div className="panel w-full max-w-sm mx-4 flex flex-col max-h-[85vh]">
 
           {/* ── Header (non-scrolling) ── */}
-          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/10 shrink-0">
+          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-line/10 shrink-0">
             <h2 className="text-base font-semibold text-ink">Deck study settings</h2>
             <div className="flex items-center gap-2 relative">
               {/* Reset menu trigger */}
@@ -942,18 +942,18 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                 title="Reset options"
               >↺</button>
               {showResetMenu && (
-                <div className="absolute right-0 top-full mt-1 z-10 bg-surface-raised border border-white/10 rounded-lg py-1 w-52 shadow-xl">
+                <div className="absolute right-0 top-full mt-1 z-10 bg-surface-raised border border-line/10 rounded-lg py-1 w-52 shadow-xl">
                   <button
                     onClick={() => { setShowResetMenu(false); setConfirmReset(true) }}
-                    className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-white/5 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-line/5 transition-colors"
                   >Reset backlog</button>
                   <button
                     onClick={() => { setShowResetMenu(false); setConfirmResetChoices(true) }}
-                    className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-white/5 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-line/5 transition-colors"
                   >Reset distractors</button>
                   <button
                     onClick={() => { setShowResetMenu(false); setConfirmFullReset(true) }}
-                    className="w-full text-left px-4 py-2 text-sm text-danger/80 hover:bg-white/5 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-danger/80 hover:bg-line/5 transition-colors"
                   >Reset all progress</button>
                 </div>
               )}
@@ -1004,7 +1004,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
             </div>
 
             {/* Learning pipeline cap — also controls elective/study-ahead cap */}
-            <div className="space-y-2 border-t border-white/10 pt-3">
+            <div className="space-y-2 border-t border-line/10 pt-3">
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input type="checkbox" checked={cardsPerSessionOn} onChange={e => setCardsPerSessionOn(e.target.checked)} className="accent-accent w-4 h-4" />
                 <span className="text-sm text-ink">Limit cards in learning</span>
@@ -1035,7 +1035,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
             </div>
 
             {/* ── Grading mode ──────────────────────────────────────────────── */}
-            <div className="space-y-3 border-t border-white/10 pt-3">
+            <div className="space-y-3 border-t border-line/10 pt-3">
               <p className="text-sm text-ink-muted">Grading mode</p>
               <div className="space-y-1.5">
                 {(['strict', 'flexible', 'smart_ai'] as const).map(mode => (
@@ -1070,7 +1070,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
               </label>
 
               {gradingMode === 'flexible' && (
-                <div className="pl-4 space-y-2 border-l border-white/10">
+                <div className="pl-4 space-y-2 border-l border-line/10">
                   {([
                     ['ignoreAccents',          'Ignore accents',               ignoreAccents,          setIgnoreAccents]          as const,
                     ['ignoreCapitalization',   'Ignore capitalization',        ignoreCapitalization,   setIgnoreCapitalization]   as const,
@@ -1090,7 +1090,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
               )}
 
               {gradingMode === 'smart_ai' && (
-                <div className="pl-4 space-y-1.5 border-l border-white/10">
+                <div className="pl-4 space-y-1.5 border-l border-line/10">
                   <label className="text-sm text-ink-muted">AI grading instructions (optional, ≤250 chars)</label>
                   <textarea
                     className="input text-sm resize-none"
@@ -1147,7 +1147,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
           </div>
 
           {/* ── Footer (non-scrolling) ── */}
-          <div className="px-5 pb-5 pt-4 border-t border-white/10 shrink-0 space-y-3">
+          <div className="px-5 pb-5 pt-4 border-t border-line/10 shrink-0 space-y-3">
             {saveError && (
               <p className="text-danger text-xs bg-danger/10 border border-danger/20 rounded-lg px-3 py-2">
                 ⚠ {saveError}
@@ -1634,7 +1634,7 @@ export default function DeckDetailPage() {
   return (
     <div className="space-y-8">
       {deletedCardUndo && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-surface-raised border border-white/10 rounded-card shadow-lg px-4 py-3 text-sm">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-surface-raised border border-line/10 rounded-card shadow-lg px-4 py-3 text-sm">
           <span className="text-ink-muted">Card deleted.</span>
           <button
             onClick={() => {
@@ -1770,7 +1770,7 @@ export default function DeckDetailPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
           <button onClick={() => setShowGear(true)}
-            className="p-2.5 rounded-lg border border-white/10 hover:border-white/20 text-ink-muted hover:text-ink transition-colors"
+            className="p-2.5 rounded-lg border border-line/10 hover:border-line/20 text-ink-muted hover:text-ink transition-colors"
             title="Study settings">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="3"/>
@@ -1815,7 +1815,7 @@ export default function DeckDetailPage() {
           { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  desc: 'In pipeline'      },
           { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', desc: 'Long-term review' },
           { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'  },
-          { label: 'Dormant',   value: dormant,   color: 'text-ink',         border: 'border-white/70',  filter: 'dormant',   desc: 'Paused — manual'  },
+          { label: 'Dormant',   value: dormant,   color: 'text-ink',         border: 'border-line/70',  filter: 'dormant',   desc: 'Paused — manual'  },
         ].map(({ label, value, color, border, filter, desc }) => {
           const isActive = activeFilter === filter
           return (
@@ -1823,7 +1823,7 @@ export default function DeckDetailPage() {
               key={label}
               href={isActive ? `/study/${deckId}` : `/study/${deckId}?filter=${filter}`}
               className={`panel border-t-2 ${border} text-center transition-colors w-full block space-y-1
-                ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
+                ${isActive ? 'bg-surface-raised ring-1 ring-ink/10' : 'hover:bg-surface-raised/50'}`}
             >
               <div className={`text-2xl font-semibold ${color}`}>{value}</div>
               <div className="text-xs font-medium text-ink">{label}</div>
@@ -1893,12 +1893,12 @@ export default function DeckDetailPage() {
                     <button
                       onClick={() => setShowBulkResetMenu(v => !v)}
                       disabled={!!bulkResetting}
-                      className="text-xs px-3 py-1 rounded border border-white/10 hover:border-white/20 text-ink-muted hover:text-ink transition-colors"
+                      className="text-xs px-3 py-1 rounded border border-line/10 hover:border-line/20 text-ink-muted hover:text-ink transition-colors"
                     >
                       {bulkResetting ? 'Resetting…' : 'Reset ▾'}
                     </button>
                     {showBulkResetMenu && (
-                      <div className="absolute right-0 top-full mt-1 z-50 bg-surface-raised border border-white/10 rounded-card shadow-lg py-1 min-w-[200px]">
+                      <div className="absolute right-0 top-full mt-1 z-50 bg-surface-raised border border-line/10 rounded-card shadow-lg py-1 min-w-[200px]">
                         {([
                           ['distractors', 'Reset distractors',  'Clears cached multiple-choice options.'],
                           ['progress',    'Reset progress',     'Erases reps, lapses, schedule.'],
@@ -1908,7 +1908,7 @@ export default function DeckDetailPage() {
                           <button
                             key={action}
                             onClick={() => handleBulkReset(action)}
-                            className={`w-full text-left px-3 py-2 hover:bg-white/5 transition-colors ${action === 'all' ? 'text-danger' : 'text-ink'}`}
+                            className={`w-full text-left px-3 py-2 hover:bg-line/5 transition-colors ${action === 'all' ? 'text-danger' : 'text-ink'}`}
                           >
                             <span className="block text-sm">{label}</span>
                             <span className="block text-xs text-ink-faint">{desc}</span>
@@ -1920,7 +1920,7 @@ export default function DeckDetailPage() {
                   <button
                     onClick={handleBulkMoveToLearning}
                     disabled={bulkMovingToLearning}
-                    className="text-xs px-3 py-1 rounded border border-white/10 hover:border-white/20 text-ink-muted hover:text-ink transition-colors disabled:opacity-40"
+                    className="text-xs px-3 py-1 rounded border border-line/10 hover:border-line/20 text-ink-muted hover:text-ink transition-colors disabled:opacity-40"
                   >
                     {bulkMovingToLearning ? 'Moving…' : 'Move to learning'}
                   </button>
@@ -1983,7 +1983,7 @@ export default function DeckDetailPage() {
           )}
         </div>
 
-        <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+        <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
           {visibleCards.map(card => {
             const s = stateMap.get(card.id)
             const phase = statusOf(card.id)
@@ -2028,7 +2028,7 @@ export default function DeckDetailPage() {
 
         <button
           onClick={() => setAddingCard(true)}
-          className="w-full border border-dashed border-white/15 hover:border-accent/40 hover:bg-surface/30
+          className="w-full border border-dashed border-line/15 hover:border-accent/40 hover:bg-surface/30
                      rounded-card text-ink-faint hover:text-ink transition-colors text-sm py-4 text-center"
         >
           + New card

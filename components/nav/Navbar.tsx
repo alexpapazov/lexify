@@ -61,7 +61,7 @@ export function Navbar() {
 
   return (
     <>
-      <nav className="sticky top-0 z-50 border-b border-white/5 bg-surface-deep/90 backdrop-blur">
+      <nav className="sticky top-0 z-50 border-b border-line/5 bg-surface-deep/90 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center">
 
           {/* ── Desktop: brand · nav links · account, spread edge to edge ── */}
@@ -135,7 +135,7 @@ export function Navbar() {
 
           {/* Drawer panel */}
           <div
-            className="relative mt-14 bg-surface-deep border-b border-white/5 px-4 py-3 space-y-1"
+            className="relative mt-14 bg-surface-deep border-b border-line/5 px-4 py-3 space-y-1"
             onClick={e => e.stopPropagation()}
           >
             {NAV_LINKS.map(({ href, label }) => {
@@ -158,7 +158,7 @@ export function Navbar() {
               )
             })}
 
-            <div className="pt-3 border-t border-white/5 mt-2 px-3 pb-1">
+            <div className="pt-3 border-t border-line/5 mt-2 px-3 pb-1">
               {user ? (
                 <ProfilePanel
                   user={user}

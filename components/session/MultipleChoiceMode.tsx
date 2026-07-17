@@ -259,14 +259,14 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
           const isSyn        = !isCorrect && isSynonym(choice)
           const isViaOvr     = isSelected && !isCorrect && !isSyn && (overrideAnswers ?? []).some(o => o === norm(choice))
           const isEditing    = editingChoice === choice
-          let style = 'border-white/10 hover:border-accent/40 hover:bg-surface-raised/50 text-ink'
+          let style = 'border-line/10 hover:border-accent/40 hover:bg-surface-raised/50 text-ink'
           if (selected) {
             if (isCorrect)           style = 'border-success/60 bg-success/10 text-success'
             else if (isSyn && isSelected) style = 'border-warning/60 bg-warning/10 text-warning'
             else if (isSyn)          style = 'border-warning/30 bg-warning/5 text-warning/60 opacity-60'
             else if (isViaOvr)       style = 'border-warning/60 bg-warning/10 text-warning'
             else if (isSelected)     style = 'border-danger/60 bg-danger/10 text-danger'
-            else                     style = 'border-white/5 text-ink-faint opacity-50'
+            else                     style = 'border-line/5 text-ink-faint opacity-50'
           }
           if (isEditing) style = 'border-accent/60 bg-surface-raised'
           return (

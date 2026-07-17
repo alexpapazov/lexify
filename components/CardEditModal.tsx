@@ -46,7 +46,7 @@ function formatIntervalDays(days: number | null | undefined): string {
 function StatGroup({ title, rows }: { title: string; rows: [string, string][] }) {
   return (
     <div className="space-y-2">
-      <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+      <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
         {title}
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -769,22 +769,22 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                 title="Reset card"
                 aria-label="Reset card"
                 disabled={resetting}
-                className="w-7 h-7 rounded-full border border-white/10 text-danger/80 hover:text-danger hover:border-danger/40 flex items-center justify-center transition-colors disabled:opacity-40"
+                className="w-7 h-7 rounded-full border border-line/10 text-danger/80 hover:text-danger hover:border-danger/40 flex items-center justify-center transition-colors disabled:opacity-40"
               >
                 <span className="text-base leading-none select-none">↺</span>
               </button>
               {showResetMenu && (
-                <div className="absolute right-0 top-9 z-10 w-56 rounded-card border border-white/10 bg-surface-raised shadow-xl py-1 text-sm">
+                <div className="absolute right-0 top-9 z-10 w-56 rounded-card border border-line/10 bg-surface-raised shadow-xl py-1 text-sm">
                   <button
                     onClick={() => { setShowResetMenu(false); setResetAction('distractors') }}
-                    className="w-full text-left px-3 py-2 hover:bg-white/5 text-ink"
+                    className="w-full text-left px-3 py-2 hover:bg-line/5 text-ink"
                   >
                     Reset distractors
                     <span className="block text-xs text-ink-faint">Clears cached multiple-choice options and regenerates them.</span>
                   </button>
                   <button
                     onClick={() => { setShowResetMenu(false); setResetAction('progress') }}
-                    className="w-full text-left px-3 py-2 hover:bg-white/5 text-ink"
+                    className="w-full text-left px-3 py-2 hover:bg-line/5 text-ink"
                   >
                     Reset progress
                     <span className="block text-xs text-ink-faint">Erases reps, lapses, schedule, etc. Keeps distractors and when it was introduced.</span>
@@ -792,7 +792,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   {card.audioGenerated && TTS_SUPPORTED_LANGUAGES.has(sourceLanguage) && (
                     <button
                       onClick={() => { setShowResetMenu(false); setResetAction('audio') }}
-                      className="w-full text-left px-3 py-2 hover:bg-white/5 text-ink"
+                      className="w-full text-left px-3 py-2 hover:bg-line/5 text-ink"
                     >
                       Reset audio
                       <span className="block text-xs text-ink-faint">Clears cached audio so it will be regenerated.</span>
@@ -800,7 +800,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   )}
                   <button
                     onClick={() => { setShowResetMenu(false); setResetAction('all') }}
-                    className="w-full text-left px-3 py-2 hover:bg-white/5 text-danger"
+                    className="w-full text-left px-3 py-2 hover:bg-line/5 text-danger"
                   >
                     Reset entirely
                     <span className="block text-xs text-ink-faint">Resets progress, distractors, and audio.</span>
@@ -832,7 +832,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   <button
                     onClick={() => setConfirmingDelete(false)}
                     disabled={deleting}
-                    className="text-xs text-ink-faint hover:text-ink px-1.5 py-0.5 rounded border border-white/10 transition-colors"
+                    className="text-xs text-ink-faint hover:text-ink px-1.5 py-0.5 rounded border border-line/10 transition-colors"
                   >
                     No
                   </button>
@@ -842,7 +842,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   onClick={() => setConfirmingDelete(true)}
                   title="Delete card"
                   aria-label="Delete card"
-                  className="w-7 h-7 rounded-full border border-white/10 text-danger/60 hover:text-danger hover:border-danger/40 flex items-center justify-center transition-colors"
+                  className="w-7 h-7 rounded-full border border-line/10 text-danger/60 hover:text-danger hover:border-danger/40 flex items-center justify-center transition-colors"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
@@ -855,7 +855,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
               title="Card stats"
               aria-label="Card stats"
               className={`w-7 h-7 rounded-full border flex items-center justify-center transition-colors
-                ${showStats ? 'text-accent border-accent/40 bg-surface-raised' : 'border-white/10 text-ink-faint hover:text-ink hover:border-white/20'}`}
+                ${showStats ? 'text-accent border-accent/40 bg-surface-raised' : 'border-line/10 text-ink-faint hover:text-ink hover:border-line/20'}`}
             >
               <span className="font-serif italic font-bold text-[13px] leading-none select-none">i</span>
             </button>
@@ -900,7 +900,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   key={t.label}
                   onClick={() => { if (!isActive) void setTrack(t.accel) }}
                   disabled={trackBusy || isActive}
-                  className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-default ${isActive ? 'border-accent/40 bg-accent/5' : 'border-white/10 hover:bg-white/5'}`}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-default ${isActive ? 'border-accent/40 bg-accent/5' : 'border-line/10 hover:bg-line/5'}`}
                 >
                   <span className="block text-sm text-ink">{t.label}{isActive && <span className="text-xs text-accent font-medium"> · Active</span>}</span>
                   <span className="block text-xs text-ink-faint">{t.hint}</span>
@@ -924,11 +924,11 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
               const hasClip  = s.key === 'browser' ? true : cachedClip(s.key) != null
               const busy     = busySource === s.key
               return (
-                <div key={s.key} className={`flex items-center gap-1 rounded-lg border pr-3 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-white/10'}`}>
+                <div key={s.key} className={`flex items-center gap-1 rounded-lg border pr-3 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-line/10'}`}>
                   <button
                     onClick={() => playSource(s.key)}
                     disabled={busy}
-                    className="flex items-center gap-2 flex-1 min-w-0 text-left px-3 py-2 hover:bg-white/5 rounded-l-lg disabled:opacity-40 transition-colors"
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left px-3 py-2 hover:bg-line/5 rounded-l-lg disabled:opacity-40 transition-colors"
                     title={hasClip ? 'Play' : 'Fetch & play'}
                   >
                     <span className="shrink-0 text-ink-muted">{busy ? '…' : '🔊'}</span>
@@ -954,9 +954,9 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
         )}
 
         {showStats && (
-          <div className="rounded-card border border-white/5 bg-surface-raised/50 p-4 space-y-4 text-sm">
+          <div className="rounded-card border border-line/5 bg-surface-raised/50 p-4 space-y-4 text-sm">
             {!state?.graduated && (
-              <div className="border-b border-white/5 pb-3 space-y-2">
+              <div className="border-b border-line/5 pb-3 space-y-2">
                 <button
                   onClick={handleGraduateNow}
                   disabled={graduating || resetting}
@@ -983,7 +983,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
             {/* ── Card properties ──────────────────────────────────────────── */}
             <div className="space-y-2">
-              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                 Card
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -1055,14 +1055,14 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             {/* ── Ladder rung progression ───────────────────────────────────── */}
             {rungHistory && rungHistory.length > 0 && (
               <div className="space-y-2">
-                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                   Rung progression <span className="normal-case font-normal opacity-60">(every rung the card climbed, drop-backs included)</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1">
                   {rungHistory.map((r, i) => (
                     <span key={i} className="flex items-center gap-1">
                       {i > 0 && <span className="text-ink-faint text-xs">→</span>}
-                      <span className="inline-flex items-center justify-center min-w-[1.25rem] px-1.5 h-5 rounded bg-surface-raised border border-white/10 text-xs tabular-nums text-ink">{r + 1}</span>
+                      <span className="inline-flex items-center justify-center min-w-[1.25rem] px-1.5 h-5 rounded bg-surface-raised border border-line/10 text-xs tabular-nums text-ink">{r + 1}</span>
                     </span>
                   ))}
                 </div>
@@ -1071,7 +1071,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
             {/* ── Synonyms (editable) ───────────────────────────────────────── */}
             <div className="space-y-2">
-              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                 Synonyms <span className="normal-case font-normal opacity-60">(accepted as correct answers)</span>
               </div>
               {(card.choices?.backSynonyms?.length ?? 0) > 0 && (
@@ -1121,7 +1121,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   ⇌ Link another card as synonym…
                 </button>
               ) : (
-                <div className="space-y-2 rounded-card border border-white/10 p-3">
+                <div className="space-y-2 rounded-card border border-line/10 p-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Link synonym card</p>
                     <button onClick={() => { setLinkSynonymMode(false); setLinkQuery(''); setLinkError(null) }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
@@ -1139,7 +1139,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     return (
                       <>
                         {results.length > 0 && (
-                          <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-44 overflow-y-auto">
+                          <div className="rounded-card border border-line/10 divide-y divide-line/5 max-h-44 overflow-y-auto">
                             {results.slice(0, 50).map(c => (
                               <button key={c.id} onClick={() => void handleLinkSynonym(c)} disabled={linkSaving}
                                 className="w-full flex items-center gap-4 px-3 py-2.5 hover:bg-surface-raised/50 text-left transition-colors disabled:opacity-50">
@@ -1150,7 +1150,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                           </div>
                         )}
                         {results.length === 0 && q && (
-                          <div className="rounded-card border border-white/10 px-3 py-3 space-y-2">
+                          <div className="rounded-card border border-line/10 px-3 py-3 space-y-2">
                             <p className="text-xs text-ink-faint">No card named &quot;{q}&quot; exists yet.</p>
                             <button onClick={() => void handleSavePendingLink(q)} disabled={linkSaving}
                               className="text-xs text-accent hover:text-accent/80 transition-colors disabled:opacity-50">
@@ -1236,7 +1236,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
                   {/* Dormancy controls */}
                   <div className="space-y-1.5">
-                    <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                    <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                       Dormancy
                     </div>
                     <p className="text-[10px] text-ink-faint leading-relaxed">
@@ -1360,7 +1360,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   )}
 
                   <div className="space-y-1">
-                    <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                    <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                       Interval history
                     </div>
                     <div className="text-ink font-medium text-sm break-words">{intervalHistoryLabel}</div>
@@ -1372,7 +1372,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             {/* Sync origin — only shown for AI-synced cards */}
             {(card.syncedFromLanguages?.length ?? 0) > 0 && (
               <div className="space-y-2">
-                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                   Sync origin
                 </div>
                 <div className="space-y-1">
@@ -1393,7 +1393,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             {/* Fast-track — only shown for import-known cards */}
             {state && (state.acceleratedMode === 'import_known' || state.acceleratedLocked) && (
               <div className="space-y-2">
-                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                   Fast-track
                 </div>
                 <div className="space-y-1">
@@ -1419,7 +1419,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
             {/* Distractors */}
             <div className="space-y-2">
-              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                 Distractors
               </div>
               {card.choices ? (
@@ -1451,7 +1451,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                             ) : (
                               <span
                                 key={d}
-                                className="chip flex items-center gap-1 cursor-pointer hover:border-white/20 group"
+                                className="chip flex items-center gap-1 cursor-pointer hover:border-line/20 group"
                                 onClick={() => { setEditingDistractor([side, d]); setDistractorEditText(d) }}
                                 title="Click to edit"
                               >
@@ -1518,7 +1518,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             {/* Typed answer overrides */}
             {overrides.length > 0 && (
               <div className="space-y-2">
-                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                   Answer overrides
                 </div>
                 <div className="space-y-2">
@@ -1543,7 +1543,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             {/* Often confused with */}
             {confusions.length > 0 && (
               <div className="space-y-2">
-                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                   Often confused with
                 </div>
                 <div className="space-y-2">
@@ -1580,7 +1580,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
             {/* ── Confusion links ─────────────────────────────────────── */}
             <div className="space-y-2">
-              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                 Confusion links
               </div>
               {confusionLinks.length > 0 && (
@@ -1622,7 +1622,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   ⇌ Link confused card…
                 </button>
               ) : (
-                <div className="space-y-2 rounded-card border border-white/10 p-3">
+                <div className="space-y-2 rounded-card border border-line/10 p-3">
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-medium text-ink-muted uppercase tracking-wider">Link confused card</p>
                     <button onClick={() => { setLinkConfusionMode(false); setLinkConfusionQuery(''); setLinkConfusionError(null) }} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
@@ -1645,7 +1645,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         )
                       : allPairCards.filter(c => !confusionLinks.some(l => l.cardAId === c.id || l.cardBId === c.id))
                     return results.length > 0 ? (
-                      <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-44 overflow-y-auto">
+                      <div className="rounded-card border border-line/10 divide-y divide-line/5 max-h-44 overflow-y-auto">
                         {results.slice(0, 50).map(c => (
                           <button
                             key={c.id}
@@ -1684,14 +1684,14 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             {(() => {
               if (reviewsLoading) return (
                 <div className="space-y-2">
-                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">Review History</div>
+                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">Review History</div>
                   <p className="text-xs text-ink-faint">Loading…</p>
                 </div>
               )
               const events = reviewHistory ?? []
               if (events.length === 0 && !reviewsLoading) return (
                 <div className="space-y-2">
-                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">Review History</div>
+                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">Review History</div>
                   <p className="text-xs text-ink-faint italic">No reviews yet.</p>
                 </div>
               )
@@ -1752,7 +1752,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
               return (
                 <div className="space-y-2">
-                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
                     Review History
                   </div>
                   {/* Track tabs */}
@@ -1765,7 +1765,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                           className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
                             historyTrack === t.key
                               ? 'bg-accent/20 border-accent/40 text-accent'
-                              : 'border-white/10 text-ink-faint hover:text-ink hover:border-white/20'
+                              : 'border-line/10 text-ink-faint hover:text-ink hover:border-line/20'
                           }`}
                         >
                           {t.label} <span className="opacity-60">({trackCounts[t.key]})</span>
@@ -1869,7 +1869,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
         {/* ── Merge UI ────────────────────────────────────────── */}
         {merging && (
-          <div className="border-t border-white/10 pt-4 space-y-3">
+          <div className="border-t border-line/10 pt-4 space-y-3">
             {!mergeTarget ? (
               <>
                 <div className="flex items-center justify-between">
@@ -1894,7 +1894,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   return results.length === 0 ? (
                     <p className="text-xs text-ink-faint text-center py-3">No cards found.</p>
                   ) : (
-                    <div className="rounded-card border border-white/10 divide-y divide-white/5 max-h-52 overflow-y-auto">
+                    <div className="rounded-card border border-line/10 divide-y divide-line/5 max-h-52 overflow-y-auto">
                       {results.slice(0, 50).map(c => (
                         <button
                           key={c.id}
@@ -1935,7 +1935,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                       <button
                         key={c.id}
                         onClick={() => setMergeSurvivorId(c.id)}
-                        className={`rounded-card border p-3 text-left space-y-1.5 transition-colors ${chosen ? 'border-accent/60 bg-accent/5' : 'border-white/10 hover:border-white/20'}`}
+                        className={`rounded-card border p-3 text-left space-y-1.5 transition-colors ${chosen ? 'border-accent/60 bg-accent/5' : 'border-line/10 hover:border-line/20'}`}
                       >
                         <div className="flex items-start justify-between gap-1">
                           <p className="text-xs text-ink-faint truncate">{label}</p>

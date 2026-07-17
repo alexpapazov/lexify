@@ -295,7 +295,7 @@ function FolderPageInner() {
     { key: 'learning'  as FilterKey, label: 'Learning',  value: counts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: counts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: counts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
-    { key: 'dormant'   as FilterKey, label: 'Dormant',   value: counts.dormant,   color: 'text-ink',         border: 'border-white/70',  desc: 'Paused — manual'  },
+    { key: 'dormant'   as FilterKey, label: 'Dormant',   value: counts.dormant,   color: 'text-ink',         border: 'border-line/70',  desc: 'Paused — manual'  },
   ] : []
 
   // ── Drop onto row ─────────────────────────────────────────────────────────
@@ -637,7 +637,7 @@ function FolderPageInner() {
                   key={key}
                   onClick={() => setActiveFilter(isActive ? null : key)}
                   className={`panel border-t-2 ${border} space-y-1 text-center transition-colors w-full
-                    ${isActive ? 'bg-surface-raised ring-1 ring-white/10' : 'hover:bg-surface-raised/50'}`}
+                    ${isActive ? 'bg-surface-raised ring-1 ring-ink/10' : 'hover:bg-surface-raised/50'}`}
                 >
                   <div className={`text-2xl font-semibold ${color}`}>{value}</div>
                   <div className="text-xs font-medium text-ink">{label}</div>
@@ -674,7 +674,7 @@ function FolderPageInner() {
               {filteredCards.length === 0 ? (
                 <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
               ) : (
-                <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+                <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
                   {filteredCards.map(({ card, deckName, deckId, status }) => (
                     <Link
                       key={card.id}
@@ -747,7 +747,7 @@ function FolderPageInner() {
             No cards match &ldquo;{searchQuery}&rdquo;.
           </div>
         ) : (
-          <div className="panel divide-y divide-white/5 p-0 overflow-hidden">
+          <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
             {folderCardResults.map(({ card, deckId, deckName }) => (
               <Link
                 key={`${card.id}-${deckId}`}
@@ -799,7 +799,7 @@ function FolderPageInner() {
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
                     isDragging      ? 'opacity-40' :
                     dt?.pos === 'into' ? 'border-accent bg-accent/5 scale-[1.01]' :
-                    'hover:border-white/10'
+                    'hover:border-line/10'
                   }`}
                 >
                   <FolderIcon />
@@ -857,7 +857,7 @@ function FolderPageInner() {
                   onTouchCancel={onItemTouchEnd}
                   style={{ WebkitTouchCallout: 'none' } as React.CSSProperties}
                   className={`panel flex items-center gap-3 py-3 my-0.5 transition-all cursor-grab active:cursor-grabbing select-none ${
-                    isDragging ? 'opacity-40' : 'hover:border-white/10'
+                    isDragging ? 'opacity-40' : 'hover:border-line/10'
                   }`}
                 >
                   <DeckIcon />
@@ -888,7 +888,7 @@ function FolderPageInner() {
                       <button
                         onClick={() => handleMoveDeckToRoot(deck.id)}
                         title="Move to library root"
-                        className="text-xs text-ink-faint hover:text-ink transition-colors px-2 py-1 rounded border border-white/10 hover:border-white/20"
+                        className="text-xs text-ink-faint hover:text-ink transition-colors px-2 py-1 rounded border border-line/10 hover:border-line/20"
                       >
                         Move to library
                       </button>

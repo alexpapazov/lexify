@@ -186,11 +186,11 @@ export default function AgentsPage() {
                 🧹 De-dupe
               </button>
               <button type="button" onClick={() => setTask("Remove the leading 'to ' from every verb gloss (the back), e.g. 'to run' → 'run'. Only touch verbs.")}
-                className="text-xs px-3 py-1.5 rounded-full border border-white/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
+                className="text-xs px-3 py-1.5 rounded-full border border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
                 Strip “to ” from verbs
               </button>
               <button type="button" onClick={() => setTask('For every noun card, append the grammatical gender in parentheses to the gloss if it is missing, e.g. "el gato" gloss "cat" → "cat (m)".')}
-                className="text-xs px-3 py-1.5 rounded-full border border-white/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
+                className="text-xs px-3 py-1.5 rounded-full border border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
                 Add noun gender
               </button>
             </div>
@@ -207,7 +207,7 @@ export default function AgentsPage() {
               <label className="text-xs text-ink-faint">Scope — select what the agent may touch</label>
               <span className="text-xs text-ink-faint">{inScopeDeckCount} deck{inScopeDeckCount === 1 ? '' : 's'} in scope</span>
             </div>
-            <div className="border border-white/10 rounded-lg max-h-56 overflow-y-auto divide-y divide-white/5">
+            <div className="border border-line/10 rounded-lg max-h-56 overflow-y-auto divide-y divide-line/5">
               {pairs.length > 0 && (
                 <>
                   <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-ink-faint bg-surface/50 sticky top-0">Whole language pair</div>
@@ -276,7 +276,7 @@ export default function AgentsPage() {
 }
 
 function Row({ tone, children }: { tone: 'before' | 'after' | 'del'; children: React.ReactNode }) {
-  const cls = tone === 'after' ? 'border-success/40 text-ink' : tone === 'del' ? 'border-danger/40 text-ink-muted line-through' : 'border-white/10 text-ink-muted'
+  const cls = tone === 'after' ? 'border-success/40 text-ink' : tone === 'del' ? 'border-danger/40 text-ink-muted line-through' : 'border-line/10 text-ink-muted'
   return <div className={`rounded-lg border px-3 py-2 text-sm font-mono ${cls}`}>{children}</div>
 }
 

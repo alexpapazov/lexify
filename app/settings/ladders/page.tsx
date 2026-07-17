@@ -88,7 +88,7 @@ function LaddersInner() {
           <p className="text-xs text-ink-faint uppercase tracking-wider">Per-language ladders</p>
           {pairs.map(p => (
             <a key={`${p.source}|${p.target}`} href={`/settings/ladders?source=${p.source}&target=${p.target}`}
-              className="panel flex items-center justify-between py-3 hover:border-white/10">
+              className="panel flex items-center justify-between py-3 hover:border-line/10">
               <span className="text-sm text-ink">{langName(p.source)} → {langName(p.target)}</span>
               <span className="chip">{p.custom ? 'custom' : 'default'}</span>
             </a>

@@ -252,13 +252,13 @@ export default function AnalyticsPage() {
         <button
           type="button"
           onClick={e => { e.stopPropagation(); setPickerOpen(isOpen ? null : colorKey) }}
-          className="w-3 h-3 rounded-sm flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-white/40 transition-shadow"
+          className="w-3 h-3 rounded-sm flex-shrink-0 cursor-pointer hover:ring-2 hover:ring-ink/40 transition-shadow"
           style={{ background: displayColor }}
           title="Click to change color"
         />
         <span className="text-xs text-ink-muted select-none">{label}</span>
         {isOpen && (
-          <div className="absolute bottom-full left-0 mb-2 bg-surface-raised border border-white/10 rounded-card p-2 z-50 shadow-lg">
+          <div className="absolute bottom-full left-0 mb-2 bg-surface-raised border border-line/10 rounded-card p-2 z-50 shadow-lg">
             <div className="grid grid-cols-6 gap-1 mb-2">
               {PRESET_COLORS.map(c => (
                 <button
@@ -274,7 +274,7 @@ export default function AnalyticsPage() {
                 />
               ))}
             </div>
-            <label className="flex items-center gap-1.5 text-xs text-ink-muted cursor-pointer pt-1 border-t border-white/10">
+            <label className="flex items-center gap-1.5 text-xs text-ink-muted cursor-pointer pt-1 border-t border-line/10">
               <input
                 type="color"
                 value={/^#[0-9a-fA-F]{6}$/.test(displayColor) ? displayColor : '#4A4BD8'}
@@ -422,7 +422,7 @@ export default function AnalyticsPage() {
                           </div>
                         )
                       })()}
-                      {isEmpty && <div className="w-full bg-white/5 rounded-sm" style={{ height: 2 }} />}
+                      {isEmpty && <div className="w-full bg-line/5 rounded-sm" style={{ height: 2 }} />}
                     </div>
                   </div>
                 )
@@ -463,7 +463,7 @@ export default function AnalyticsPage() {
           const clampedLeft = Math.min(Math.max(tooltip.x - tooltipW / 2, 4), chartWidth - tooltipW - 4)
           return (
           <div
-            className="absolute z-10 pointer-events-none bg-surface-raised border border-white/10 rounded-card shadow-lg px-3 py-2 text-xs space-y-1 w-48"
+            className="absolute z-10 pointer-events-none bg-surface-raised border border-line/10 rounded-card shadow-lg px-3 py-2 text-xs space-y-1 w-48"
             style={{ left: clampedLeft, top: tooltip.y - 10, transform: 'translateY(-100%)' }}
           >
             <p className="font-medium text-ink">{fullDate(tooltip.day.date, todayStr, yesterdayStr)}</p>
@@ -507,7 +507,7 @@ export default function AnalyticsPage() {
             {[...data].reverse().filter(d => d.newCards.length > 0).map(day => {
               const open = expanded.has(day.date)
               return (
-                <div key={day.date} className="rounded-card border border-white/10 overflow-hidden">
+                <div key={day.date} className="rounded-card border border-line/10 overflow-hidden">
                   <button
                     onClick={() => setExpanded(prev => {
                       const n = new Set(prev)
@@ -526,7 +526,7 @@ export default function AnalyticsPage() {
                     </div>
                   </button>
                   {open && (
-                    <div className="border-t border-white/10 divide-y divide-white/5">
+                    <div className="border-t border-line/10 divide-y divide-line/5">
                       {day.newCards.map(c => (
                         <div key={c.cardId} className="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-4 px-4 py-2.5">
                           <span className="text-sm font-medium text-ink sm:w-40 truncate sm:shrink-0">{c.front}</span>

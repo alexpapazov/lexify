@@ -195,7 +195,7 @@ function SeparatorPicker({ label, value, onChange, custom, onCustomChange }: {
 /** Pill-style toggle between "Wordlist" and "Extract Text". */
 function ModeSwitch({ value, onChange }: { value: AiMode; onChange: (v: AiMode) => void }) {
   return (
-    <div className="inline-flex items-center rounded-full border border-white/10 bg-surface p-1 text-sm shrink-0">
+    <div className="inline-flex items-center rounded-full border border-line/10 bg-surface p-1 text-sm shrink-0">
       <button
         type="button"
         onClick={() => onChange('wordlist')}
@@ -772,7 +772,7 @@ export default function UploadPage() {
               </div>
 
               {dupChecked && item.duplicate?.tier === 'exact' && item.duplicate.existingCard && (
-                <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
+                <div className="pl-7 space-y-2 border-t border-line/10 pt-3">
                   <p className="text-xs text-ink-muted">
                     {item.existingCardDeckNames && item.existingCardDeckNames.length > 0
                       ? <>Already in <span className="text-ink">{item.existingCardDeckNames.join(', ')}</span>.</>
@@ -782,7 +782,7 @@ export default function UploadPage() {
               )}
 
               {dupChecked && item.duplicate?.tier === 'near' && (
-                <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
+                <div className="pl-7 space-y-2 border-t border-line/10 pt-3">
                   {item.duplicate.existingCard ? (
                     <>
                       <p className="text-xs text-ink-muted">

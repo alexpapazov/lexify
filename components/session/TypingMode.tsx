@@ -525,7 +525,7 @@ export function TypingMode({
               <button
                 onClick={() => setResetConfirm(true)}
                 title="Reset card to learning pipeline"
-                className="absolute top-3 left-3 text-xs text-ink-faint hover:text-ink-muted transition-colors leading-none w-5 h-5 flex items-center justify-center rounded-full border border-white/10 hover:border-white/20"
+                className="absolute top-3 left-3 text-xs text-ink-faint hover:text-ink-muted transition-colors leading-none w-5 h-5 flex items-center justify-center rounded-full border border-line/10 hover:border-line/20"
               >
                 ↺
               </button>

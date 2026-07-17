@@ -12,6 +12,7 @@ import type { LanguagePair, LanguageSyncRule, CardState } from '@/domain'
 import { langName, langFlag, assignLanguageColors, LANG_COLOR_PALETTE } from '@/lib/languages'
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
+import { ThemeToggle } from '@/components/ThemeToggle'
 
 // ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
 function hslToHex(h: number, s: number, l: number): string {
@@ -64,22 +65,22 @@ function LanguageColorPicker({ value, onChange }: { value: string; onChange: (he
   return (
     <div className="relative">
       <button type="button" onClick={() => setOpen(o => !o)} aria-label="Choose color"
-        className="w-8 h-8 rounded cursor-pointer border border-white/10 hover:border-white/30 transition-colors"
+        className="w-8 h-8 rounded cursor-pointer border border-line/10 hover:border-line/30 transition-colors"
         style={{ backgroundColor: value }} />
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 mt-1 left-0 p-3 rounded-lg border border-white/10 bg-surface-raised shadow-lg">
+          <div className="absolute z-20 mt-1 left-0 p-3 rounded-lg border border-line/10 bg-surface-raised shadow-lg">
             <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(12, 1.5rem)' }}>
               {COLOR_SWATCHES.map(hex => (
                 <button key={hex} type="button" title={hex} onClick={() => { onChange(hex); setOpen(false) }}
-                  className={`w-6 h-6 rounded-md border border-white/10 transition-transform hover:scale-125 hover:z-10 ${value.toLowerCase() === hex.toLowerCase() ? 'ring-2 ring-white ring-offset-1 ring-offset-surface-raised' : ''}`}
+                  className={`w-6 h-6 rounded-md border border-line/10 transition-transform hover:scale-125 hover:z-10 ${value.toLowerCase() === hex.toLowerCase() ? 'ring-2 ring-ink ring-offset-1 ring-offset-surface-raised' : ''}`}
                   style={{ backgroundColor: hex }} />
               ))}
             </div>
             <label className="mt-2 flex items-center gap-2 text-xs text-ink-muted cursor-pointer">
               <input type="color" value={value} onChange={e => onChange(e.target.value)}
-                className="w-6 h-6 rounded cursor-pointer bg-transparent border border-white/10 p-0.5" />
+                className="w-6 h-6 rounded cursor-pointer bg-transparent border border-line/10 p-0.5" />
               Custom…
             </label>
           </div>
@@ -246,7 +247,7 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
         if (!src || !dst) return null
         const confirmingDelete = confirmDeleteId === rule.id
         return (
-          <div key={rule.id} className={`rounded-card border p-3 space-y-2 ${rule.enabled && !confirmingDelete ? 'border-white/10' : confirmingDelete ? 'border-danger/30 bg-danger/5' : 'border-white/5 opacity-60'}`}>
+          <div key={rule.id} className={`rounded-card border p-3 space-y-2 ${rule.enabled && !confirmingDelete ? 'border-line/10' : confirmingDelete ? 'border-danger/30 bg-danger/5' : 'border-line/5 opacity-60'}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink">
@@ -264,7 +265,7 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
                     <button
                       onClick={() => handleToggle(rule)}
                       title={rule.enabled ? 'Disable rule' : 'Enable rule'}
-                      className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${rule.enabled ? 'bg-accent' : 'bg-white/20'}`}
+                      className={`w-9 h-5 rounded-full transition-colors relative flex-shrink-0 ${rule.enabled ? 'bg-accent' : 'bg-line/20'}`}
                     >
                       <span className={`absolute top-1 w-3 h-3 bg-white rounded-full shadow transition-transform ${rule.enabled ? 'translate-x-5' : 'translate-x-1'}`} />
                     </button>
@@ -290,7 +291,7 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
                     <button
                       onClick={() => setConfirmDeleteId(null)}
                       disabled={deleting}
-                      className="text-xs text-ink-faint hover:text-ink px-2 py-1 rounded border border-white/10 transition-colors"
+                      className="text-xs text-ink-faint hover:text-ink px-2 py-1 rounded border border-line/10 transition-colors"
                     >
                       Cancel
                     </button>
@@ -304,7 +305,7 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
 
       {/* Add-rule form */}
       {showForm ? (
-        <div className="rounded-card border border-white/10 p-4 space-y-3">
+        <div className="rounded-card border border-line/10 p-4 space-y-3">
           <h3 className="text-xs font-medium text-ink-muted uppercase tracking-wider">New sync rule</h3>
 
           <div className="grid grid-cols-2 gap-3">
@@ -649,6 +650,15 @@ export default function SettingsPage() {
 
       <h1 className="text-2xl font-semibold text-ink">Settings</h1>
 
+      {/* Appearance */}
+      <div className="panel space-y-4">
+        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Appearance</h2>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <p className="text-sm text-ink-muted">Theme</p>
+          <ThemeToggle />
+        </div>
+      </div>
+
       {/* Profile */}
       <div className="panel space-y-4">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Profile</h2>
@@ -808,7 +818,7 @@ export default function SettingsPage() {
               <button key={code} onClick={() => toggle(code)} className={[
                 'px-3 py-1.5 rounded-full text-sm font-medium border transition-colors',
                 active ? 'bg-accent/20 border-accent/60 text-accent-soft'
-                       : 'bg-surface-raised border-white/10 text-ink-muted hover:border-white/20 hover:text-ink',
+                       : 'bg-surface-raised border-line/10 text-ink-muted hover:border-line/20 hover:text-ink',
               ].join(' ')}>{label}</button>
             )
           })}
@@ -980,7 +990,7 @@ export default function SettingsPage() {
           <button
             onClick={handleGlobalRedistribute}
             disabled={redistributing}
-            className="text-sm border border-white/20 text-ink-muted hover:text-ink hover:border-white/40 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+            className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
           >
             {redistributing ? 'Redistributing…' : '⟳ Redistribute all cards'}
           </button>

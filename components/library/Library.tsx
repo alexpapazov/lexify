@@ -109,7 +109,7 @@ function DeckRow({ deck, allFolders, onMove, onPin }: {
             ↪
           </button>
           {showMove && (
-            <div className="absolute right-0 top-5 z-50 bg-surface border border-white/10 rounded-lg shadow-xl min-w-[160px] py-1">
+            <div className="absolute right-0 top-5 z-50 bg-surface border border-line/10 rounded-lg shadow-xl min-w-[160px] py-1">
               <button
                 onClick={() => { onMove(deck.id, null); setShowMove(false) }}
                 className="w-full text-left px-3 py-1.5 text-xs text-ink-muted hover:bg-surface-raised hover:text-ink transition-colors"

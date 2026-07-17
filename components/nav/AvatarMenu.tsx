@@ -57,7 +57,7 @@ export function AvatarMenu({
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-64 rounded-card border border-white/10 bg-surface-raised shadow-xl p-4 z-50">
+        <div className="absolute right-0 mt-2 w-64 rounded-card border border-line/10 bg-surface-raised shadow-xl p-4 z-50">
           <ProfilePanel
             user={user}
             displayName={displayName}

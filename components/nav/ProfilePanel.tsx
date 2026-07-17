@@ -141,7 +141,7 @@ export function ProfilePanel({
 
       <button
         onClick={onSignOut}
-        className="btn-ghost text-sm py-2 w-full mt-1 border-t border-white/5 rounded-none pt-3 text-ink-muted hover:text-ink"
+        className="btn-ghost text-sm py-2 w-full mt-1 border-t border-line/5 rounded-none pt-3 text-ink-muted hover:text-ink"
       >
         Sign out
       </button>

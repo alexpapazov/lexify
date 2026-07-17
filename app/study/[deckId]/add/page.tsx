@@ -350,14 +350,14 @@ export default function AddCardsPage() {
             <button
               onClick={() => setMode('wordlist')}
               className={`flex-1 rounded-lg border px-4 py-2.5 text-sm transition-colors
-                ${mode === 'wordlist' ? 'border-accent/50 bg-accent/10 text-ink' : 'border-white/10 text-ink-muted hover:text-ink'}`}
+                ${mode === 'wordlist' ? 'border-accent/50 bg-accent/10 text-ink' : 'border-line/10 text-ink-muted hover:text-ink'}`}
             >
               Word list
             </button>
             <button
               onClick={() => setMode('extraction')}
               className={`flex-1 rounded-lg border px-4 py-2.5 text-sm transition-colors
-                ${mode === 'extraction' ? 'border-accent/50 bg-accent/10 text-ink' : 'border-white/10 text-ink-muted hover:text-ink'}`}
+                ${mode === 'extraction' ? 'border-accent/50 bg-accent/10 text-ink' : 'border-line/10 text-ink-muted hover:text-ink'}`}
             >
               Extract from text
             </button>
@@ -517,7 +517,7 @@ export default function AddCardsPage() {
                 )}
 
                 {item.duplicate.tier === 'near' && item.duplicate.existingCard && (
-                  <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
+                  <div className="pl-7 space-y-2 border-t border-line/10 pt-3">
                     <p className="text-xs text-ink-muted">
                       Similar to existing card: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
                     </p>
@@ -535,7 +535,7 @@ export default function AddCardsPage() {
                 )}
 
                 {item.splitSegments && item.splitSegments.length >= 2 && (
-                  <div className="pl-7 space-y-2 border-t border-white/10 pt-3">
+                  <div className="pl-7 space-y-2 border-t border-line/10 pt-3">
                     <p className="text-xs text-ink-muted">
                       Looks like multiple translations — create as separate synonym-linked cards?
                     </p>

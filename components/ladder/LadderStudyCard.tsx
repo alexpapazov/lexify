@@ -113,7 +113,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
 function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
   if (!onInfo) return null
   return (
-    <button onClick={onInfo} title="Card info" className="absolute top-3 right-3 w-5 h-5 flex items-center justify-center rounded-full border border-white/10 text-ink-faint hover:text-ink-muted text-xs italic">i</button>
+    <button onClick={onInfo} title="Card info" className="absolute top-3 right-3 w-5 h-5 flex items-center justify-center rounded-full border border-line/10 text-ink-faint hover:text-ink-muted text-xs italic">i</button>
   )
 }
 
