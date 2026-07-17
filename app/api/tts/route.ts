@@ -134,12 +134,19 @@ async function ttsElevenLabsOnce(
  * duration is plausible for the text length — or, failing that, the longest one
  * (the complete rendering is longer than any clipped half).
  */
+// Leading pause to protect the onset (a short leading article like "el"/"la"/"le" is the phoneme
+// most often clipped at the start). It renders as a brief silence, not spoken words. LEAD_PAD_SEC
+// is roughly how much silence it adds — the duration guard's minimum is bumped by it so the guard
+// still catches a clip of the actual speech rather than being fooled by the pad's silence.
+const ELEVEN_LEAD_PAD = '… '
+const ELEVEN_LEAD_PAD_SEC = 0.28
+
 async function ttsElevenLabs(text: string, language: string, apiKey: string): Promise<string> {
-  // A trailing period gives the model a phrase boundary; a leading pause inflates the
-  // duration signal, so we only pad the end and lean on the duration guard for onset clips.
-  const padded = /[.!?…。]$/.test(text) ? text : `${text}.`
-  // Expected minimum seconds for a complete rendering (~50 ms per non-space character).
-  const minSec = Math.max(0.35, text.replace(/\s+/g, '').length * 0.05)
+  // Pad the start (onset protection) AND end (phrase boundary).
+  const withEnd = /[.!?…。]$/.test(text) ? text : `${text}.`
+  const padded = `${ELEVEN_LEAD_PAD}${withEnd}`
+  // Expected minimum seconds for a complete rendering (~50 ms per non-space character) + the lead pad.
+  const minSec = Math.max(0.35, text.replace(/\s+/g, '').length * 0.05) + ELEVEN_LEAD_PAD_SEC
 
   let best: { base64: string; durationSec: number } | null = null
   for (let i = 0; i < ELEVEN_ATTEMPTS.length; i++) {
