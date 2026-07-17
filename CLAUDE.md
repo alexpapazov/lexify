@@ -1041,6 +1041,20 @@ stats panel as a "Rung progression" chip row (`CardEditModal` fetches the climb 
 `SupabaseLadderClimbRepository.listForCards(userId,[cardId])`, displays rung+1). Cards climbed before this
 shipped have no history (empty → section hidden). Tested in `engine/__tests__/ladderEngine.test.ts`.
 
+## Day-turnover: fix pre-turnover due-date snapping + snap ladder graduation (2026-07-17)
+
+Two linked fixes so a card graduating before the turnover hour is due at the start of the CURRENT study
+day, not pushed a day late:
+- **`lib/dates.ts: snapDueAtToStartOfDay` bug.** It mutated `local` (subtract a day when the time is before
+  the turnover hour) and then computed the system↔target tz offset from the *mutated* value — corrupting it
+  by 24h, so a pre-turnover due date snapped to the *next* study day. Fix: capture the offset BEFORE the day
+  mutation. Only the before-turnover branch changes; after-turnover snapping is unaffected. Propagates to
+  every caller (all FSRS session scheduling + the ladder).
+- **Ladder `graduate()` now snaps.** It used the raw `now + days` timestamp (no turnover awareness). It now
+  loads the profile tz + `day_turnover_hour` (`tzRef`/`turnoverRef`) and snaps both directions' due dates via
+  `snapDueAtToStartOfDay`. So: graduate at 2:30am with a 1-day interval and turnover 4am → due at 4:00am the
+  same calendar day (due once you cross 4am, not before). Tested in `lib/__tests__/graduationTurnover.test.ts`.
+
 ## Audio: global default source, robotic by default (2026-07-17)
 
 The global audio default is now a 3-way **`profiles.audio_source_default`** ('browser' | 'elevenlabs' |

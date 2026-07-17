@@ -16,6 +16,7 @@ import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
 import { pickNextCard, reshowDelayMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
+import { snapDueAtToStartOfDay } from '@/lib/dates'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
 import { UndoFab } from '@/components/session/UndoFab'
@@ -42,6 +43,8 @@ function LadderStudyInner() {
   const [hasMore, setHasMore] = useState(false)  // more cards to learn beyond this batch
   const progressPctRef = useRef(0)               // monotonic progress % (never regresses on drop-back)
   const startStepsRef  = useRef(0)               // rung-steps already done when the session started (baseline)
+  const tzRef          = useRef('UTC')           // profile timezone + day-turnover, for snapping graduation due dates
+  const turnoverRef    = useRef(0)
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
@@ -141,9 +144,11 @@ function LadderStudyInner() {
       const prefs = await prefsRepo.get(uid, deckId)
       setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
       setAudioVolume(prefs?.audioVolume ?? 1)
-      const audioPref = await createClient().from('profiles').select('audio_source_default, audio_source_by_language').eq('user_id', uid).single()
+      const audioPref = await createClient().from('profiles').select('audio_source_default, audio_source_by_language, timezone, day_turnover_hour').eq('user_id', uid).single()
       setAudioSourceDefault(audioPref.data?.audio_source_default as string | null)
       setAudioSourceByLanguage(audioPref.data?.audio_source_by_language as Record<string, string> | null)
+      tzRef.current       = (audioPref.data?.timezone as string | null) ?? 'UTC'
+      turnoverRef.current = (audioPref.data?.day_turnover_hour as number | null) ?? 0
 
       let q: string[]
       if (category === 'new')          q = shuffle(fresh)
@@ -202,7 +207,11 @@ function LadderStudyInner() {
     if (!userId || !deck) return
     const repo = new SupabaseCardStateRepository()
     const now = new Date()
-    const due = (days: number) => new Date(now.getTime() + days * DAY_MS).toISOString()
+    // Snap to the start of the logical day (turnover hour) so a 1-day interval is due at the start
+    // of the NEXT logical day, honoring the day-turnover: graduating at 2:30am with turnover 4am
+    // (still "yesterday" logically) becomes due at 4am the same calendar day, not next-day 2:30am.
+    const due = (days: number) =>
+      snapDueAtToStartOfDay(new Date(now.getTime() + days * DAY_MS).toISOString(), tzRef.current, turnoverRef.current)
     const base = initialCardState(userId, cardId, deck.pipelineId)
     const tDays = target?.min ?? 1
     const nDays = native?.min ?? 1

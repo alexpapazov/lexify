@@ -16,6 +16,10 @@ export function snapDueAtToStartOfDay(
   // the system timezone for .getTime() but the correct wall-clock for .getHours()
   // / .getDate() — same trick as getToday().
   const local = new Date(date.toLocaleString('en-US', { timeZone: tz }))
+  // Capture the (system_tz − target_tz) offset BEFORE any day mutation below — otherwise the
+  // subtracted day corrupts it and pushes the result 24h late (a pre-turnover due date snapped
+  // to the *next* study day instead of the current one).
+  const offset = date.getTime() - local.getTime()
   const lHour = local.getHours()
 
   if (lHour < turnoverHour) local.setDate(local.getDate() - 1)
@@ -25,12 +29,10 @@ export function snapDueAtToStartOfDay(
   const sd = String(local.getDate()).padStart(2, '0')
   const sh = String(turnoverHour).padStart(2, '0')
 
-  // The difference (date.getTime() - local.getTime()) is the offset between the
-  // actual UTC instant and the local-string-parsed-as-system-time, which equals
-  // the (system_tz − target_tz) delta. Applying it to the target local datetime
-  // (also parsed as system time) converts it back to the correct UTC instant.
+  // Apply the captured offset to the target local datetime (parsed as system time) to convert
+  // it back to the correct UTC instant.
   const targetLocal = new Date(`${sy}-${sm}-${sd}T${sh}:00:00`)
-  return new Date(targetLocal.getTime() + (date.getTime() - local.getTime())).toISOString()
+  return new Date(targetLocal.getTime() + offset).toISOString()
 }
 
 /**
