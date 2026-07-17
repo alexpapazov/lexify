@@ -62,15 +62,14 @@ export function Navbar() {
   return (
     <>
       <nav className="sticky top-0 z-50 border-b border-white/5 bg-surface-deep/90 backdrop-blur">
-        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center gap-1 relative">
+        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center">
 
-          {/* ── Desktop: Lexify brand in gutter ── */}
-          <Link href="/study" className="absolute right-full -translate-x-3 text-ink font-semibold tracking-wide whitespace-nowrap hidden md:block">
-            Lexify
-          </Link>
+          {/* ── Desktop: brand · nav links · account, spread edge to edge ── */}
+          <div className="hidden md:flex items-center justify-between w-full gap-2">
+            <Link href="/study" className="text-ink font-semibold tracking-wide whitespace-nowrap">
+              Lexify
+            </Link>
 
-          {/* ── Desktop nav links ── */}
-          <div className="hidden md:flex items-center gap-1 flex-1">
             {NAV_LINKS.map(({ href, label }) => {
               const isActive = pathname === href
               const onClick = href === '/library' && pathname === '/library'
@@ -78,17 +77,14 @@ export function Navbar() {
                 : undefined
               return (
                 <Link key={href} href={href} onClick={onClick} className={[
-                  'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150',
+                  'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150 whitespace-nowrap',
                   isActive ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
                 ].join(' ')}>
                   {label}
                 </Link>
               )
             })}
-          </div>
 
-          {/* ── Desktop user section ── */}
-          <div className="hidden md:flex ml-auto items-center gap-3">
             {user ? (
               <AvatarMenu
                 user={user}
