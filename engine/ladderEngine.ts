@@ -102,7 +102,7 @@ function ruleMet(history: Rating[], rule: { times: number; inARow: boolean; minR
 
 /** Move to an earlier/later rung by index (drop-back), clearing per-rung state. */
 function toRung(s: ClimbState, index: number): ClimbState {
-  return { ...resetPerRung(s), rungIndex: index, rungHistory: [...(s.rungHistory ?? [s.rungIndex]), index] }
+  return { ...resetPerRung(s), rungIndex: index }
 }
 
 /** Advance past `fromIndex`; may set the window start, record an interval, and graduate. */
@@ -118,9 +118,6 @@ function advance(s: ClimbState, ladder: Ladder, now: number, fromIndex: number, 
     next.graduated = true
     if (!next.targetInterval) next.targetInterval = { min: 1, max: 1 }
     if (!next.nativeInterval) next.nativeInterval = { min: 1, max: 1 }
-    // Don't append the past-the-end graduation index; the last real rung is already recorded.
-  } else {
-    next.rungHistory = [...(s.rungHistory ?? [s.rungIndex]), next.rungIndex]
   }
   return next
 }
@@ -129,7 +126,21 @@ const RESHOW_BY_RATING: Record<Rating, ReshowHint> = { again: 'soon', hard: 'sho
 
 // ─── Main entry ──────────────────────────────────────────────────────────────
 
+/**
+ * Records one review attempt, appending the resulting rung to `rungHistory` — so a card that
+ * STAYS on a rung repeats it (e.g. 1 2 3 3 3 3 4 3 3 4 4 5 6). The past-the-end graduation index
+ * is not appended (the last real rung is already the previous entry).
+ */
 export function reviewRung(ladder: Ladder, state: ClimbState, outcome: RungAttemptOutcome, now: number): RungResult {
+  // Already graduated / out of range → no attempt to record.
+  if (!ladder.rungs[state.rungIndex] || state.graduated) return reviewRungCore(ladder, state, outcome, now)
+  const res = reviewRungCore(ladder, state, outcome, now)
+  if (res.state.graduated) return res
+  const rungHistory = [...(state.rungHistory ?? [state.rungIndex]), res.state.rungIndex]
+  return { ...res, state: { ...res.state, rungHistory } }
+}
+
+function reviewRungCore(ladder: Ladder, state: ClimbState, outcome: RungAttemptOutcome, now: number): RungResult {
   const rung = ladder.rungs[state.rungIndex]
   if (!rung || state.graduated) return { state, reshow: 'advanced', advanced: false, droppedBackTo: null }
 

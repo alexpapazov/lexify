@@ -178,4 +178,12 @@ describe('rung history', () => {
     expect(s.graduated).toBe(true)
     expect(s.rungHistory).toEqual([0, 1])   // stops at the last real rung
   })
+
+  it('a stay repeats the rung (records every attempt, not just changes)', () => {
+    // Rung 0 needs 3 passes in a row to advance; rung 1 advances on 1.
+    const l: Ladder = { rungs: [rung({ advanceTimes: 3, advanceInARow: true }), rung()] }
+    const s = run(l, ['pass', 'pass', 'pass'])   // stay, stay, advance 0→1
+    expect(s.rungIndex).toBe(1)
+    expect(s.rungHistory).toEqual([0, 0, 0, 1])   // rung 1 repeated for the two stays
+  })
 })
