@@ -1030,6 +1030,19 @@ day (due tomorrow, not today). Propagates to all 3 session pages via `scheduleGr
 pinned at 10 still makes stability grow slowly (only Easy walks difficulty down) — a genuinely hard card reviews
 daily until it stabilizes; that's expected, not a bug.
 
+## Smart typing: a lapse reverts to typed (2026-07-16)
+
+A lapsed smart card now goes back to **typed** and stays typed until its interval climbs past the
+threshold again — this now takes precedence over the accelerated self-grade shortcut.
+`lib/sessionLimits.ts: forwardProductionMode` smart lane: **relearning → 'typed'** (during relearn the
+interval hasn't dropped yet, so gate on the `relearning` flag, not just the interval), else
+`smartProductionMode(interval, threshold)`. The accelerated (`import_known` + `acceleratedTypedConfirmed`)
+override now applies only to the **typed (always-type) lane**, not the smart lane — so getting a smart card
+wrong means you type it again even if it's import-known. All 3 session pages' smart branch now recompute
+`productionMode = forwardProductionMode(smartNewState, 'smart', threshold)` when re-queuing a lapsed card,
+so the revert shows up **immediately in-session** (the relearn re-show), not just next session. Tested in
+`lib/__tests__/forwardProductionMode.test.ts`.
+
 ## FSRS: difficulty mean-reversion — escape "difficulty hell" (2026-07-16)
 
 Cards that ratcheted up to difficulty 10 were frozen there: `DIFFICULTY_DELTA.good = 0`

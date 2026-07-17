@@ -118,23 +118,30 @@ export function smartProductionMode(smartIntervalDays: number | null, thresholdD
 }
 
 /**
- * How a forward production review is presented. Accelerated (import-known) cards go
- * self-graded once confirmed by a correct typed review (you already knew the word);
- * otherwise the smart track uses its interval-vs-threshold rule and the typed track
- * always types.
+ * How a forward production review is presented.
+ *
+ * Smart lane: a lapsed card — currently relearning, or whose interval has fallen back below the
+ * threshold — is presented as TYPED again, and stays typed until it climbs back past the threshold.
+ * This revert takes precedence over the accelerated self-grade shortcut (getting it wrong means you
+ * type it, even for an import-known card). Above the threshold (and not relearning) it self-grades.
+ *
+ * Typed (always-type) lane: known (accelerated, import-known + confirmed) cards may skip typing.
  */
 export function forwardProductionMode(
-  state: { acceleratedMode: string; acceleratedTypedConfirmed: boolean; smartIntervalDays: number | null; typedIntervalDays?: number | null; intervalDays?: number | null },
+  state: { acceleratedMode: string; acceleratedTypedConfirmed: boolean; smartIntervalDays: number | null; typedIntervalDays?: number | null; intervalDays?: number | null; relearning?: boolean },
   reviewTrack: 'typed' | 'smart',
   thresholdDays: number,
 ): 'typed' | 'self-graded' {
-  if (state.acceleratedMode === 'import_known' && state.acceleratedTypedConfirmed) return 'self-graded'
   if (reviewTrack === 'smart') {
+    // Recovering a lapse → type it. (During relearn the interval hasn't dropped yet, so gate on the
+    // relearning flag too, not just the interval.)
+    if (state.relearning) return 'typed'
     // A ladder-graduated or legacy card put on the smart lane may not have a smart_interval_days yet —
     // fall back to its actual production interval so the typed/self-graded split is stable everywhere.
     const iv = state.smartIntervalDays ?? state.typedIntervalDays ?? state.intervalDays ?? null
     return smartProductionMode(iv, thresholdDays)
   }
+  if (state.acceleratedMode === 'import_known' && state.acceleratedTypedConfirmed) return 'self-graded'
   return 'typed'
 }
 

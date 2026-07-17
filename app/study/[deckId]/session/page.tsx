@@ -1110,11 +1110,13 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         }
 
         setCardStates(prev => { const n = new Map(prev); n.set(card.id, smartNewState); return n })
+        // Re-derive presentation: a lapsed smart card reverts to typed until it re-passes the threshold.
+        const smartMode = forwardProductionMode(smartNewState, 'smart', schedulerParams.smartTypingThresholdDays)
         setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: smartNewState }])
         setRedoStack([])
-        setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: smartNewState } : item))
+        setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: smartNewState, productionMode: smartMode } : item))
         if (smartNewState.relearningStep > 0) {
-          setRelearnPool(prev => [...prev, { ...current, state: smartNewState, relearnLapsedAt: reviewCountRef.current }])
+          setRelearnPool(prev => [...prev, { ...current, state: smartNewState, productionMode: smartMode, relearnLapsedAt: reviewCountRef.current }])
           setIndex(i => i + 1)
           return
         }
