@@ -38,21 +38,22 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
   // show the answer + Continue instead of the self-rating buttons.
   const [dontKnow, setDontKnow] = useState(false)
   const [hintLevel, setHintLevel] = useState(0)
+  // The target word (card.front, source language) is the ONLY thing ever spoken aloud — never the
+  // native side. When the target is the prompt we autoplay it; when it's the answer we speak it on reveal.
+  const answerIsTarget = promptSide === 'back'   // prompt is native → the answer is the target word
   useEffect(() => {
     setRevealed(false); setDontKnow(false); setHintLevel(0)
-    if (autoPlayAudio && promptLanguage) speak(promptSide === 'front' ? card.front : card.back, promptLanguage, card.audioData)
+    if (autoPlayAudio && promptSide === 'front' && promptLanguage) speak(card.front, promptLanguage, card.audioData)
   }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const prompt = displayText(promptSide === 'front' ? card.front : card.back)
   const answer = displayText(promptSide === 'front' ? card.back  : card.front)
   const rawAnswer = promptSide === 'front' ? card.back : card.front
-  // The cached clip is the FRONT (target) word's audio — use it only when the answer is the front.
-  const answerAudio = promptSide === 'front' ? null : card.audioData
 
-  // Reveal the answer and play it aloud (in the produce-target rung the answer is the target word).
+  // Reveal the answer, speaking the target word aloud only when the answer IS the target (never native).
   function reveal(asDontKnow = false) {
     if (asDontKnow) setDontKnow(true)
     setRevealed(true)
-    if (autoPlayAudio && answerLanguage) speak(rawAnswer, answerLanguage, answerAudio)
+    if (autoPlayAudio && answerIsTarget && answerLanguage) speak(card.front, answerLanguage, card.audioData)
   }
 
   const plan = useMemo(() => hintPlan(rawAnswer, answerLanguage), [rawAnswer, answerLanguage])
@@ -71,9 +72,9 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
         {onPromptEdit
           ? <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit(t)} />
           : <p className="text-2xl font-medium text-ink">{prompt}</p>}
-        {promptLanguage && (
+        {promptSide === 'front' && promptLanguage && (
           <button
-            onClick={() => speak(promptSide === 'front' ? card.front : card.back, promptLanguage, card.audioData)}
+            onClick={() => speak(card.front, promptLanguage, card.audioData)}
             title="Listen"
             className="absolute bottom-3 left-1/2 -translate-x-1/2 text-ink-faint hover:text-ink-muted transition-colors"
           >
@@ -114,8 +115,8 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
             {onAnswerEdit
               ? <span className="text-xl text-ink"><EditableAnswerText text={answer} onEdit={t => onAnswerEdit(t)} /></span>
               : <p className="text-xl text-ink">{answer}</p>}
-            {answerLanguage && (
-              <button onClick={() => speak(rawAnswer, answerLanguage, answerAudio)} title="Listen"
+            {answerIsTarget && answerLanguage && (
+              <button onClick={() => speak(card.front, answerLanguage, card.audioData)} title="Listen"
                 className="absolute bottom-2 left-1/2 -translate-x-1/2 text-ink-faint hover:text-ink-muted transition-colors">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
                   <path d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-4.5 4.5H4.508c-1.141 0-2.318.664-2.66 1.905A9.76 9.76 0 0 0 1.5 12c0 .898.121 1.768.35 2.595.341 1.24 1.518 1.905 2.659 1.905h1.93l4.5 4.5c.945.945 2.561.276 2.561-1.06V4.06ZM18.584 5.106a.75.75 0 0 1 1.06 0c3.808 3.807 3.808 9.98 0 13.788a.75.75 0 0 1-1.06-1.06 8.25 8.25 0 0 0 0-11.668.75.75 0 0 1 0-1.06Z" />
