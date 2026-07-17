@@ -186,6 +186,32 @@ function looksMalformed(text: string): boolean {
   return hasLatin && (hasCyrillic || hasGreek)
 }
 
+/** The dominant writing system of a word, ignoring parenthetical annotations like "(m)"/"(n)". */
+function primaryScript(text: string): string {
+  const t = text.replace(/\([^)]*\)/g, ' ').replace(/\[[^\]]*\]/g, ' ')
+  const counts: Record<string, number> = {
+    latin:    (t.match(/[A-Za-zÀ-ÿ]/g)                 || []).length,
+    cyrillic: (t.match(/[Ѐ-ӿ]/g)             || []).length,
+    greek:    (t.match(/[Ͱ-Ͽἀ-῿]/g) || []).length,
+    cjk:      (t.match(/[぀-ヿ㐀-鿿]/g) || []).length,   // kana + Han (Japanese/Chinese)
+    hangul:   (t.match(/[가-힯ᄀ-ᇿ]/g) || []).length,   // Korean
+    arabic:   (t.match(/[؀-ۿ]/g)             || []).length,
+  }
+  let best = '', max = 0
+  for (const k in counts) if (counts[k]! > max) { max = counts[k]!; best = k }
+  return best
+}
+
+/**
+ * True when a distractor is written in the same script as the correct answer (or either has no
+ * letters). Blocks cross-language leakage the mixed-script check misses — e.g. a CJK word like
+ * "状態" appearing among Cyrillic (Bulgarian) options.
+ */
+export function scriptMatches(correct: string, distractor: string): boolean {
+  const a = primaryScript(correct), b = primaryScript(distractor)
+  return !a || !b || a === b
+}
+
 export function buildOptions(
   card: Card,
   side: CardSide,
@@ -197,9 +223,10 @@ export function buildOptions(
   const distractorsNeeded = OPTIONS_NEEDED - 1
   const excludeNorms = new Set((excludeTexts ?? []).map(norm))
 
-  // Filter out synonyms, excluded texts, AND malformed (mixed-script) AI distractors.
+  // Filter out synonyms, excluded texts, malformed (mixed-script) distractors, AND any distractor
+  // in a different script from the answer (cross-language leakage, e.g. a CJK word among Cyrillic).
   const cachedFiltered = (card.choices?.[side] ?? []).filter(d =>
-    !synonyms.some(s => norm(s) === norm(d)) && !excludeNorms.has(norm(d)) && !looksMalformed(d)
+    !synonyms.some(s => norm(s) === norm(d)) && !excludeNorms.has(norm(d)) && !looksMalformed(d) && scriptMatches(correct, d)
   )
 
   let pool = dedupeAgainst(correct, cachedFiltered)
@@ -309,6 +336,7 @@ export function promoteConfusionDistractor(
   const best = confusions
     .filter(c => c.answerSide === side && c.isWordMixup && c.count >= CONFUSION_PROMOTION_THRESHOLD)
     .filter(c => norm(c.confusedText) !== norm(correct))
+    .filter(c => scriptMatches(correct, c.confusedText))   // don't promote a cross-language mix-up
     .sort((a, b) => b.count - a.count)[0]
   if (!best) return null
 
