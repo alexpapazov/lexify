@@ -5,16 +5,16 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
+import { AvatarMenu } from './AvatarMenu'
+import { ProfilePanel } from './ProfilePanel'
 
 const NAV_LINKS = [
-  { href: '/',          label: 'Home'     },
   { href: '/study',     label: 'Study'    },
   { href: '/library',   label: 'Library'  },
-  { href: '/progress',  label: 'Analytics' },
   { href: '/browse',    label: 'Browse'   },
   { href: '/upload',    label: 'Upload'   },
   { href: '/agents',    label: 'Agents'   },
-  { href: '/profile',   label: 'Profile'  },
+  { href: '/progress',  label: 'Analytics' },
   { href: '/settings',  label: 'Settings' },
 ]
 
@@ -53,7 +53,7 @@ export function Navbar() {
 
   async function handleSignOut() {
     await supabase.auth.signOut()
-    router.push('/')
+    router.push('/auth')
     router.refresh()
   }
 
@@ -63,7 +63,7 @@ export function Navbar() {
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center gap-1 relative">
 
           {/* ── Desktop: Lexify brand in gutter ── */}
-          <Link href="/" className="absolute right-full -translate-x-3 text-ink font-semibold tracking-wide whitespace-nowrap hidden md:block">
+          <Link href="/study" className="absolute right-full -translate-x-3 text-ink font-semibold tracking-wide whitespace-nowrap hidden md:block">
             Lexify
           </Link>
 
@@ -88,14 +88,12 @@ export function Navbar() {
           {/* ── Desktop user section ── */}
           <div className="hidden md:flex ml-auto items-center gap-3">
             {user ? (
-              <>
-                <span className="text-xs text-ink-muted truncate max-w-[160px]">
-                  {displayName ?? user.email}
-                </span>
-                <button onClick={handleSignOut} className="btn-ghost text-sm py-1.5 px-3">
-                  Sign out
-                </button>
-              </>
+              <AvatarMenu
+                user={user}
+                displayName={displayName}
+                onDisplayNameSaved={setDisplayName}
+                onSignOut={handleSignOut}
+              />
             ) : (
               <Link href="/auth" className="btn-ghost text-sm py-1.5 px-3">Sign in</Link>
             )}
@@ -103,7 +101,7 @@ export function Navbar() {
 
           {/* ── Mobile: brand + hamburger ── */}
           <div className="flex md:hidden items-center justify-between w-full">
-            <Link href="/" className="text-ink font-semibold tracking-wide">Lexify</Link>
+            <Link href="/study" className="text-ink font-semibold tracking-wide">Lexify</Link>
             <button
               onClick={() => setMenuOpen(o => !o)}
               className="text-ink-muted hover:text-ink transition-colors p-1"
@@ -160,16 +158,14 @@ export function Navbar() {
               )
             })}
 
-            <div className="pt-2 border-t border-white/5 mt-2">
+            <div className="pt-3 border-t border-white/5 mt-2 px-3 pb-1">
               {user ? (
-                <div className="flex items-center justify-between px-3 py-2">
-                  <span className="text-xs text-ink-muted truncate max-w-[200px]">
-                    {displayName ?? user.email}
-                  </span>
-                  <button onClick={handleSignOut} className="btn-ghost text-sm py-1.5 px-3">
-                    Sign out
-                  </button>
-                </div>
+                <ProfilePanel
+                  user={user}
+                  displayName={displayName}
+                  onSaved={setDisplayName}
+                  onSignOut={handleSignOut}
+                />
               ) : (
                 <Link href="/auth" className="block px-3 py-2.5 text-sm font-medium text-ink-muted hover:text-ink transition-colors">
                   Sign in
