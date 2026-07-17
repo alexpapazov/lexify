@@ -137,6 +137,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [rungHistory,        setRungHistory]        = useState<number[] | null>(null)
   const [historyTrack,       setHistoryTrack]       = useState<'typed' | 'recall' | 'recognition'>('typed')
   const [reverseCardState,   setReverseCardState]   = useState<CardState | null | undefined>(undefined) // undefined = not yet loaded
+  const [forwardCardState,   setForwardCardState]   = useState<CardState | null | undefined>(undefined) // the forward row's own D/S
   // Synonym editing state
   const [sourceSynonymInput, setSourceSynonymInput] = useState('')
   const [targetSynonymInput, setTargetSynonymInput] = useState('')
@@ -196,10 +197,12 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     Promise.all([
       new SupabaseReviewEventRepository().listForCard(userId, card.id),
       new SupabaseCardStateRepository().get(userId, card.id, 'reverse'),
+      new SupabaseCardStateRepository().get(userId, card.id, 'forward'),
     ])
-      .then(([events, revState]) => {
+      .then(([events, revState, fwdState]) => {
         setReviewHistory(events)
         setReverseCardState(revState)
+        setForwardCardState(fwdState)
         const counts = { typed: 0, recall: 0, recognition: 0 }
         for (const e of events) {
           const t = e.wasTyped === true ? 'typed'
@@ -1202,16 +1205,38 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
               return (
                 <>
-                  <StatGroup title="Status" rows={[
-                    ['Status',         status],
-                    ['Review mode',    reviewModeLabel],
-                    ['Reps',           String(state.reps)],
-                    ['Lapses',         String(state.lapses)],
-                    ['Difficulty',     state.difficulty != null ? `${state.difficulty.toFixed(1)} / 10` : '—'],
-                    ['Stability',      state.stability  != null ? `${state.stability.toFixed(1)}d` : '—'],
-                    ['Last rating',    rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
-                    ["I don't know",   String(state.iDontKnowCount)],
-                  ]} />
+                  {(() => {
+                    // Difficulty/Stability are tracked separately per direction (forward vs reverse rows).
+                    // Show the forward row's own D/S (fall back to the passed state until it loads) and,
+                    // when a reverse row exists, its D/S too — each clearly labelled.
+                    const fwd = forwardCardState ?? state
+                    const rev = reverseCardState
+                    const hasRev = !!rev && (rev.difficulty != null || rev.stability != null)
+                    const dfmt = (d: number | null | undefined) => d != null ? `${d.toFixed(1)} / 10` : '—'
+                    const sfmt = (s: number | null | undefined) => s != null ? `${s.toFixed(1)}d` : '—'
+                    const dsRows: [string, string][] = hasRev
+                      ? [
+                          ['Difficulty (forward)', dfmt(fwd?.difficulty)],
+                          ['Stability (forward)',  sfmt(fwd?.stability)],
+                          ['Difficulty (reverse)', dfmt(rev!.difficulty)],
+                          ['Stability (reverse)',  sfmt(rev!.stability)],
+                        ]
+                      : [
+                          ['Difficulty', dfmt(fwd?.difficulty)],
+                          ['Stability',  sfmt(fwd?.stability)],
+                        ]
+                    return (
+                      <StatGroup title="Status" rows={[
+                        ['Status',         status],
+                        ['Review mode',    reviewModeLabel],
+                        ['Reps',           String(state.reps)],
+                        ['Lapses',         String(state.lapses)],
+                        ...dsRows,
+                        ['Last rating',    rating ? rating.charAt(0).toUpperCase() + rating.slice(1) : '—'],
+                        ["I don't know",   String(state.iDontKnowCount)],
+                      ]} />
+                    )
+                  })()}
 
                   {/* Dormancy controls */}
                   <div className="space-y-1.5">
