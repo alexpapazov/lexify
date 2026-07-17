@@ -34,6 +34,9 @@ export interface ClimbState {
   graduated:      boolean
   targetInterval: IntervalRange | null
   nativeInterval: IntervalRange | null
+  /** Every rung index the card has occupied, in order (drop-backs included). 0-indexed;
+   *  e.g. [0,1,2,3,2,3,4] = "1→2→3→4→3→4→5". For display/analytics only. */
+  rungHistory?:   number[]
 }
 
 /** When to show the card again if it stays on the same rung. */
@@ -47,7 +50,7 @@ export interface RungResult {
 }
 
 export function initialClimbState(): ClimbState {
-  return { rungIndex: 0, progress: 0, messUps: 0, lastRating: null, outcomeCounts: {}, startedAt: null, graduated: false, targetInterval: null, nativeInterval: null }
+  return { rungIndex: 0, progress: 0, messUps: 0, lastRating: null, outcomeCounts: {}, startedAt: null, graduated: false, targetInterval: null, nativeInterval: null, rungHistory: [0] }
 }
 
 // ─── 12-hour window ──────────────────────────────────────────────────────────
@@ -99,7 +102,7 @@ function ruleMet(history: Rating[], rule: { times: number; inARow: boolean; minR
 
 /** Move to an earlier/later rung by index (drop-back), clearing per-rung state. */
 function toRung(s: ClimbState, index: number): ClimbState {
-  return { ...resetPerRung(s), rungIndex: index }
+  return { ...resetPerRung(s), rungIndex: index, rungHistory: [...(s.rungHistory ?? [s.rungIndex]), index] }
 }
 
 /** Advance past `fromIndex`; may set the window start, record an interval, and graduate. */
@@ -115,6 +118,9 @@ function advance(s: ClimbState, ladder: Ladder, now: number, fromIndex: number, 
     next.graduated = true
     if (!next.targetInterval) next.targetInterval = { min: 1, max: 1 }
     if (!next.nativeInterval) next.nativeInterval = { min: 1, max: 1 }
+    // Don't append the past-the-end graduation index; the last real rung is already recorded.
+  } else {
+    next.rungHistory = [...(s.rungHistory ?? [s.rungIndex]), next.rungIndex]
   }
   return next
 }

@@ -1030,6 +1030,17 @@ day (due tomorrow, not today). Propagates to all 3 session pages via `scheduleGr
 pinned at 10 still makes stability grow slowly (only Easy walks difficulty down) — a genuinely hard card reviews
 daily until it stabilizes; that's expected, not a bug.
 
+## Ladder: per-card rung progression history (2026-07-17)
+
+`ClimbState.rungHistory?: number[]` (0-indexed) records every rung a card occupied in order, drop-backs
+included — e.g. `[0,1,2,3,2,3,4]` = "1→2→3→4→3→4→5". `engine/ladderEngine.ts`: `initialClimbState` seeds
+`[0]`; `advance()` appends the new rung (unless it's the past-the-end graduation index) and `toRung()`
+(drop-back) appends the target rung. **No migration** — the climb row stores the whole `ClimbState` in its
+JSONB `state` column, and the row survives graduation (graduate() doesn't delete it). Shown in the card ℹ
+stats panel as a "Rung progression" chip row (`CardEditModal` fetches the climb via
+`SupabaseLadderClimbRepository.listForCards(userId,[cardId])`, displays rung+1). Cards climbed before this
+shipped have no history (empty → section hidden). Tested in `engine/__tests__/ladderEngine.test.ts`.
+
 ## Audio: global default source, robotic by default (2026-07-17)
 
 The global audio default is now a 3-way **`profiles.audio_source_default`** ('browser' | 'elevenlabs' |

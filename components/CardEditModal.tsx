@@ -11,6 +11,7 @@ import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOve
 import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymLinks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { SupabaseReviewEventRepository }       from '@/lib/data/reviewEvents'
+import { SupabaseLadderClimbRepository }       from '@/lib/data/ladderClimb'
 import type { Card, CardState, CardChoices, CardConfusion, CardConfusionLink, Pipeline, TypedAnswerOverride, ReviewEvent } from '@/domain'
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding } from '@/lib/distractors'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
@@ -133,6 +134,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [deletedDistractors, setDeletedDistractors] = useState<{front: string[]; back: string[]}>({front: [], back: []})
   const [reviewHistory,      setReviewHistory]      = useState<ReviewEvent[] | null>(null)
   const [reviewsLoading,     setReviewsLoading]     = useState(false)
+  const [rungHistory,        setRungHistory]        = useState<number[] | null>(null)
   const [historyTrack,       setHistoryTrack]       = useState<'typed' | 'recall' | 'recognition'>('typed')
   const [reverseCardState,   setReverseCardState]   = useState<CardState | null | undefined>(undefined) // undefined = not yet loaded
   // Synonym editing state
@@ -212,6 +214,14 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
       .catch(err => console.error('Failed to load review history:', err))
       .finally(() => setReviewsLoading(false))
   }, [showStats, userId, card.id, reviewHistory, reviewsLoading])
+
+  // Ladder rung progression (from the card's climb row) — for display/future analytics.
+  useEffect(() => {
+    if (!showStats || rungHistory !== null) return
+    new SupabaseLadderClimbRepository().listForCards(userId, [card.id])
+      .then(m => setRungHistory(m.get(card.id)?.rungHistory ?? []))
+      .catch(() => setRungHistory([]))
+  }, [showStats, userId, card.id, rungHistory])
 
   async function handleSave() {
     if (!front.trim()) { setValidErr('Front cannot be empty.'); return }
@@ -1042,6 +1052,23 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                 </div>
               )}
             </div>
+
+            {/* ── Ladder rung progression ───────────────────────────────────── */}
+            {rungHistory && rungHistory.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-white/5 pb-1">
+                  Rung progression <span className="normal-case font-normal opacity-60">(every rung the card climbed, drop-backs included)</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1">
+                  {rungHistory.map((r, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      {i > 0 && <span className="text-ink-faint text-xs">→</span>}
+                      <span className="inline-flex items-center justify-center min-w-[1.25rem] px-1.5 h-5 rounded bg-surface-raised border border-white/10 text-xs tabular-nums text-ink">{r + 1}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* ── Synonyms (editable) ───────────────────────────────────────── */}
             <div className="space-y-2">

@@ -160,3 +160,22 @@ describe('full climb & independent intervals', () => {
     expect(s.nativeInterval).toEqual({ min: 1, max: 1 })
   })
 })
+
+describe('rung history', () => {
+  it('records every rung occupied, drop-backs included (1→2→3→4→3→4→5)', () => {
+    const r0 = rung(), r1 = rung(), r2 = rung(), r3b = rung(), r4 = rung()
+    const r3 = { ...r3b, dropBacks: [{ on: 'miss' as const, times: 1, inARow: true, toRungId: r2.id }] }
+    const l: Ladder = { rungs: [r0, r1, r2, r3, r4] }
+    // pass×3 (0→1→2→3), miss (drop 3→2), pass×2 (2→3→4)
+    const s = run(l, ['pass', 'pass', 'pass', 'miss', 'pass', 'pass'])
+    expect(s.rungIndex).toBe(4)
+    expect(s.rungHistory).toEqual([0, 1, 2, 3, 2, 3, 4])
+  })
+
+  it('does not append the past-the-end graduation index', () => {
+    const l: Ladder = { rungs: [rung(), rung()] }
+    const s = run(l, ['pass', 'pass'])   // 0→1, then 1→graduated
+    expect(s.graduated).toBe(true)
+    expect(s.rungHistory).toEqual([0, 1])   // stops at the last real rung
+  })
+})

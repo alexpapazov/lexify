@@ -24,10 +24,14 @@ function hslToHex(h: number, s: number, l: number): string {
   }
   return `#${f(0)}${f(8)}${f(4)}`
 }
-// 7 hues across the spectrum (columns) × 7 lightness steps light→dark (rows).
-const COLOR_SWATCHES: string[] = Array.from({ length: 7 }, (_, r) =>
-  Array.from({ length: 7 }, (_, c) => hslToHex(Math.round((c * 360) / 7), 68, 80 - r * 8)),
-).flat()
+// 10 hues across the spectrum (columns) × 6 lightness steps (rows), plus a grayscale row.
+const HUE_COLS = 10
+const LIGHTNESS_ROWS = [80, 68, 56, 45, 35, 26]
+const COLOR_SWATCHES: string[] = [
+  ...LIGHTNESS_ROWS.flatMap(l => Array.from({ length: HUE_COLS }, (_, c) => hslToHex(Math.round((c * 360) / HUE_COLS), 70, l))),
+  // grayscale row: white → black
+  ...Array.from({ length: HUE_COLS }, (_, c) => hslToHex(0, 0, Math.round(96 - (c * (96 - 8)) / (HUE_COLS - 1)))),
+]
 
 function LanguageColorPicker({ value, onChange }: { value: string; onChange: (hex: string) => void }) {
   const [open, setOpen] = useState(false)
@@ -39,11 +43,11 @@ function LanguageColorPicker({ value, onChange }: { value: string; onChange: (he
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 mt-1 left-0 p-2 rounded-lg border border-white/10 bg-surface-raised shadow-lg">
-            <div className="grid grid-cols-7 gap-1">
+          <div className="absolute z-20 mt-1 left-0 p-3 rounded-lg border border-white/10 bg-surface-raised shadow-lg">
+            <div className="grid grid-cols-10 gap-1.5">
               {COLOR_SWATCHES.map(hex => (
                 <button key={hex} type="button" title={hex} onClick={() => { onChange(hex); setOpen(false) }}
-                  className={`w-6 h-6 rounded transition-transform hover:scale-110 ${value.toLowerCase() === hex.toLowerCase() ? 'ring-2 ring-white' : ''}`}
+                  className={`w-6 h-6 rounded-md border border-white/10 transition-transform hover:scale-125 hover:z-10 ${value.toLowerCase() === hex.toLowerCase() ? 'ring-2 ring-white ring-offset-1 ring-offset-surface-raised' : ''}`}
                   style={{ backgroundColor: hex }} />
               ))}
             </div>
