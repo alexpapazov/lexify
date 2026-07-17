@@ -20,16 +20,28 @@ export function setAudioPlaybackRate(rate: number): void {
   audioPlaybackRate = Number.isFinite(rate) && rate > 0 ? rate : 1
 }
 
-// Global "prefer Forvo" setting (profile-level). When on, on-demand audio fetches
-// (speakViaTts) try Forvo — real native-speaker recordings — first and fall back to
-// ElevenLabs when Forvo has no recording. Pages set this from the profile on load.
-let preferForvo = false
-export function setPreferForvo(on: boolean): void { preferForvo = !!on }
-export function getPreferForvo(): boolean { return preferForvo }
+// Per-deck audio volume (0–1). Pages set this from the deck's preferences on load;
+// `speak`/`playClip` apply it to cached-clip playback and the Web Speech fallback.
+let audioVolume = 1
+export function setAudioVolume(vol: number): void {
+  audioVolume = Number.isFinite(vol) ? Math.min(1, Math.max(0, vol)) : 1
+}
+
+// Global default audio source (profile-level). 'browser' (robotic, the default) generates no
+// audio — playback uses the on-device speech synth. 'elevenlabs'/'forvo' pre-generate & play real
+// clips (forvo auto-falls back to ElevenLabs when it has no recording). Pages set this from the
+// profile on load; per-card audio choices still override this for individual cards.
+export type AudioSourceDefault = 'browser' | 'elevenlabs' | 'forvo'
+let audioSourceDefault: AudioSourceDefault = 'browser'
+export function setAudioSourceDefault(src: string | null | undefined): void {
+  audioSourceDefault = src === 'elevenlabs' || src === 'forvo' ? src : 'browser'
+}
+export function getAudioSourceDefault(): AudioSourceDefault { return audioSourceDefault }
 
 function playClip(src: string): Promise<void> {
   const audio = new Audio(src)
   audio.playbackRate = audioPlaybackRate
+  audio.volume = audioVolume
   // Keep pitch natural when slowed/sped (Safari uses the webkit-prefixed flag).
   audio.preservesPitch = true
   ;(audio as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = true
@@ -62,6 +74,7 @@ export function speak(text: string, langCode: string, audioData?: string | null)
   const utt = new SpeechSynthesisUtterance(stripAnnotations(text))
   utt.lang = SPEECH_LANG[langCode] ?? langCode
   utt.rate = audioPlaybackRate
+  utt.volume = audioVolume
   window.speechSynthesis.speak(utt)
 }
 
@@ -96,12 +109,13 @@ export async function fetchAudioSource(
 
 export async function speakViaTts(text: string, language: string): Promise<string | null> {
   if (typeof window === 'undefined') return null
+  // Robotic default → don't generate a clip; the caller falls back to on-device speech.
+  if (audioSourceDefault === 'browser') return null
   try {
     const res = await fetch('/api/tts', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      // Prefer Forvo (real recordings) when the global setting is on; the route
-      // auto-falls back to ElevenLabs when Forvo has no recording for the word.
-      body: JSON.stringify(preferForvo ? { text, language, source: 'forvo', fallback: true } : { text, language }),
+      // Use the chosen default source; Forvo auto-falls back to ElevenLabs when it has no recording.
+      body: JSON.stringify({ text, language, source: audioSourceDefault, fallback: audioSourceDefault === 'forvo' }),
     })
     const data = await res.json()
     if (data.ok && data.audioData) {

@@ -931,6 +931,8 @@ export interface DeckPreferences {
   learningBatchMode:    boolean
   /** Audio playback speed for this deck (applied at playback time; pitch preserved). 1 = normal. */
   audioSpeed:           number
+  /** Audio playback volume for this deck (applied at playback time). 0–1, 1 = full. */
+  audioVolume:          number
 }
 
 export const DEFAULT_DAILY_NEW_CARDS = 20

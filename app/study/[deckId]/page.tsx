@@ -8,7 +8,7 @@ import { SupabaseDeckRepository }            from '@/lib/data/decks'
 import { SupabaseCardRepository }            from '@/lib/data/cards'
 import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
-import { setAudioPlaybackRate } from '@/lib/speak'
+import { setAudioPlaybackRate, setAudioVolume } from '@/lib/speak'
 import { SupabaseFolderRepository }          from '@/lib/data/folders'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseSynonymGroupRepository }    from '@/lib/data/synonymGroups'
@@ -778,8 +778,10 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   const [cardsPerSession,    setCardsPerSession]    = useState(initialPrefs?.cardsPerSession || 12)
   const [learningBatchMode,  setLearningBatchMode]  = useState(initialPrefs?.learningBatchMode ?? false)
   const [audioSpeed,         setAudioSpeed]         = useState(initialPrefs?.audioSpeed ?? 1)
-  // Apply speed immediately so the "Play audio" preview reflects the slider live.
+  const [audioVolume,        setAudioVolumeState]   = useState(initialPrefs?.audioVolume ?? 1)
+  // Apply speed/volume immediately so the "Play audio" preview reflects the controls live.
   useEffect(() => { setAudioPlaybackRate(audioSpeed) }, [audioSpeed])
+  useEffect(() => { setAudioVolume(audioVolume) }, [audioVolume])
   const [saving,            setSaving]            = useState(false)
   const [saved,             setSaved]             = useState(false)
   const [saveError,         setSaveError]         = useState<string | null>(null)
@@ -819,6 +821,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
           electiveSessionLimit: cardsPerSessionOn ? cardsPerSession : 0,
           learningBatchMode:    cardsPerSessionOn ? learningBatchMode : false,
           audioSpeed,
+          audioVolume,
         }),
         new SupabaseDeckRepository().update(deckId, { gradingSettings: newGradingSettings }),
       ])
@@ -1111,6 +1114,18 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                     <option key={v} value={v}>{v === 1 ? 'Normal' : `${v}×`}</option>
                   ))}
                 </select>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm text-ink">Volume</span>
+                <div className="flex items-center gap-2 w-40">
+                  <input
+                    type="range" min={0} max={100} step={5}
+                    value={Math.round(audioVolume * 100)}
+                    onChange={e => setAudioVolumeState(Number(e.target.value) / 100)}
+                    className="accent-accent flex-1 cursor-pointer"
+                  />
+                  <span className="text-xs text-ink-muted tabular-nums w-9 text-right">{Math.round(audioVolume * 100)}%</span>
+                </div>
               </div>
             </div>
 

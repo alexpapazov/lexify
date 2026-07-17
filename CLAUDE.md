@@ -1030,6 +1030,20 @@ day (due tomorrow, not today). Propagates to all 3 session pages via `scheduleGr
 pinned at 10 still makes stability grow slowly (only Easy walks difficulty down) — a genuinely hard card reviews
 daily until it stabilizes; that's expected, not a bug.
 
+## Audio: global default source, robotic by default (2026-07-17)
+
+The global audio default is now a 3-way **`profiles.audio_source_default`** ('browser' | 'elevenlabs' |
+'forvo', **migration 088**, default **'browser'**) — superseding the `prefer_forvo` boolean (migration 084;
+column left in place, no longer read/written; 088 migrates a true value to 'forvo'). **Robotic (device
+speech) is the default and generates no clips** — playback falls back to the Web Speech synth. 'elevenlabs'
+/'forvo' pre-generate real clips (forvo → ElevenLabs fallback). `lib/speak.ts`: `setAudioSourceDefault(src)`
+/`getAudioSourceDefault()` (replaced `setPreferForvo`/`getPreferForvo`); `speakViaTts` returns null when
+'browser' (no fetch); `lib/distractors.ts: fetchAndCacheAudio` early-returns when 'browser'. Set from the
+profile on load in the ladder + all 3 session pages. Per-card `audioSource` (the ℹ picker) still overrides
+per card. Settings: the "Prefer Forvo" checkbox became a **"Default audio source"** select. Also added a
+per-deck **audio volume** slider (migration 087, `user_deck_preferences.audio_volume`; `setAudioVolume` in
+`lib/speak.ts` applies it to clips + Web Speech).
+
 ## Smart typing: a lapse reverts to typed (2026-07-16)
 
 A lapsed smart card now goes back to **typed** and stays typed until its interval climbs past the

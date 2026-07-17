@@ -13,6 +13,52 @@ import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
 
+// ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100
+  const a = s * Math.min(l, 1 - l)
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+    return Math.round(255 * c).toString(16).padStart(2, '0')
+  }
+  return `#${f(0)}${f(8)}${f(4)}`
+}
+// 7 hues across the spectrum (columns) × 7 lightness steps light→dark (rows).
+const COLOR_SWATCHES: string[] = Array.from({ length: 7 }, (_, r) =>
+  Array.from({ length: 7 }, (_, c) => hslToHex(Math.round((c * 360) / 7), 68, 80 - r * 8)),
+).flat()
+
+function LanguageColorPicker({ value, onChange }: { value: string; onChange: (hex: string) => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => setOpen(o => !o)} aria-label="Choose color"
+        className="w-8 h-8 rounded cursor-pointer border border-white/10 hover:border-white/30 transition-colors"
+        style={{ backgroundColor: value }} />
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute z-20 mt-1 left-0 p-2 rounded-lg border border-white/10 bg-surface-raised shadow-lg">
+            <div className="grid grid-cols-7 gap-1">
+              {COLOR_SWATCHES.map(hex => (
+                <button key={hex} type="button" title={hex} onClick={() => { onChange(hex); setOpen(false) }}
+                  className={`w-6 h-6 rounded transition-transform hover:scale-110 ${value.toLowerCase() === hex.toLowerCase() ? 'ring-2 ring-white' : ''}`}
+                  style={{ backgroundColor: hex }} />
+              ))}
+            </div>
+            <label className="mt-2 flex items-center gap-2 text-xs text-ink-muted cursor-pointer">
+              <input type="color" value={value} onChange={e => onChange(e.target.value)}
+                className="w-6 h-6 rounded cursor-pointer bg-transparent border border-white/10 p-0.5" />
+              Custom…
+            </label>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 const LANGUAGES = [
   { code: 'es', label: 'Spanish'    },
   { code: 'fr', label: 'French'     },
@@ -312,7 +358,7 @@ export default function SettingsPage() {
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
   const [spilloverDue,        setSpilloverDue]        = useState(false)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
-  const [preferForvo,         setPreferForvoState]    = useState(false)
+  const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo'>('browser')
   const [langColors,          setLangColors]          = useState<Record<string, string>>({})
   const [timezone,            setTimezone]            = useState('')
   const [turnoverHour,        setTurnoverHour]        = useState(0)
@@ -346,7 +392,7 @@ export default function SettingsPage() {
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, prefer_forvo, language_colors')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, language_colors')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -360,7 +406,7 @@ export default function SettingsPage() {
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
-        setPreferForvoState((profile.prefer_forvo as boolean | null) ?? false)
+        setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo')
         setLangColors((profile.language_colors as Record<string, string> | null) ?? {})
       } else {
         setTimezone(detectBrowserTimezone())
@@ -397,7 +443,7 @@ export default function SettingsPage() {
       timezone:                  timezone || null,
       day_turnover_hour:         turnoverHour,
       study_mode_autoplay:       studyModeAutoplay,
-      prefer_forvo:              preferForvo,
+      audio_source_default:      audioSourceDefault,
       language_colors:           langColors,
     }).eq('user_id', session.user.id)
     setSaved(true)
@@ -674,13 +720,20 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-1">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" checked={preferForvo} onChange={e => setPreferForvoState(e.target.checked)} className="accent-accent w-4 h-4" />
-            <span className="text-sm text-ink">Prefer Forvo (real native-speaker recordings)</span>
-          </label>
-          <p className="text-xs text-ink-faint pl-6">
-            When on, newly generated audio uses real Forvo recordings, automatically falling back to ElevenLabs
-            when Forvo has no recording for a word. Existing cards keep their current audio until you clear/refetch it.
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm text-ink">Default audio source</span>
+            <select value={audioSourceDefault} onChange={e => setAudioSourceDefaultState(e.target.value as 'browser' | 'elevenlabs' | 'forvo')}
+              className="input text-sm w-44">
+              <option value="browser">Robotic (device voice)</option>
+              <option value="elevenlabs">AI voice (ElevenLabs)</option>
+              <option value="forvo">Forvo (real recordings)</option>
+            </select>
+          </div>
+          <p className="text-xs text-ink-faint">
+            The voice used for new cards. <strong>Robotic</strong> uses your device&apos;s built-in speech (no generation).
+            <strong> AI voice</strong> and <strong>Forvo</strong> pre-generate real clips (Forvo falls back to AI when it
+            has no recording). You can still override the source per card from its ℹ panel. Existing cards keep their
+            current audio until you clear/refetch it.
           </p>
         </div>
       </div>
@@ -714,9 +767,8 @@ export default function SettingsPage() {
               <div className="flex flex-col gap-2">
                 {codes.map(code => (
                   <div key={code} className="flex items-center gap-3 text-sm">
-                    <input type="color" value={colorMap[code]} title={`${langName(code)} color`}
-                      onChange={e => setLangColors(prev => ({ ...prev, [code]: e.target.value }))}
-                      className="w-8 h-8 rounded cursor-pointer bg-transparent border border-white/10 p-0.5" />
+                    <LanguageColorPicker value={colorMap[code]!}
+                      onChange={hex => setLangColors(prev => ({ ...prev, [code]: hex }))} />
                     <span className="text-ink">{langFlag(code)} {langName(code)}</span>
                     {langColors[code] && (
                       <button onClick={() => setLangColors(prev => { const n = { ...prev }; delete n[code]; return n })}

@@ -11,7 +11,7 @@ import { SupabaseReviewEventRepository }     from '@/lib/data/reviewEvents'
 import { SupabaseLadderClimbRepository }     from '@/lib/data/ladderClimb'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
-import { setAudioPlaybackRate, setPreferForvo } from '@/lib/speak'
+import { setAudioPlaybackRate, setAudioVolume, setAudioSourceDefault } from '@/lib/speak'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
@@ -403,12 +403,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         cardRepo.listByDeck(deckId),
         pipelineRepo.getDefault(),
         prefRepo.get(session.user.id, deckId),
-        supabase.from('profiles').select('timezone, day_turnover_hour, prefer_forvo').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default').eq('user_id', session.user.id).single(),
       ])
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
-      setPreferForvo((profileData.data?.prefer_forvo as boolean | null) ?? false)
+      setAudioSourceDefault(profileData.data?.audio_source_default as string | null)
       tzRef.current       = tz
       turnoverRef.current = turnoverHour
 
@@ -538,6 +538,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       batchSizeRef.current = cardsPerSession && cardsPerSession > 0 ? cardsPerSession : 20
       const learningBatchMode = prefs?.learningBatchMode ?? false
       setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
+      setAudioVolume(prefs?.audioVolume ?? 1)
 
       // Exclude states for soft-deleted cards so they don't skew budget math.
       const activeCardIdSet   = new Set(cards.map(c => c.id))

@@ -9,7 +9,7 @@ import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOve
 import type { CardSide } from '@/domain'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
-import { setAudioPlaybackRate, setPreferForvo } from '@/lib/speak'
+import { setAudioPlaybackRate, setAudioVolume, setAudioSourceDefault } from '@/lib/speak'
 import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { resolveEffectiveLadder } from '@/lib/ladder'
@@ -130,8 +130,9 @@ function LadderStudyInner() {
       const prefsRepo = new SupabaseDeckPreferencesRepository()
       const prefs = await prefsRepo.get(uid, deckId)
       setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
-      const forvoPref = await createClient().from('profiles').select('prefer_forvo').eq('user_id', uid).single()
-      setPreferForvo((forvoPref.data?.prefer_forvo as boolean | null) ?? false)
+      setAudioVolume(prefs?.audioVolume ?? 1)
+      const audioPref = await createClient().from('profiles').select('audio_source_default').eq('user_id', uid).single()
+      setAudioSourceDefault(audioPref.data?.audio_source_default as string | null)
 
       let q: string[]
       if (category === 'new')          q = shuffle(fresh)

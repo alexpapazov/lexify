@@ -15,6 +15,7 @@ function rowToPrefs(row: Record<string, unknown>): DeckPreferences {
     electiveSessionLimit: (row.elective_session_limit as number | null) ?? null,
     learningBatchMode:    (row.learning_batch_mode    as boolean | null) ?? false,
     audioSpeed:           (row.audio_speed            as number | null) ?? 1,
+    audioVolume:          (row.audio_volume           as number | null) ?? 1,
   }
 }
 
@@ -46,6 +47,7 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
         elective_session_limit: prefs.electiveSessionLimit,
         learning_batch_mode:    prefs.learningBatchMode,
         audio_speed:            prefs.audioSpeed,
+        audio_volume:           prefs.audioVolume,
       }, { onConflict: 'user_id,deck_id' })
       .select()
       .single()

@@ -39,7 +39,7 @@ import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
-import { setPreferForvo } from '@/lib/speak'
+import { setAudioSourceDefault } from '@/lib/speak'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
@@ -217,13 +217,13 @@ function FolderSessionInner() {
         folderRepo.list(session.user.id),
         pipelineRepo.getDefault(),
         folderRepo.get(folderId),
-        supabase.from('profiles').select('timezone, day_turnover_hour, prefer_forvo').eq('user_id', session.user.id).single(),
+        supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default').eq('user_id', session.user.id).single(),
       ])
       setFolder(thisFolder)
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
-      setPreferForvo((profileData.data?.prefer_forvo as boolean | null) ?? false)
+      setAudioSourceDefault(profileData.data?.audio_source_default as string | null)
       tzRef.current       = tz
       turnoverRef.current = turnoverHour
 
