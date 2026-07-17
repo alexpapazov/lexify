@@ -24,13 +24,13 @@ function hslToHex(h: number, s: number, l: number): string {
   }
   return `#${f(0)}${f(8)}${f(4)}`
 }
-// 10 hues across the spectrum (columns) × 6 lightness steps (rows), plus a grayscale row.
-const HUE_COLS = 10
+// Hand-picked hues (columns) so we hit a true yellow (~52°) instead of an even-spaced chartreuse.
+const HUE_STOPS = [0, 32, 52, 90, 145, 175, 205, 240, 280, 315]
 const LIGHTNESS_ROWS = [80, 68, 56, 45, 35, 26]
 const COLOR_SWATCHES: string[] = [
-  ...LIGHTNESS_ROWS.flatMap(l => Array.from({ length: HUE_COLS }, (_, c) => hslToHex(Math.round((c * 360) / HUE_COLS), 70, l))),
+  ...LIGHTNESS_ROWS.flatMap(l => HUE_STOPS.map(h => hslToHex(h, 70, l))),
   // grayscale row: white → black
-  ...Array.from({ length: HUE_COLS }, (_, c) => hslToHex(0, 0, Math.round(96 - (c * (96 - 8)) / (HUE_COLS - 1)))),
+  ...Array.from({ length: HUE_STOPS.length }, (_, c) => hslToHex(0, 0, Math.round(96 - (c * 88) / (HUE_STOPS.length - 1)))),
 ]
 
 function LanguageColorPicker({ value, onChange }: { value: string; onChange: (hex: string) => void }) {
@@ -44,7 +44,7 @@ function LanguageColorPicker({ value, onChange }: { value: string; onChange: (he
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute z-20 mt-1 left-0 p-3 rounded-lg border border-white/10 bg-surface-raised shadow-lg">
-            <div className="grid grid-cols-10 gap-1.5">
+            <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(10, 1.5rem)' }}>
               {COLOR_SWATCHES.map(hex => (
                 <button key={hex} type="button" title={hex} onClick={() => { onChange(hex); setOpen(false) }}
                   className={`w-6 h-6 rounded-md border border-white/10 transition-transform hover:scale-125 hover:z-10 ${value.toLowerCase() === hex.toLowerCase() ? 'ring-2 ring-white ring-offset-1 ring-offset-surface-raised' : ''}`}
