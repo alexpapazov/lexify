@@ -9,9 +9,9 @@ const settings = (): GradingSettings => ({
 })
 
 const sibs = [
-  { cardId: 'A', front: 'занаятчия' },   // artisan
-  { cardId: 'B', front: 'куче' },        // dog — clearly a different word
-  { cardId: 'C', front: 'especie' },
+  { cardId: 'A', front: 'занаятчия', sourceLanguage: 'bg' },   // artisan
+  { cardId: 'B', front: 'куче',      sourceLanguage: 'bg' },   // dog — clearly a different word
+  { cardId: 'C', front: 'especie',   sourceLanguage: 'es' },
 ]
 
 describe('findConfusedSibling', () => {

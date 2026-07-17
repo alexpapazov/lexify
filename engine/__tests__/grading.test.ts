@@ -7,6 +7,7 @@ const STRICT: GradingSettings = {
   ignoreAccents: false, ignoreCapitalization: false, ignoreMinorTypos: false,
   ignoreDefiniteArticles: false, requireParentheticalContent: true,
   slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards',
+  autoPlayAudio: false,
 }
 
 // A flexible base with all toggles OFF
@@ -15,6 +16,7 @@ const FLEX_BASE: GradingSettings = {
   ignoreAccents: false, ignoreCapitalization: false, ignoreMinorTypos: false,
   ignoreDefiniteArticles: false, requireParentheticalContent: true,
   slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards',
+  autoPlayAudio: false,
 }
 
 describe('normalizeAnswer', () => {
