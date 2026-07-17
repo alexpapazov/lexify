@@ -18,6 +18,7 @@ import { pickNextCard, reshowDelayMs, type QueueItem } from '@/lib/ladderSession
 import { prefetchAudio } from '@/lib/distractors'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
+import { UndoFab } from '@/components/session/UndoFab'
 import { CardEditModal } from '@/components/CardEditModal'
 import type { Card, CardChoices, Deck, Ladder, RungType } from '@/domain'
 
@@ -44,6 +45,15 @@ function LadderStudyInner() {
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
+  // Undo stack for the learning pipeline (Cmd/Ctrl+Z): each entry restores the state before one outcome.
+  const [undoStack, setUndoStack] = useState<Array<{
+    cardId: string
+    prevClimb: ClimbState | undefined
+    prevQueueItem: QueueItem | undefined
+    wasGraduated: boolean
+    prevAnswered: number
+    prevPaused: boolean
+  }>>([])
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     if (!userId) return
@@ -206,6 +216,11 @@ function LadderStudyInner() {
     if (!userId || !ladder || !currentId || !currentClimb) return
     const now = Date.now()
     const res = reviewRung(ladder, currentClimb, outcome, now)
+    // Snapshot the pre-outcome state so Cmd/Ctrl+Z can restore it.
+    setUndoStack(prev => [...prev.slice(-19), {
+      cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
+      wasGraduated: res.state.graduated, prevAnswered: answered, prevPaused: paused,
+    }])
     await new SupabaseLadderClimbRepository().save(userId, currentId, deckId, res.state).catch(console.error)
     setStates(prev => new Map(prev).set(currentId, res.state))
 
@@ -236,6 +251,44 @@ function LadderStudyInner() {
     if (nextId && total > 0 && nextAnswered % total === 0) setPaused(true)
   }
 
+  // Undo the last outcome (Cmd/Ctrl+Z): restore the card's climb state, its queue timer, the
+  // answered count, and jump back to it. A graduation is undone by deleting its card_state rows.
+  const handleUndo = useCallback(async () => {
+    const entry = undoStack[undoStack.length - 1]
+    if (!entry || !userId) return
+    setUndoStack(prev => prev.slice(0, -1))
+    const { cardId, prevClimb, prevQueueItem, wasGraduated, prevAnswered, prevPaused } = entry
+    const fallbackItem: QueueItem = prevQueueItem ?? { cardId, readyAt: 0, ratedAt: 0 }
+    const climbRepo = new SupabaseLadderClimbRepository()
+    if (prevClimb) {
+      await climbRepo.save(userId, cardId, deckId, prevClimb).catch(console.error)
+      setStates(prev => new Map(prev).set(cardId, prevClimb))
+    } else {
+      await climbRepo.remove(userId, cardId).catch(console.error)   // was a fresh card with no climb row
+      setStates(prev => { const m = new Map(prev); m.delete(cardId); return m })
+    }
+    if (wasGraduated) {
+      const stateRepo = new SupabaseCardStateRepository()
+      await stateRepo.delete(userId, cardId, 'forward').catch(() => {})
+      await stateRepo.delete(userId, cardId, 'reverse').catch(() => {})
+      setGraduated(g => Math.max(0, g - 1))
+      setQueue(prev => prev.some(e => e.cardId === cardId) ? prev : [...prev, fallbackItem])
+    } else {
+      setQueue(prev => prev.map(e => e.cardId === cardId ? fallbackItem : e))
+    }
+    setAnswered(prevAnswered)
+    setPaused(prevPaused)
+    setCurrentId(cardId)
+  }, [undoStack, userId, deckId])
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); void handleUndo() }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [handleUndo])
+
   // Repeat: don't advance or redo in place — re-queue the current card at the same rung
   // and move on. Held for the ladder's between-rung wait (same 3-min-default timer) so it
   // spaces out rather than reappearing right away.
@@ -256,6 +309,7 @@ function LadderStudyInner() {
   if (!currentCard || !currentRung || !currentClimb) {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-6">
+        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
         <h1 className="text-xl font-semibold text-ink">Session complete</h1>
         <p className="text-ink-muted">{graduated > 0 ? `Graduated ${graduated} card${graduated === 1 ? '' : 's'}.` : 'Nothing to learn right now.'}</p>
         <div className="flex flex-wrap justify-center gap-3">
@@ -272,6 +326,7 @@ function LadderStudyInner() {
   if (paused) {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-6">
+        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
         <h1 className="text-xl font-semibold text-ink">Round complete</h1>
         <p className="text-ink-muted">{graduated}/{total} card{total === 1 ? '' : 's'} graduated so far. Keep going?</p>
         <div className="flex flex-wrap justify-center gap-3">
@@ -308,6 +363,7 @@ function LadderStudyInner() {
         </p>
       )}
 
+      <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
       <LadderStudyCard
         key={`${currentId}:${currentClimb.rungIndex}`}
         card={currentCard} rung={currentRung} deckCards={[...cardsById.values()]} deckName={deck.name}
