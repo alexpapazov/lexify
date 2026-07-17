@@ -11,12 +11,16 @@ import { ProfilePanel } from './ProfilePanel'
 export function AvatarMenu({
   user,
   displayName,
+  avatarUrl,
   onDisplayNameSaved,
+  onAvatarChange,
   onSignOut,
 }: {
   user: User
   displayName: string | null
+  avatarUrl: string | null
   onDisplayNameSaved: (name: string | null) => void
+  onAvatarChange: (url: string | null) => void
   onSignOut: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -49,7 +53,7 @@ export function AvatarMenu({
         aria-expanded={open}
         className="rounded-full transition hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-offset-2 focus:ring-offset-surface-deep"
       >
-        <Avatar name={displayName} email={user.email ?? ''} size={32} />
+        <Avatar name={displayName} email={user.email ?? ''} src={avatarUrl} size={32} />
       </button>
 
       {open && (
@@ -57,7 +61,9 @@ export function AvatarMenu({
           <ProfilePanel
             user={user}
             displayName={displayName}
+            avatarUrl={avatarUrl}
             onSaved={onDisplayNameSaved}
+            onAvatarChange={onAvatarChange}
             onSignOut={onSignOut}
           />
         </div>

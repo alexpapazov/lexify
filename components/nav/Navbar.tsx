@@ -24,11 +24,13 @@ export function Navbar() {
   const supabase = createClient()
   const [user,        setUser]        = useState<User | null>(null)
   const [displayName, setDisplayName] = useState<string | null>(null)
+  const [avatarUrl,   setAvatarUrl]   = useState<string | null>(null)
   const [menuOpen,    setMenuOpen]    = useState(false)
 
   async function loadProfile(uid: string) {
-    const { data } = await supabase.from('profiles').select('display_name').eq('user_id', uid).single()
+    const { data } = await supabase.from('profiles').select('display_name, avatar_url').eq('user_id', uid).single()
     setDisplayName(data?.display_name ?? null)
+    setAvatarUrl(data?.avatar_url ?? null)
   }
 
   useEffect(() => {
@@ -91,7 +93,9 @@ export function Navbar() {
               <AvatarMenu
                 user={user}
                 displayName={displayName}
+                avatarUrl={avatarUrl}
                 onDisplayNameSaved={setDisplayName}
+                onAvatarChange={setAvatarUrl}
                 onSignOut={handleSignOut}
               />
             ) : (
@@ -163,7 +167,9 @@ export function Navbar() {
                 <ProfilePanel
                   user={user}
                   displayName={displayName}
+                  avatarUrl={avatarUrl}
                   onSaved={setDisplayName}
+                  onAvatarChange={setAvatarUrl}
                   onSignOut={handleSignOut}
                 />
               ) : (
