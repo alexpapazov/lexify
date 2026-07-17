@@ -42,6 +42,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
+import { UndoFab } from '@/components/session/UndoFab'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { interleaveConfusablePairs } from '@/engine/confusion'
 import { CardEditModal } from '@/components/CardEditModal'
@@ -1432,6 +1433,7 @@ function AllDueSessionInner() {
     const backLabel = pairLabel ? `Back to ${pairLabel}` : 'Back to study'
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
+        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
         <div className="text-5xl">🎉</div>
         <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}{pairLabel ? ` in ${pairLabel}` : ' across all decks'}.</p>
@@ -1482,6 +1484,7 @@ function AllDueSessionInner() {
           <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>
           <div className="text-xs text-warning">Confusion drill</div>
         </div>
+        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
         <ConfusionDrill card={current.card} otherFront={current.drill.otherFront} deckName={current.deckName}
           onDone={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(current.card.id, 'back', t)}
@@ -1515,6 +1518,7 @@ function AllDueSessionInner() {
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">
+      <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
       {dormantNotice && (
         <div className="fixed left-1/2 -translate-x-1/2 top-6 z-50 px-4 py-2 rounded-card bg-surface-raised border border-white/70 text-sm text-ink shadow-lg">
           💤 Card is now dormant
