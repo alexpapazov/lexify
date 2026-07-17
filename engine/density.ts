@@ -1,21 +1,18 @@
 /**
  * engine/density.ts
  *
- * Review-density smoothing for the long-term scheduler. When a correct
- * (hard/good/easy) review produces a `smoothMinDays`/`smoothMaxDays` window
- * (engine/scheduler.ts's `idealIntervalRange` / per-review blended range),
- * the exact due date can be nudged anywhere within that window to even out
- * how many cards become due on any given day — across ALL of the user's
- * decks.
+ * Review-density smoothing for long-term scheduling. When a review produces a
+ * `[minDays, maxDays]` interval window (the FSRS fuzz range in engine/fsrs.ts,
+ * or the graduationIntervalRange bucket), the exact due date can be nudged
+ * anywhere within that window to even out how many cards become due on any
+ * given day — across ALL of the user's decks.
  *
- * Intervals where `smoothMinDays`/`smoothMaxDays` are absent or collapse to
- * less than a day's difference (e.g. short relearn intervals) are scheduled
- * precisely — no smoothing.
+ * Windows that are absent or collapse to less than a day's difference (e.g.
+ * short relearn intervals) are scheduled precisely — no smoothing.
  *
- * This is intentionally NOT part of engine/pipeline.ts or engine/scheduler.ts
- * (both of which stay pure / synchronous) — it's an async post-processing
- * step that callers (study session pages) apply to a freshly-scheduled
- * `dueAt` before persisting it.
+ * This is intentionally NOT part of engine/pipeline.ts (which stays pure /
+ * synchronous) — it's an async post-processing step that callers (study
+ * session pages) apply to a freshly-scheduled `dueAt` before persisting it.
  */
 
 import type { CardStateRepository } from '@/lib/data/interfaces'

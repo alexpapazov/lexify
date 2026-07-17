@@ -27,7 +27,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { progressAfterReview, initialCardState, appendHistory } from '@/engine/pipeline'
 import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
-import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
+import { classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
 import { scheduleGraduatedFsrs, RELEARN_MINUTES } from '@/engine/dueNow'
 import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
@@ -602,9 +602,6 @@ function FolderSessionInner() {
       const typedPenalty = typedPenaltyRef.current
       typedPenaltyRef.current = null
       const nmWeight = (typedPenalty && typedPenalty.weight > 0 && typedPenalty.weight < 1) ? typedPenalty.weight : 0
-      const penaltyGrowth = (wasCorrect && nmWeight > 0) ? 1 - nmWeight : undefined
-      const growthFactors = [wasCorrect ? hint?.growthFactor : undefined, penaltyGrowth].filter((x): x is number => x !== undefined)
-      const hintGrowthFactor = growthFactors.length ? growthFactors.reduce((a, b) => a * b, 1) : undefined
       if (typedPenalty?.category) {
         new SupabaseTypingErrorMarkRepository()
           .record(card.id, reviewAnswerSide, typedPenalty.category, reviewAnswerSide === 'front' ? card.front : card.back, userAnswer)
@@ -817,10 +814,6 @@ function FolderSessionInner() {
       // A wrong pipeline typing answer is a "struggle" feeding the cumulative error count.
       const pipelineErrorInc = (!state.graduated && step.stepType === 'typing' && !wasCorrect) ? 1 : 0
 
-      // Computed independently (same `nowDate`) so the density-smoothing
-      // window matches exactly what progressAfterReview just applied.
-      let scheduled = state.graduated ? scheduleNext(state, rating, { now: nowDate, wrongSeverity, params: cardParams, hintGrowthFactor }) : null
-
       let newState = progressAfterReview(state, pipeline, { wasCorrect, rating, wrongSeverity, wasTyped: wasTyped ?? false }, nowDate)
 
       if (state.graduated && !newState.graduated) {
@@ -894,17 +887,6 @@ function FolderSessionInner() {
               : newState.intervalHistory,
           }
         }
-        scheduled = null  // FSRS owns the schedule; skip the legacy density smoothing below.
-      }
-
-      if (
-        newState.graduated && newState.dueAt && scheduled &&
-        !scheduled.noChange && !scheduled.relearn && scheduled.relearningStep === 0 &&
-        scheduled.smoothMinDays != null && scheduled.smoothMaxDays != null &&
-        scheduled.intervalDays >= 7
-      ) {
-        const smoothed = await smoothDueDate(userId, newState.dueAt, scheduled.smoothMinDays, scheduled.smoothMaxDays, scheduled.intervalDays, stateRepo)
-        newState = { ...newState, dueAt: smoothed }
       }
 
       if (!state.graduated && newState.graduated && newState.dueAt) {
@@ -923,7 +905,7 @@ function FolderSessionInner() {
       }
 
       // Typed track: keep typedDueAt in sync with dueAt after scheduling.
-      if (newState.graduated && !scheduled?.relearn && reviewTrack === 'typed') {
+      if (newState.graduated && reviewTrack === 'typed') {
         newState = { ...newState, typedDueAt: newState.dueAt, typedIntervalDays: newState.intervalDays }
         // Phase 1 completion: once last 3 typed reviews are all correct, activate the recall track.
         if (wasCorrect && !newState.recallDueAt) {
@@ -950,16 +932,31 @@ function FolderSessionInner() {
       // Works even when recallDueAt is null (card predates dual-track) — initialises recall from the typed interval.
       if (softWrongRecallRating && newState.graduated && !isRecallReview && (reviewTrack === 'typed' || reviewTrack === 'legacy')) {
         const recallIntervalBase = state.recallIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
-        const recallBase = { ...state, intervalDays: recallIntervalBase, scheduledIntervalDays: recallIntervalBase }
-        const recallSched = scheduleNext(recallBase, softWrongRecallRating, { now: nowDate, wrongSeverity: undefined, params: cardParams })
-        const newRecallDueAt = recallSched.dueAt
-          ? snapDueAtToStartOfDay(recallSched.dueAt, tzRef.current, turnoverRef.current)
-          : state.recallDueAt
-        newState = { ...newState, recallIntervalDays: recallSched.intervalDays, recallDueAt: newRecallDueAt }
+        const elapsedDays = state.lastReviewedAt
+          ? Math.max(0, (nowDate.getTime() - new Date(state.lastReviewedAt).getTime()) / 86_400_000)
+          : recallIntervalBase
+        const recallFsrs = scheduleGraduatedFsrs({
+          difficulty:   state.difficulty,
+          stability:    state.stability,
+          intervalDays: recallIntervalBase,
+          lapses:       state.lapses,
+          relearning:   false,
+          goodStreak:   state.goodStreak,
+          againStreak:  state.againStreak,
+          elapsedDays,
+        }, softWrongRecallRating, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention }, {})
+        if (recallFsrs.intervalDays != null) {
+          const newRecallDueAt = snapDueAtToStartOfDay(new Date(nowDate.getTime() + recallFsrs.intervalDays * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
+          newState = { ...newState, recallIntervalDays: recallFsrs.intervalDays, recallDueAt: newRecallDueAt }
+        } else {
+          // Recall rating lapsed → re-show soon (relearn), keeping the recall interval as-is.
+          const minutes = recallFsrs.dueInMinutes ?? RELEARN_MINUTES.again
+          newState = { ...newState, recallDueAt: new Date(nowDate.getTime() + minutes * 60_000).toISOString() }
+        }
       }
 
       // Legacy track: check Phase 1 completion when review was typed.
-      if (newState.graduated && !scheduled?.relearn && reviewTrack === 'legacy' && wasTyped && wasCorrect && !newState.recallDueAt) {
+      if (newState.graduated && reviewTrack === 'legacy' && wasTyped && wasCorrect && !newState.recallDueAt) {
         const w = newState.typedAccuracyWindow
         if (w.length >= 3 && w.slice(-3).every(v => v === 1)) {
           const recallInterval = Math.round(newState.intervalDays * 1.5)

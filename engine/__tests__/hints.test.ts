@@ -1,31 +1,4 @@
 import { hintPlan, hintGrowthFactor } from '@/lib/hints'
-import { scheduleNext } from '../scheduler'
-import type { CardState } from '@/domain'
-
-const DAY_MS = 24 * 60 * 60 * 1000
-const NOW = new Date('2026-06-14T00:00:00.000Z')
-const daysAgo = (d: number) => new Date(NOW.getTime() - d * DAY_MS).toISOString()
-
-function baseState(overrides: Partial<CardState> = {}): CardState {
-  return {
-    userId: 'u', cardId: 'c', pipelineId: 'p',
-    currentStepOrder: 0, correctInStep: 0, graduated: true,
-    dueAt: daysAgo(0), intervalDays: 10, scheduledIntervalDays: 10, ease: 2.5,
-    reps: 5, lapses: 0, lastRating: 'good', lastReviewedAt: daysAgo(10),
-    introducedDate: '2026-01-01', lapseClusterCount: 0, lastLapseAt: null,
-    graduatedAt: daysAgo(30), relearningStep: 0, pendingIntervalDays: null,
-    typedAccuracyWindow: [], typedReviewCount: 0, lastTypedReviewAt: null,
-    forcedTypedRemaining: 0, intervalHistory: [], typingMistakeStreak: 0,
-    typingFailCycles: 0, stage3EnteredDate: null, iDontKnowCount: 0,
-    accentMistakeCount: 0, articleMistakeCount: 0, genderMistakeCount: 0,
-    typoMistakeCount: 0, semanticMistakeCount: 0, wrongSynonymCount: 0,
-    acceleratedMode: 'none', acceleratedLocked: false, acceleratedWrongStreak: 0,
-    acceleratedPenalty: 0, postAccelRestartWindow: 0, postAccelWrongCount: 0,
-    typedIntervalDays: null, typedDueAt: null, recallIntervalDays: null,
-    recallDueAt: null, reviewDirection: 'forward',
-    ...overrides,
-  } as CardState
-}
 
 describe('hintPlan — alphabetic', () => {
   it('reveals first then first-two letters for a normal word', () => {
@@ -135,24 +108,5 @@ describe('hintGrowthFactor', () => {
   })
   it('no hint: 1 (no dampening)', () => {
     expect(hintGrowthFactor(0, false)).toBe(1)
-  })
-})
-
-describe('scheduler hint dampening', () => {
-  it('a hinted correct review grows less than an un-hinted one', () => {
-    const s = baseState()
-    const normal = scheduleNext(s, 'good', { now: NOW })
-    const hinted = scheduleNext(s, 'good', { now: NOW, hintGrowthFactor: 0.4 })
-    expect(hinted.intervalDays).toBeLessThan(normal.intervalDays)
-    // Never shrinks below the current interval.
-    expect(hinted.intervalDays).toBeGreaterThanOrEqual(s.intervalDays)
-  })
-
-  it('does NOT affect an "again" rating (no automatic penalty for hinting)', () => {
-    const s = baseState()
-    const normal = scheduleNext(s, 'again', { now: NOW })
-    const hinted = scheduleNext(s, 'again', { now: NOW, hintGrowthFactor: 0.35 })
-    expect(hinted.intervalDays).toBe(normal.intervalDays)
-    expect(hinted.dueAt).toBe(normal.dueAt)
   })
 })

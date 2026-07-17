@@ -4,14 +4,17 @@
  * Pure function: no database calls, no side effects.
  */
 
-import type { CardState, Pipeline, ReviewInput, Rating, SchedulerParams } from '@/domain'
-import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
-import { scheduleNext } from './scheduler'
+import type { CardState, Pipeline, ReviewInput, Rating } from '@/domain'
 import {
   TYPED_ACCURACY_WINDOW_SIZE,
   FORCED_TYPED_ON_TYPO_ERROR,
   FORCED_TYPED_ON_LAPSE,
 } from './productionMode'
+
+/** First interval (days) a card is seeded with the moment it graduates, keyed by the graduating
+ *  rating. Matches the old scheduler's INITIAL_INTERVAL. The session overrides this on the main
+ *  path (graduationIntervalRange); it only survives for co-advanced synonym members. */
+const GRADUATION_SEED_INTERVAL: Record<Rating, number> = { again: 1, hard: 1, good: 3, easy: 7 }
 
 /** How many interval snapshots to keep in `intervalHistory`. */
 const INTERVAL_HISTORY_SIZE = 50
@@ -138,6 +141,100 @@ export function fastTrackCardState(
   }
 }
 
+/** Below this fraction of the scheduled interval, a correct graduated review is "very early":
+ *  the session still advances the FSRS memory model, but reps/lastReviewedAt are left untouched
+ *  (pure practice). Preserves the old scheduler's very-early no-op for these bookkeeping counters. */
+const VERY_EARLY_THRESHOLD = 0.30
+
+/**
+ * Post-graduation bookkeeping for one review: the typed-accuracy window, forced-typing counter,
+ * accelerated fast-track counters, reps, and lapses — everything about a graduated review that
+ * ISN'T scheduling. Scheduling (dueAt / difficulty / stability) and un-graduation are owned by the
+ * session's FSRS layer (engine/dueNow); this function never touches them. Extracted from
+ * progressAfterReview so the legacy multiplier scheduler could be removed.
+ */
+export function applyProductionBookkeeping(
+  state:   CardState,
+  input:   ReviewInput,
+  nowDate: Date = new Date(),
+): CardState {
+  const now = nowDate.toISOString()
+  const { wasCorrect, rating, wrongSeverity } = input
+
+  // Typed-production bookkeeping — applies to every post-graduation review.
+  let typedAccuracyWindow  = state.typedAccuracyWindow
+  let typedReviewCount     = state.typedReviewCount
+  let lastTypedReviewAt    = state.lastTypedReviewAt
+  let forcedTypedRemaining = state.forcedTypedRemaining
+
+  if (input.wasTyped) {
+    typedAccuracyWindow = [...state.typedAccuracyWindow, wasCorrect ? 1 : 0].slice(-TYPED_ACCURACY_WINDOW_SIZE)
+    typedReviewCount    = state.typedReviewCount + 1
+    lastTypedReviewAt   = now
+    if (forcedTypedRemaining > 0) forcedTypedRemaining -= 1
+    if (!wasCorrect && (wrongSeverity ?? 0) <= CLOSE_TYPO_SEVERITY_THRESHOLD) {
+      // Spelling / accent / gender / article slip — force typed for the next few reviews.
+      forcedTypedRemaining = Math.max(forcedTypedRemaining, FORCED_TYPED_ON_TYPO_ERROR)
+    }
+  } else if (rating === 'again') {
+    // Self-graded "Again" — force the next review back to typed.
+    forcedTypedRemaining = Math.max(forcedTypedRemaining, FORCED_TYPED_ON_LAPSE)
+  }
+  const typedFields = { typedAccuracyWindow, typedReviewCount, lastTypedReviewAt, forcedTypedRemaining }
+
+  // ── Accelerated fast-track bookkeeping ───────────────────────────────────
+  let acceleratedMode        = state.acceleratedMode
+  let acceleratedLocked      = state.acceleratedLocked
+  let acceleratedWrongStreak = state.acceleratedWrongStreak
+  let acceleratedPenalty     = state.acceleratedPenalty
+  let postAccelRestartWindow = state.postAccelRestartWindow
+  let postAccelWrongCount    = state.postAccelWrongCount
+
+  if (state.acceleratedMode === 'import_known' || state.acceleratedLocked) {
+    acceleratedLocked = true   // lock after first actual review
+  }
+  if (state.acceleratedMode === 'import_known') {
+    if (rating === 'again') {
+      acceleratedWrongStreak++
+      acceleratedPenalty++
+      if (acceleratedWrongStreak >= 2) {
+        acceleratedMode = 'none'
+        postAccelRestartWindow = 3
+        postAccelWrongCount    = 0
+      }
+    } else {
+      acceleratedWrongStreak = 0   // reset on correct; penalty is permanent
+    }
+  }
+  const accelFields = { acceleratedMode, acceleratedLocked, acceleratedWrongStreak, acceleratedPenalty, postAccelRestartWindow, postAccelWrongCount }
+
+  // A wrong ("again") answer is a lapse; the FSRS relearn gate decides relearn-vs-un-graduate.
+  if (rating === 'again') {
+    return { ...state, ...typedFields, ...accelFields, lapses: state.lapses + 1, lastRating: rating, lastReviewedAt: now }
+  }
+
+  // hard / good / easy — a very-early correct review records practice but does not bump
+  // reps / lastReviewedAt (the session still advances FSRS memory state).
+  const scheduledInterval = state.scheduledIntervalDays > 0 ? state.scheduledIntervalDays : state.intervalDays
+  const elapsed  = state.lastReviewedAt
+    ? Math.max(0, (nowDate.getTime() - new Date(state.lastReviewedAt).getTime()) / 86_400_000)
+    : Infinity
+  const progress  = scheduledInterval > 0 ? elapsed / scheduledInterval : 1
+  const cardIsDue = state.dueAt ? new Date(state.dueAt) <= nowDate : false
+  if (progress < VERY_EARLY_THRESHOLD && !cardIsDue) {
+    return { ...state, ...typedFields, ...accelFields, lastRating: rating }
+  }
+
+  return {
+    ...state,
+    ...typedFields,
+    ...accelFields,
+    reps:           rating !== 'hard' ? state.reps + 1 : state.reps,
+    lastRating:     rating,
+    lastReviewedAt: now,
+  }
+}
+
 export function progressAfterReview(
   state:    CardState,
   pipeline: Pipeline,
@@ -147,139 +244,13 @@ export function progressAfterReview(
   const now = nowDate.toISOString()
   const { wasCorrect, rating, wrongSeverity } = input
 
-  // ── Post-graduation ──────────────────────────────────────────────────────
+  // ── Post-graduation: bookkeeping only ────────────────────────────────────
+  // The session's FSRS layer (engine/dueNow) owns all graduated scheduling AND
+  // un-graduation — its relearn gate (3 Agains → back to the ladder) replaces the
+  // old lapse-cluster → back-to-pipeline path. So here we only update the counters
+  // FSRS doesn't touch (typed window, forced-typing, accel, reps, lapses).
   if (state.graduated) {
-    // Typed-production bookkeeping — applies to every post-graduation
-    // review, regardless of how it affects scheduling.
-    let typedAccuracyWindow  = state.typedAccuracyWindow
-    let typedReviewCount     = state.typedReviewCount
-    let lastTypedReviewAt    = state.lastTypedReviewAt
-    let forcedTypedRemaining = state.forcedTypedRemaining
-
-    if (input.wasTyped) {
-      typedAccuracyWindow = [...state.typedAccuracyWindow, wasCorrect ? 1 : 0].slice(-TYPED_ACCURACY_WINDOW_SIZE)
-      typedReviewCount    = state.typedReviewCount + 1
-      lastTypedReviewAt   = now
-      if (forcedTypedRemaining > 0) forcedTypedRemaining -= 1
-      if (!wasCorrect && (wrongSeverity ?? 0) <= CLOSE_TYPO_SEVERITY_THRESHOLD) {
-        // Spelling / accent / gender / article slip — force typed for the next few reviews.
-        forcedTypedRemaining = Math.max(forcedTypedRemaining, FORCED_TYPED_ON_TYPO_ERROR)
-      }
-    } else if (rating === 'again') {
-      // Self-graded "Again" — force the next review back to typed.
-      forcedTypedRemaining = Math.max(forcedTypedRemaining, FORCED_TYPED_ON_LAPSE)
-    }
-
-    const typedFields = { typedAccuracyWindow, typedReviewCount, lastTypedReviewAt, forcedTypedRemaining }
-
-    // ── Accelerated fast-track bookkeeping ───────────────────────────────────
-    let acceleratedMode        = state.acceleratedMode
-    let acceleratedLocked      = state.acceleratedLocked
-    let acceleratedWrongStreak = state.acceleratedWrongStreak
-    let acceleratedPenalty     = state.acceleratedPenalty
-    let postAccelRestartWindow = state.postAccelRestartWindow
-    let postAccelWrongCount    = state.postAccelWrongCount
-
-    if (state.acceleratedMode === 'import_known' || state.acceleratedLocked) {
-      acceleratedLocked = true   // lock after first actual review
-    }
-    if (state.acceleratedMode === 'import_known') {
-      if (rating === 'again') {
-        acceleratedWrongStreak++
-        acceleratedPenalty++
-        if (acceleratedWrongStreak >= 2) {
-          acceleratedMode = 'none'
-          postAccelRestartWindow = 3
-          postAccelWrongCount    = 0
-        }
-      } else {
-        acceleratedWrongStreak = 0   // reset on correct; penalty is permanent
-      }
-    }
-    const accelFields = { acceleratedMode, acceleratedLocked, acceleratedWrongStreak, acceleratedPenalty, postAccelRestartWindow, postAccelWrongCount }
-
-    if (rating === 'again') {
-      const scheduled = scheduleNext(state, 'again', { now: nowDate, wrongSeverity })
-
-      if (scheduled.relearn) {
-        // 3+ "again"s within a lapse cluster — send the card back into the
-        // learning pipeline instead of just shrinking its interval.
-        return {
-          ...state,
-          ...typedFields,
-          ...accelFields,
-          graduated:         false,
-          currentStepOrder:  0,
-          correctInStep:     0,
-          dueAt:             null,
-          intervalDays:      0,
-          scheduledIntervalDays: 0,
-          ease:              scheduled.ease,
-          lapses:            state.lapses + 1,
-          lapseClusterCount: scheduled.lapseClusterCount,
-          lastLapseAt:       scheduled.lastLapseAt,
-          lastRating:        rating,
-          lastReviewedAt:    now,
-          relearningStep:    0,
-          pendingIntervalDays: null,
-          graduatedAt:       null,
-          forcedTypedRemaining: Math.max(forcedTypedRemaining, FORCED_TYPED_ON_LAPSE),
-        }
-      }
-
-      // Either entering the 10-minute relearn loop for the first time, or
-      // failing another retry within it (relearningStep keeps incrementing).
-      return {
-        ...state,
-        ...typedFields,
-        ...accelFields,
-        lapses:            state.lapses + 1,
-        lastRating:        rating,
-        lastReviewedAt:    now,
-        dueAt:             scheduled.dueAt,
-        intervalDays:      scheduled.intervalDays,
-        scheduledIntervalDays: scheduled.scheduledIntervalDays,
-        ease:              scheduled.ease,
-        lapseClusterCount: scheduled.lapseClusterCount,
-        lastLapseAt:       scheduled.lastLapseAt,
-        relearningStep:    scheduled.relearningStep,
-        pendingIntervalDays: scheduled.pendingIntervalDays,
-      }
-    }
-
-    // hard / good / easy
-    const scheduled = scheduleNext(state, rating, { now: nowDate, wrongSeverity })
-
-    if (scheduled.noChange) {
-      // Very-early correct review — counts as practice, but the schedule
-      // (dueAt / intervalDays / scheduledIntervalDays / lastReviewedAt) is
-      // left untouched.
-      return {
-        ...state,
-        ...typedFields,
-        ...accelFields,
-        lastRating: rating,
-      }
-    }
-
-    return {
-      ...state,
-      ...typedFields,
-      ...accelFields,
-      reps:              rating !== 'hard' ? state.reps + 1 : state.reps,
-      lastRating:        rating,
-      lastReviewedAt:    now,
-      dueAt:             scheduled.dueAt,
-      intervalDays:      scheduled.intervalDays,
-      scheduledIntervalDays: scheduled.scheduledIntervalDays,
-      ease:              scheduled.ease,
-      lapseClusterCount: scheduled.lapseClusterCount,
-      lastLapseAt:       scheduled.lastLapseAt,
-      relearningStep:    scheduled.relearningStep,
-      pendingIntervalDays: scheduled.pendingIntervalDays,
-      // intervalHistory is appended by the session layer with the real FSRS
-      // interval once memory-model scheduling runs (see appendHistory).
-    }
+    return applyProductionBookkeeping(state, input, nowDate)
   }
 
   // ── Pre-graduation ───────────────────────────────────────────────────────
@@ -371,8 +342,11 @@ export function progressAfterReview(
       : state.stage3EnteredDate
 
     if (!nextStep) {
-      // Graduate
-      const scheduled = scheduleNext(state, rating, { now: nowDate })
+      // Graduate. The session's graduation block overrides dueAt/intervalDays with the calibrated
+      // graduationIntervalRange; this flat seed (matching the old scheduler's INITIAL_INTERVAL) is
+      // what co-advanced synonym members — which don't run the session's FSRS/graduation blocks —
+      // graduate with. Graduation only fires on a correct good/easy answer, so it's never a lapse.
+      const seedInterval = GRADUATION_SEED_INTERVAL[rating]
       return {
         ...state,
         correctInStep:    0,
@@ -384,14 +358,14 @@ export function progressAfterReview(
         stage3EnteredDate,
         lastRating:       rating,
         lastReviewedAt:   now,
-        dueAt:                 scheduled.dueAt,
-        intervalDays:          scheduled.intervalDays,
-        scheduledIntervalDays: scheduled.scheduledIntervalDays,
-        ease:                  scheduled.ease,
-        lapseClusterCount:     scheduled.lapseClusterCount,
-        lastLapseAt:           scheduled.lastLapseAt,
-        relearningStep:        scheduled.relearningStep,
-        pendingIntervalDays:   scheduled.pendingIntervalDays,
+        dueAt:                 new Date(nowDate.getTime() + seedInterval * 86_400_000).toISOString(),
+        intervalDays:          seedInterval,
+        scheduledIntervalDays: seedInterval,
+        ease:                  state.ease,
+        lapseClusterCount:     0,
+        lastLapseAt:           state.lastLapseAt,
+        relearningStep:        0,
+        pendingIntervalDays:   null,
         graduatedAt:           now,
         // intervalHistory is appended by the session layer with the real
         // graduation interval (graduationIntervalRange) — see appendHistory.

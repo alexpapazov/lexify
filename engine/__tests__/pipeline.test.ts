@@ -1,4 +1,4 @@
-import { progressAfterReview, initialCardState } from '../pipeline'
+import { progressAfterReview, initialCardState, applyProductionBookkeeping } from '../pipeline'
 import { FORCED_TYPED_ON_TYPO_ERROR, FORCED_TYPED_ON_LAPSE } from '../productionMode'
 import type { CardState, Pipeline } from '@/domain'
 
@@ -94,32 +94,22 @@ describe('post-graduation', () => {
     const s = graduated()
     // A review immediately after graduation (elapsed ~0) is "very early"
     // (progress < 0.30 of the 3-day post-good interval) and is a no-op by
-    // design (see scheduler.ts VERY_EARLY_THRESHOLD) — so push `now` past
+    // design (see pipeline.ts VERY_EARLY_THRESHOLD) — so push `now` past
     // that threshold to exercise the normal "reps increments" path.
     const later = new Date(Date.now() + 24 * 60 * 60 * 1000)
     const next = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' }, later)
     expect(next.reps).toBeGreaterThan(s.reps)
   })
 
-  it('sends the card back to the learning pipeline after 3 close-together early lapses', () => {
-    let s = graduated() // intervalDays: 3 (good graduation), lastReviewedAt: now, lapseClusterCount: 0
-
-    // First lapse: clusters to 1
-    s = progressAfterReview(s, PIPELINE, { wasCorrect: false, rating: 'again' })
+  it('accumulates lapses on repeated "again" but never un-graduates (the FSRS layer owns that)', () => {
+    // Post-FSRS, progressAfterReview does bookkeeping only. Un-graduation after 3 Agains-in-a-row
+    // is decided by engine/dueNow's relearn gate (see dueNow.test), NOT here — so the card stays
+    // graduated and just accrues lapses regardless of how many Agains it receives.
+    let s = graduated()
+    for (let i = 0; i < 3; i++) s = progressAfterReview(s, PIPELINE, { wasCorrect: false, rating: 'again' })
     expect(s.graduated).toBe(true)
-    expect(s.lapseClusterCount).toBe(1)
-
-    // Second close-together lapse: clusters to 2
-    s = progressAfterReview(s, PIPELINE, { wasCorrect: false, rating: 'again' })
-    expect(s.graduated).toBe(true)
-    expect(s.lapseClusterCount).toBe(2)
-
-    // Third close-together lapse: relearn — back into the pipeline
-    s = progressAfterReview(s, PIPELINE, { wasCorrect: false, rating: 'again' })
-    expect(s.graduated).toBe(false)
-    expect(s.currentStepOrder).toBe(0)
-    expect(s.dueAt).toBeNull()
     expect(s.lapses).toBe(3)
+    expect(s.currentStepOrder).toBe(graduated().currentStepOrder)  // unchanged — not sent to step 0
   })
 })
 
@@ -371,5 +361,43 @@ describe('post-graduation bookkeeping — Stage 0 characterization (must survive
     const seeded = { ...graduated(), intervalHistory: [3, 8] }
     const post = progressAfterReview(seeded, PIPELINE, { wasCorrect: true, rating: 'good', wasTyped: false }, later)
     expect(post.intervalHistory).toEqual([3, 8])
+  })
+})
+
+describe('applyProductionBookkeeping — Stage 3 (bookkeeping only, no scheduling / un-graduation)', () => {
+  const later = new Date(Date.now() + 5 * 86_400_000)
+  function graduated(): CardState {
+    let s = fresh()
+    for (let i = 0; i < 4; i++) s = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' })
+    // Anchor lastReviewedAt / scheduledIntervalDays so the very-early guard is exercisable.
+    return { ...s, lastReviewedAt: new Date().toISOString(), scheduledIntervalDays: 10, dueAt: later.toISOString() }
+  }
+
+  it('never touches scheduling fields (dueAt / difficulty / stability) — FSRS owns those', () => {
+    const g = { ...graduated(), difficulty: 6, stability: 42, dueAt: '2099-01-01T00:00:00.000Z' }
+    const out = applyProductionBookkeeping(g, { wasCorrect: true, rating: 'good', wasTyped: false }, later)
+    expect(out.dueAt).toBe(g.dueAt)
+    expect(out.difficulty).toBe(6)
+    expect(out.stability).toBe(42)
+  })
+
+  it('an "again" increments lapses but stays graduated (no send-to-pipeline here)', () => {
+    const g = graduated()
+    const out = applyProductionBookkeeping(g, { wasCorrect: false, rating: 'again', wasTyped: false }, later)
+    expect(out.lapses).toBe(g.lapses + 1)
+    expect(out.graduated).toBe(true)
+    expect(out.currentStepOrder).toBe(g.currentStepOrder)
+  })
+
+  it('a very-early correct review records practice but does NOT bump reps / lastReviewedAt', () => {
+    // Reviewed ~0 days into a 10-day scheduled interval (progress < 0.30) and not past dueAt.
+    const g = graduated()
+    const soon = new Date(new Date(g.lastReviewedAt!).getTime() + 1 * 86_400_000)  // 1/10 of the interval
+    const out = applyProductionBookkeeping(g, { wasCorrect: true, rating: 'good', wasTyped: false }, soon)
+    expect(out.reps).toBe(g.reps)
+    expect(out.lastReviewedAt).toBe(g.lastReviewedAt)
+    // ...but an on-time review DOES advance reps.
+    const onTime = applyProductionBookkeeping(g, { wasCorrect: true, rating: 'good', wasTyped: false }, later)
+    expect(onTime.reps).toBe(g.reps + 1)
   })
 })
