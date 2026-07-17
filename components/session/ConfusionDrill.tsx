@@ -3,17 +3,21 @@
 import { useMemo, useState } from 'react'
 import type { Card } from '@/domain'
 import { displayText } from '@/lib/cardText'
+import { CardInfoButton } from './CardInfoButton'
+import { EditablePromptPanel } from './EditablePromptPanel'
 
 /**
  * Immediate discrimination drill fired when the learner confuses two target words in production
  * (typed B on a card that wanted A). Shows A's meaning and asks them to pick A's word vs B's word —
  * fixing the discrimination while it's fresh. Pure practice: it never reschedules either card.
  */
-export function ConfusionDrill({ card, otherFront, deckName, onDone }: {
+export function ConfusionDrill({ card, otherFront, deckName, onDone, onPromptEdit, onInfo }: {
   card: Card            // card A (the one under review)
   otherFront: string    // card B's target word (the word they wrongly typed)
   deckName?: string
   onDone: () => void
+  onPromptEdit?: (newText: string) => void   // inline-edit card A's shown meaning (card.back)
+  onInfo?: () => void                        // open the full card info/edit modal
 }) {
   const correct = displayText(card.front)
   const other   = displayText(otherFront)
@@ -27,8 +31,11 @@ export function ConfusionDrill({ card, otherFront, deckName, onDone }: {
     <div className="space-y-6 w-full max-w-xl mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
       <p className="text-xs text-center text-warning uppercase tracking-wider">Discrimination check · which word is this?</p>
-      <div className="panel min-h-[120px] flex items-center justify-center text-center">
-        <p className="text-2xl font-medium text-ink">{prompt}</p>
+      <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
+        {onInfo && <CardInfoButton onClick={onInfo} />}
+        {onPromptEdit
+          ? <EditablePromptPanel text={prompt} onEdit={onPromptEdit} />
+          : <p className="text-2xl font-medium text-ink">{prompt}</p>}
       </div>
       <div className="grid gap-3">
         {options.map(opt => {

@@ -1861,7 +1861,17 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           <div className="text-xs text-warning">Confusion drill</div>
         </div>
         <ConfusionDrill card={current.card} otherFront={current.drill.otherFront} deckName={deckName}
-          onDone={() => setIndex(i => i + 1)} />
+          onDone={() => setIndex(i => i + 1)}
+          onPromptEdit={t => handlePromptEdit(current.card.id, 'back', t)}
+          onInfo={() => setInfoOpen(true)} />
+        {infoOpen && (
+          <CardEditModal
+            card={current.card} state={cardStates.get(current.card.id)} userId={userId} deckId={deckId}
+            deckCards={allCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage}
+            onSave={handleInfoSave} onCardChange={applyInfoCardChange} onStateChange={applyInfoStateChange}
+            onDelete={handleInfoDelete} onClose={() => setInfoOpen(false)} initialShowStats
+          />
+        )}
       </div>
     )
   }

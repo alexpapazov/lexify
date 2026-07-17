@@ -1480,7 +1480,17 @@ function AllDueSessionInner() {
           <div className="text-xs text-warning">Confusion drill</div>
         </div>
         <ConfusionDrill card={current.card} otherFront={current.drill.otherFront} deckName={current.deckName}
-          onDone={() => setIndex(i => i + 1)} />
+          onDone={() => setIndex(i => i + 1)}
+          onPromptEdit={t => handlePromptEdit(current.card.id, 'back', t)}
+          onInfo={() => setInfoOpen(true)} />
+        {infoOpen && (
+          <CardEditModal
+            card={current.card} state={current.state} userId={userId} deckId={current.deckId}
+            deckCards={current.deckCards} sourceLanguage={current.sourceLanguage} targetLanguage={current.targetLanguage}
+            onSave={handleInfoSave} onCardChange={applyInfoCardChange} onStateChange={applyInfoStateChange}
+            onDelete={handleInfoDelete} onClose={() => setInfoOpen(false)} initialShowStats
+          />
+        )}
       </div>
     )
   }
