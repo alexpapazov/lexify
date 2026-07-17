@@ -658,7 +658,7 @@ function FolderSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention }, { softLapse: nearMiss })
         // The recall/reverse track only ever recognises the native side, so failing it
         // never sends a card back to the ladder — only failing target-language production
         // (the forward path) does. A recall sendToLadder is treated as one more 5-min loop.
@@ -724,7 +724,7 @@ function FolderSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention }, { softLapse: nearMiss })
 
         let smartNewState: CardState
         if (fsrs.sendToLadder) {
@@ -850,7 +850,7 @@ function FolderSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention }, { softLapse: nearMiss })
         if (fsrs.sendToLadder) {
           // Un-graduate and restart the CURRENT ladder (drop any stale climb row).
           newState = {

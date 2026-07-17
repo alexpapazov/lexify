@@ -41,18 +41,24 @@ function scheduled(difficulty: number, stability: number, cfg: FsrsConfig): DueN
   }
 }
 
+/** Extra context for a review. `softLapse` marks an Again that came from a typed *near-miss*
+ *  ("almost") rather than a full wrong answer — it still relearns, but must not count toward the
+ *  3-in-a-row → back-to-ladder un-graduation (only full wrong answers should). */
+export interface ReviewOpts { softLapse?: boolean }
+
 /**
  * Processes one Due Now review. `elapsedDays` = days since the card was last seen.
  * A clean Hard advances normally (slower growth); only a lapse triggers the gate.
  */
-export function reviewDueNow(state: DueNowState, grade: Rating, elapsedDays: number, cfg: FsrsConfig = DEFAULT_FSRS_CONFIG): DueNowResult {
+export function reviewDueNow(state: DueNowState, grade: Rating, elapsedDays: number, cfg: FsrsConfig = DEFAULT_FSRS_CONFIG, opts: ReviewOpts = {}): DueNowResult {
   const difficulty = nextDifficulty(state.difficulty, grade)
 
   // ── Not in the relearn loop ──
   if (!state.relearning) {
     if (grade === 'again') {
       const stability = stabilityAfterLapse(state, elapsedDays, cfg)
-      return { state: { difficulty, stability, relearning: true, goodStreak: 0, againStreak: 1 }, action: { kind: 'relearn', minutes: RELEARN_MINUTES.again } }
+      // A near-miss lapse relearns but starts the un-graduate countdown at 0 (doesn't count).
+      return { state: { difficulty, stability, relearning: true, goodStreak: 0, againStreak: opts.softLapse ? 0 : 1 }, action: { kind: 'relearn', minutes: RELEARN_MINUTES.again } }
     }
     // Hard / Good / Easy on a clean card → advance (Hard just grows slower).
     const stability = stabilityAfterSuccess({ difficulty, stability: state.stability }, grade, elapsedDays, cfg)
@@ -61,7 +67,9 @@ export function reviewDueNow(state: DueNowState, grade: Rating, elapsedDays: num
 
   // ── In the relearn loop ──
   if (grade === 'again') {
-    const againStreak = state.againStreak + 1
+    // Near-miss ("almost") lapses relearn but never advance the un-graduate counter — only full
+    // wrong answers do. A soft lapse leaves againStreak untouched (neither counts nor resets it).
+    const againStreak = opts.softLapse ? state.againStreak : state.againStreak + 1
     if (againStreak >= 3) return { state: { difficulty, stability: state.stability, relearning: false, goodStreak: 0, againStreak: 0 }, action: { kind: 'sendToLadder' } }
     return { state: { difficulty, stability: state.stability, relearning: true, goodStreak: 0, againStreak }, action: { kind: 'relearn', minutes: RELEARN_MINUTES.again } }
   }
@@ -117,8 +125,10 @@ export interface GraduatedFsrsOutput {
   sendToLadder: boolean
 }
 
-/** Applies one graduated review under FSRS, seeding D/S lazily for pre-FSRS cards. */
-export function scheduleGraduatedFsrs(cur: GraduatedFsrsInput, grade: Rating, cfg: FsrsConfig = DEFAULT_FSRS_CONFIG): GraduatedFsrsOutput {
+/** Applies one graduated review under FSRS, seeding D/S lazily for pre-FSRS cards.
+ *  `opts.softLapse` = the Again came from a typed near-miss ("almost"), so it won't count toward
+ *  the 3-in-a-row → back-to-ladder un-graduation. */
+export function scheduleGraduatedFsrs(cur: GraduatedFsrsInput, grade: Rating, cfg: FsrsConfig = DEFAULT_FSRS_CONFIG, opts: ReviewOpts = {}): GraduatedFsrsOutput {
   const state: DueNowState = {
     difficulty:  cur.difficulty ?? seedDifficulty(cur.lapses),
     stability:   cur.stability ?? seedStability(cur.intervalDays),
@@ -126,7 +136,7 @@ export function scheduleGraduatedFsrs(cur: GraduatedFsrsInput, grade: Rating, cf
     goodStreak:  cur.goodStreak,
     againStreak: cur.againStreak,
   }
-  const { state: next, action } = reviewDueNow(state, grade, cur.elapsedDays, cfg)
+  const { state: next, action } = reviewDueNow(state, grade, cur.elapsedDays, cfg, opts)
   const base = { difficulty: next.difficulty, stability: next.stability, relearning: next.relearning, goodStreak: next.goodStreak, againStreak: next.againStreak }
   if (action.kind === 'schedule') return { ...base, intervalDays: action.intervalDays, dueInMinutes: null, sendToLadder: false }
   if (action.kind === 'relearn')  return { ...base, intervalDays: null, dueInMinutes: action.minutes, sendToLadder: false }

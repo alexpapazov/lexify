@@ -104,3 +104,30 @@ describe('scheduleGraduatedFsrs', () => {
     expect(out.relearning).toBe(true)
   })
 })
+
+describe('reviewDueNow — near-miss (softLapse) does not un-graduate', () => {
+  const relearning = (againStreak: number) => ({ difficulty: 5, stability: 2, relearning: true, goodStreak: 0, againStreak })
+
+  it('a full-wrong Again x3 in the relearn loop sends the card back to the ladder', () => {
+    let s = relearning(2)
+    const r = reviewDueNow(s, 'again', 1)   // 3rd full wrong
+    expect(r.action).toEqual({ kind: 'sendToLadder' })
+  })
+
+  it('a near-miss Again does NOT increment the counter — never reaches sendToLadder', () => {
+    // Sitting at 2 full-wrongs, a near-miss must not tip it to 3.
+    const soft = reviewDueNow(relearning(2), 'again', 1, undefined, { softLapse: true })
+    expect(soft.action).toEqual({ kind: 'relearn', minutes: RELEARN_MINUTES.again })
+    expect(soft.state.againStreak).toBe(2)   // unchanged, not 3
+    expect(soft.state.relearning).toBe(true)
+
+    // Even many near-misses in a row never un-graduate.
+    let st = { difficulty: 5, stability: 2, relearning: false, goodStreak: 0, againStreak: 0 }
+    for (let i = 0; i < 10; i++) {
+      const r = reviewDueNow(st, 'again', 1, undefined, { softLapse: true })
+      expect(r.action).not.toEqual({ kind: 'sendToLadder' })
+      st = r.state
+    }
+    expect(st.againStreak).toBe(0)
+  })
+})
