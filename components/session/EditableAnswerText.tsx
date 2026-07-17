@@ -40,10 +40,11 @@ export function EditableAnswerText({
   }
 
   useEffect(() => {
-    if (editing) {
-      ref.current?.focus()
-      ref.current?.select()
-    }
+    if (!editing) return
+    // Defer a frame so a synchronous focus+select doesn't drop the first character with CJK input
+    // methods (the IME is still processing the click that opened the editor).
+    const id = requestAnimationFrame(() => { ref.current?.focus(); ref.current?.select() })
+    return () => cancelAnimationFrame(id)
   }, [editing])
 
   if (editing) {

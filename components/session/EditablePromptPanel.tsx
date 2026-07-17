@@ -43,10 +43,12 @@ export function EditablePromptPanel({
   }
 
   useEffect(() => {
-    if (editing) {
-      ref.current?.focus()
-      ref.current?.select()
-    }
+    if (!editing) return
+    // Defer focus/select by a frame. Doing it synchronously right after the double-click drops the
+    // first character with CJK input methods (e.g. Korean "개발총괄" → "발총괄"): the IME is still
+    // mid-processing the click, and a synchronous focus+select eats the leading syllable.
+    const id = requestAnimationFrame(() => { ref.current?.focus(); ref.current?.select() })
+    return () => cancelAnimationFrame(id)
   }, [editing])
 
   if (editing) {
