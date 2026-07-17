@@ -9,7 +9,7 @@ import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules
 import { SupabaseLanguagePairRepository }     from '@/lib/data/languagePairs'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import type { LanguagePair, LanguageSyncRule, CardState } from '@/domain'
-import { langName } from '@/lib/languages'
+import { langName, langFlag, languageColor } from '@/lib/languages'
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
 
@@ -313,6 +313,7 @@ export default function SettingsPage() {
   const [spilloverDue,        setSpilloverDue]        = useState(false)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
   const [preferForvo,         setPreferForvoState]    = useState(false)
+  const [langColors,          setLangColors]          = useState<Record<string, string>>({})
   const [timezone,            setTimezone]            = useState('')
   const [turnoverHour,        setTurnoverHour]        = useState(0)
   const [loading,       setLoading]       = useState(true)
@@ -345,7 +346,7 @@ export default function SettingsPage() {
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, prefer_forvo')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, prefer_forvo, language_colors')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -360,6 +361,7 @@ export default function SettingsPage() {
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
         setPreferForvoState((profile.prefer_forvo as boolean | null) ?? false)
+        setLangColors((profile.language_colors as Record<string, string> | null) ?? {})
       } else {
         setTimezone(detectBrowserTimezone())
       }
@@ -396,6 +398,7 @@ export default function SettingsPage() {
       day_turnover_hour:         turnoverHour,
       study_mode_autoplay:       studyModeAutoplay,
       prefer_forvo:              preferForvo,
+      language_colors:           langColors,
     }).eq('user_id', session.user.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -698,6 +701,28 @@ export default function SettingsPage() {
           })}
         </div>
       </div>
+
+      {/* Language colors */}
+      {langPairs.length > 0 && (
+        <div className="panel space-y-3">
+          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Language colors</h2>
+          <p className="text-xs text-ink-faint">Each language&apos;s color in the analytics charts (pie + filters). Changes save with the button below.</p>
+          <div className="flex flex-col gap-2">
+            {[...new Set(langPairs.map(p => p.sourceLanguage))].map(code => (
+              <div key={code} className="flex items-center gap-3 text-sm">
+                <input type="color" value={languageColor(code, langColors)} title={`${langName(code)} color`}
+                  onChange={e => setLangColors(prev => ({ ...prev, [code]: e.target.value }))}
+                  className="w-8 h-8 rounded cursor-pointer bg-transparent border border-white/10 p-0.5" />
+                <span className="text-ink">{langFlag(code)} {langName(code)}</span>
+                {langColors[code] && (
+                  <button onClick={() => setLangColors(prev => { const n = { ...prev }; delete n[code]; return n })}
+                    className="text-xs text-ink-faint hover:text-ink underline">Reset to default</button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Daily Goals */}
       {langPairs.length > 0 && (() => {

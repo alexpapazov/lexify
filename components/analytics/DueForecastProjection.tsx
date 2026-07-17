@@ -6,7 +6,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
-import { langName, langFlag } from '@/lib/languages'
+import { langName, langFlag, languageColor } from '@/lib/languages'
 import { fsrsScheduleMix, stabilityForInterval, estimateInitialInterval, normalizeRatingMix, DEFAULT_RATING_MIX, type WeightedStep, type RatingMix } from '@/lib/forecastFsrs'
 import type { Rating } from '@/domain'
 
@@ -52,6 +52,7 @@ export function DueForecastProjection() {
   const [data, setData] = useState<Forecast | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [filterKey, setFilterKey] = useState<string | null>(null)   // selected pair, or null = all
+  const [langColors, setLangColors] = useState<Record<string, string>>({})  // per-language color overrides
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -63,6 +64,9 @@ export function DueForecastProjection() {
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) { setError('Not signed in'); return }
         const uid = session.user.id
+
+        void supabase.from('profiles').select('language_colors').eq('user_id', uid).single()
+          .then(r => { if (!cancelled) setLangColors((r.data?.language_colors as Record<string, string> | null) ?? {}) })
 
         const [decks, paramRows, pairs] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
@@ -319,7 +323,7 @@ export function DueForecastProjection() {
 
   const hoverPt = hover ? points[hover.i] : null
   const pieSlices = hover && !filterKey
-    ? data.pairs.map(p => ({ label: p.label, flag: p.flag, value: p.typed[hover.i]! + p.selfg[hover.i]! + p.recog[hover.i]! }))
+    ? data.pairs.map(p => ({ label: p.label, flag: p.flag, value: p.typed[hover.i]! + p.selfg[hover.i]! + p.recog[hover.i]!, color: languageColor(p.key.split('|')[0]!, langColors) }))
         .filter(s => s.value > 0.05).sort((a, b) => b.value - a.value)
     : []
 
@@ -332,7 +336,8 @@ export function DueForecastProjection() {
             className={`px-2 py-0.5 rounded-full border ${filterKey === null ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`}>All languages</button>
           {data.pairs.map(p => (
             <button key={p.key} onClick={() => setFilterKey(p.key)}
-              className={`px-2 py-0.5 rounded-full border ${filterKey === p.key ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`}>
+              className={`px-2 py-0.5 rounded-full border inline-flex items-center gap-1.5 ${filterKey === p.key ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`}>
+              <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: languageColor(p.key.split('|')[0]!, langColors) }} />
               {p.flag} {p.label}
             </button>
           ))}
@@ -422,13 +427,13 @@ export function DueForecastProjection() {
   )
 }
 
-/** Small SVG pie with per-slice labels ("🇪🇸 Spanish 12/day"). */
-function PieChart({ slices }: { slices: { label: string; flag: string; value: number }[] }) {
+/** Small SVG pie with per-slice labels ("🇪🇸 Spanish 12/day"). Each slice carries its own
+ *  (per-language) color so a language's color is consistent across every snapshot. */
+function PieChart({ slices }: { slices: { label: string; flag: string; value: number; color: string }[] }) {
   const total = slices.reduce((s, x) => s + x.value, 0)
   const R = 46, C = 52
-  const colors = ['#7c6af7', '#f59e0b', '#10b981', '#6366f1', '#ec4899', '#14b8a6', '#f43f5e', '#a3e635']
   let ang = -Math.PI / 2
-  const arcs = slices.map((s, i) => {
+  const arcs = slices.map(s => {
     const frac = total > 0 ? s.value / total : 0
     const a0 = ang, a1 = ang + frac * Math.PI * 2
     ang = a1
@@ -438,7 +443,7 @@ function PieChart({ slices }: { slices: { label: string; flag: string; value: nu
     const d = frac >= 0.999
       ? `M${C - R},${C} A${R},${R} 0 1 1 ${C + R},${C} A${R},${R} 0 1 1 ${C - R},${C}Z`
       : `M${C},${C} L${p0[0]!.toFixed(1)},${p0[1]!.toFixed(1)} A${R},${R} 0 ${large} 1 ${p1[0]!.toFixed(1)},${p1[1]!.toFixed(1)} Z`
-    return { d, color: colors[i % colors.length]! }
+    return { d, color: s.color }
   })
   return (
     <div className="flex items-center gap-3">
@@ -448,7 +453,7 @@ function PieChart({ slices }: { slices: { label: string; flag: string; value: nu
       <div className="flex flex-col gap-0.5 text-[11px] whitespace-nowrap">
         {slices.map((s, i) => (
           <span key={s.label + i} className="flex items-center gap-1.5 text-ink-muted">
-            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: colors[i % colors.length] }} />
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: s.color }} />
             {s.flag} {s.label} <span className="text-ink font-medium">{Math.round(s.value)}/day</span>
           </span>
         ))}

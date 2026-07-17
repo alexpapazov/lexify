@@ -57,3 +57,23 @@ export function langNativeName(code: string): string {
 export function langFlag(code: string): string {
   return LANGUAGES.find(l => l.code === code)?.flag ?? '🌐'
 }
+
+/** Curated palette for per-language colors (analytics, etc.). */
+export const LANG_COLOR_PALETTE = [
+  '#7c6af7', '#f59e0b', '#10b981', '#6366f1', '#ec4899', '#14b8a6',
+  '#f43f5e', '#a3e635', '#3b82f6', '#eab308', '#22c55e', '#a855f7',
+]
+
+/** A stable default color for a language, derived deterministically from its code
+ *  so the same language always gets the same color until the user overrides it. */
+export function defaultLanguageColor(code: string): string {
+  let h = 0
+  for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) >>> 0
+  return LANG_COLOR_PALETTE[h % LANG_COLOR_PALETTE.length]!
+}
+
+/** The color for a language: the user's chosen override (a #rrggbb hex) if valid, else the default. */
+export function languageColor(code: string, overrides?: Record<string, string> | null): string {
+  const o = overrides?.[code]
+  return o && /^#[0-9a-fA-F]{6}$/.test(o) ? o : defaultLanguageColor(code)
+}
