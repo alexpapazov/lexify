@@ -1,4 +1,5 @@
 import { progressAfterReview, initialCardState } from '../pipeline'
+import { FORCED_TYPED_ON_TYPO_ERROR, FORCED_TYPED_ON_LAPSE } from '../productionMode'
 import type { CardState, Pipeline } from '@/domain'
 
 const PIPELINE: Pipeline = {
@@ -289,5 +290,86 @@ describe('initialCardState', () => {
     const s = initialCardState('user-1', 'card-1', 'pipeline-1')
     expect(s.lapseClusterCount).toBe(0)
     expect(s.lastLapseAt).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stage 0 characterization: pins the production BOOKKEEPING that progressAfterReview
+// uniquely provides and that the session pages keep (typed-accuracy window, forced-typing,
+// reps-on-hard, accelerated transitions). These are NOT the multiplier SCHEDULING (which FSRS
+// overrides). When Stage 3 extracts this into applyProductionBookkeeping(), these must still pass.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('post-graduation bookkeeping — Stage 0 characterization (must survive multiplier removal)', () => {
+  const later = new Date(Date.now() + 5 * 86_400_000)   // past the very-early no-op window
+  function graduated(): CardState {
+    let s = fresh()
+    for (let i = 0; i < 4; i++) s = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' })
+    return s
+  }
+
+  it('a typed review appends to the accuracy window (1=correct, 0=wrong) and bumps the typed count', () => {
+    const g = graduated()
+    const ok = progressAfterReview(g, PIPELINE, { wasCorrect: true, rating: 'good', wasTyped: true }, later)
+    expect(ok.typedAccuracyWindow).toEqual([...g.typedAccuracyWindow, 1])
+    expect(ok.typedReviewCount).toBe(g.typedReviewCount + 1)
+    const bad = progressAfterReview(g, PIPELINE, { wasCorrect: false, rating: 'again', wasTyped: true, wrongSeverity: 1 })
+    expect(bad.typedAccuracyWindow).toEqual([...g.typedAccuracyWindow, 0])
+  })
+
+  it('a self-graded review does NOT touch the typed accuracy window/count', () => {
+    const g = graduated()
+    const sg = progressAfterReview(g, PIPELINE, { wasCorrect: true, rating: 'good', wasTyped: false }, later)
+    expect(sg.typedAccuracyWindow).toEqual(g.typedAccuracyWindow)
+    expect(sg.typedReviewCount).toBe(g.typedReviewCount)
+  })
+
+  it('a close typo miss forces typed for the next few reviews; a self-graded Again forces one; a full miss forces none', () => {
+    const g = graduated()
+    expect(progressAfterReview(g, PIPELINE, { wasCorrect: false, rating: 'again', wasTyped: true,  wrongSeverity: 0.2 }).forcedTypedRemaining).toBe(FORCED_TYPED_ON_TYPO_ERROR)
+    expect(progressAfterReview(g, PIPELINE, { wasCorrect: false, rating: 'again', wasTyped: false                     }).forcedTypedRemaining).toBe(FORCED_TYPED_ON_LAPSE)
+    expect(progressAfterReview(g, PIPELINE, { wasCorrect: false, rating: 'again', wasTyped: true,  wrongSeverity: 1   }).forcedTypedRemaining).toBe(0)
+  })
+
+  it('a typed review decrements forcedTypedRemaining', () => {
+    const g = { ...graduated(), forcedTypedRemaining: 3 }
+    expect(progressAfterReview(g, PIPELINE, { wasCorrect: true, rating: 'good', wasTyped: true }, later).forcedTypedRemaining).toBe(2)
+  })
+
+  it('reps increment on good but NOT on hard', () => {
+    const g = graduated()
+    expect(progressAfterReview(g, PIPELINE, { wasCorrect: true, rating: 'good', wasTyped: false }, later).reps).toBe(g.reps + 1)
+    expect(progressAfterReview(g, PIPELINE, { wasCorrect: true, rating: 'hard', wasTyped: false }, later).reps).toBe(g.reps)
+  })
+
+  it('accelerated import-known: two Agains drop it; a correct resets the streak but keeps the penalty', () => {
+    const accel = { ...graduated(), acceleratedMode: 'import_known' as const }
+    const a1 = progressAfterReview(accel, PIPELINE, { wasCorrect: false, rating: 'again', wasTyped: false })
+    expect(a1.acceleratedWrongStreak).toBe(1)
+    expect(a1.acceleratedPenalty).toBe(1)
+    expect(a1.acceleratedMode).toBe('import_known')
+
+    const a2 = progressAfterReview(a1, PIPELINE, { wasCorrect: false, rating: 'again', wasTyped: false })
+    expect(a2.acceleratedMode).toBe('none')
+    expect(a2.postAccelRestartWindow).toBe(3)
+
+    const back = progressAfterReview(a1, PIPELINE, { wasCorrect: true, rating: 'good', wasTyped: false }, later)
+    expect(back.acceleratedWrongStreak).toBe(0)
+    expect(back.acceleratedPenalty).toBe(1)   // penalty is permanent
+    expect(back.acceleratedMode).toBe('import_known')
+  })
+
+  it('Stage 1: progressAfterReview no longer appends to intervalHistory (the session layer logs the real FSRS interval)', () => {
+    // Graduation must not append here — the session graduation block appends the
+    // real graduationIntervalRange value.
+    let s = fresh()
+    for (let i = 0; i < 3; i++) s = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' })
+    const atGraduation = progressAfterReview(s, PIPELINE, { wasCorrect: true, rating: 'good' })
+    expect(atGraduation.graduated).toBe(true)
+    expect(atGraduation.intervalHistory).toEqual([])
+
+    // A post-graduation review must not append either — the session FSRS block does.
+    const seeded = { ...graduated(), intervalHistory: [3, 8] }
+    const post = progressAfterReview(seeded, PIPELINE, { wasCorrect: true, rating: 'good', wasTyped: false }, later)
+    expect(post.intervalHistory).toEqual([3, 8])
   })
 })

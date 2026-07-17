@@ -21,7 +21,7 @@ import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import type { CardSide } from '@/domain'
-import { progressAfterReview, initialCardState } from '@/engine/pipeline'
+import { progressAfterReview, initialCardState, appendHistory } from '@/engine/pipeline'
 import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { scheduleNext, classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
@@ -969,6 +969,11 @@ function AllDueSessionInner() {
             typedDueAt:            dueAt,
             dueAt,
             acceleratedTypedConfirmed: state.acceleratedTypedConfirmed || (state.acceleratedMode === 'import_known' && !!wasTyped && wasCorrect),
+            // Log the real FSRS interval (skip sub-day relearn steps) so the ℹ menu
+            // shows how long each interval actually was given difficulty/stability.
+            intervalHistory: fsrs.dueInMinutes == null
+              ? appendHistory(newState.intervalHistory, fsrs.intervalDays!)
+              : newState.intervalHistory,
           }
         }
         scheduled = null  // FSRS owns the schedule; skip the legacy density smoothing below.
@@ -992,10 +997,7 @@ function AllDueSessionInner() {
         const smoothed = (maxDays - minDays >= 1)
           ? await smoothDueDate(userId, idealDueAt, minDays, maxDays, idealDays, stateRepo)
           : idealDueAt
-        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays, typedDueAt: smoothed, typedIntervalDays: idealDays, graduationErrorCount: errors, pipelineErrorCount: 0 }
-        if (newState.intervalHistory.length > 0) {
-          newState = { ...newState, intervalHistory: [...newState.intervalHistory.slice(0, -1), idealDays] }
-        }
+        newState = { ...newState, dueAt: smoothed, intervalDays: idealDays, scheduledIntervalDays: idealDays, typedDueAt: smoothed, typedIntervalDays: idealDays, graduationErrorCount: errors, pipelineErrorCount: 0, intervalHistory: appendHistory(newState.intervalHistory, idealDays) }
       }
 
       if (newState.graduated && newState.dueAt && newState.relearningStep === 0) {

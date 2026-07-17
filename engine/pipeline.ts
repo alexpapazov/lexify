@@ -13,7 +13,7 @@ import {
   FORCED_TYPED_ON_LAPSE,
 } from './productionMode'
 
-/** How many `scheduledIntervalDays` snapshots to keep in `intervalHistory`. */
+/** How many interval snapshots to keep in `intervalHistory`. */
 const INTERVAL_HISTORY_SIZE = 50
 
 /**
@@ -24,7 +24,13 @@ const INTERVAL_HISTORY_SIZE = 50
  */
 const CLOSE_TYPO_SEVERITY_THRESHOLD = 0.3
 
-function appendHistory(history: number[], value: number): number[] {
+/**
+ * Append a real (FSRS or graduation) interval-days value to a card's
+ * `intervalHistory`, capping the log at the most recent `INTERVAL_HISTORY_SIZE`
+ * entries. Owned by the session layer — `progressAfterReview` no longer appends,
+ * since the true interval is only known after FSRS scheduling runs.
+ */
+export function appendHistory(history: number[], value: number): number[] {
   return [...history, value].slice(-INTERVAL_HISTORY_SIZE)
 }
 
@@ -271,7 +277,8 @@ export function progressAfterReview(
       lastLapseAt:       scheduled.lastLapseAt,
       relearningStep:    scheduled.relearningStep,
       pendingIntervalDays: scheduled.pendingIntervalDays,
-      intervalHistory:   appendHistory(state.intervalHistory, scheduled.scheduledIntervalDays),
+      // intervalHistory is appended by the session layer with the real FSRS
+      // interval once memory-model scheduling runs (see appendHistory).
     }
   }
 
@@ -386,7 +393,8 @@ export function progressAfterReview(
         relearningStep:        scheduled.relearningStep,
         pendingIntervalDays:   scheduled.pendingIntervalDays,
         graduatedAt:           now,
-        intervalHistory:       appendHistory(state.intervalHistory, scheduled.scheduledIntervalDays),
+        // intervalHistory is appended by the session layer with the real
+        // graduation interval (graduationIntervalRange) — see appendHistory.
       }
     }
 

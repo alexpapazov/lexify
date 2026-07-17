@@ -18,7 +18,7 @@ import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { speak, fetchAudioSource, playAudioClip } from '@/lib/speak'
 import type { AudioSource } from '@/domain'
-import { classifyReviewMode, MULTIPLIER_RANGE } from '@/engine/scheduler'
+import { classifyReviewMode } from '@/engine/scheduler'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
 import { batchFastTrackDueDates } from '@/engine/density'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -1302,19 +1302,6 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   )}
 
                   {(() => {
-                    const reviewWindow = (() => {
-                      if (!state.graduated || !state.lastReviewedAt || !state.dueAt) return '—'
-                      const rating = state.lastRating
-                      if (!rating || rating === 'again') return '—'
-                      const r = MULTIPLIER_RANGE[rating]
-                      const sched = state.scheduledIntervalDays > 0 ? state.scheduledIntervalDays : state.intervalDays
-                      if (sched <= 0) return '—'
-                      const prevInterval = sched / r.ideal
-                      const base = new Date(state.lastReviewedAt).getTime()
-                      const minDate = new Date(base + prevInterval * r.min * 86400_000)
-                      const maxDate = new Date(base + prevInterval * r.max * 86400_000)
-                      return `${formatDate(minDate.toISOString())} → ${formatDate(maxDate.toISOString())}`
-                    })()
                     const gradIntervalDays = state.graduated && state.intervalHistory.length > 0
                       ? state.intervalHistory[0]! : null
                     const isSmartTrack = state.graduated && state.smartDueAt != null
@@ -1329,7 +1316,6 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                       <StatGroup title={prodTitle} rows={[
                         ['Interval (ideal)',    formatIntervalDays(prodInterval)],
                         ['Scheduled interval',  formatIntervalDays(state.scheduledIntervalDays)],
-                        ['Review window',       reviewWindow],
                         ['Next due',            state.graduated ? formatDate(prodDue) : '—'],
                         ['Last reviewed',       formatDate(state.lastReviewedAt, 'Never')],
                       ]} />
