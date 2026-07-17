@@ -571,20 +571,14 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
     const repo = new SupabaseUserSchedulerParamsRepository()
-    const D = DEFAULT_SCHEDULER_PARAMS
-    const updates: Record<string, number> = {
-      good_min: D.goodMin, good_ideal: D.goodIdeal, good_max: D.goodMax, good_floor: D.goodFloor,
-      hard_min: D.hardMin, hard_ideal: D.hardIdeal, hard_max: D.hardMax, hard_floor: D.hardFloor,
-      easy_min: D.easyMin, easy_ideal: D.easyIdeal, easy_max: D.easyMax, easy_floor: D.easyFloor,
-    }
-    const patch = {
-      goodMin: D.goodMin, goodIdeal: D.goodIdeal, goodMax: D.goodMax, goodFloor: D.goodFloor,
-      hardMin: D.hardMin, hardIdeal: D.hardIdeal, hardMax: D.hardMax, hardFloor: D.hardFloor,
-      easyMin: D.easyMin, easyIdeal: D.easyIdeal, easyMax: D.easyMax, easyFloor: D.easyFloor,
+    // FSRS owns scheduling; the only per-track calibrated value left is the measured retention
+    // rate that feeds the workload forecast. Resetting clears it so it re-measures from scratch.
+    const updates: Record<string, unknown> = {
+      recent_retention_rate: null, calibrated_at: null, total_due_reviews: 0,
     }
     await repo.update(userId, src, tgt, answerField, updates)
     setSrsParams(prev => prev.map(p =>
-      p.answerField === answerField ? { ...p, ...patch } : p
+      p.answerField === answerField ? { ...p, recentRetentionRate: null, calibratedAt: null, totalDueReviews: 0 } : p
     ))
   }
 
@@ -1008,12 +1002,6 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           // So the constants table / calibration history show only Typed / Self-graded / Reverse.
           const CONST_BUCKETS = BUCKETS.filter(b => b.field !== 'forward_smart')
 
-          const CONST_KEYS: { key: keyof typeof DEFAULT_SCHEDULER_PARAMS; label: string }[] = [
-            { key: 'hardIdeal', label: 'Hard ×' },
-            { key: 'goodIdeal', label: 'Good ×' },
-            { key: 'easyIdeal', label: 'Easy ×' },
-          ]
-
           // Graduation intervals are a single per-pair value (calibrated on the
           // forward_typed row), bucketed by exact pipeline-error count. 8 = "8+".
 
@@ -1197,35 +1185,26 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                           )
                         })()}
 
-                        {/* Constants table */}
+                        {/* Measured retention per track (feeds the workload forecast) */}
                         <div className="flex flex-col gap-1">
-                          <p className="text-xs text-ink-faint">Current calibration constants (highlighted = adjusted from default):</p>
+                          <p className="text-xs text-ink-faint">Measured retention (used by the workload forecast):</p>
                           <div className="overflow-x-auto">
                             <table className="w-full text-xs border-collapse">
                               <thead>
                                 <tr className="text-ink-muted">
-                                  <th className="text-left py-1 pr-2 font-medium">Constant</th>
-                                  {CONST_BUCKETS.map(b => (
-                                    <th key={b.field} className="text-right py-1 px-1 font-medium">{b.label.split(' ')[0]}</th>
-                                  ))}
-                                  <th className="text-right py-1 pl-1 font-medium text-ink-faint">Default</th>
+                                  <th className="text-left py-1 pr-2 font-medium">Track</th>
+                                  <th className="text-right py-1 px-1 font-medium">Retention</th>
+                                  <th className="text-right py-1 pl-1 font-medium">Reviews</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {CONST_KEYS.map(({ key, label }) => (
-                                  <tr key={key} className="border-t border-surface-border/50">
-                                    <td className="py-1 pr-2 text-ink-muted">{label}</td>
-                                    {CONST_BUCKETS.map(b => {
-                                      const val = b.row?.[key as keyof SchedulerParamsRow] as number | undefined
-                                      const def = DEFAULT_SCHEDULER_PARAMS[key]
-                                      const changed = val !== undefined && val !== def
-                                      return (
-                                        <td key={b.field} className={`text-right py-1 px-1 ${changed ? 'text-accent font-medium' : 'text-ink'}`}>
-                                          {val?.toFixed(2) ?? '—'}
-                                        </td>
-                                      )
-                                    })}
-                                    <td className="text-right py-1 pl-1 text-ink-faint">{(DEFAULT_SCHEDULER_PARAMS[key] as number).toFixed(2)}</td>
+                                {CONST_BUCKETS.map(b => (
+                                  <tr key={b.field} className="border-t border-surface-border/50">
+                                    <td className="py-1 pr-2 text-ink-muted">{b.label}</td>
+                                    <td className="text-right py-1 px-1 text-ink">
+                                      {b.row?.recentRetentionRate != null ? `${Math.round(b.row.recentRetentionRate * 100)}%` : '—'}
+                                    </td>
+                                    <td className="text-right py-1 pl-1 text-ink-faint">{b.row?.totalDueReviews ?? 0}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -1260,7 +1239,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                                       {rows.slice(0, 10).map(r => (
                                         <div key={r.id} className="text-xs text-ink-faint flex justify-between gap-2">
                                           <span>{new Date(r.snapshottedAt).toLocaleDateString()}</span>
-                                          <span>good×{r.snapshot.goodIdeal?.toFixed(2)} easy×{r.snapshot.easyIdeal?.toFixed(2)}</span>
+                                          <span>ret {r.snapshot.recentRetentionRate != null ? `${Math.round(r.snapshot.recentRetentionRate * 100)}%` : '—'}</span>
                                           <span>{r.totalDueReviews} reviews</span>
                                         </div>
                                       ))}

@@ -17,7 +17,6 @@ async function calibratePair(userId: string, sourceLanguage: string, targetLangu
     await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField)
   }
   await calibrateGradIntervals(userId, sourceLanguage, targetLanguage)
-  await calibrateAccelBucket(userId, sourceLanguage, targetLanguage)
 }
 
 export async function POST(req: Request) {
@@ -58,33 +57,10 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     sourceLanguage:      row.source_language as string,
     targetLanguage:      row.target_language as string,
     answerField:         row.answer_field as string,
-    goodMin:             row.good_min as number,
-    goodIdeal:           row.good_ideal as number,
-    goodMax:             row.good_max as number,
-    goodFloor:           row.good_floor as number,
-    hardMin:             row.hard_min as number,
-    hardIdeal:           row.hard_ideal as number,
-    hardMax:             row.hard_max as number,
-    hardFloor:           row.hard_floor as number,
-    easyMin:             row.easy_min as number,
-    easyIdeal:           row.easy_ideal as number,
-    easyMax:             row.easy_max as number,
-    easyFloor:           row.easy_floor as number,
-    accelGoodMin:        row.accel_good_min as number,
-    accelGoodIdeal:      row.accel_good_ideal as number,
-    accelGoodMax:        row.accel_good_max as number,
-    accelHardMin:        row.accel_hard_min as number,
-    accelHardIdeal:      row.accel_hard_ideal as number,
-    accelHardMax:        row.accel_hard_max as number,
-    accelEasyMin:        row.accel_easy_min as number,
-    accelEasyIdeal:      row.accel_easy_ideal as number,
-    accelEasyMax:        row.accel_easy_max as number,
     typedProbBelow70:    row.typed_prob_below_70 as number,
     typedProb70to84:     row.typed_prob_70_to_84 as number,
     typedProb85to94:     row.typed_prob_85_to_94 as number,
     typedProb95plus:     row.typed_prob_95_plus as number,
-    decayConstantDays:   row.decay_constant_days as number,
-    againReduction:      row.again_reduction as number,
     maxIntervalDays:     row.max_interval_days as number,
     gradInterval0errMin: row.grad_interval_0err_min as number,
     gradInterval0errMax: row.grad_interval_0err_max as number,
@@ -176,8 +152,6 @@ async function calibrateBucket(
 
   const n              = params.totalDueReviews
   const windowSize     = Math.max(20, Math.min(150, Math.round(n * 0.15)))
-  // Converge a bit faster than the old 0.01 floor while still easing off as data grows.
-  const adjustmentStep = Math.max(0.03, 0.10 * Math.exp(-n / 300))
 
   const wasTyped  = answerField === 'forward_typed' || answerField === 'forward_smart'
   const reviewDir = answerField === 'reverse_recall' ? 'reverse' : 'forward'
@@ -221,41 +195,11 @@ async function calibrateBucket(
     (e.near_miss_weight ?? (e.near_miss ? 0.2 : 0))
   const successWeight = (e: { was_correct: boolean; near_miss: boolean; near_miss_weight?: number | null }) =>
     e.was_correct ? 1 : (nmWeight(e) > 0 ? 1 - nmWeight(e) : 0)
+  // FSRS owns interval scheduling now; the only thing this loop still calibrates is the MEASURED
+  // recent retention rate, which the workload forecast (analytics + "Coming up") reads per track.
   const retentionRate = events.reduce((sum, e) => sum + successWeight(e), 0) / events.length
 
-  let newGoodIdeal = params.goodIdeal
-  let newEasyIdeal = params.easyIdeal
-  let newHardIdeal = params.hardIdeal
-
-  if (retentionRate < 0.88) {
-    newGoodIdeal = Math.max(1.50, params.goodIdeal - adjustmentStep)
-    newEasyIdeal = Math.max(2.00, params.easyIdeal - adjustmentStep)
-    newHardIdeal = Math.max(1.05, params.hardIdeal - adjustmentStep)  // never fully flatten
-  } else if (retentionRate > 0.92) {
-    newGoodIdeal = Math.min(4.00, params.goodIdeal + adjustmentStep)
-    newEasyIdeal = Math.min(6.00, params.easyIdeal + adjustmentStep)
-    newHardIdeal = Math.min(1.80, params.hardIdeal + adjustmentStep)
-  }
-
-  const changed = newGoodIdeal !== params.goodIdeal
-    || newEasyIdeal !== params.easyIdeal
-    || newHardIdeal !== params.hardIdeal
-
-  if (changed) {
-    await saveHistory({ ...params, totalDueReviews: newTotal })
-  }
-
-  // Move the [min,max] band by the same delta as the ideal, so the
-  // density-smoothing range stays centered on the calibrated ideal instead of
-  // drifting outside it (which let the smoother partially undo calibration).
-  const gd = newGoodIdeal - params.goodIdeal
-  const ed = newEasyIdeal - params.easyIdeal
-  const hd = newHardIdeal - params.hardIdeal
-
   await updateParams(userId, sourceLang, targetLang, answerField, {
-    good_min:   params.goodMin + gd, good_ideal: newGoodIdeal, good_max: params.goodMax + gd,
-    easy_min:   params.easyMin + ed, easy_ideal: newEasyIdeal, easy_max: params.easyMax + ed,
-    hard_min:   params.hardMin + hd, hard_ideal: newHardIdeal, hard_max: params.hardMax + hd,
     calibrated_at:         new Date().toISOString(),
     total_due_reviews:     newTotal,
     recent_retention_rate: retentionRate,
@@ -327,64 +271,3 @@ async function calibrateGradIntervals(userId: string, sourceLang: string, target
   }
 }
 
-async function calibrateAccelBucket(
-  userId: string,
-  sourceLang: string,
-  targetLang: string,
-) {
-  const db     = createAdminClient()
-  const params = await getOrCreate(userId, sourceLang, targetLang, 'forward_typed')
-
-  const n              = params.totalDueReviews
-  const windowSize     = Math.max(20, Math.min(150, Math.round(n * 0.15)))
-  const adjustmentStep = Math.max(0.01, 0.08 * Math.exp(-n / 200))
-
-  const { data: events } = await db
-    .from('review_events')
-    .select('was_correct, near_miss, near_miss_weight, accelerated_penalty')
-    .eq('user_id', userId)
-    .eq('source_language', sourceLang)
-    .eq('target_language', targetLang)
-    .eq('review_mode', 'due')
-    .eq('was_accelerated', true)
-    .order('reviewed_at', { ascending: false })
-    .limit(windowSize)
-
-  if (!events || events.length < windowSize) return
-
-  let weightedCorrect = 0
-  let weightedTotal   = 0
-  for (const e of events) {
-    const weight  = Math.max(0, 1 - (e.accelerated_penalty ?? 0) / 5)
-    const nmw     = Number(e.near_miss_weight ?? (e.near_miss ? 0.2 : 0))
-    const success = e.was_correct ? 1 : (nmw > 0 ? 1 - nmw : 0)
-    weightedTotal   += weight
-    weightedCorrect += weight * success
-  }
-
-  if (weightedTotal < 5) return
-
-  const retentionRate = weightedCorrect / weightedTotal
-
-  let newAccelGoodIdeal = params.accelGoodIdeal
-  let newAccelEasyIdeal = params.accelEasyIdeal
-
-  if (retentionRate < 0.88) {
-    newAccelGoodIdeal = Math.max(2.50, params.accelGoodIdeal - adjustmentStep)
-    newAccelEasyIdeal = Math.max(3.00, params.accelEasyIdeal - adjustmentStep)
-  } else if (retentionRate > 0.92) {
-    newAccelGoodIdeal = Math.min(3.50, params.accelGoodIdeal + adjustmentStep)
-    newAccelEasyIdeal = Math.min(6.00, params.accelEasyIdeal + adjustmentStep)
-  }
-
-  if (newAccelGoodIdeal !== params.accelGoodIdeal || newAccelEasyIdeal !== params.accelEasyIdeal) {
-    await saveHistory({ ...params })
-    // Shift the [min,max] band with the ideal (same fix as the normal track).
-    const gd = newAccelGoodIdeal - params.accelGoodIdeal
-    const ed = newAccelEasyIdeal - params.accelEasyIdeal
-    await updateParams(userId, sourceLang, targetLang, 'forward_typed', {
-      accel_good_min: params.accelGoodMin + gd, accel_good_ideal: newAccelGoodIdeal, accel_good_max: params.accelGoodMax + gd,
-      accel_easy_min: params.accelEasyMin + ed, accel_easy_ideal: newAccelEasyIdeal, accel_easy_max: params.accelEasyMax + ed,
-    })
-  }
-}

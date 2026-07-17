@@ -4,6 +4,7 @@ import {
   FORCED_TYPED_ON_TYPO_ERROR,
   FORCED_TYPED_ON_LAPSE,
 } from '../productionMode'
+import { initialCardState } from '../pipeline'
 import type { CardState } from '@/domain'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -25,36 +26,19 @@ function accuracyWindow(correct: number, total: number): number[] {
  * override fields to land in the branch they're checking.
  */
 function baseState(overrides: Partial<CardState> = {}): CardState {
+  // Derive from the canonical initialCardState so the fixture stays complete as CardState evolves.
   return {
-    userId: 'user-1',
-    cardId: 'card-1',
-    pipelineId: 'pipeline-1',
-    currentStepOrder: 0,
-    correctInStep: 0,
+    ...initialCardState('user-1', 'card-1', 'pipeline-1'),
     graduated: true,
-    dueAt: null,
     intervalDays: 30,
     scheduledIntervalDays: 30,
-    ease: 2.5,
-    difficulty: null, stability: null, relearning: false, goodStreak: 0, againStreak: 0,
-    smartIntervalDays: null, smartDueAt: null, acceleratedTypedConfirmed: false,
     reps: 10,
-    lapses: 0,
     lastRating: 'good',
     lastReviewedAt: daysAgo(1),
-    introducedDate: '2026-01-01',
-    lapseClusterCount: 0,
-    lastLapseAt: null,
     graduatedAt: daysAgo(30),
-    relearningStep: 0,
-    pendingIntervalDays: null,
     typedAccuracyWindow: accuracyWindow(20, 20), // 100% accuracy
     typedReviewCount: 10,
     lastTypedReviewAt: daysAgo(1),
-    forcedTypedRemaining: 0,
-    intervalHistory: [],
-    typingMistakeStreak: 0,
-    typingFailCycles: 0,
     ...overrides,
   }
 }

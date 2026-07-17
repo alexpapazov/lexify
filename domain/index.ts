@@ -311,19 +311,11 @@ export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
 // ─── Scheduler params ─────────────────────────────────────────────────────────
 
 export interface SchedulerParams {
-  // Normal track multipliers
-  goodMin: number; goodIdeal: number; goodMax: number; goodFloor: number
-  hardMin: number; hardIdeal: number; hardMax: number; hardFloor: number
-  easyMin: number; easyIdeal: number; easyMax: number; easyFloor: number
-  // Accelerated track multipliers
-  accelGoodMin: number; accelGoodIdeal: number; accelGoodMax: number
-  accelHardMin: number; accelHardIdeal: number; accelHardMax: number
-  accelEasyMin: number; accelEasyIdeal: number; accelEasyMax: number
-  // Typing probability thresholds
+  // Typing probability thresholds (production-mode typed-vs-self-graded gating)
   typedProbBelow70: number; typedProb70to84: number
   typedProb85to94: number; typedProb95plus: number
-  // Shared scheduling constants
-  decayConstantDays: number; againReduction: number; maxIntervalDays: number
+  // FSRS interval cap (days)
+  maxIntervalDays: number
   // Graduation intervals by exact pipeline-error count (8err = 8 or more)
   gradInterval0errMin: number; gradInterval0errMax: number
   gradInterval1errMin: number; gradInterval1errMax: number
@@ -345,15 +337,9 @@ export interface SchedulerParams {
 }
 
 export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
-  goodMin: 2.00, goodIdeal: 2.25, goodMax: 2.50, goodFloor: 1.15,
-  hardMin: 1.10, hardIdeal: 1.20, hardMax: 1.30, hardFloor: 1.00,
-  easyMin: 3.00, easyIdeal: 3.50, easyMax: 4.00, easyFloor: 1.25,
-  accelGoodMin: 2.50, accelGoodIdeal: 3.00, accelGoodMax: 3.50,
-  accelHardMin: 1.30, accelHardIdeal: 1.50, accelHardMax: 1.70,
-  accelEasyMin: 4.00, accelEasyIdeal: 5.00, accelEasyMax: 6.00,
   typedProbBelow70: 1.00, typedProb70to84: 0.70,
   typedProb85to94: 0.35, typedProb95plus: 0.15,
-  decayConstantDays: 90, againReduction: 0.60, maxIntervalDays: 1460,
+  maxIntervalDays: 1460,
   gradInterval0errMin: 4, gradInterval0errMax: 6,
   gradInterval1errMin: 3, gradInterval1errMax: 4,
   gradInterval2errMin: 2, gradInterval2errMax: 3,
@@ -676,7 +662,6 @@ export interface CardState {
    * based on `dueAt`, not on `intervalDays`.
    */
   scheduledIntervalDays: number
-  ease:             number
   // ── FSRS Due Now scheduler (migration 074) ────────────────────────────────
   /** FSRS difficulty (1–10); null until the card is scheduled under FSRS. */
   difficulty:       number | null
@@ -694,14 +679,6 @@ export interface CardState {
   lastReviewedAt:   string | null
   /** ISO date (YYYY-MM-DD) when this card was first introduced to the user. */
   introducedDate:   string | null
-  /**
-   * Number of consecutive "again" ratings (post-graduation) that happened
-   * within the lapse-clustering window of each other (see lastLapseAt).
-   * Resets to 0 on a correct answer.
-   */
-  lapseClusterCount: number
-  /** Timestamp of the most recent post-graduation "again" rating, if any. */
-  lastLapseAt:       string | null
   /** Timestamp this card most recently (re-)graduated into long-term review. */
   graduatedAt:       string | null
   /**
@@ -711,11 +688,6 @@ export interface CardState {
    * clustered lapse, which sends it back to the learning pipeline).
    */
   relearningStep:   number
-  /**
-   * The ideal interval (days) to apply once the 10-minute relearn loop is
-   * recovered with a correct answer. Null when not in the relearn loop.
-   */
-  pendingIntervalDays: number | null
   /**
    * Rolling window of recent typed-production results for this card
    * (1 = correct, 0 = incorrect), most-recent last, capped at

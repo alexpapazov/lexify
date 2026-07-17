@@ -397,16 +397,12 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
           dueAt,
           intervalDays:          3,
           scheduledIntervalDays: 3,
-          ease:                  base.graduated ? base.ease : 2.5,
           reps:                  Math.max(base.reps, 1),
           lapses:                base.lapses,
           lastRating:            'good',
           lastReviewedAt:        nowIso,
           graduatedAt:           base.graduatedAt ?? nowIso,
           relearningStep:        0,
-          pendingIntervalDays:   null,
-          lapseClusterCount:     0,
-          lastLapseAt:           null,
         }
       }
       const updated = await stateRepo.upsert(graduated)
@@ -873,7 +869,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
               resetAction === 'distractors'
                 ? 'Clear the cached multiple-choice distractors for this card? Fresh ones will be generated in the background.'
                 : resetAction === 'progress'
-                  ? 'Erase this card\'s study progress (reps, lapses, ease, schedule, etc.)? It will go back to "never studied" but keep its cached distractors and introduction date.'
+                  ? 'Erase this card\'s study progress (reps, lapses, difficulty/stability, schedule, etc.)? It will go back to "never studied" but keep its cached distractors and introduction date.'
                   : resetAction === 'audio'
                     ? 'Clear the cached audio for this card? It will be regenerated the next time the card appears in a session.'
                     : 'Reset this card entirely — clears study progress, cached distractors, and audio? This can\'t be undone.'
@@ -1341,12 +1337,8 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   })()}
 
                   <StatGroup title="Lapses & relearning" rows={[
-                    ['Recent lapses (cluster)', String(state.lapseClusterCount)],
-                    ['Last lapse',              formatDate(state.lastLapseAt, '—')],
-                    ['Relearn step',            relearnLabel],
-                    ['Pending interval',        state.pendingIntervalDays != null
-                      ? `${formatIntervalDays(state.pendingIntervalDays)} (on recovery)`
-                      : '—'],
+                    ['Lapses (total)', String(state.lapses)],
+                    ['Relearn step',   relearnLabel],
                   ]} />
 
                   <StatGroup title="Typed production" rows={[

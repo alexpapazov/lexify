@@ -276,10 +276,12 @@ describe('same-day window (stages 3-5)', () => {
 })
 
 describe('initialCardState', () => {
-  it('initializes lapse-clustering fields', () => {
+  it('starts ungraduated with a clean FSRS/relearn slate', () => {
     const s = initialCardState('user-1', 'card-1', 'pipeline-1')
-    expect(s.lapseClusterCount).toBe(0)
-    expect(s.lastLapseAt).toBeNull()
+    expect(s.graduated).toBe(false)
+    expect(s.reps).toBe(0)
+    expect(s.lapses).toBe(0)
+    expect(s.relearningStep).toBe(0)
   })
 })
 

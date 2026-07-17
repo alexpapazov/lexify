@@ -52,7 +52,6 @@ export function initialCardState(
     dueAt:            null,
     intervalDays:     0,
     scheduledIntervalDays: 0,
-    ease:             2.5,
     difficulty:       null,
     stability:        null,
     relearning:       false,
@@ -63,11 +62,8 @@ export function initialCardState(
     lastRating:       null,
     lastReviewedAt:   null,
     introducedDate:   new Date().toISOString().slice(0, 10), // YYYY-MM-DD
-    lapseClusterCount: 0,
-    lastLapseAt:       null,
     graduatedAt:       null,
     relearningStep:    0,
-    pendingIntervalDays: null,
     typedAccuracyWindow: [],
     typedReviewCount:    0,
     lastTypedReviewAt:   null,
@@ -361,11 +357,7 @@ export function progressAfterReview(
         dueAt:                 new Date(nowDate.getTime() + seedInterval * 86_400_000).toISOString(),
         intervalDays:          seedInterval,
         scheduledIntervalDays: seedInterval,
-        ease:                  state.ease,
-        lapseClusterCount:     0,
-        lastLapseAt:           state.lastLapseAt,
         relearningStep:        0,
-        pendingIntervalDays:   null,
         graduatedAt:           now,
         // intervalHistory is appended by the session layer with the real
         // graduation interval (graduationIntervalRange) — see appendHistory.

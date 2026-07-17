@@ -1445,7 +1445,6 @@ export default function DeckDetailPage() {
             scheduledIntervalDays:  0,
             lastRating:             null,
             relearningStep:         0,
-            pendingIntervalDays:    null,
             typingMistakeStreak:    0,
             typingFailCycles:       0,
             stage3EnteredDate:      null,
