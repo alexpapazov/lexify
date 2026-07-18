@@ -46,7 +46,10 @@ function hexToHsl(hex: string): { h: number; s: number; l: number } {
 // columns = the 12 palette hues sorted into a spectrum, each shown as a tint · base · shade,
 // then a grayscale row. The OS color wheel sits behind "Custom".
 const clampL = (l: number) => Math.max(8, Math.min(94, l))
-const PALETTE_COLS = [...LANG_COLOR_PALETTE]
+// The categorical palette plus the yellow highlight accent — yellow is held out of the
+// auto-assigned/chart set, but offered here as a manual per-language choice.
+const PICKER_PALETTE = [...LANG_COLOR_PALETTE, '#F5C518']
+const PALETTE_COLS = PICKER_PALETTE
   .map(hex => ({ hex, ...hexToHsl(hex) }))
   .sort((a, b) => a.h - b.h)
 const L_OFFSETS = [16, 0, -16] // tint · base (exact palette color) · shade
@@ -71,7 +74,7 @@ function LanguageColorPicker({ value, onChange }: { value: string; onChange: (he
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute z-20 mt-1 left-0 p-3 rounded-lg border border-line/10 bg-surface-raised shadow-lg">
-            <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(12, 1.5rem)' }}>
+            <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(13, 1.5rem)' }}>
               {COLOR_SWATCHES.map(hex => (
                 <button key={hex} type="button" title={hex} onClick={() => { onChange(hex); setOpen(false) }}
                   className={`w-6 h-6 rounded-md border border-line/10 transition-transform hover:scale-125 hover:z-10 ${value.toLowerCase() === hex.toLowerCase() ? 'ring-2 ring-ink ring-offset-1 ring-offset-surface-raised' : ''}`}

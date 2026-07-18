@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
@@ -8,6 +8,11 @@ type Mode = 'signin' | 'signup'
 
 export default function AuthPage() {
   const [mode,     setMode]     = useState<Mode>('signin')
+
+  // Open the sign-up tab when linked as /auth?mode=signup (e.g. from the auth gate).
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('mode') === 'signup') setMode('signup')
+  }, [])
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
   const [name,     setName]     = useState('')
