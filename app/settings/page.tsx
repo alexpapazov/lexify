@@ -14,6 +14,7 @@ import { langName, langFlag, assignLanguageColors, LANG_COLOR_PALETTE } from '@/
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { OfflinePanel } from '@/components/settings/OfflinePanel'
 import { startTour } from '@/components/Tour'
 
 // ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
@@ -766,6 +767,9 @@ export default function SettingsPage() {
           </p>
         </div>
       </div>
+
+      {/* Offline */}
+      <OfflinePanel />
 
       {/* Study defaults */}
       <div className="panel space-y-3" data-tour="settings-ladder">
