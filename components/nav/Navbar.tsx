@@ -63,19 +63,15 @@ export function Navbar() {
   }
 
   const offline = useOfflineMode()
-  // Offline: hide the AI-only destinations (agent card-making, upload/AI card gen).
-  const OFFLINE_HIDDEN = new Set(['/agents', '/upload'])
+  // Offline: hide destinations that need a connection (AI card-making/upload, community browse,
+  // full analytics). Study/Library/Settings remain.
+  const OFFLINE_HIDDEN = new Set(['/agents', '/upload', '/browse', '/progress'])
   const navLinks = offline ? NAV_LINKS.filter(l => !OFFLINE_HIDDEN.has(l.href)) : NAV_LINKS
 
   return (
     <>
-      {offline && (
-        <div className="z-[60] bg-amber-500/90 text-black text-xs font-medium text-center py-1 px-3 flex items-center justify-center gap-3">
-          <span>● Offline mode — studying from your downloaded cards. Reviews sync when you go back online.</span>
-          <button onClick={() => setOfflineMode(false)} className="underline underline-offset-2 hover:no-underline shrink-0">Go online</button>
-        </div>
-      )}
-      <nav className="sticky top-0 z-50 border-b border-line/5 bg-surface-deep/90 backdrop-blur">
+      {/* pt-[safe-area] keeps the Lexify row below the device status bar (Capacitor edge-to-edge). */}
+      <nav className="sticky top-0 z-50 border-b border-line/5 bg-surface-deep/90 backdrop-blur pt-[env(safe-area-inset-top)]">
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center">
 
           {/* ── Desktop: brand · nav links · account, spread edge to edge ── */}
@@ -141,6 +137,14 @@ export function Navbar() {
         </div>
       </nav>
 
+      {/* Offline banner — sits under the Lexify row, scrolls with the page. */}
+      {offline && (
+        <div className="z-40 bg-amber-500/90 text-black text-xs font-medium text-center py-1.5 px-3 flex items-center justify-center gap-3">
+          <span>● Offline mode — studying from your downloaded cards. Reviews sync when you go back online.</span>
+          <button onClick={() => setOfflineMode(false)} className="underline underline-offset-2 hover:no-underline shrink-0">Go online</button>
+        </div>
+      )}
+
       {/* ── Mobile drawer ── */}
       {menuOpen && (
         <div className="md:hidden fixed inset-0 z-40 flex flex-col" onClick={() => setMenuOpen(false)}>
@@ -149,7 +153,7 @@ export function Navbar() {
 
           {/* Drawer panel */}
           <div
-            className="relative mt-14 bg-surface-deep border-b border-line/5 px-4 py-3 space-y-1"
+            className="relative mt-[calc(env(safe-area-inset-top)+3.5rem)] bg-surface-deep border-b border-line/5 px-4 py-3 space-y-1"
             onClick={e => e.stopPropagation()}
           >
             {navLinks.map(({ href, label }) => {

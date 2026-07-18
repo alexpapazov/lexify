@@ -12,7 +12,7 @@ import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { pushOutbox, resolveConflicts, type CardStateConflict, type ConflictChoice, type SyncProgress } from '@/lib/offline/sync'
 import { SyncConflictModal } from '@/components/settings/SyncConflictModal'
 import type { Deck, Folder } from '@/domain'
-import type { Manifest, OfflineScope, OfflineScopeKind } from '@/lib/offline/types'
+import type { Manifest, OfflineScope } from '@/lib/offline/types'
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -27,8 +27,10 @@ function fmtWhen(iso: string): string {
 export function OfflinePanel() {
   const [decks, setDecks] = useState<Deck[]>([])
   const [folders, setFolders] = useState<Folder[]>([])
-  const [kind, setKind] = useState<OfflineScopeKind>('library')
-  const [target, setTarget] = useState('')
+  const [wholeLibrary, setWholeLibrary] = useState(true)
+  const [selPairs,   setSelPairs]   = useState<Set<string>>(new Set())
+  const [selFolders, setSelFolders] = useState<Set<string>>(new Set())
+  const [selDecks,   setSelDecks]   = useState<Set<string>>(new Set())
   const [windowDays, setWindowDays] = useState(7)
   const [includeAudio, setIncludeAudio] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -65,23 +67,28 @@ export function OfflinePanel() {
       .map(d => ({ key: `${d.sourceLanguage}|${d.targetLanguage}`, source: d.sourceLanguage, target: d.targetLanguage }))
   }, [decks])
 
-  // Reset the target when the scope kind changes.
-  useEffect(() => { setTarget(kind === 'language' ? (pairs[0]?.key ?? '') : kind === 'folder' ? (folders[0]?.id ?? '') : kind === 'deck' ? (decks[0]?.id ?? '') : '') }, [kind, pairs, folders, decks])
+  function toggleIn(set: Set<string>, id: string, setter: (s: Set<string>) => void) {
+    const next = new Set(set)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    setter(next)
+  }
 
-  function buildScope(): OfflineScope | null {
-    if (kind === 'library') return { kind: 'library' }
-    if (kind === 'language') { const [source, t] = target.split('|'); return source ? { kind: 'language', source, target: t } : null }
-    if (kind === 'folder') return target ? { kind: 'folder', folderId: target } : null
-    return target ? { kind: 'deck', deckId: target } : null
+  function buildScopes(): OfflineScope[] {
+    if (wholeLibrary) return [{ kind: 'library' }]
+    const scopes: OfflineScope[] = []
+    for (const key of selPairs) { const [source, t] = key.split('|'); if (source) scopes.push({ kind: 'language', source, target: t }) }
+    for (const id of selFolders) scopes.push({ kind: 'folder', folderId: id })
+    for (const id of selDecks)   scopes.push({ kind: 'deck', deckId: id })
+    return scopes
   }
 
   async function run() {
-    const scope = buildScope()
-    if (!scope) { setError('Pick what to download.'); return }
+    const scopes = buildScopes()
+    if (scopes.length === 0) { setError('Pick at least one thing to download (or choose Whole library).'); return }
     setBusy(true); setError(null); setResult(null); setProgress(null)
     try {
       const { manifest: m, bytes } = await downloadForOffline({
-        scope, dueWindowDays: windowDays, includeAudio,
+        scopes, dueWindowDays: windowDays, includeAudio,
         onProgress: (phase, done, total) => setProgress({ phase, done, total }),
       })
       setResult({ cardCount: m.cardCount, bytes })
@@ -160,25 +167,31 @@ export function OfflinePanel() {
       {/* Offline toggle — only meaningful once a bundle is downloaded */}
       {manifest && (
         <div className={`rounded-lg border px-3 py-2 ${offline ? 'border-accent/40 bg-accent/5' : 'border-line/10'}`}>
-          <label className="flex items-center justify-between gap-3 cursor-pointer">
+          <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm text-ink">{offline ? 'Offline mode — studying locally' : 'Go offline'}</div>
+              <div className="text-sm text-ink">{offline ? 'Offline mode — studying locally' : 'Online'}</div>
               <div className="text-xs text-ink-faint mt-0.5">
                 {offline
-                  ? 'Reviews are saved on this device. Toggle off when you have a connection to sync them back.'
+                  ? 'Reviews are saved on this device. Switch to Online when you have a connection to sync them back.'
                   : pendingCount > 0
                     ? `${pendingCount} local change${pendingCount === 1 ? '' : 's'} waiting to sync.`
                     : 'Study without a connection using your downloaded cards.'}
               </div>
             </div>
-            <input
-              type="checkbox"
-              className="h-5 w-9 shrink-0 accent-accent cursor-pointer disabled:opacity-50"
-              checked={offline}
-              disabled={syncing}
-              onChange={e => void handleToggle(e.target.checked)}
-            />
-          </label>
+            {/* Online ⟷ Offline switch (Online is the default). */}
+            <div className="shrink-0 inline-flex rounded-full border border-line/15 bg-surface-raised p-0.5 text-xs font-medium select-none">
+              <button
+                onClick={() => { if (!syncing && offline) void handleToggle(false) }}
+                disabled={syncing}
+                className={`px-3 py-1 rounded-full transition-colors disabled:opacity-60 ${!offline ? 'bg-accent text-white' : 'text-ink-muted'}`}
+              >Online</button>
+              <button
+                onClick={() => { if (!syncing && !offline) void handleToggle(true) }}
+                disabled={syncing}
+                className={`px-3 py-1 rounded-full transition-colors disabled:opacity-60 ${offline ? 'bg-amber-500 text-black' : 'text-ink-muted'}`}
+              >Offline</button>
+            </div>
+          </div>
           {(syncing || syncProgress || syncMsg) && (
             <div className="mt-2 text-xs">
               {syncing && <span className="text-ink-faint">{syncProgress ? `${syncProgress.phase} — ${syncProgress.done}/${syncProgress.total}` : 'Syncing…'}</span>}
@@ -199,29 +212,55 @@ export function OfflinePanel() {
         />
       )}
 
-      {/* Scope */}
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-xs text-ink-muted">Download</span>
-        <select className="input py-1 w-auto" value={kind} onChange={e => setKind(e.target.value as OfflineScopeKind)}>
-          <option value="library">Whole library</option>
-          <option value="language">A language</option>
-          <option value="folder">A folder</option>
-          <option value="deck">A deck</option>
-        </select>
-        {kind === 'language' && (
-          <select className="input py-1 w-auto" value={target} onChange={e => setTarget(e.target.value)}>
-            {pairs.map(p => <option key={p.key} value={p.key}>{langFlag(p.source)} {langName(p.source)} → {langName(p.target)}</option>)}
-          </select>
-        )}
-        {kind === 'folder' && (
-          <select className="input py-1 w-auto" value={target} onChange={e => setTarget(e.target.value)}>
-            {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
-        )}
-        {kind === 'deck' && (
-          <select className="input py-1 w-auto max-w-[200px]" value={target} onChange={e => setTarget(e.target.value)}>
-            {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
+      {/* Scope — multi-select: whole library, or any mix of languages / folders / decks */}
+      <div className="space-y-2 text-sm">
+        <div className="text-xs text-ink-muted">What to download</div>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" className="accent-accent" checked={wholeLibrary} onChange={e => setWholeLibrary(e.target.checked)} />
+          <span className="text-ink">Whole library</span>
+        </label>
+        {!wholeLibrary && (
+          <div className="space-y-3 pl-1 pt-1">
+            {pairs.length > 0 && (
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-faint mb-1">Languages</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {pairs.map(p => (
+                    <label key={p.key} className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" className="accent-accent" checked={selPairs.has(p.key)} onChange={() => toggleIn(selPairs, p.key, setSelPairs)} />
+                      <span className="text-ink">{langFlag(p.source)} {langName(p.source)} → {langName(p.target)}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            {folders.length > 0 && (
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-faint mb-1">Folders</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {folders.map(f => (
+                    <label key={f.id} className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" className="accent-accent" checked={selFolders.has(f.id)} onChange={() => toggleIn(selFolders, f.id, setSelFolders)} />
+                      <span className="text-ink truncate max-w-[220px]">{f.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            {decks.length > 0 && (
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-faint mb-1">Decks</div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                  {decks.map(d => (
+                    <label key={d.id} className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" className="accent-accent" checked={selDecks.has(d.id)} onChange={() => toggleIn(selDecks, d.id, setSelDecks)} />
+                      <span className="text-ink truncate max-w-[220px]">{d.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

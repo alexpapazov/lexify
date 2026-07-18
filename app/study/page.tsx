@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { loadProfileRow } from '@/lib/offline/profilePrefs'
+import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { routes } from '@/lib/routes'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -286,6 +287,7 @@ export default function StudyPage() {
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
   const forecastSettingsRef = useRef<HTMLDivElement>(null)
+  const offline = useOfflineMode()
   const router = useRouter()
   const supabase = createClient()
 
@@ -1033,6 +1035,10 @@ export default function StudyPage() {
                 )}
               </div>
             </div>
+
+            {offline && (
+              <p className="text-xs text-ink-faint -mt-1">Offline — this forecast only reflects the cards you downloaded.</p>
+            )}
 
             {forecast.every(d => d.count === 0) ? (
               <div className="panel text-ink-muted text-sm text-center py-6">

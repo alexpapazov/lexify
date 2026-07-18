@@ -8,6 +8,8 @@ import { ConnectionGraph } from '@/components/analytics/ConnectionGraph'
 import { DueForecastProjection } from '@/components/analytics/DueForecastProjection'
 import { LadderLogs } from '@/components/analytics/LadderLogs'
 import { getToday } from '@/lib/dates'
+import { useOfflineMode } from '@/lib/offline/useOfflineMode'
+import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 
 type RangeDays = 7 | 14 | 30 | 90
 
@@ -69,6 +71,7 @@ const DEFAULT_LAPSES_COLOR  = '#F05068' // danger
 const LANG_PALETTE = LANG_COLOR_PALETTE
 
 export default function AnalyticsPage() {
+  const offline = useOfflineMode()
   const [range,        setRange]        = useState<RangeDays>(30)
   const [data,         setData]         = useState<DayData[]>([])
   const [loading,      setLoading]      = useState(true)
@@ -311,6 +314,8 @@ export default function AnalyticsPage() {
 
   const langPairLabel = (src: string, tgt: string) =>
     `${langName(src)} → ${langName(tgt)}`
+
+  if (offline) return <OfflineUnavailable feature="Analytics" />
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10 space-y-8">

@@ -35,7 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen flex flex-col">
         <ServiceWorkerRegister />
         <Navbar />
-        <main className="flex-1 px-4 py-8 max-w-5xl mx-auto w-full">
+        <main className="flex-1 px-4 py-8 max-w-5xl mx-auto w-full pb-[calc(2rem+env(safe-area-inset-bottom))]">
           <AuthWall>{children}</AuthWall>
         </main>
         <Tour />

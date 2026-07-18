@@ -16,6 +16,7 @@ import { getToday } from '@/lib/dates'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { OfflinePanel } from '@/components/settings/OfflinePanel'
 import { startTour } from '@/components/Tour'
+import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 
 // ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
 function hslToHex(h: number, s: number, l: number): string {
@@ -95,19 +96,6 @@ function LanguageColorPicker({ value, onChange }: { value: string; onChange: (he
     </div>
   )
 }
-
-const LANGUAGES = [
-  { code: 'es', label: 'Spanish'    },
-  { code: 'fr', label: 'French'     },
-  { code: 'de', label: 'German'     },
-  { code: 'bg', label: 'Bulgarian'  },
-  { code: 'zh', label: 'Mandarin'   },
-  { code: 'ja', label: 'Japanese'   },
-  { code: 'ko', label: 'Korean'     },
-  { code: 'pt', label: 'Portuguese' },
-  { code: 'it', label: 'Italian'    },
-  { code: 'asl', label: 'ASL'       },
-]
 
 function ConfirmDialog({ message, onConfirm, onCancel }: {
   message: string; onConfirm: () => void; onCancel: () => void
@@ -415,6 +403,7 @@ export default function SettingsPage() {
   const [deletingPair,           setDeletingPair]           = useState(false)
   const [deletePairError,        setDeletePairError]        = useState<string | null>(null)
 
+  const offline  = useOfflineMode()
   const router   = useRouter()
   const supabase = createClient()
 
@@ -675,10 +664,6 @@ export default function SettingsPage() {
     }
   }
 
-  function toggle(code: string) {
-    setSelectedLangs(prev => prev.includes(code) ? prev.filter(c => c !== code) : [...prev, code])
-  }
-
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
 
   return (
@@ -700,10 +685,12 @@ export default function SettingsPage() {
           <p className="text-sm text-ink-muted">Theme</p>
           <ThemeToggle />
         </div>
-        <div className="flex items-center justify-between gap-4 flex-wrap border-t border-line/5 pt-4">
-          <p className="text-sm text-ink-muted">Take the guided tour again</p>
-          <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => startTour()}>Replay tutorial</button>
-        </div>
+        {!offline && (
+          <div className="flex items-center justify-between gap-4 flex-wrap border-t border-line/5 pt-4">
+            <p className="text-sm text-ink-muted">Take the guided tour again</p>
+            <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => startTour()}>Replay tutorial</button>
+          </div>
+        )}
       </div>
 
       {/* Profile */}
@@ -720,7 +707,8 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Timezone */}
+      {/* Timezone — online only */}
+      {!offline && (
       <div className="panel space-y-4" data-tour="settings-timezone">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Time zone</h2>
         <div className="space-y-1.5">
@@ -767,6 +755,7 @@ export default function SettingsPage() {
           </p>
         </div>
       </div>
+      )}
 
       {/* Offline */}
       <OfflinePanel />
@@ -855,23 +844,6 @@ export default function SettingsPage() {
               </div>
             )
           })()}
-        </div>
-      </div>
-
-      {/* Languages */}
-      <div className="panel space-y-4">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Languages I&apos;m learning</h2>
-        <div className="flex flex-wrap gap-2">
-          {LANGUAGES.map(({ code, label }) => {
-            const active = selectedLangs.includes(code)
-            return (
-              <button key={code} onClick={() => toggle(code)} className={[
-                'px-3 py-1.5 rounded-full text-sm font-medium border transition-colors',
-                active ? 'bg-accent/20 border-accent/60 text-accent-soft'
-                       : 'bg-surface-raised border-line/10 text-ink-muted hover:border-line/20 hover:text-ink',
-              ].join(' ')}>{label}</button>
-            )
-          })}
         </div>
       </div>
 
@@ -1008,8 +980,8 @@ export default function SettingsPage() {
         </button>
       </div>
 
-      {/* Language Sync */}
-      {userId && (
+      {/* Language Sync — online only */}
+      {!offline && userId && (
         <div className="panel space-y-4" data-tour="settings-sync">
           <div>
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Language Sync</h2>
@@ -1022,8 +994,8 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Global redistribute */}
-      {userId && (
+      {/* Global redistribute — online only */}
+      {!offline && userId && (
         <div className="panel space-y-3">
           <div>
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Redistribute cards</h2>
@@ -1047,7 +1019,8 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Global reset */}
+      {/* Danger zone — online only */}
+      {!offline && (
       <div className="panel border-danger/20 space-y-2">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Danger zone</h2>
         <p className="text-xs text-ink-muted">
@@ -1117,6 +1090,7 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

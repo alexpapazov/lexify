@@ -69,7 +69,8 @@ export function estimateBundleBytes(bundle: DownloadBundle): number {
 // ── Orchestration (online → local store) ─────────────────────────────────────
 
 export interface DownloadOptions {
-  scope:         OfflineScope
+  /** One or more scopes to download — the union of their decks is bundled (multi-select). */
+  scopes:        OfflineScope[]
   dueWindowDays: number
   includeAudio:  boolean
   onProgress?:   (phase: string, done: number, total: number) => void
@@ -92,7 +93,7 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
     new SupabaseDeckRepository().list(uid),
     new SupabaseFolderRepository().list(uid),
   ])
-  const deckIds = new Set(scopeDeckIds(opts.scope, allDecks, allFolders))
+  const deckIds = new Set(opts.scopes.flatMap(s => scopeDeckIds(s, allDecks, allFolders)))
   const decks = allDecks.filter(d => deckIds.has(d.id))
 
   // Gather cards + states across the scope's decks (dedupe shared cards).
@@ -153,9 +154,19 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   const defaultLadder = await new SupabaseLadderRepository().getDefault(uid)
 
   const manifest: Manifest = {
-    userId: uid, scope: opts.scope, dueWindowDays: opts.dueWindowDays, includeAudio: opts.includeAudio,
+    userId: uid, scope: opts.scopes[0] ?? { kind: 'library' }, dueWindowDays: opts.dueWindowDays, includeAudio: opts.includeAudio,
     downloadedAt: new Date().toISOString(), cardCount: finalCards.length,
   }
+  // Only bundle folders that (transitively) contain a downloaded deck — plus their ancestors so the
+  // tree is navigable — so the offline library shows just the relevant folders, not every language's.
+  const folderById = new Map(allFolders.map(f => [f.id, f]))
+  const keepFolders = new Set<string>()
+  for (const d of decks) {
+    let fid: string | null = d.folderId
+    while (fid && !keepFolders.has(fid)) { keepFolders.add(fid); fid = folderById.get(fid)?.parentId ?? null }
+  }
+  const scopedFolders = allFolders.filter(f => keepFolders.has(f.id))
+
   const bundle: DownloadBundle = {
     manifest,
     cards: finalCards,
@@ -167,7 +178,7 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
     ],
     schedulerParams: params.map(p => ({ key: paramKey(p.sourceLanguage, p.targetLanguage, p.answerField), source: p.sourceLanguage, target: p.targetLanguage, answerField: p.answerField, row: p })),
     decks,
-    folders: allFolders,
+    folders: scopedFolders,
     confusionLinks: links.map((l, i) => ({ ...l, id: (l as { id?: string }).id ?? `link-${i}` })),
     overrides: overrides.map(o => ({ key: overrideKey(o.cardId, o.answerSide, o.answerText), cardId: o.cardId, answerSide: o.answerSide, answerText: o.answerText })),
     deckCards: deckCardRows.map(r => ({ key: `${r.deck_id}:${r.card_id}`, deckId: r.deck_id, cardId: r.card_id })),

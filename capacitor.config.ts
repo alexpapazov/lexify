@@ -12,7 +12,10 @@ const config: CapacitorConfig = {
   // instead of showing white behind the web view.
   backgroundColor: '#13141F',
   ios: {
-    contentInset: 'always',
+    // 'never' lets the web view go edge-to-edge; we pad for the status bar / home indicator with
+    // CSS env(safe-area-inset-*) so the sticky navbar sits below the status bar and content clears
+    // the home indicator (viewport-fit=cover is set in the app's viewport meta).
+    contentInset: 'never',
     backgroundColor: '#13141F',
   },
 }

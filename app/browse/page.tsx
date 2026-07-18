@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import { useOfflineMode } from '@/lib/offline/useOfflineMode'
+import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 
 const PLACEHOLDER_DECKS = [
   { id: '1', name: 'Spanish 501 Verbs',    author: 'maria_learns', cardCount: 501 },
@@ -9,7 +11,9 @@ const PLACEHOLDER_DECKS = [
 ]
 
 export default function BrowsePage() {
+  const offline = useOfflineMode()
   const [query, setQuery] = useState('')
+  if (offline) return <OfflineUnavailable feature="Browse" />
   const filtered = PLACEHOLDER_DECKS.filter(d =>
     d.name.toLowerCase().includes(query.toLowerCase())
   )
