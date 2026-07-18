@@ -35,7 +35,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   /** Inline edit of the card's prompt/answer text (empty string = delete the card). */
   onCardEdit?:     (cardId: string, side: CardSide, newText: string) => void
   onRepeat?:       () => void
-  onOutcome:      (o: RungAttemptOutcome, overridden?: boolean) => void
+  onOutcome:      (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onInfo?:        () => void
 }) {
@@ -70,6 +70,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   // Track whether this attempt was marked correct via override (accept=true), so the replay can
   // flash the overridden result rather than the natural grade. Resets each card (component remounts).
   const overrodeRef = useRef(false)
+  const almostRef = useRef(false)   // near-miss on the current attempt (for 'almost' outcome/color)
   const trackOverride = (answerSide: CardSide) => (answerText: string, accept: boolean) => {
     if (accept) overrodeRef.current = true
     onOverrideAnswer?.(card.id, answerSide, answerText, accept)
@@ -126,8 +127,9 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         onAnswerEdit={onCardEdit ? (t => onCardEdit(card.id, answerSide, t)) : undefined}
         synonyms={answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
         onRepeat={onRepeat}
+        onNearMiss={isAlmost => { almostRef.current = isAlmost }}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
-        onRate={(r, wasCorrect) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r), overrodeRef.current)}
+        onRate={(r, wasCorrect) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r), overrodeRef.current, almostRef.current)}
       />
     )
   }

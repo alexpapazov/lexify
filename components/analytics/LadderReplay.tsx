@@ -9,14 +9,14 @@ const GUTTER = 76   // left label gutter
 
 // Flash colour when a card just moved, by the rating/outcome of that attempt.
 const OUTCOME_COLOR: Record<string, string> = {
-  again: '#F05068', miss: '#F05068', almost: '#F05068',  // wrong / mess-up → red
+  again: '#F05068', miss: '#F05068',                      // wrong / mess-up → red
+  almost: '#F0883E', hard: '#F0883E',                     // near-miss / hard → orange
   pass:  '#4ADE80', good: '#4ADE80',                      // correct / good → green
-  hard:  '#F0883E',                                       // hard → orange
   easy:  '#4C8DFF',                                       // easy → blue
 }
 const LEGEND: { label: string; color: string }[] = [
   { label: 'Again / miss', color: '#F05068' },
-  { label: 'Hard', color: '#F0883E' },
+  { label: 'Almost / Hard', color: '#F0883E' },
   { label: 'Correct / Good', color: '#4ADE80' },
   { label: 'Easy', color: '#4C8DFF' },
 ]

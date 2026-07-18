@@ -309,10 +309,13 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       reviewDirection: 'reverse', intervalDays: nDays, scheduledIntervalDays: nDays, recallIntervalDays: nDays, dueAt: due(nDays), recallDueAt: due(nDays) })
   }
 
-  async function onOutcome(outcome: RungAttemptOutcome, overridden = false) {
+  async function onOutcome(outcome: RungAttemptOutcome, overridden = false, almost = false) {
     if (!userId || !ladder || !currentId || !currentClimb) return
     const now = Date.now()
     const res = reviewRung(ladder, currentClimb, outcome, now)
+    // The engine keeps the real outcome ('miss'); the LOG marks a near-miss as 'almost' for the replay
+    // colour without changing drop-back behaviour.
+    const loggedOutcome: RungAttemptOutcome = almost && outcome === 'miss' ? 'almost' : outcome
 
     // Log this rung attempt (fire-and-forget) so Analytics → Logs can show session stats + a replay.
     const rungCount = ladder.rungs.length
@@ -323,7 +326,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       sourceLanguage: logDeck?.sourceLanguage ?? null, targetLanguage: logDeck?.targetLanguage ?? null,
       fromRung: currentClimb.rungIndex, toRung: res.state.graduated ? rungCount : res.state.rungIndex, rungCount,
       rungType: ladder.rungs[currentClimb.rungIndex]?.type ?? null,
-      outcome, advanced: res.advanced, graduated: res.state.graduated, overridden,
+      outcome: loggedOutcome, advanced: res.advanced, graduated: res.state.graduated, overridden,
       durationMs: Math.min(5 * 60_000, Math.max(0, now - shownAtRef.current)),  // cap at 5 min (ignore idle)
     }]).catch(() => {})
     touchSession()  // slide the freshness window so a refresh keeps continuing this session
