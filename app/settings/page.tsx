@@ -13,6 +13,7 @@ import { langName, langFlag, assignLanguageColors, LANG_COLOR_PALETTE } from '@/
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
 import { ThemeToggle } from '@/components/ThemeToggle'
+import { startTour } from '@/components/Tour'
 
 // ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
 function hslToHex(h: number, s: number, l: number): string {
@@ -659,6 +660,10 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-ink-muted">Theme</p>
           <ThemeToggle />
+        </div>
+        <div className="flex items-center justify-between gap-4 flex-wrap border-t border-line/5 pt-4">
+          <p className="text-sm text-ink-muted">Take the guided tour again</p>
+          <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => startTour()}>Replay tutorial</button>
         </div>
       </div>
 

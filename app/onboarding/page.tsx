@@ -5,7 +5,14 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { SupabaseLadderRepository } from '@/lib/data/ladders'
+import { SupabaseFolderRepository } from '@/lib/data/folders'
+import { SupabaseDeckRepository } from '@/lib/data/decks'
+import { SupabaseCardRepository } from '@/lib/data/cards'
+import { starterFoldersFor } from '@/lib/starterContent'
+import { startTour } from '@/components/Tour'
 import { LANGUAGES, langFlag, langName } from '@/lib/languages'
+
+const DEFAULT_PIPELINE_ID = '00000000-0000-0000-0000-000000000001'
 import {
   STUDY_STYLES, tracksForStyle, LADDER_PRESETS, PACES, goalsForPace,
   type StudyStyle, type LadderDepth, type Pace,
@@ -83,6 +90,9 @@ export default function OnboardingPage() {
       const pairRepo   = new SupabaseLanguagePairRepository()
       const paramRepo  = new SupabaseUserSchedulerParamsRepository()
       const ladderRepo = new SupabaseLadderRepository()
+      const folderRepo = new SupabaseFolderRepository()
+      const deckRepo   = new SupabaseDeckRepository()
+      const cardRepo   = new SupabaseCardRepository()
 
       // Default ladder for every newly added language.
       await ladderRepo.saveDefault(uid, LADDER_PRESETS[depth].ladder)
@@ -104,11 +114,21 @@ export default function OnboardingPage() {
           await paramRepo.getOrCreate(uid, learned, native, field)
           await paramRepo.update(uid, learned, native, field, { [key]: flags[key] })
         }
+
+        // Seed starter folders (Common Phrases + Numbers) so there's something to study.
+        for (const sf of starterFoldersFor(learned, native)) {
+          const folder = await folderRepo.create(uid, sf.name, null, { sourceLanguage: learned, targetLanguage: native })
+          const deck = await deckRepo.create(uid, { name: sf.name, sourceLanguage: learned, targetLanguage: native, pipelineId: DEFAULT_PIPELINE_ID })
+          await deckRepo.update(deck.id, { folderId: folder.id })
+          await cardRepo.bulkCreate(deck.id, uid, learned, native, sf.cards.map((c, i) => ({ front: c.front, back: c.back, position: i })))
+        }
       }
 
       try { localStorage.setItem('lexify-theme', theme) } catch { /* ignore */ }
       await supabase.from('profiles').update({ onboarding_completed: true }).eq('user_id', uid)
 
+      // Kick off the guided tour on the next page (persists across the reload).
+      startTour()
       // Hard navigation so AuthWall re-reads the (now-completed) onboarding flag.
       window.location.href = '/study'
     } catch (err) {

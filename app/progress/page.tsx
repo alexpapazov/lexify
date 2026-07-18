@@ -316,7 +316,7 @@ export default function AnalyticsPage() {
       <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
 
       {/* Forward projection: Due Now load over the next 2 years */}
-      <div className="panel p-5 space-y-3">
+      <div className="panel p-5 space-y-3" data-tour="projected-due">
         <div>
           <h2 className="text-sm font-semibold text-ink">Projected Due Now load</h2>
           <p className="text-xs text-ink-faint">Your existing cards plus new cards from your daily goals, simulated on the FSRS model per language — each language&apos;s measured initial interval, average difficulty, and rating mix (again/hard/good/easy). Existing accelerated cards use their own difficulty/stability. Split into typed, self-graded (recall + smart-typing past its threshold), and reverse recognition.</p>

@@ -772,7 +772,7 @@ export default function StudyPage() {
 
           {/* ── Today's goals ───────────────────────────────────────────── */}
           {pairsWithGoalsToday.length > 0 && (
-            <div className="panel space-y-3">
+            <div className="panel space-y-3" data-tour="todays-goals">
               <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Today&apos;s goals</h2>
               {pairsWithGoalsToday.map(pair => {
                 const key   = `${pair.sourceLanguage}|${pair.targetLanguage}`
@@ -839,7 +839,7 @@ export default function StudyPage() {
 
           {/* ── Study all due ───────────────────────────────────────────── */}
           {deckStats.length > 0 && (
-            <div className="mt-8 relative inline-block" ref={duePickerRef}>
+            <div className="mt-8 relative inline-block" ref={duePickerRef} data-tour="due-now">
               {totalDue === 0 ? (
                 <button disabled className="btn-primary opacity-40 cursor-not-allowed">No cards due</button>
               ) : (
@@ -898,7 +898,7 @@ export default function StudyPage() {
           )}
 
           {/* ── Upcoming reviews ─────────────────────────────────────────── */}
-          <div className="space-y-3">
+          <div className="space-y-3" data-tour="coming-up">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-base font-medium text-ink">Coming up</h2>
               <div className="relative" ref={forecastSettingsRef}>

@@ -1382,7 +1382,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       </div>
 
       {/* Pairing-wide stat counters */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3" data-tour="library-counter">
         {PAIR_COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
           const isActive = activeFilter === key
           return (

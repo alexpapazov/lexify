@@ -46,7 +46,7 @@ export function AvatarMenu({
   }, [open])
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative" data-tour="avatar">
       <button
         onClick={() => setOpen(o => !o)}
         aria-label="Account menu"

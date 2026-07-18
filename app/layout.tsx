@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 import { Navbar } from '@/components/nav/Navbar'
 import { AuthWall } from '@/components/AuthWall'
+import { Tour } from '@/components/Tour'
 
 export const metadata: Metadata = {
   title: 'Lexify',
@@ -23,6 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="flex-1 px-4 py-8 max-w-5xl mx-auto w-full">
           <AuthWall>{children}</AuthWall>
         </main>
+        <Tour />
       </body>
     </html>
   )
