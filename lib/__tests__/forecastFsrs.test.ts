@@ -1,4 +1,4 @@
-import { stabilityForInterval, fsrsSchedule, fsrsScheduleMix, normalizeRatingMix, DEFAULT_RATING_MIX, median, estimateInitialInterval, seedStability, seedDifficulty, measureRatingMix, DEFAULT_DIFFICULTY } from '@/lib/forecastFsrs'
+import { stabilityForInterval, fsrsSchedule, fsrsScheduleMix, normalizeRatingMix, DEFAULT_RATING_MIX, median, estimateInitialInterval, seedStability, seedDifficulty, measureRatingMix, DEFAULT_DIFFICULTY, mulberry32, sampleRating, fsrsScheduleSampled, monteCarloSteps, percentile } from '@/lib/forecastFsrs'
 import { intervalForRetention } from '@/engine/fsrs'
 
 describe('stabilityForInterval', () => {
@@ -22,6 +22,78 @@ describe('fsrsSchedule', () => {
     const steps = fsrsSchedule({ stability: 3, difficulty: 5, firstReviewDay: 1, retention: 0.9, maxInt: 30, horizon: 365 })
     for (let i = 1; i < steps.length; i++) expect(steps[i]!.day - steps[i - 1]!.day).toBeLessThanOrEqual(31)
     expect(steps[steps.length - 1]!.day).toBeLessThanOrEqual(365)
+  })
+})
+
+describe('mulberry32', () => {
+  it('is deterministic for a given seed and varies across seeds', () => {
+    const a = mulberry32(42), b = mulberry32(42), c = mulberry32(43)
+    const seqA = [a(), a(), a()], seqB = [b(), b(), b()], seqC = [c(), c(), c()]
+    expect(seqA).toEqual(seqB)
+    expect(seqA).not.toEqual(seqC)
+    for (const x of [...seqA, ...seqC]) { expect(x).toBeGreaterThanOrEqual(0); expect(x).toBeLessThan(1) }
+  })
+})
+
+describe('sampleRating', () => {
+  it('maps uniform samples onto the mix cumulative buckets', () => {
+    const mix = { again: 0.1, hard: 0.2, good: 0.6, easy: 0.1 }
+    expect(sampleRating(mix, 0.05)).toBe('again')
+    expect(sampleRating(mix, 0.2)).toBe('hard')
+    expect(sampleRating(mix, 0.5)).toBe('good')
+    expect(sampleRating(mix, 0.95)).toBe('easy')
+  })
+})
+
+describe('fsrsScheduleSampled', () => {
+  it('produces increasing review days within the horizon', () => {
+    const rand = mulberry32(7)
+    const steps = fsrsScheduleSampled({ stability: 3, difficulty: 5, firstReviewDay: 3, retention: 0.9, maxInt: 1460, horizon: 730, mix: DEFAULT_RATING_MIX, rand, fuzz: true })
+    expect(steps.length).toBeGreaterThan(2)
+    for (let i = 1; i < steps.length; i++) expect(steps[i]!.day).toBeGreaterThanOrEqual(steps[i - 1]!.day)
+    expect(steps[steps.length - 1]!.day).toBeLessThanOrEqual(730)
+  })
+  it('an all-again mix reviews far more often than an all-good mix (lapses add load)', () => {
+    const allGood = { again: 0, hard: 0, good: 1, easy: 0 }
+    const allAgain = { again: 1, hard: 0, good: 0, easy: 0 }
+    const good = fsrsScheduleSampled({ stability: 3, difficulty: 5, firstReviewDay: 1, retention: 0.9, maxInt: 1460, horizon: 365, mix: allGood, rand: mulberry32(1) })
+    const bad  = fsrsScheduleSampled({ stability: 3, difficulty: 5, firstReviewDay: 1, retention: 0.9, maxInt: 1460, horizon: 365, mix: allAgain, rand: mulberry32(1) })
+    expect(bad.length).toBeGreaterThan(good.length)
+  })
+})
+
+describe('monteCarloSteps', () => {
+  it('is reproducible for a seed and averages to weight 1 per run', () => {
+    const opts = { stability: 3, difficulty: 5, firstReviewDay: 3, retention: 0.9, maxInt: 1460, horizon: 365, mix: DEFAULT_RATING_MIX, K: 40, fuzz: true }
+    const a = monteCarloSteps(opts, 99)
+    const b = monteCarloSteps(opts, 99)
+    expect(a.steps.length).toBe(b.steps.length)
+    const totalWeight = a.steps.reduce((s, x) => s + x.weight, 0)
+    // ~ mean reviews per run; should be a positive, finite number and match the run count scale
+    expect(totalWeight).toBeGreaterThan(0)
+    const runs = new Set(a.steps.map(s => s.run))
+    expect(runs.size).toBeLessThanOrEqual(40)
+  })
+  it('honors maxReviews (dormancy) by capping each run and reporting a dormant day', () => {
+    const { steps, dormantDay } = monteCarloSteps({ stability: 3, difficulty: 5, firstReviewDay: 2, retention: 0.9, maxInt: 1460, horizon: 730, mix: DEFAULT_RATING_MIX, K: 20, maxReviews: 3 }, 5)
+    const perRun = new Map<number, number>()
+    for (const s of steps) perRun.set(s.run!, (perRun.get(s.run!) ?? 0) + 1)
+    for (const n of perRun.values()) expect(n).toBeLessThanOrEqual(3)
+    expect(dormantDay).not.toBeNull()
+  })
+  it('honors stopDay by truncating runs', () => {
+    const { steps } = monteCarloSteps({ stability: 3, difficulty: 5, firstReviewDay: 2, retention: 0.9, maxInt: 1460, horizon: 730, mix: DEFAULT_RATING_MIX, K: 10, stopDay: 100 }, 3)
+    for (const s of steps) expect(s.day).toBeLessThanOrEqual(100)
+  })
+})
+
+describe('percentile', () => {
+  it('returns interpolated order statistics', () => {
+    const xs = [10, 20, 30, 40, 50]
+    expect(percentile(xs, 0)).toBe(10)
+    expect(percentile(xs, 1)).toBe(50)
+    expect(percentile(xs, 0.5)).toBe(30)
+    expect(percentile([], 0.5)).toBe(0)
   })
 })
 

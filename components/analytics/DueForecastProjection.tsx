@@ -7,18 +7,21 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
-import { fsrsScheduleMix, estimateInitialInterval, measureRatingMix, seedStability, seedDifficulty, DEFAULT_RATING_MIX, DEFAULT_I0, DEFAULT_DIFFICULTY, stabilityForInterval, type WeightedStep, type RatingMix } from '@/lib/forecastFsrs'
+import { monteCarloSteps, percentile, estimateInitialInterval, measureRatingMix, seedStability, seedDifficulty, DEFAULT_RATING_MIX, DEFAULT_I0, DEFAULT_DIFFICULTY, stabilityForInterval, type RatingMix } from '@/lib/forecastFsrs'
 
 // Forward projection of daily "Due Now" load, split into Typed / Self-graded / Reverse / Total,
-// simulated on the live FSRS stability model. Each card's future reviews are simulated per language
-// using that language's MEASURED behaviour — its typical initial interval, its average difficulty,
-// and its rating mix (how often it gets again/hard/good/easy) — rather than assuming an all-Good
-// path. Existing cards seed from their own real difficulty/stability (so accelerated cards, which
-// carry their own D/S, are modelled as-is); new cards from daily goals seed from the per-language
-// averages of NON-accelerated cards (we don't assume you'll accelerate future cards).
+// simulated on the live FSRS stability model by MONTE CARLO. Each card is played forward many times;
+// on every review a rating is drawn from that language's measured mix (again/hard/good/easy), stability
+// and difficulty advance by the real engine, and the next interval is fuzzed like the live scheduler.
+// Averaging the runs gives an unbiased mean (the mean-field stepper under-counted load via Jensen's
+// inequality); the spread across runs gives a p10–p90 confidence band. Existing cards seed from their
+// own real difficulty/stability (accelerated cards modelled as-is); new cards from daily goals seed from
+// the per-language averages of NON-accelerated cards. New-card intake is capped at each language's
+// remaining unlearned cards (finite decks), so the long tail doesn't grow forever.
 
 const HORIZON = 730          // 2 years
 const STEP = 14              // chart sampling / smoothing window (days)
+const RUNS = 64              // Monte Carlo trajectories per card/track
 
 interface PairCfg {
   typedP: number; selfgP: number; smartP: number; reverseP: number
@@ -30,7 +33,7 @@ interface PairCfg {
 
 interface PairSeries { key: string; label: string; flag: string; typed: number[]; selfg: number[]; recog: number[] }
 interface PairModel { key: string; label: string; flag: string; days: number; difficulty: number }
-interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairModel[]; hasGoals: boolean }
+interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairModel[]; hasGoals: boolean; bandLo: number[]; bandHi: number[] }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 function ordinal(n: number): string {
@@ -64,11 +67,16 @@ export function DueForecastProjection() {
         void supabase.from('profiles').select('language_colors').eq('user_id', uid).single()
           .then(r => { if (!cancelled) setLangColors((r.data?.language_colors as Record<string, string> | null) ?? {}) })
 
-        const [decks, paramRows, pairs] = await Promise.all([
+        const [decks, paramRows, pairs, cardRows] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
           new SupabaseUserSchedulerParamsRepository().listForUser(uid),
           new SupabaseLanguagePairRepository().list(uid),
+          supabase.from('cards').select('deck_id').eq('owner_id', uid).is('deleted_at', null),
         ])
+        // Total (non-deleted) cards per deck — used to cap future new-card intake at each
+        // language's finite remaining cards.
+        const cardsByDeck = new Map<string, number>()
+        for (const r of (cardRows.data ?? []) as { deck_id: string }[]) cardsByDeck.set(r.deck_id, (cardsByDeck.get(r.deck_id) ?? 0) + 1)
 
         // Per-pair config keyed `${src}|${tgt}`.
         const cfg = new Map<string, PairCfg>()
@@ -113,23 +121,31 @@ export function DueForecastProjection() {
         const seedS = seedStability
         const seedD = seedDifficulty
 
-        // Emit a card's FSRS (rating-mix) schedule into one array, accumulating each step's expected
-        // weight (>1 when lapses add relearn reviews). Returns the day it hits `maxReviews` (dormancy),
-        // else null. Honors `stopDay` (a track ghosted by dormancy elsewhere).
+        const stateRepo = new SupabaseCardStateRepository()
+        const deckStates = await Promise.all(decks.map(d => stateRepo.listByDeck(uid, d.id)))
+
+        // Per-run total-load accumulators (K realizations) → the p10–p90 confidence band. Each card
+        // contributes its run-k sample to system-run k; since cards use independent RNG streams, run k
+        // is a valid i.i.d. draw of the total. Scale K down on large libraries to bound compute.
+        const gradedRows = deckStates.reduce((n, ss) => n + ss.reduce((m, s) => m + (s.graduated ? 1 : 0), 0), 0)
+        const K = gradedRows > 1500 ? 24 : gradedRows > 600 ? 40 : RUNS
+        const runTotals: Float64Array[] = Array.from({ length: K }, () => new Float64Array(HORIZON + 1))
+        let mcSeed = 1
+
+        // Emit a card's Monte Carlo schedule into one array: accumulate each sampled review's weight
+        // (1/K, so the sum is the mean load) and tally per-run totals for the band. Returns the median
+        // day runs hit `maxReviews` (dormancy), else null. Honors `stopDay` (a track ghosted elsewhere).
         const emit = (
           arr: Float64Array, firstDay: number | null, S0: number, D0: number, retention: number, maxInt: number, mix: RatingMix,
           opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
           if (firstDay === null) return null
-          const steps = fsrsScheduleMix({ stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix })
-          let count = 0
-          for (const st of steps) {
-            if (opts?.stopDay != null && st.day > opts.stopDay) break
-            arr[st.day] = (arr[st.day] ?? 0) + st.weight
-            count++
-            if (opts?.maxReviews != null && count >= opts.maxReviews) return st.day
-          }
-          return null
+          const { steps, dormantDay } = monteCarloSteps(
+            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
+            mcSeed++,
+          )
+          for (const st of steps) { arr[st.day]! += st.weight; runTotals[st.run!]![st.day]! += 1 }
+          return dormantDay
         }
         // Smart variant: each review is typed while its interval is below `threshold`, else self-graded.
         const emitSmart = (
@@ -137,20 +153,17 @@ export function DueForecastProjection() {
           retention: number, maxInt: number, threshold: number, mix: RatingMix, opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
           if (firstDay === null) return null
-          const steps = fsrsScheduleMix({ stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix })
-          let count = 0
+          const { steps, dormantDay } = monteCarloSteps(
+            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
+            mcSeed++,
+          )
           for (const st of steps) {
-            if (opts?.stopDay != null && st.day > opts.stopDay) break
             const arr = st.intervalDays < threshold ? typedArr : selfgArr
-            arr[st.day] = (arr[st.day] ?? 0) + st.weight
-            count++
-            if (opts?.maxReviews != null && count >= opts.maxReviews) return st.day
+            arr[st.day]! += st.weight
+            runTotals[st.run!]![st.day]! += 1
           }
-          return null
+          return dormantDay
         }
-
-        const stateRepo = new SupabaseCardStateRepository()
-        const deckStates = await Promise.all(decks.map(d => stateRepo.listByDeck(uid, d.id)))
 
         // ── Pass 1: measure each language's behaviour ─────────────────────────────
         // Rating mix from every graduated forward card; initial interval + average difficulty from the
@@ -179,6 +192,23 @@ export function DueForecastProjection() {
           const ds = diffSamples.get(k) ?? []
           diffByPair.set(k, ds.length ? ds.reduce((a, b) => a + b, 0) / ds.length : DEFAULT_DIFFICULTY)
           initI0Map.set(k, estimateInitialInterval(initSamples.get(k) ?? [], DEFAULT_I0))
+        }
+
+        // Remaining new cards per language = total cards − already-graduated (forward). Caps future
+        // new-card intake so the projection's tail reflects a finite deck, not infinite daily intake.
+        const remainingNewByPair = new Map<string, number>()
+        {
+          const totalByPair = new Map<string, number>()
+          for (const d of decks) {
+            const key = `${d.sourceLanguage}|${d.targetLanguage}`
+            totalByPair.set(key, (totalByPair.get(key) ?? 0) + (cardsByDeck.get(d.id) ?? 0))
+          }
+          for (const [key, sts] of statesByPair) {
+            let g = 0
+            for (const s of sts) if (s.reviewDirection !== 'reverse' && s.graduated) g++
+            remainingNewByPair.set(key, Math.max(0, (totalByPair.get(key) ?? 0) - g))
+          }
+          for (const [key, total] of totalByPair) if (!remainingNewByPair.has(key)) remainingNewByPair.set(key, total)
         }
 
         // ── Pass 2: simulate existing graduated cards (real per-card D/S + language mix) ──
@@ -227,14 +257,37 @@ export function DueForecastProjection() {
         }
 
         // ── New cards — renewal from daily goals, seeded at each language's measured initial interval
-        // and average difficulty, grown with its rating mix (lapse inflation is already in the step
-        // weights). Daily load at age t = dailyGoal · cum(t). ──
-        const cumulative = (steps: WeightedStep[], splitBelow?: number): { t: Float64Array; g: Float64Array } => {
-          const t = new Float64Array(HORIZON + 1), g = new Float64Array(HORIZON + 1)
-          for (const st of steps) { if (st.day > HORIZON) continue; const arr = splitBelow != null && st.intervalDays >= splitBelow ? g : t; arr[st.day] = (arr[st.day] ?? 0) + st.weight }
-          let ct = 0, cg = 0
-          for (let d = 0; d <= HORIZON; d++) { ct += t[d]!; cg += g[d]!; t[d] = ct; g[d] = cg }
-          return { t, g }
+        // and average difficulty, grown by Monte Carlo with its rating mix. A representative card's
+        // per-run cumulative reviews are superposed over daily cohorts; intake is capped at the
+        // language's remaining new cards, so load(d) = goal · (cum(d) − cum(d − intakeDays)). ──
+        const emitNew = (
+          targetArr: Float64Array, retention: number, i0: number, d0: number, mix: RatingMix, maxInt: number,
+          dailyGoal: number, intakeDays: number, splitArr?: Float64Array, splitBelow?: number,
+        ) => {
+          const { steps } = monteCarloSteps({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt, horizon: HORIZON, mix, K, fuzz: true }, mcSeed++)
+          const tRun = Array.from({ length: K }, () => new Float64Array(HORIZON + 1))
+          const gRun = splitBelow != null ? Array.from({ length: K }, () => new Float64Array(HORIZON + 1)) : null
+          for (const st of steps) {
+            if (st.day > HORIZON) continue
+            const useG = gRun && splitBelow != null && st.intervalDays >= splitBelow
+            ;(useG ? gRun! : tRun)[st.run!]![st.day]! += 1
+          }
+          for (let k = 0; k < K; k++) {   // per-run prefix sums
+            let ct = 0, cg = 0
+            for (let d = 0; d <= HORIZON; d++) { ct += tRun[k]![d]!; tRun[k]![d] = ct; if (gRun) { cg += gRun[k]![d]!; gRun[k]![d] = cg } }
+          }
+          for (let d = 0; d <= HORIZON; d++) {
+            const back = d - intakeDays
+            let mt = 0, mg = 0
+            for (let k = 0; k < K; k++) {
+              const t = tRun[k]![d]! - (back >= 0 ? tRun[k]![back]! : 0)
+              const g = gRun ? gRun[k]![d]! - (back >= 0 ? gRun[k]![back]! : 0) : 0
+              mt += t; mg += g
+              runTotals[k]![d]! += dailyGoal * (t + g)
+            }
+            targetArr[d]! += dailyGoal * mt / K
+            if (splitArr && gRun) splitArr[d]! += dailyGoal * mg / K
+          }
         }
         for (const [k, c] of cfg) {
           if (c.dailyGoal <= 0) continue
@@ -242,11 +295,13 @@ export function DueForecastProjection() {
           const i0 = initI0Map.get(k) ?? DEFAULT_I0
           const d0 = diffByPair.get(k) ?? DEFAULT_DIFFICULTY
           const mix = mixByPair.get(k) ?? DEFAULT_RATING_MIX
-          const seed = (retention: number) => ({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt: c.maxInt, horizon: HORIZON, mix })
-          if (c.typedOn)  { const { t } = cumulative(fsrsScheduleMix(seed(c.typedP)));  for (let d = 0; d <= HORIZON; d++) sr.typed[d]! += c.dailyGoal * t[d]! }
-          if (c.smartOn)  { const { t, g } = cumulative(fsrsScheduleMix(seed(c.smartP)), Math.min(c.smartThreshold, c.maxInt)); for (let d = 0; d <= HORIZON; d++) { sr.typed[d]! += c.dailyGoal * t[d]!; sr.selfg[d]! += c.dailyGoal * g[d]! } }
-          if (c.selfgOn)  { const { t } = cumulative(fsrsScheduleMix(seed(c.selfgP)));  for (let d = 0; d <= HORIZON; d++) sr.selfg[d]! += c.dailyGoal * t[d]! }
-          if (c.reverseOn) { const { t } = cumulative(fsrsScheduleMix(seed(c.reverseP))); for (let d = 0; d <= HORIZON; d++) sr.recog[d]! += c.dailyGoal * t[d]! }
+          const remaining = remainingNewByPair.get(k) ?? Infinity
+          const intakeDays = Math.min(HORIZON + 1, Math.ceil((Number.isFinite(remaining) ? remaining : HORIZON * c.dailyGoal) / c.dailyGoal))
+          if (intakeDays <= 0) continue
+          if (c.typedOn)   emitNew(sr.typed, c.typedP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
+          if (c.smartOn)   emitNew(sr.typed, c.smartP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
+          if (c.selfgOn)   emitNew(sr.selfg, c.selfgP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
+          if (c.reverseOn) emitNew(sr.recog, c.reverseP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
         }
 
         // Downsample each pair's series to STEP-day points (windowed average).
@@ -264,7 +319,16 @@ export function DueForecastProjection() {
           .filter(([k]) => pairSeries.some(p => p.key === k))
           .map(([k, days]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), days, difficulty: diffByPair.get(k) ?? DEFAULT_DIFFICULTY }))
 
-        if (!cancelled) setData({ pairs: pairSeries, sampleDays, models, hasGoals: anyGoal })
+        // Confidence band (total load): downsample each run, then take p10/p90 across runs per window.
+        const perRunDown = runTotals.map(downsample)
+        const bandLo: number[] = [], bandHi: number[] = []
+        for (let i = 0; i < sampleDays.length; i++) {
+          const col = perRunDown.map(r => r[i]!)
+          bandLo.push(percentile(col, 0.1))
+          bandHi.push(percentile(col, 0.9))
+        }
+
+        if (!cancelled) setData({ pairs: pairSeries, sampleDays, models, hasGoals: anyGoal, bandLo, bandHi })
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       }
@@ -286,13 +350,14 @@ export function DueForecastProjection() {
   const svg = useMemo(() => {
     if (!points) return null
     const W = 720, H = 280, mL = 44, mR = 12, mT = 12, mB = 26
-    const maxY = Math.max(10, ...points.map(p => p.total)) * 1.1
+    const band = filterKey === null && data ? data.bandHi : []
+    const maxY = Math.max(10, ...points.map(p => p.total), ...band) * 1.1
     const x = (day: number) => mL + (day / HORIZON) * (W - mL - mR)
     const y = (v: number) => H - mB - (v / maxY) * (H - mT - mB)
     const path = (key: 'typed' | 'selfg' | 'recog' | 'total') =>
       points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.day).toFixed(1)},${y(p[key]).toFixed(1)}`).join(' ')
     return { W, H, mL, mR, mT, mB, maxY, x, y, path, yTicks: 4 }
-  }, [points])
+  }, [points, data, filterKey])
 
   if (error) return <p className="text-sm text-danger">Couldn&apos;t build projection: {error}</p>
   if (!data || !points || !svg) return <p className="text-sm text-ink-faint">Building projection…</p>
@@ -368,6 +433,13 @@ export function DueForecastProjection() {
               <circle cx={x(hoverPt.day)} cy={y(hoverPt.total)} r={3} fill="#E6E8F5" />
             </g>
           )}
+          {/* p10–p90 confidence band on total (all-languages view only) */}
+          {filterKey === null && data.bandLo.length > 0 && (
+            <path
+              d={`${data.sampleDays.map((day, i) => `${i === 0 ? 'M' : 'L'}${x(day).toFixed(1)},${y(data.bandHi[i]!).toFixed(1)}`).join(' ')} ${data.sampleDays.map((day, i) => ({ day, i })).reverse().map(({ day, i }) => `L${x(day).toFixed(1)},${y(data.bandLo[i]!).toFixed(1)}`).join(' ')} Z`}
+              fill="#E6E8F5" opacity={0.09} stroke="none"
+            />
+          )}
           {/* series */}
           <path d={path('total')} fill="none" stroke="#E6E8F5" strokeWidth={2.5} />
           <path d={path('typed')} fill="none" stroke="#6640FF" strokeWidth={2} opacity={0.9} />
@@ -398,6 +470,12 @@ export function DueForecastProjection() {
             {l.label}{hoverPt ? ` (${Math.round(hoverPt[l.key])})` : ''}
           </span>
         ))}
+        {filterKey === null && (
+          <span className="flex items-center gap-1.5 text-ink-faint">
+            <span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: '#E6E8F5', opacity: 0.18 }} />
+            p10–p90 range
+          </span>
+        )}
       </div>
 
       {/* measured per-language model (initial interval + average difficulty), fed into the forecast */}

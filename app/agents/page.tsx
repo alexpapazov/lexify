@@ -1,21 +1,66 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
+import { SupabaseFolderRepository } from '@/lib/data/folders'
+import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { gatherScopedCards, analyzeBatch, applyProposal, undoEdit, chunk, findDuplicates } from '@/lib/agents/cardEditor'
 import type { ScopedCard, EditProposal } from '@/lib/agents/cardEditor'
-import type { Deck, Grant } from '@/domain'
+import type { Deck, Folder, CardState, Grant } from '@/domain'
+import { langFlag } from '@/lib/languages'
 
 const BATCH_SIZE = 20
 type Phase = 'setup' | 'gathering' | 'analyzing' | 'review' | 'done'
+
+// ── Scope tree (a mini library: pairs → folders → subfolders → decks) ──────────
+type CardStatus = 'unlearned' | 'learning' | 'graduated' | 'due' | 'dormant'
+const STATUS_META: { key: CardStatus; label: string; color: string }[] = [
+  { key: 'unlearned', label: 'Unlearned', color: 'var(--c-ink-muted, #9aa)' },
+  { key: 'learning',  label: 'Learning',  color: '#F0883E' },
+  { key: 'graduated', label: 'Graduated', color: '#4ADE80' },
+  { key: 'due',       label: 'Due now',   color: '#6640FF' },
+  { key: 'dormant',   label: 'Dormant',   color: '#9aa' },
+]
+
+type DeckNode = { kind: 'deck'; id: string; name: string; source: string; target: string }
+type FolderNode = { kind: 'folder'; id: string; name: string; children: TreeNode[]; deckIds: string[] }
+type TreeNode = DeckNode | FolderNode
+type PairNode = { kind: 'pair'; key: string; source: string; target: string; children: TreeNode[]; deckIds: string[] }
+
+/** Build the pair→folder→deck tree from the user's folders + decks (mirrors the library). */
+function buildScopeTree(folders: Folder[], decks: Deck[]): PairNode[] {
+  const pairKeys = Array.from(new Set(decks.map(d => `${d.sourceLanguage}|${d.targetLanguage}`)))
+  return pairKeys.map(key => {
+    const [source, target] = key.split('|') as [string, string]
+    const pf = folders.filter(f => f.sourceLanguage === source && f.targetLanguage === target)
+    const pd = decks.filter(d => d.sourceLanguage === source && d.targetLanguage === target)
+    const pfIds = new Set(pf.map(f => f.id))
+    const byPos = <T extends { position?: number; name: string }>(a: T, b: T) => (a.position ?? 0) - (b.position ?? 0) || a.name.localeCompare(b.name)
+    const deckNode = (d: Deck): DeckNode => ({ kind: 'deck', id: d.id, name: d.name, source: d.sourceLanguage, target: d.targetLanguage })
+    const folderNode = (f: Folder): FolderNode => {
+      const childFolders = pf.filter(x => x.parentId === f.id).sort(byPos).map(folderNode)
+      const childDecks = pd.filter(d => d.folderId === f.id).sort(byPos).map(deckNode)
+      const children = [...childFolders, ...childDecks]
+      const deckIds = children.flatMap(c => c.kind === 'folder' ? c.deckIds : [c.id])
+      return { kind: 'folder', id: f.id, name: f.name, children, deckIds }
+    }
+    const rootFolders = pf.filter(f => !f.parentId || !pfIds.has(f.parentId)).sort(byPos).map(folderNode)
+    const rootDecks = pd.filter(d => !d.folderId || !pfIds.has(d.folderId)).sort(byPos).map(deckNode)
+    const children = [...rootFolders, ...rootDecks]
+    return { kind: 'pair', key, source, target, children, deckIds: pd.map(d => d.id) }
+  })
+}
 
 const PLACEHOLDER = 'e.g. "Split any card whose gloss has two distinct meanings", "Remove the leading \'to \' from every verb gloss", "Add the gender in parentheses to noun glosses", "Delete duplicate cards"…'
 
 export default function AgentsPage() {
   const [userId, setUserId] = useState<string | null>(null)
   const [decks, setDecks] = useState<Deck[]>([])
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())   // deck IDs in scope
+  const [statuses, setStatuses] = useState<Set<CardStatus>>(new Set())  // empty = all statuses
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())   // expanded pair/folder ids
   const [task, setTask] = useState('')
   const [phase, setPhase] = useState<Phase>('setup')
   const [queue, setQueue] = useState<EditProposal[]>([])
@@ -38,23 +83,69 @@ export default function AgentsPage() {
       const { data: { session } } = await createClient().auth.getSession()
       if (!session) return
       setUserId(session.user.id)
-      setDecks(await new SupabaseDeckRepository().list(session.user.id))
+      const [ds, fs] = await Promise.all([
+        new SupabaseDeckRepository().list(session.user.id),
+        new SupabaseFolderRepository().list(session.user.id),
+      ])
+      setDecks(ds)
+      setFolders(fs)
+      // Expand every pair by default so the tree opens showing top-level folders/decks.
+      setExpanded(new Set(Array.from(new Set(ds.map(d => `pair:${d.sourceLanguage}|${d.targetLanguage}`)))))
     })()
   }, [])
 
-  const pairs = Array.from(new Set(decks.map(d => `${d.sourceLanguage}|${d.targetLanguage}`)))
-  function toggle(key: string) {
-    setSelected(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
+  const tree = useMemo(() => buildScopeTree(folders, decks), [folders, decks])
+
+  function scopedDeckIds(): string[] { return [...selected] }
+  const inScopeDeckCount = selected.size
+
+  // Toggle a set of deck IDs on/off together (a deck, or every deck under a folder/pair).
+  function toggleDecks(ids: string[]) {
+    if (ids.length === 0) return
+    setSelected(prev => {
+      const n = new Set(prev)
+      const allOn = ids.every(id => n.has(id))
+      for (const id of ids) allOn ? n.delete(id) : n.add(id)
+      return n
+    })
   }
-  function scopedDeckIds(): string[] {
-    const ids = new Set<string>()
-    for (const key of selected) {
-      if (key.startsWith('deck:')) ids.add(key.slice(5))
-      else if (key.startsWith('pair:')) decks.filter(d => `${d.sourceLanguage}|${d.targetLanguage}` === key.slice(5)).forEach(d => ids.add(d.id))
+  function toggleExpand(id: string) {
+    setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  /** none | some | all of `ids` are selected (drives checkbox checked/indeterminate). */
+  function selState(ids: string[]): 'none' | 'some' | 'all' {
+    if (ids.length === 0) return 'none'
+    let on = 0
+    for (const id of ids) if (selected.has(id)) on++
+    return on === 0 ? 'none' : on === ids.length ? 'all' : 'some'
+  }
+
+  function toggleStatus(s: CardStatus) {
+    setStatuses(prev => { const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n })
+  }
+
+  // Narrow scoped cards to the selected statuses (empty = all). Status is read from each card's
+  // forward card_state: none → unlearned, dormant, !graduated → learning, else graduated (due if its
+  // production due date has passed). 'graduated' includes due cards; 'due' is the due-only subset.
+  async function filterByStatus(cards: ScopedCard[]): Promise<ScopedCard[]> {
+    if (statuses.size === 0 || statuses.size === STATUS_META.length || !userId) return cards
+    const stateRepo = new SupabaseCardStateRepository()
+    const deckIds = [...new Set(cards.map(c => c.deckId))]
+    const fwd = new Map<string, CardState>()
+    await Promise.all(deckIds.map(async id => {
+      for (const s of await stateRepo.listByDeck(userId, id)) if (s.reviewDirection !== 'reverse') fwd.set(s.cardId, s)
+    }))
+    const now = Date.now()
+    const prodDue = (s: CardState) => { const iso = s.smartDueAt ?? s.typedDueAt ?? s.dueAt; return iso != null && new Date(iso).getTime() <= now }
+    const matches = (s: CardState | undefined): boolean => {
+      if (!s) return statuses.has('unlearned')
+      if (s.dormant) return statuses.has('dormant')
+      if (!s.graduated) return statuses.has('learning')
+      if (statuses.has('graduated')) return true
+      return statuses.has('due') && prodDue(s)
     }
-    return [...ids]
+    return cards.filter(c => matches(fwd.get(c.cardId)))
   }
-  const inScopeDeckCount = scopedDeckIds().length
 
   // Analyzes one batch (advancing the cursor). Returns its proposals, or null when out of batches.
   async function analyzeOne(): Promise<EditProposal[] | null> {
@@ -95,7 +186,7 @@ export default function AgentsPage() {
     bufferRef.current = []
     try {
       const grant: Grant = { operations: ['edit', 'create', 'delete'], languages: [], folderIds: [], deckIds: scopedDeckIds(), dryRunOnly: false }
-      const cards = await gatherScopedCards(userId, grant)
+      const cards = await filterByStatus(await gatherScopedCards(userId, grant))
       setTotal(cards.length)
       batchesRef.current = chunk(cards, BATCH_SIZE)
       nextBatchRef.current = 0
@@ -116,7 +207,7 @@ export default function AgentsPage() {
     bufferRef.current = []; batchesRef.current = []; nextBatchRef.current = 0
     try {
       const grant: Grant = { operations: ['edit', 'create', 'delete'], languages: [], folderIds: [], deckIds, dryRunOnly: false }
-      const cards = await gatherScopedCards(userId, grant)
+      const cards = await filterByStatus(await gatherScopedCards(userId, grant))
       setTotal(cards.length); setScanned(cards.length)
       const dups = findDuplicates(cards)
       if (dups.length === 0) setPhase('done')

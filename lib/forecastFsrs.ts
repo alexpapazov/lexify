@@ -8,7 +8,7 @@
  * MEASURED initial interval (see estimateInitialInterval) rather than a hardcoded constant.
  */
 
-import { intervalForRetention, retrievability, stabilityAfterLapse, reviewCard, type FsrsConfig, DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
+import { intervalForRetention, retrievability, stabilityAfterLapse, reviewCard, fsrsFuzzRange, type FsrsConfig, DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
 import type { Rating } from '@/domain'
 
 /** Stability whose scheduled interval (at `retention`) equals `intervalDays`. Inverse of intervalForRetention. */
@@ -75,6 +75,8 @@ export interface WeightedStep {
   intervalDays: number
   /** Expected number of reviews this step contributes (>1 accounts for lapse relearns). */
   weight: number
+  /** Monte Carlo realization index this step belongs to (for building a percentile band). */
+  run?: number
 }
 
 const clampD = (d: number) => Math.min(10, Math.max(1, d))
@@ -186,4 +188,114 @@ export function estimateInitialInterval(
     if (sample.length >= 3 || (maxReps === 3 && sample.length > 0)) return median(sample)
   }
   return fallback
+}
+
+// ─── Monte Carlo scheduler ───────────────────────────────────────────────────
+// The mean-field stepper (fsrsScheduleMix) propagates a single *expected* stability, which — because
+// review frequency is convex in difficulty — systematically under-counts load (Jensen's inequality)
+// and produces an artificial staircase. The Monte Carlo model instead samples an actual rating at each
+// review, so a run is a real trajectory; averaging many runs gives an unbiased mean and a spread
+// (percentile band). Each run is reproducible from a seed, so results are deterministic (and testable).
+
+/** Small fast seedable PRNG (mulberry32). Deterministic given `seed`. */
+export function mulberry32(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** Draw a rating from a mix given a uniform [0,1) sample. */
+export function sampleRating(mix: RatingMix, u: number): Rating {
+  if (u < mix.again) return 'again'
+  if (u < mix.again + mix.hard) return 'hard'
+  if (u < mix.again + mix.hard + mix.good) return 'good'
+  return 'easy'
+}
+
+/**
+ * One sampled FSRS review trajectory: at each review a rating is drawn from `mix`, stability/difficulty
+ * advance by the real engine, the next interval is fuzzed like the live scheduler, and a lapse ('again')
+ * adds a same-day relearn review (the extra load a lapse creates). Returns each review's day + the
+ * interval that led to it.
+ */
+export function fsrsScheduleSampled(opts: {
+  stability: number; difficulty: number; firstReviewDay: number
+  retention: number; maxInt: number; horizon: number; mix: RatingMix
+  rand: () => number; cfg?: FsrsConfig; fuzz?: boolean
+}): ReviewStep[] {
+  const cfg: FsrsConfig = { ...(opts.cfg ?? DEFAULT_FSRS_CONFIG), requestRetention: opts.retention }
+  const steps: ReviewStep[] = []
+  let S = Math.max(0.1, opts.stability)
+  let D = Math.min(10, Math.max(1, opts.difficulty))
+  let day = opts.firstReviewDay
+  let cur = Math.min(intervalForRetention(S, opts.retention), opts.maxInt) // interval that placed this review
+  let guard = 0
+  while (day <= opts.horizon && guard++ < 1000) {
+    steps.push({ day, intervalDays: Math.max(0.5, cur) })
+    const rating = sampleRating(opts.mix, opts.rand())
+    const elapsed = Math.max(1, cur)
+    const rev = reviewCard({ stability: S, difficulty: D }, rating, elapsed, cfg)
+    S = rev.stability; D = rev.difficulty
+    if (rating === 'again' && day <= opts.horizon) {
+      steps.push({ day, intervalDays: Math.max(0.5, cur) }) // relearn re-review lands the same day
+    }
+    let next = Math.min(rev.intervalDays, opts.maxInt)
+    if (opts.fuzz && next >= 2.5) {
+      const [lo, hi] = fsrsFuzzRange(next)
+      next = lo + opts.rand() * (hi - lo)
+    }
+    next = Math.max(1, next)
+    day += Math.round(next)
+    cur = next
+  }
+  return steps
+}
+
+/**
+ * Runs `K` sampled trajectories and returns all their reviews tagged with `run` and weight `1/K`
+ * (so accumulating `weight` yields the mean load and grouping by `run` yields per-realization totals
+ * for a percentile band). `maxReviews` caps each run (dormancy); `stopDay` truncates each run (a track
+ * ghosted elsewhere). When `maxReviews` is set, the median day runs hit it is returned as `dormantDay`
+ * (for coupling a card's reverse track to when its production track goes dormant).
+ */
+export function monteCarloSteps(
+  opts: {
+    stability: number; difficulty: number; firstReviewDay: number
+    retention: number; maxInt: number; horizon: number; mix: RatingMix
+    K: number; fuzz?: boolean; cfg?: FsrsConfig; maxReviews?: number; stopDay?: number
+  },
+  seed: number,
+): { steps: WeightedStep[]; dormantDay: number | null } {
+  const K = Math.max(1, Math.round(opts.K))
+  const w = 1 / K
+  const steps: WeightedStep[] = []
+  const dormantDays: number[] = []
+  for (let k = 0; k < K; k++) {
+    const rand = mulberry32(((seed * 2654435761) ^ (k * 40503 + 0x9e3779b9)) >>> 0)
+    const path = fsrsScheduleSampled({
+      stability: opts.stability, difficulty: opts.difficulty, firstReviewDay: opts.firstReviewDay,
+      retention: opts.retention, maxInt: opts.maxInt, horizon: opts.horizon, mix: opts.mix, rand, cfg: opts.cfg, fuzz: opts.fuzz,
+    })
+    let count = 0
+    for (const st of path) {
+      if (opts.stopDay != null && st.day > opts.stopDay) break
+      steps.push({ day: st.day, intervalDays: st.intervalDays, weight: w, run: k })
+      count++
+      if (opts.maxReviews != null && count >= opts.maxReviews) { dormantDays.push(st.day); break }
+    }
+  }
+  return { steps, dormantDay: dormantDays.length ? Math.round(median(dormantDays)) : null }
+}
+
+/** Percentile (0..1) of a numeric list via linear interpolation (0 if empty). */
+export function percentile(sortedOrNot: number[], p: number): number {
+  if (sortedOrNot.length === 0) return 0
+  const a = [...sortedOrNot].sort((x, y) => x - y)
+  const idx = Math.min(a.length - 1, Math.max(0, p * (a.length - 1)))
+  const lo = Math.floor(idx), hi = Math.ceil(idx)
+  return lo === hi ? a[lo]! : a[lo]! + (a[hi]! - a[lo]!) * (idx - lo)
 }
