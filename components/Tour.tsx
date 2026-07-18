@@ -74,26 +74,43 @@ export function Tour() {
     }
   }, [step, pathname])
 
-  // Interaction gate: poll the live DOM until the required action is done, then unlock Next.
+  // Interaction gate: poll the live DOM until the required action is done, then
+  // auto-advance to the next step (with a brief beat so the user sees it worked).
   useEffect(() => {
     setGatePassed(false)
     if (!step?.gate || pathname !== step.path) return
     const check = GATE_CHECKS[step.gate]
-    if (check()) { setGatePassed(true); return }
-    const t = setInterval(() => { if (check()) { setGatePassed(true); clearInterval(t) } }, 350)
-    return () => clearInterval(t)
+    let advanceTimer: ReturnType<typeof setTimeout> | undefined
+    const onPass = () => {
+      setGatePassed(true)
+      advanceTimer = setTimeout(() => setI(n => n + 1), 550)
+    }
+    if (check()) { onPass(); return () => clearTimeout(advanceTimer) }
+    const iv = setInterval(() => { if (check()) { clearInterval(iv); onPass() } }, 300)
+    return () => { clearInterval(iv); clearTimeout(advanceTimer) }
   }, [step, pathname])
 
-  // Keep the spotlight aligned on scroll/resize.
+  // Keep the spotlight aligned as the page scrolls, resizes, or the anchored element
+  // grows — e.g. an async chart that loads and expands its panel after first measure.
   useEffect(() => {
     if (!step?.anchor) return
     const update = () => {
       const el = document.querySelector(`[data-tour="${step.anchor}"]`)
       if (el) setRect(el.getBoundingClientRect())
     }
+    update()
     window.addEventListener('scroll', update, true)
     window.addEventListener('resize', update)
-    return () => { window.removeEventListener('scroll', update, true); window.removeEventListener('resize', update) }
+    let ro: ResizeObserver | undefined
+    const el = document.querySelector(`[data-tour="${step.anchor}"]`)
+    if (el && typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(update); ro.observe(el) }
+    const iv = setInterval(update, 400) // catch late-loading content the observer can't see yet
+    return () => {
+      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('resize', update)
+      ro?.disconnect()
+      clearInterval(iv)
+    }
   }, [step])
 
   if (!running || !step) return null
