@@ -4,7 +4,7 @@ import type { LadderEvent } from '@/lib/data/ladderEvents'
 const ev = (over: Partial<LadderEvent>): LadderEvent => ({
   id: Math.random().toString(36).slice(2), sessionId: 's1', cardId: 'c1', deckId: 'd1', label: 'hola',
   sourceLanguage: 'es', targetLanguage: 'en', fromRung: 0, toRung: 1, rungCount: 5, rungType: 'mcq',
-  outcome: 'pass', advanced: true, graduated: false, durationMs: 2000, createdAt: '2026-07-01T00:00:00Z', ...over,
+  outcome: 'pass', advanced: true, graduated: false, overridden: false, durationMs: 2000, createdAt: '2026-07-01T00:00:00Z', ...over,
 })
 
 describe('groupSessions', () => {

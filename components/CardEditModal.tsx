@@ -233,13 +233,20 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     setSaving(true)
     try {
       // Persist the dormancy threshold along with the card edit (if it changed).
+      const raw = dormancyInput.trim()
+      const newThreshold = raw ? (parseInt(raw, 10) || null) : null
       if (state) {
-        const raw = dormancyInput.trim()
-        const newThreshold = raw ? (parseInt(raw, 10) || null) : null
         if (newThreshold !== (state.dormancyThreshold ?? null)) {
           const updated = await new SupabaseCardStateRepository().setDormancy(userId, card.id, { dormancyThreshold: newThreshold })
           onStateChange(updated)
         }
+      } else if (newThreshold != null) {
+        // No state yet: create a pristine forward row carrying only the dormancy threshold. It stays
+        // "Unlearned" (no reps/progress) and the ladder preserves the threshold on graduation.
+        const pipelineId = (await new SupabasePipelineRepository().getDefault()).id
+        const created = { ...initialCardState(userId, card.id, pipelineId), dormancyThreshold: newThreshold }
+        await new SupabaseCardStateRepository().upsert(created)
+        onStateChange(created)
       }
       await onSave(card.id, front.trim(), back.trim())
       setSaved(true)
@@ -1166,7 +1173,33 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             </div>
 
             {!state ? (
-              <p className="text-ink-faint text-xs">New — not yet studied. No stats yet.</p>
+              <div className="space-y-3">
+                <p className="text-ink-faint text-xs">New — not yet studied. No stats yet.</p>
+                {/* Dormancy can be pre-set before the card is ever studied. */}
+                <div className="space-y-1.5">
+                  <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">Dormancy</div>
+                  <p className="text-[10px] text-ink-faint leading-relaxed">
+                    A dormant card stays in the deck and is reviewable, but never becomes due automatically.
+                  </p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-ink-muted">Go dormant after</span>
+                    <input
+                      type="number" min={1} max={999}
+                      className="input text-center text-sm px-1 py-1 w-16"
+                      placeholder="—"
+                      value={dormancyInput}
+                      onChange={e => setDormancyInput(e.target.value)}
+                    />
+                    <span className="text-xs text-ink-muted">production reviews</span>
+                  </div>
+                  <p className="text-[10px] text-ink-faint">Takes effect once the card graduates. Press Save to store it.</p>
+                  {dormancyMsg && (
+                    <p className={`text-xs ${dormancyMsg.ok ? 'text-success' : 'text-danger'}`}>
+                      {dormancyMsg.ok ? '✓ ' : '⚠ '}{dormancyMsg.text}
+                    </p>
+                  )}
+                </div>
+              </div>
             ) : (() => {
               const status = state.dormant
                 ? 'Dormant'

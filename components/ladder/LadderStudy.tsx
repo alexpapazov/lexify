@@ -74,6 +74,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const turnoverRef    = useRef(0)
   const sessionIdRef   = useRef<string>(newSessionId())
   const shownAtRef     = useRef<number>(Date.now())
+  // Pre-set dormancy (threshold/flag) per card, captured at load — preserved through graduation so a
+  // dormancy set before studying isn't wiped when the card graduates.
+  const dormancyByCardRef = useRef<Map<string, { threshold: number | null; dormant: boolean }>>(new Map())
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
@@ -186,7 +189,10 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         for (const c of cards) { if (!cardDeck.has(c.id)) { allCards.push(c); cardDeck.set(c.id, deck.id) } }
         for (const s of cs) {
           if (s.reviewDirection === 'reverse') continue
-          if (s.graduated) gradSet.add(s.cardId); else learningStateSet.add(s.cardId)
+          dormancyByCardRef.current.set(s.cardId, { threshold: s.dormancyThreshold ?? null, dormant: s.dormant })
+          // A pristine state (created only to pre-set dormancy — no reps, no progress) is still "fresh".
+          if (s.graduated) gradSet.add(s.cardId)
+          else if (s.reps > 0 || s.currentStepOrder > 0) learningStateSet.add(s.cardId)
         }
       }
       setCardsById(new Map(allCards.map(c => [c.id, c])))
@@ -293,15 +299,17 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     const due = (days: number) =>
       snapDueAtToStartOfDay(new Date(now.getTime() + days * DAY_MS).toISOString(), tzRef.current, turnoverRef.current)
     const base = initialCardState(userId, cardId, deck?.pipelineId ?? DEFAULT_PIPELINE_ID)
+    const dorm = dormancyByCardRef.current.get(cardId)  // preserve a dormancy set before studying
     const tDays = target?.min ?? 1
     const nDays = native?.min ?? 1
     await repo.upsert({ ...base, graduated: true, graduatedAt: now.toISOString(), reps: 1, lastRating: 'good', lastReviewedAt: now.toISOString(),
+      dormancyThreshold: dorm?.threshold ?? null, dormant: dorm?.dormant ?? false,
       reviewDirection: 'forward', intervalDays: tDays, scheduledIntervalDays: tDays, typedIntervalDays: tDays, dueAt: due(tDays), typedDueAt: due(tDays) })
     await repo.upsert({ ...base, graduated: true, graduatedAt: now.toISOString(), reps: 1, lastRating: 'good', lastReviewedAt: now.toISOString(),
       reviewDirection: 'reverse', intervalDays: nDays, scheduledIntervalDays: nDays, recallIntervalDays: nDays, dueAt: due(nDays), recallDueAt: due(nDays) })
   }
 
-  async function onOutcome(outcome: RungAttemptOutcome) {
+  async function onOutcome(outcome: RungAttemptOutcome, overridden = false) {
     if (!userId || !ladder || !currentId || !currentClimb) return
     const now = Date.now()
     const res = reviewRung(ladder, currentClimb, outcome, now)
@@ -315,7 +323,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       sourceLanguage: logDeck?.sourceLanguage ?? null, targetLanguage: logDeck?.targetLanguage ?? null,
       fromRung: currentClimb.rungIndex, toRung: res.state.graduated ? rungCount : res.state.rungIndex, rungCount,
       rungType: ladder.rungs[currentClimb.rungIndex]?.type ?? null,
-      outcome, advanced: res.advanced, graduated: res.state.graduated,
+      outcome, advanced: res.advanced, graduated: res.state.graduated, overridden,
       durationMs: Math.min(5 * 60_000, Math.max(0, now - shownAtRef.current)),  // cap at 5 min (ignore idle)
     }]).catch(() => {})
     touchSession()  // slide the freshness window so a refresh keeps continuing this session

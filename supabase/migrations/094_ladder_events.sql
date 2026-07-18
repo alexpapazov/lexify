@@ -16,9 +16,13 @@ create table if not exists ladder_events (
   outcome         text,                   -- pass | miss | almost | again | hard | good | easy
   advanced        boolean not null default false,
   graduated       boolean not null default false,
+  overridden      boolean not null default false,  -- learner marked it correct via override
   duration_ms     int,                    -- time the card was on screen before answering
   created_at      timestamptz not null default now()
 );
+
+-- Idempotent: add the override flag whether the table is new or already exists.
+alter table ladder_events add column if not exists overridden boolean not null default false;
 
 create index if not exists ladder_events_user_created_idx on ladder_events (user_id, created_at desc);
 create index if not exists ladder_events_session_idx       on ladder_events (session_id);

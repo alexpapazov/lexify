@@ -118,7 +118,10 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
             // A card "pulses" briefly right after an attempt lands, coloured by that attempt's rating.
             const lastEvt = c.events.filter(e => new Date(e.createdAt).getTime() <= t).slice(-1)[0]
             const active = !!lastEvt && (t - new Date(lastEvt.createdAt).getTime()) < Math.max(1500, wallMs * 0.03)
-            const flash = active && lastEvt?.outcome ? OUTCOME_COLOR[lastEvt.outcome] : undefined
+            // An overridden attempt flashes as "correct" (the overridden result), not its natural grade.
+            const flash = active
+              ? (lastEvt?.overridden ? OUTCOME_COLOR.pass : lastEvt?.outcome ? OUTCOME_COLOR[lastEvt.outcome] : undefined)
+              : undefined
             return (
               <div
                 key={c.cardId}

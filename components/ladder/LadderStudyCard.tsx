@@ -35,7 +35,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   /** Inline edit of the card's prompt/answer text (empty string = delete the card). */
   onCardEdit?:     (cardId: string, side: CardSide, newText: string) => void
   onRepeat?:       () => void
-  onOutcome:      (o: RungAttemptOutcome) => void
+  onOutcome:      (o: RungAttemptOutcome, overridden?: boolean) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onInfo?:        () => void
 }) {
@@ -67,6 +67,14 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   const effectiveIpa = card.ipa ?? fetchedIpa
   const ipaProps = { ipaText: showIpa ? (effectiveIpa ?? undefined) : undefined, onToggleIPA: () => setShowIpa(v => !v) }
 
+  // Track whether this attempt was marked correct via override (accept=true), so the replay can
+  // flash the overridden result rather than the natural grade. Resets each card (component remounts).
+  const overrodeRef = useRef(false)
+  const trackOverride = (answerSide: CardSide) => (answerText: string, accept: boolean) => {
+    if (accept) overrodeRef.current = true
+    onOverrideAnswer?.(card.id, answerSide, answerText, accept)
+  }
+
   if (rung.type === 'mcq') {
     return (
       <MultipleChoiceMode
@@ -76,12 +84,12 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
         onChoicesCached={onChoicesCached} onInfo={onInfo}
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
-        onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
+        onOverrideAnswer={trackOverride(answerSide)}
         onChoiceEdit={onChoiceEdit ? ((orig, newText, isCorrect) => onChoiceEdit(card.id, answerSide, orig, newText, isCorrect)) : undefined}
         onPromptEdit={onCardEdit ? (t => onCardEdit(card.id, promptSide, t)) : undefined}
         onRepeat={onRepeat}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
-        onRate={(r, wasCorrect) => onOutcome(mcqOutcome(wasCorrect, rung.selfRated, r))}
+        onRate={(r, wasCorrect) => onOutcome(mcqOutcome(wasCorrect, rung.selfRated, r), overrodeRef.current)}
       />
     )
   }
@@ -113,13 +121,13 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
         strictness={rung.strictness ?? DEFAULT_TYPED_STRICTNESS} deckName={deckName} onInfo={onInfo}
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
-        onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
+        onOverrideAnswer={trackOverride(answerSide)}
         onPromptEdit={onCardEdit ? (t => onCardEdit(card.id, promptSide, t)) : undefined}
         onAnswerEdit={onCardEdit ? (t => onCardEdit(card.id, answerSide, t)) : undefined}
         synonyms={answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
         onRepeat={onRepeat}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
-        onRate={(r, wasCorrect) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r))}
+        onRate={(r, wasCorrect) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r), overrodeRef.current)}
       />
     )
   }
@@ -137,7 +145,7 @@ function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
   )
 }
 
-function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void }) {
+function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void }) {
   const [input, setInput] = useState('')
   const [rating, setRating] = useState(false)
   const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean; normalized: string } | null>(null)
@@ -179,7 +187,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
     if (!result) return
     const finalStatus: 'pass' | 'almost' | 'miss' = result.overridden ? 'pass' : result.status
     if (rung.selfRated && finalStatus === 'pass') { setRating(true); setResult(null); return }
-    onOutcome(typedOutcome(finalStatus, rung.selfRated))
+    onOutcome(typedOutcome(finalStatus, rung.selfRated), result.overridden)
   }
 
   const isCorrect = result != null && (result.overridden || result.status === 'pass')

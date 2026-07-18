@@ -16,6 +16,7 @@ export interface LadderEventInput {
   outcome:         string | null
   advanced:        boolean
   graduated:       boolean
+  overridden:      boolean
   durationMs:      number | null
 }
 
@@ -40,6 +41,7 @@ function rowToEvent(r: Record<string, unknown>): LadderEvent {
     outcome:        (r.outcome as string | null) ?? null,
     advanced:       !!r.advanced,
     graduated:      !!r.graduated,
+    overridden:     !!r.overridden,
     durationMs:     (r.duration_ms as number | null) ?? null,
     createdAt:      r.created_at as string,
   }
@@ -54,7 +56,7 @@ export class SupabaseLadderEventRepository {
       user_id: userId, session_id: e.sessionId, card_id: e.cardId, deck_id: e.deckId, label: e.label,
       source_language: e.sourceLanguage, target_language: e.targetLanguage,
       from_rung: e.fromRung, to_rung: e.toRung, rung_count: e.rungCount, rung_type: e.rungType,
-      outcome: e.outcome, advanced: e.advanced, graduated: e.graduated, duration_ms: e.durationMs,
+      outcome: e.outcome, advanced: e.advanced, graduated: e.graduated, overridden: e.overridden, duration_ms: e.durationMs,
     }))
     const { error } = await this.db.from('ladder_events').insert(rows)
     if (error) throw new Error(error.message)
