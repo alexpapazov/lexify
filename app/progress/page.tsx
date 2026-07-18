@@ -325,9 +325,6 @@ export default function AnalyticsPage() {
         <DueForecastProjection />
       </div>
 
-      {/* Logs: learning-ladder sessions + replay */}
-      <LadderLogs />
-
       {/* Daily review history — this is what the range toggle controls */}
       <div className="flex items-center justify-between flex-wrap gap-3 pt-2">
         <h2 className="text-sm font-semibold text-ink">Daily review history</h2>
@@ -545,6 +542,9 @@ export default function AnalyticsPage() {
           </div>
         </div>
       )}
+
+      {/* Logs: learning-ladder sessions + replay (bottom of the page) */}
+      <LadderLogs />
     </div>
   )
 }
