@@ -487,7 +487,6 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         </p>
       )}
 
-      <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
       <LadderStudyCard
         key={`${currentId}:${currentClimb.rungIndex}`}
         card={currentCard} rung={currentRung} deckCards={curDeckCards} deckName={currentDeck.name}
@@ -514,6 +513,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         onRepeat={handleRepeat}
         onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
       />
+
+      <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
 
       {infoOpen && userId && (
         <CardEditModal
