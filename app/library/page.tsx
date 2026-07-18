@@ -1416,7 +1416,9 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             const cfg = PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)
             return cfg && cfg.value > 0 ? (
               <Link
-                href={`/study/all/session?category=${activeFilter}&source=${pairSource}&target=${pairTarget}`}
+                href={activeFilter === 'new' || activeFilter === 'learning'
+                  ? `/study/ladder/all?source=${pairSource}&target=${pairTarget}&category=${activeFilter}`
+                  : `/study/all/session?category=${activeFilter}&source=${pairSource}&target=${pairTarget}`}
                 className="btn-primary block w-full text-center"
               >
                 Study {cfg.label}
@@ -1608,7 +1610,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                       className="text-ink-faint hover:text-warning transition-colors text-sm">
                       {deck.isPinned ? '★' : '☆'}
                     </button>
-                    <Link href={`/study/${deck.id}/session`} className="btn-primary text-xs py-1 px-3">Study</Link>
+                    <Link href={`/study/ladder/${deck.id}`} className="btn-primary text-xs py-1 px-3">Study</Link>
                   </div>
                 </div>
 

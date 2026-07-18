@@ -663,7 +663,9 @@ function FolderPageInner() {
                 const cfg = COUNTER_CONFIG.find(c => c.key === activeFilter)
                 return cfg && cfg.value > 0 ? (
                   <Link
-                    href={`/study/folder/${folderId}/session?category=${activeFilter}`}
+                    href={activeFilter === 'new' || activeFilter === 'learning'
+                      ? `/study/ladder/folder/${folderId}?category=${activeFilter}`
+                      : `/study/folder/${folderId}/session?category=${activeFilter}`}
                     className="btn-primary block w-full text-center"
                   >
                     Study {cfg.label}
@@ -697,7 +699,7 @@ function FolderPageInner() {
           )}
 
           <Link
-            href={`/study/folder/${folderId}/session`}
+            href={`/study/ladder/folder/${folderId}`}
             className={(counts.dueNow + counts.learning) === 0 ? 'btn-primary opacity-40 pointer-events-none inline-block' : 'btn-primary inline-block'}
           >
             Study folder ({counts.dueNow + counts.learning})
@@ -893,7 +895,7 @@ function FolderPageInner() {
                         Move to library
                       </button>
                     )}
-                    <Link href={`/study/${deck.id}/session`} className="btn-primary text-xs py-1 px-3">Study</Link>
+                    <Link href={`/study/ladder/${deck.id}`} className="btn-primary text-xs py-1 px-3">Study</Link>
                   </div>
                 </div>
                 {dt?.pos === 'after' && (

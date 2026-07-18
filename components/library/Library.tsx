@@ -128,7 +128,7 @@ function DeckRow({ deck, allFolders, onMove, onPin }: {
             </div>
           )}
         </div>
-        <Link href={`/study/${deck.id}/session`}
+        <Link href={`/study/ladder/${deck.id}`}
           className="text-xs text-accent hover:text-accent-soft transition-colors px-1"
           title="Study">
           ▶

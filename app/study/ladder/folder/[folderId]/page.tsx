@@ -5,10 +5,10 @@ import { useParams } from 'next/navigation'
 import { LadderStudy } from '@/components/ladder/LadderStudy'
 
 function Inner() {
-  const { deckId } = useParams<{ deckId: string }>()
-  return <LadderStudy scope={{ kind: 'deck', deckId }} />
+  const { folderId } = useParams<{ folderId: string }>()
+  return <LadderStudy scope={{ kind: 'folder', folderId }} />
 }
 
-export default function LadderDeckPage() {
+export default function LadderFolderPage() {
   return <Suspense fallback={<p className="p-6 text-sm text-ink-faint">Loading…</p>}><Inner /></Suspense>
 }
