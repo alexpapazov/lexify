@@ -28,10 +28,20 @@ export function LadderLogs() {
   useEffect(() => {
     ;(async () => {
       try {
-        const { data: { session } } = await createClient().auth.getSession()
+        const supabase = createClient()
+        const { data: { session } } = await supabase.auth.getSession()
         if (!session) return
         const events = await new SupabaseLadderEventRepository().listForUser(session.user.id)
-        setSessions(groupSessions(events))
+        const grouped = groupSessions(events)
+        // Relabel cards with their CURRENT front (so edits made during/after the pipeline show in the
+        // replay), falling back to the logged label for deleted cards.
+        const cardIds = [...new Set(events.map(e => e.cardId))]
+        if (cardIds.length > 0) {
+          const { data } = await supabase.from('cards').select('id, front').in('id', cardIds)
+          const frontById = new Map((data ?? []).map(r => [r.id as string, r.front as string]))
+          for (const s of grouped) for (const c of s.cards) c.label = frontById.get(c.cardId) ?? c.label
+        }
+        setSessions(grouped)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }
