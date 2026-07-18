@@ -7,6 +7,20 @@ const LANE_H = 44
 const CHIP_W = 104
 const GUTTER = 76   // left label gutter
 
+// Flash colour when a card just moved, by the rating/outcome of that attempt.
+const OUTCOME_COLOR: Record<string, string> = {
+  again: '#F05068', miss: '#F05068', almost: '#F05068',  // wrong / mess-up → red
+  pass:  '#4ADE80', good: '#4ADE80',                      // correct / good → green
+  hard:  '#F0883E',                                       // hard → orange
+  easy:  '#4C8DFF',                                       // easy → blue
+}
+const LEGEND: { label: string; color: string }[] = [
+  { label: 'Again / miss', color: '#F05068' },
+  { label: 'Hard', color: '#F0883E' },
+  { label: 'Correct / Good', color: '#4ADE80' },
+  { label: 'Easy', color: '#4C8DFF' },
+]
+
 function fmtClock(msSpan: number): string {
   const s = Math.max(0, Math.round(msSpan / 1000))
   const m = Math.floor(s / 60)
@@ -71,6 +85,16 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
         </span>
       </div>
 
+      {/* Rating colour legend */}
+      <div className="flex flex-wrap gap-3 text-[11px] text-ink-faint">
+        {LEGEND.map(l => (
+          <span key={l.label} className="flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: l.color }} />
+            {l.label}
+          </span>
+        ))}
+      </div>
+
       {/* Ladder */}
       <div className="overflow-x-auto rounded-lg border border-line/10 bg-surface-deep/40">
         <div className="relative" style={{ height: laneCount * LANE_H + 12, width: containerW, minWidth: '100%' }}>
@@ -91,17 +115,21 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
             const level = cardLevelAt(c.events, t)
             const col = columns.get(c.cardId) ?? 0
             const grad = level >= rungCount
-            // A card "pulses" briefly right after an attempt lands.
+            // A card "pulses" briefly right after an attempt lands, coloured by that attempt's rating.
             const lastEvt = c.events.filter(e => new Date(e.createdAt).getTime() <= t).slice(-1)[0]
             const active = !!lastEvt && (t - new Date(lastEvt.createdAt).getTime()) < Math.max(1500, wallMs * 0.03)
+            const flash = active && lastEvt?.outcome ? OUTCOME_COLOR[lastEvt.outcome] : undefined
             return (
               <div
                 key={c.cardId}
                 title={`${c.label} — ${c.attempts} attempt${c.attempts === 1 ? '' : 's'}, ${fmtClock(c.activeMs)}`}
                 className={`absolute rounded-md px-2 py-1 text-[11px] font-medium truncate transition-all duration-500 ease-out border ${
-                  grad ? 'bg-accent/25 border-accent/50 text-ink' : active ? 'bg-highlight/80 border-accent text-ink' : 'bg-surface-raised border-line/15 text-ink-muted'
+                  flash ? 'text-ink' : grad ? 'bg-accent/25 border-accent/50 text-ink' : 'bg-surface-raised border-line/15 text-ink-muted'
                 }`}
-                style={{ top: laneTop(level), left: GUTTER + col * (CHIP_W + 8), width: CHIP_W, height: LANE_H - 12 }}>
+                style={{
+                  top: laneTop(level), left: GUTTER + col * (CHIP_W + 8), width: CHIP_W, height: LANE_H - 12,
+                  ...(flash ? { backgroundColor: flash + '40', borderColor: flash } : {}),
+                }}>
                 {c.label}
               </div>
             )
