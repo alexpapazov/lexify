@@ -1837,7 +1837,6 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     const allLearned = allCards.length > 0 && allCards.every(c => cardStates.get(c.id)?.graduated === true)
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
-        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
         <div className="text-5xl">🎉</div>
         <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
         <p className="text-ink-muted">You reviewed {queue.length} card{queue.length !== 1 ? 's' : ''}.</p>

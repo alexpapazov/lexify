@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/client'
 import type { UserId } from '@/domain'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localLogLadderEvent, localDeleteLadderEvent } from '@/lib/offline/localRepos'
 
 /** One logged rung attempt in a ladder study session. */
 export interface LadderEventInput {
@@ -64,6 +66,7 @@ export class SupabaseLadderEventRepository {
 
   /** Log one attempt and return its id (so undo can delete it → undo+redo counts once). */
   async log(userId: UserId, e: LadderEventInput): Promise<string | null> {
+    if (isOfflineActive()) return localLogLadderEvent(e)
     const { data, error } = await this.db.from('ladder_events').insert({
       user_id: userId, session_id: e.sessionId, card_id: e.cardId, deck_id: e.deckId, label: e.label,
       source_language: e.sourceLanguage, target_language: e.targetLanguage,
@@ -75,6 +78,7 @@ export class SupabaseLadderEventRepository {
   }
 
   async deleteById(id: string): Promise<void> {
+    if (isOfflineActive()) return localDeleteLadderEvent(id)
     const { error } = await this.db.from('ladder_events').delete().eq('id', id)
     if (error) throw new Error(error.message)
   }

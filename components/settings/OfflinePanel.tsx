@@ -7,6 +7,8 @@ import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { langFlag, langName } from '@/lib/languages'
 import { downloadForOffline } from '@/lib/offline/download'
 import { getLocalStore } from '@/lib/offline/localStore'
+import { setOfflineMode } from '@/lib/offline/mode'
+import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import type { Deck, Folder } from '@/domain'
 import type { Manifest, OfflineScope, OfflineScopeKind } from '@/lib/offline/types'
 
@@ -32,6 +34,8 @@ export function OfflinePanel() {
   const [result, setResult] = useState<{ cardCount: number; bytes: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [manifest, setManifest] = useState<Manifest | null>(null)
+  const [pendingCount, setPendingCount] = useState(0)
+  const offline = useOfflineMode()
 
   useEffect(() => {
     ;(async () => {
@@ -43,8 +47,9 @@ export function OfflinePanel() {
       ])
       setDecks(ds); setFolders(fs)
       setManifest((await getLocalStore().getManifest()) ?? null)
+      setPendingCount(await getLocalStore().outboxCount())
     })()
-  }, [])
+  }, [offline])
 
   const pairs = useMemo(() => {
     const seen = new Set<string>()
@@ -98,7 +103,31 @@ export function OfflinePanel() {
             <div className="text-ink">Downloaded — {manifest.cardCount} cards</div>
             <div className="text-xs text-ink-faint">{fmtWhen(manifest.downloadedAt)} · {manifest.includeAudio ? 'with audio' : 'no audio'} · {manifest.dueWindowDays}-day window</div>
           </div>
-          <button onClick={clear} className="text-xs text-danger hover:underline shrink-0">Clear</button>
+          <button onClick={clear} disabled={offline} className="text-xs text-danger hover:underline shrink-0 disabled:opacity-40 disabled:no-underline">Clear</button>
+        </div>
+      )}
+
+      {/* Offline toggle — only meaningful once a bundle is downloaded */}
+      {manifest && (
+        <div className={`rounded-lg border px-3 py-2 ${offline ? 'border-accent/40 bg-accent/5' : 'border-line/10'}`}>
+          <label className="flex items-center justify-between gap-3 cursor-pointer">
+            <div>
+              <div className="text-sm text-ink">{offline ? 'Offline mode — studying locally' : 'Go offline'}</div>
+              <div className="text-xs text-ink-faint mt-0.5">
+                {offline
+                  ? 'Reviews are saved on this device. Toggle off when you have a connection to sync them back.'
+                  : pendingCount > 0
+                    ? `${pendingCount} local change${pendingCount === 1 ? '' : 's'} waiting to sync.`
+                    : 'Study without a connection using your downloaded cards.'}
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              className="h-5 w-9 shrink-0 accent-accent cursor-pointer"
+              checked={offline}
+              onChange={e => setOfflineMode(e.target.checked)}
+            />
+          </label>
         </div>
       )}
 

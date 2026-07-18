@@ -7,6 +7,8 @@ import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 import { AvatarMenu } from './AvatarMenu'
 import { ProfilePanel } from './ProfilePanel'
+import { useOfflineMode } from '@/lib/offline/useOfflineMode'
+import { setOfflineMode } from '@/lib/offline/mode'
 
 const NAV_LINKS = [
   { href: '/study',     label: 'Study'    },
@@ -59,8 +61,19 @@ export function Navbar() {
     router.refresh()
   }
 
+  const offline = useOfflineMode()
+  // Offline: hide the AI-only destinations (agent card-making, upload/AI card gen).
+  const OFFLINE_HIDDEN = new Set(['/agents', '/upload'])
+  const navLinks = offline ? NAV_LINKS.filter(l => !OFFLINE_HIDDEN.has(l.href)) : NAV_LINKS
+
   return (
     <>
+      {offline && (
+        <div className="z-[60] bg-amber-500/90 text-black text-xs font-medium text-center py-1 px-3 flex items-center justify-center gap-3">
+          <span>● Offline mode — studying from your downloaded cards. Reviews sync when you go back online.</span>
+          <button onClick={() => setOfflineMode(false)} className="underline underline-offset-2 hover:no-underline shrink-0">Go online</button>
+        </div>
+      )}
       <nav className="sticky top-0 z-50 border-b border-line/5 bg-surface-deep/90 backdrop-blur">
         <div className="max-w-5xl mx-auto px-4 h-14 flex items-center">
 
@@ -70,7 +83,7 @@ export function Navbar() {
               Lexify
             </Link>
 
-            {NAV_LINKS.map(({ href, label }) => {
+            {navLinks.map(({ href, label }) => {
               const isActive = pathname === href
               const onClick = href === '/library' && pathname === '/library'
                 ? () => window.dispatchEvent(new CustomEvent('lexify:library-reset'))
@@ -138,7 +151,7 @@ export function Navbar() {
             className="relative mt-14 bg-surface-deep border-b border-line/5 px-4 py-3 space-y-1"
             onClick={e => e.stopPropagation()}
           >
-            {NAV_LINKS.map(({ href, label }) => {
+            {navLinks.map(({ href, label }) => {
               const isActive = pathname === href
               const onClick = href === '/library' && pathname === '/library'
                 ? () => window.dispatchEvent(new CustomEvent('lexify:library-reset'))

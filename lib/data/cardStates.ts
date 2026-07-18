@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/client'
 import type { CardState, UserId, DeckId, CardId, Rating } from '@/domain'
 import type { CardStateRepository } from './interfaces'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localCardStatesByDeck, localUpsertCardState, localDeleteCardState } from '@/lib/offline/localRepos'
 
 function rowToCardState(row: Record<string, unknown>): CardState {
   return {
@@ -72,6 +74,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
   }
 
   async listByDeck(userId: UserId, deckId: DeckId): Promise<CardState[]> {
+    if (isOfflineActive()) return localCardStatesByDeck(deckId)
     // cards are no longer deck-owned — join through deck_cards to find
     // which cards belong to this deck, then fetch this user's states for them.
     const { data: links, error: linkError } = await this.db.from('deck_cards')
@@ -89,6 +92,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
   }
 
   async upsert(state: CardState): Promise<CardState> {
+    if (isOfflineActive()) return localUpsertCardState(state)
     const { data, error } = await this.db.from('card_states').upsert({
       user_id: state.userId, card_id: state.cardId, pipeline_id: state.pipelineId,
       current_step_order: state.currentStepOrder, correct_in_step: state.correctInStep,
@@ -202,6 +206,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
   }
 
   async delete(userId: UserId, cardId: CardId, reviewDirection: 'forward' | 'reverse' = 'forward'): Promise<void> {
+    if (isOfflineActive()) return localDeleteCardState(cardId, reviewDirection)
     const { error } = await this.db.from('card_states')
       .delete()
       .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', reviewDirection)

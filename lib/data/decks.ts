@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/client'
 import type { Deck, UserId, DeckId, GradingSettings } from '@/domain'
 import { DEFAULT_GRADING_SETTINGS } from '@/domain'
 import type { DeckRepository, CreateDeckInput } from './interfaces'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localDecks, localGetDeck } from '@/lib/offline/localRepos'
 
 function rowToDeck(row: Record<string, unknown>): Deck {
   return {
@@ -27,6 +29,7 @@ export class SupabaseDeckRepository implements DeckRepository {
   private get db() { return createClient() }
 
   async list(userId: UserId): Promise<Deck[]> {
+    if (isOfflineActive()) return localDecks()
     const { data, error } = await this.db.from('decks').select('*')
       .eq('owner_id', userId).is('deleted_at', null).order('position', { ascending: true })
     if (error) throw new Error(error.message)
@@ -42,6 +45,7 @@ export class SupabaseDeckRepository implements DeckRepository {
   }
 
   async get(deckId: DeckId): Promise<Deck | null> {
+    if (isOfflineActive()) return (await localGetDeck(deckId)) ?? null
     const { data, error } = await this.db.from('decks').select('*')
       .eq('id', deckId).is('deleted_at', null).single()
     if (error) return null

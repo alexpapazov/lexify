@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/client'
 import type { Folder, UserId, FolderId } from '@/domain'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localFolders } from '@/lib/offline/localRepos'
 
 function rowToFolder(row: Record<string, unknown>): Folder {
   return {
@@ -22,6 +24,7 @@ export class SupabaseFolderRepository {
 
   /** All non-deleted folders for the user — flat list, tree built in UI. */
   async list(userId: UserId): Promise<Folder[]> {
+    if (isOfflineActive()) return localFolders()
     const { data, error } = await this.db
       .from('folders')
       .select('*')

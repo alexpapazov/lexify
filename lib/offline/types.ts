@@ -32,9 +32,10 @@ export interface StoredLadder { key: string; source: string | null; target: stri
 export interface StoredParam  { key: string; source: string; target: string; answerField: string; row: unknown }
 export interface StoredLink   { id: string; [k: string]: unknown }
 export interface StoredOverride { key: string; cardId: string; answerSide: string; answerText: string }
+export interface StoredDeckCard { key: string; deckId: string; cardId: string }
 
 // ── Outbox: local changes queued for the next online sync ────────────────────
-export type OutboxEntity = 'cardState' | 'ladderClimb' | 'ladderEvent' | 'reviewEvent' | 'override'
+export type OutboxEntity = 'cardState' | 'ladderClimb' | 'ladderEvent' | 'reviewEvent' | 'override' | 'card'
 export interface OutboxEntry {
   id?:            number       // Dexie auto-increment
   entity:         OutboxEntity
@@ -56,4 +57,5 @@ export interface DownloadBundle {
   folders:         Folder[]
   confusionLinks:  StoredLink[]
   overrides:       StoredOverride[]
+  deckCards:       StoredDeckCard[]   // deck ↔ card membership (for per-deck reads offline)
 }

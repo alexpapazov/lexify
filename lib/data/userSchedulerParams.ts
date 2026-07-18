@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/client'
 import type { SchedulerParams, TypedStrictnessLevel } from '@/domain'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localSchedulerParams } from '@/lib/offline/localRepos'
 
 export interface SchedulerParamsRow extends SchedulerParams {
   userId: string
@@ -97,6 +99,7 @@ export class SupabaseUserSchedulerParamsRepository {
   }
 
   async listForUser(userId: string): Promise<SchedulerParamsRow[]> {
+    if (isOfflineActive()) return localSchedulerParams()
     const { data, error } = await this.db
       .from('user_scheduler_params')
       .select('*')

@@ -17,6 +17,7 @@ import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoice
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { speak, fetchAudioSource, playAudioClip } from '@/lib/speak'
+import { isOfflineActive } from '@/lib/offline/mode'
 import type { AudioSource } from '@/domain'
 import { classifyReviewMode } from '@/engine/scheduler'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
@@ -300,6 +301,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   async function fetchAndCache(source: 'elevenlabs' | 'forvo'): Promise<string | null> {
     const existing = cachedClip(source)
     if (existing) return existing
+    if (isOfflineActive()) { setAudioError('Audio generation needs a connection. Use Robotic (device) audio offline.'); return null }
     const { audioData, reason } = await fetchAudioSource(card.front, sourceLanguage, source)
     if (!audioData) { setAudioError(audioReason(reason)); return null }
     const newSources = { ...(card.audioSources ?? {}), [source]: audioData }
@@ -355,6 +357,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
   async function handleConfirmReset() {
     if (!resetAction) return
+    if (isOfflineActive()) { setResetError('Resetting needs a connection (it regenerates distractors/audio). Try again online.'); setResetAction(null); return }
     setResetting(true)
     setResetError(null)
     try {

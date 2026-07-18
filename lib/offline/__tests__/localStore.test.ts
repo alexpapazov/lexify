@@ -22,6 +22,7 @@ const bundle = (over: Partial<DownloadBundle> = {}): DownloadBundle => ({
   cards: [card('a'), card('b')],
   cardStates: [state('a'), state('b')],
   ladderClimb: [], ladders: [], schedulerParams: [], decks: [], folders: [], confusionLinks: [], overrides: [],
+  deckCards: [],
   ...over,
 })
 

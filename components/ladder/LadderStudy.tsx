@@ -23,6 +23,7 @@ import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
 import { UndoFab } from '@/components/session/UndoFab'
 import { CardEditModal } from '@/components/CardEditModal'
+import { isOfflineActive } from '@/lib/offline/mode'
 import type { Card, CardChoices, Deck, Ladder, RungType } from '@/domain'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -240,14 +241,22 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
       // Audio + timezone prefs. Per-deck intake caps only apply to single-deck scope.
       const prefsRepo = new SupabaseDeckPreferencesRepository()
-      const prefs = scope.kind === 'deck' ? await prefsRepo.get(uid, scope.deckId) : null
+      const prefs = (scope.kind === 'deck' && !isOfflineActive()) ? await prefsRepo.get(uid, scope.deckId) : null
       setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
       setAudioVolume(prefs?.audioVolume ?? 1)
-      const audioPref = await createClient().from('profiles').select('audio_source_default, audio_source_by_language, timezone, day_turnover_hour').eq('user_id', uid).single()
-      setAudioSourceDefault(audioPref.data?.audio_source_default as string | null)
-      setAudioSourceByLanguage(audioPref.data?.audio_source_by_language as Record<string, string> | null)
-      tzRef.current       = (audioPref.data?.timezone as string | null) ?? 'UTC'
-      turnoverRef.current = (audioPref.data?.day_turnover_hour as number | null) ?? 0
+      // Offline: no AI audio, and use the device's own timezone (device-local time is authoritative offline).
+      if (isOfflineActive()) {
+        setAudioSourceDefault('browser')
+        setAudioSourceByLanguage(null)
+        try { tzRef.current = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { tzRef.current = 'UTC' }
+        turnoverRef.current = 0
+      } else {
+        const audioPref = await createClient().from('profiles').select('audio_source_default, audio_source_by_language, timezone, day_turnover_hour').eq('user_id', uid).single()
+        setAudioSourceDefault(audioPref.data?.audio_source_default as string | null)
+        setAudioSourceByLanguage(audioPref.data?.audio_source_by_language as Record<string, string> | null)
+        tzRef.current       = (audioPref.data?.timezone as string | null) ?? 'UTC'
+        turnoverRef.current = (audioPref.data?.day_turnover_hour as number | null) ?? 0
+      }
 
       let q: string[]
       if (category === 'new')          q = shuffle(fresh)
@@ -431,7 +440,6 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   if (!currentCard || !currentRung || !currentClimb || !currentDeck) {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-6">
-        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
         <h1 className="text-xl font-semibold text-ink">Session complete</h1>
         <p className="text-ink-muted">{graduated > 0 ? `Graduated ${graduated} card${graduated === 1 ? '' : 's'}.` : 'Nothing to learn right now.'}</p>
         <div className="flex flex-wrap justify-center gap-3">

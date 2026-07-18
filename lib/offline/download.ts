@@ -123,17 +123,20 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   }
   const finalCards = cardIds.map(id => cardsById.get(id)!).map(c => opts.includeAudio ? c : stripAudio(c))
 
-  // Sync baselines (server updated_at) for the conflicting tables, keyed for lookup.
+  // Sync baselines (server updated_at) for the conflicting tables + the deck↔card join.
   progress('Packaging', 0, 1)
   const stateMeta = new Map<string, string>()
   const climbRows: { card_id: string; deck_id: string; state: unknown; updated_at: string }[] = []
+  const deckCardRows: { deck_id: string; card_id: string }[] = []
   if (cardIds.length > 0) {
-    const [su, cl] = await Promise.all([
+    const [su, cl, dc] = await Promise.all([
       supabase.from('card_states').select('card_id, review_direction, updated_at').in('card_id', cardIds),
       supabase.from('ladder_climb').select('card_id, deck_id, state, updated_at').in('card_id', cardIds),
+      supabase.from('deck_cards').select('deck_id, card_id').in('deck_id', [...deckIds]),
     ])
     for (const r of su.data ?? []) stateMeta.set(cardStateKey(r.card_id as string, r.review_direction as string), r.updated_at as string)
     for (const r of cl.data ?? []) climbRows.push(r as { card_id: string; deck_id: string; state: unknown; updated_at: string })
+    for (const r of dc.data ?? []) if (selected.has(r.card_id as string)) deckCardRows.push(r as { deck_id: string; card_id: string })
   }
 
   const cardStates: StoredCardState[] = states.filter(s => selected.has(s.cardId)).map(s => ({
@@ -167,6 +170,7 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
     folders: allFolders,
     confusionLinks: links.map((l, i) => ({ ...l, id: (l as { id?: string }).id ?? `link-${i}` })),
     overrides: overrides.map(o => ({ key: overrideKey(o.cardId, o.answerSide, o.answerText), cardId: o.cardId, answerSide: o.answerSide, answerText: o.answerText })),
+    deckCards: deckCardRows.map(r => ({ key: `${r.deck_id}:${r.card_id}`, deckId: r.deck_id, cardId: r.card_id })),
   }
 
   const bytes = estimateBundleBytes(bundle)

@@ -1358,7 +1358,6 @@ function FolderSessionInner() {
     const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant' }
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
-        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
         <div className="text-5xl">🎉</div>
         <h2 className="text-2xl font-semibold text-ink">Session complete!</h2>
         <p className="text-ink-muted">

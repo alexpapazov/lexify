@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/client'
 import type { Ladder, Rung, UserId } from '@/domain'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localLadderForPair } from '@/lib/offline/localRepos'
 
 /** The default ladder is stored under empty-string source/target. */
 const DEFAULT_KEY = { source: '', target: '' }
@@ -16,6 +18,7 @@ export class SupabaseLadderRepository {
 
   /** The ladder saved for a specific pair, or null if none. */
   async getForPair(userId: UserId, source: string, target: string): Promise<Ladder | null> {
+    if (isOfflineActive()) return localLadderForPair(source, target)
     const { data, error } = await this.db.from('learning_ladders')
       .select('*').eq('user_id', userId).eq('source_language', source).eq('target_language', target).maybeSingle()
     if (error) throw new Error(error.message)

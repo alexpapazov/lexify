@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/client'
 import type { Card, DeckId, CardId, UserId } from '@/domain'
 import type { CardRepository, CreateCardInput } from './interfaces'
 import { tier1Match } from '@/lib/duplicates'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localCardsByDeck, localGetCard, localUpdateCard } from '@/lib/offline/localRepos'
 
 function rowToCard(row: Record<string, unknown>): Card {
   return {
@@ -44,6 +46,7 @@ export class SupabaseCardRepository implements CardRepository {
   private get db() { return createClient() }
 
   async listByDeck(deckId: DeckId): Promise<Card[]> {
+    if (isOfflineActive()) return localCardsByDeck(deckId)
     const { data, error } = await this.db.from('deck_cards')
       .select('position, cards(*)')
       .eq('deck_id', deckId)
@@ -57,6 +60,7 @@ export class SupabaseCardRepository implements CardRepository {
   }
 
   async get(cardId: CardId): Promise<Card | null> {
+    if (isOfflineActive()) return (await localGetCard(cardId)) ?? null
     const { data, error } = await this.db.from('cards').select('*')
       .eq('id', cardId).is('deleted_at', null).single()
     if (error) return null
@@ -169,6 +173,7 @@ export class SupabaseCardRepository implements CardRepository {
   }
 
   async update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints' | 'choices' | 'audioGenerated' | 'audioData' | 'audioSource' | 'audioSources' | 'ipa'>>): Promise<Card> {
+    if (isOfflineActive()) return localUpdateCard(cardId, patch)
     const dbPatch: Record<string, unknown> = {}
     if (patch.front          !== undefined) dbPatch.front           = patch.front
     if (patch.back           !== undefined) dbPatch.back            = patch.back

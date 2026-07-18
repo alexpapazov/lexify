@@ -10,8 +10,8 @@ import Dexie, { type Table } from 'dexie'
 import type { Card, CardState, Deck, Folder } from '@/domain'
 import { cardStateKey } from './keys'
 import type {
-  DownloadBundle, Manifest, OutboxEntry, StoredCardState, StoredClimb, StoredLadder, StoredLink,
-  StoredOverride, StoredParam,
+  DownloadBundle, Manifest, OutboxEntry, StoredCardState, StoredClimb, StoredDeckCard, StoredLadder,
+  StoredLink, StoredOverride, StoredParam,
 } from './types'
 
 const META_MANIFEST = 'manifest'
@@ -26,6 +26,7 @@ class LexifyOfflineDB extends Dexie {
   schedulerParams!: Table<StoredParam, string>
   confusionLinks!:  Table<StoredLink, string>
   overrides!:       Table<StoredOverride, string>
+  deckCards!:       Table<StoredDeckCard, string>
   meta!:            Table<{ key: string; value: unknown }, string>
   outbox!:          Table<OutboxEntry, number>
 
@@ -41,6 +42,7 @@ class LexifyOfflineDB extends Dexie {
       schedulerParams: 'key',
       confusionLinks:  'id',
       overrides:       'key, cardId',
+      deckCards:       'key, deckId, cardId',
       meta:            'key',
       outbox:          '++id, entity',
     })
@@ -50,7 +52,7 @@ class LexifyOfflineDB extends Dexie {
 /** All synced content tables (everything a download replaces). The outbox + meta are NOT cleared here. */
 const CONTENT_TABLES = [
   'cards', 'cardStates', 'ladderClimb', 'decks', 'folders', 'ladders', 'schedulerParams',
-  'confusionLinks', 'overrides',
+  'confusionLinks', 'overrides', 'deckCards',
 ] as const
 
 export class LocalStore {
@@ -71,6 +73,7 @@ export class LocalStore {
         this.db.schedulerParams.bulkPut(bundle.schedulerParams),
         this.db.confusionLinks.bulkPut(bundle.confusionLinks),
         this.db.overrides.bulkPut(bundle.overrides),
+        this.db.deckCards.bulkPut(bundle.deckCards),
       ])
       await this.db.meta.put({ key: META_MANIFEST, value: bundle.manifest })
     })
@@ -88,6 +91,16 @@ export class LocalStore {
   // ── Cards ──
   getCard(id: string): Promise<Card | undefined> { return this.db.cards.get(id) }
   allCards(): Promise<Card[]> { return this.db.cards.toArray() }
+  async putCard(card: Card): Promise<void> { await this.db.cards.put(card) }
+  async deleteCard(id: string): Promise<void> { await this.db.cards.delete(id) }
+  /** Card ids belonging to a deck (deck ↔ card join). */
+  async cardIdsForDeck(deckId: string): Promise<string[]> {
+    return (await this.db.deckCards.where('deckId').equals(deckId).toArray()).map(r => r.cardId)
+  }
+  async cardsForDeck(deckId: string): Promise<Card[]> {
+    const ids = await this.cardIdsForDeck(deckId)
+    return (await this.db.cards.bulkGet(ids)).filter((c): c is Card => !!c)
+  }
 
   // ── Card states (hot path) ──
   getCardState(cardId: string, reviewDirection: string): Promise<StoredCardState | undefined> {
@@ -101,10 +114,25 @@ export class LocalStore {
   async putCardState(state: CardState & { serverUpdatedAt?: string | null }): Promise<void> {
     await this.db.cardStates.put({ ...state, key: cardStateKey(state.cardId, state.reviewDirection), serverUpdatedAt: state.serverUpdatedAt ?? null } as StoredCardState)
   }
+  async deleteCardState(cardId: string, reviewDirection: string): Promise<void> {
+    await this.db.cardStates.delete(cardStateKey(cardId, reviewDirection))
+  }
+  async cardStatesForDeck(deckId: string): Promise<StoredCardState[]> {
+    const ids = new Set(await this.cardIdsForDeck(deckId))
+    return (await this.db.cardStates.toArray()).filter(s => ids.has(s.cardId))
+  }
 
   // ── Ladder climb ──
   getClimb(cardId: string): Promise<StoredClimb | undefined> { return this.db.ladderClimb.get(cardId) }
+  async climbForCards(cardIds: string[]): Promise<StoredClimb[]> {
+    return (await this.db.ladderClimb.bulkGet(cardIds)).filter((c): c is StoredClimb => !!c)
+  }
   async putClimb(row: StoredClimb): Promise<void> { await this.db.ladderClimb.put(row) }
+  async removeClimb(cardId: string): Promise<void> { await this.db.ladderClimb.delete(cardId) }
+
+  // ── Overrides ──
+  async putOverride(row: StoredOverride): Promise<void> { await this.db.overrides.put(row) }
+  async deleteOverride(key: string): Promise<void> { await this.db.overrides.delete(key) }
 
   // ── Config reads ──
   getLadder(key: string): Promise<StoredLadder | undefined> { return this.db.ladders.get(key) }

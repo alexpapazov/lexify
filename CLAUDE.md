@@ -1157,6 +1157,48 @@ page also guards `showElectivePicker`):
   preservesPitch), set from deck prefs by the ladder/session pages; control in Deck
   settings → Audio. (Cross-deck all/folder sessions use normal speed.)
 
+## Offline mode (Stage 3 done, 2026-07-18)
+
+Toggle-based, online-primary offline study. **The study path (ladder + Due Now) works offline;
+sync-back (Stage 5) and the conflict popup (Stage 6) are NOT built yet — see below.**
+
+- **Local store**: `lib/offline/localStore.ts` (Dexie/IndexedDB) + `getLocalStore()` singleton;
+  tables for cards, cardStates, ladderClimb, decks/folders, ladders, schedulerParams, overrides,
+  deckCards, meta, and an **outbox** (`++id, entity`) that captures every offline write.
+- **Toggle**: `lib/offline/mode.ts` — `isOfflineActive()` (server-safe, reads localStorage
+  `lexify-offline-mode`), `setOfflineMode(on)`. The reactive React hook `useOfflineMode()` lives in
+  `lib/offline/useOfflineMode.ts` (SEPARATE file, `'use client'`) — do NOT put the hook back in
+  `mode.ts`; `mode.ts` is imported into server bundles via the repo layer and must stay React-free.
+- **Download**: `lib/offline/download.ts: downloadForOffline({scope, dueWindowDays, includeAudio})`
+  gathers cards/states/climb/config for a scope (library/language/folder/deck), pre-generates
+  distractors, strips audio unless includeAudio, and hydrates the local store. UI:
+  `components/settings/OfflinePanel.tsx` (in Settings) — scope picker + due-window + audio toggle +
+  Download + the **offline toggle** (shown once a bundle exists) + Clear. Outbox pending-count shown.
+- **Repo router (Option B)**: the Supabase repos delegate to `lib/offline/localRepos.ts` when
+  `isOfflineActive()` — guards added to `cardStates`, `ladderClimb`, `ladders`, `ladderEvents`,
+  `userSchedulerParams`, `typedAnswerOverrides`, `decks`, `folders`, `cards`. So the study
+  pages/ladder are UNCHANGED; offline is a flag with zero online impact when off. Every local write
+  also `enqueue()`s to the outbox (undo of a ladder event removes its pending insert).
+- **Ladder profiles fix**: `LadderStudy.tsx` skips the direct `supabase.from('profiles')` read when
+  offline — uses the DEVICE timezone (`Intl…resolvedOptions().timeZone`), turnover 0, browser audio.
+  Deck-prefs fetch also skipped offline.
+- **AI gating**: an amber **offline banner** (Navbar) with "Go online"; the **Agents** and **Upload**
+  nav links are hidden offline; `CardEditModal` blocks audio-provider fetch and the reset/regenerate
+  actions offline (robotic/device TTS still works — it needs no network). Audio *generation* is
+  already neutralized offline (browser default + `fetchAndCacheAudio` early-return).
+- **Migrations**: `095_offline_updated_at.sql` (adds `updated_at` triggers to
+  user_scheduler_params, card_confusion_links, typed_answer_overrides — for future conflict
+  detection). USER CONFIRMED RAN 095.
+- **Tests**: `lib/offline/__tests__/localStore.test.ts`, `download.test.ts`, `localRepos.test.ts`
+  (fake-indexeddb). All green; tsc + `npm run build` pass.
+- **REMAINING**: **Stage 5** = the sync engine (on toggle-off, drain the outbox to Supabase, pull
+  server changes, rebase local baselines). **Stage 6** = conflict popup (per-card study-state diff +
+  bulk keep-device/keep-cloud) when a row changed both locally and on server since download. **Stage
+  7** = PWA. **Stage 8** = Capacitor native app (needs Apple Developer acct + Xcode/CocoaPods on the
+  user's Mac — flag before starting). Also: the toggle currently just flips the flag; going online
+  does NOT yet sync (Stage 5). **Offline study must be tested on-device** before relying on it — it
+  can't be runtime-verified in this environment.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/client'
 import type { TypedAnswerOverride, UserId, CardId, CardSide } from '@/domain'
 import type { TypedAnswerOverrideRepository } from './interfaces'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localOverridesForUser, localAddOverride, localRemoveOverride } from '@/lib/offline/localRepos'
 
 function rowToOverride(row: Record<string, unknown>): TypedAnswerOverride {
   return {
@@ -15,6 +17,7 @@ export class SupabaseTypedAnswerOverrideRepository implements TypedAnswerOverrid
   private get db() { return createClient() }
 
   async listForUser(userId: UserId): Promise<TypedAnswerOverride[]> {
+    if (isOfflineActive()) return (await localOverridesForUser()).map(o => ({ ...o, userId }))
     const { data, error } = await this.db.from('typed_answer_overrides')
       .select('*')
       .eq('user_id', userId)
@@ -23,6 +26,7 @@ export class SupabaseTypedAnswerOverrideRepository implements TypedAnswerOverrid
   }
 
   async add(userId: UserId, cardId: CardId, answerSide: CardSide, answerText: string): Promise<void> {
+    if (isOfflineActive()) return localAddOverride(cardId, answerSide, answerText)
     const { error } = await this.db.from('typed_answer_overrides')
       .upsert(
         { user_id: userId, card_id: cardId, answer_side: answerSide, answer_text: answerText },
@@ -32,6 +36,7 @@ export class SupabaseTypedAnswerOverrideRepository implements TypedAnswerOverrid
   }
 
   async remove(userId: UserId, cardId: CardId, answerSide: CardSide, answerText: string): Promise<void> {
+    if (isOfflineActive()) return localRemoveOverride(cardId, answerSide, answerText)
     const { error } = await this.db.from('typed_answer_overrides')
       .delete()
       .eq('user_id', userId).eq('card_id', cardId).eq('answer_side', answerSide).eq('answer_text', answerText)
