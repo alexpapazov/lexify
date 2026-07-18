@@ -58,6 +58,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const [graduated, setGraduated] = useState(0)
   const [answered, setAnswered] = useState(0)
   const [paused, setPaused] = useState(false)
+  const [pauseKind, setPauseKind] = useState<'round' | 'lastcard'>('round')
   const [hasMore, setHasMore] = useState(false)
   const progressPctRef = useRef(0)
   const startStepsRef  = useRef(0)
@@ -296,7 +297,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
     const nextAnswered = answered + 1
     setAnswered(nextAnswered)
-    if (nextId && total > 0 && nextAnswered % total === 0) setPaused(true)
+    // When only the just-rated card is left, pickNextCard has no other card to switch to
+    // and re-shows it immediately — which reads as "the rating didn't register". Break to a
+    // short interstitial so the rating clearly lands before the card comes back.
+    if (nextId && !res.state.graduated && nextQueue.length === 1) { setPauseKind('lastcard'); setPaused(true) }
+    else if (nextId && total > 0 && nextAnswered % total === 0) { setPauseKind('round'); setPaused(true) }
   }
 
   const handleUndo = useCallback(async () => {
@@ -369,8 +374,12 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-6">
         <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
-        <h1 className="text-xl font-semibold text-ink">Round complete</h1>
-        <p className="text-ink-muted">{graduated}/{total} card{total === 1 ? '' : 's'} graduated so far. Keep going?</p>
+        <h1 className="text-xl font-semibold text-ink">{pauseKind === 'lastcard' ? 'Answer saved' : 'Round complete'}</h1>
+        <p className="text-ink-muted">
+          {pauseKind === 'lastcard'
+            ? 'Just this last card left — keep going to see it again.'
+            : `${graduated}/${total} card${total === 1 ? '' : 's'} graduated so far. Keep going?`}
+        </p>
         <div className="flex flex-wrap justify-center gap-3">
           <a href={back} className="btn-ghost">Back</a>
           <button onClick={() => setPaused(false)} className="btn-primary">Continue</button>
