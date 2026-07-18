@@ -33,7 +33,7 @@ interface PairCfg {
 
 interface PairSeries { key: string; label: string; flag: string; typed: number[]; selfg: number[]; recog: number[] }
 interface PairModel { key: string; label: string; flag: string; days: number; difficulty: number }
-interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairModel[]; hasGoals: boolean; bandLo: number[]; bandHi: number[] }
+interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairModel[]; hasGoals: boolean; bands: Record<string, { lo: number[]; hi: number[] }> }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 function ordinal(n: number): string {
@@ -124,19 +124,25 @@ export function DueForecastProjection() {
         const stateRepo = new SupabaseCardStateRepository()
         const deckStates = await Promise.all(decks.map(d => stateRepo.listByDeck(uid, d.id)))
 
-        // Per-run total-load accumulators (K realizations) → the p10–p90 confidence band. Each card
-        // contributes its run-k sample to system-run k; since cards use independent RNG streams, run k
-        // is a valid i.i.d. draw of the total. Scale K down on large libraries to bound compute.
+        // Per-run total-load accumulators (K realizations) → the p10–p90 confidence band, kept PER
+        // PAIR so each language filter gets its own band (the all-languages band sums them per run).
+        // Each card contributes its run-k sample to system-run k; independent RNG streams make run k a
+        // valid i.i.d. draw. Scale K down on large libraries to bound compute.
         const gradedRows = deckStates.reduce((n, ss) => n + ss.reduce((m, s) => m + (s.graduated ? 1 : 0), 0), 0)
         const K = gradedRows > 1500 ? 24 : gradedRows > 600 ? 40 : RUNS
-        const runTotals: Float64Array[] = Array.from({ length: K }, () => new Float64Array(HORIZON + 1))
+        const runsByPair = new Map<string, Float64Array[]>()
+        const runsFor = (key: string): Float64Array[] => {
+          let r = runsByPair.get(key)
+          if (!r) { r = Array.from({ length: K }, () => new Float64Array(HORIZON + 1)); runsByPair.set(key, r) }
+          return r
+        }
         let mcSeed = 1
 
         // Emit a card's Monte Carlo schedule into one array: accumulate each sampled review's weight
-        // (1/K, so the sum is the mean load) and tally per-run totals for the band. Returns the median
-        // day runs hit `maxReviews` (dormancy), else null. Honors `stopDay` (a track ghosted elsewhere).
+        // (1/K, so the sum is the mean load) and tally per-run totals (in `runs`) for the band. Returns
+        // the median day runs hit `maxReviews` (dormancy), else null. Honors `stopDay`.
         const emit = (
-          arr: Float64Array, firstDay: number | null, S0: number, D0: number, retention: number, maxInt: number, mix: RatingMix,
+          arr: Float64Array, runs: Float64Array[], firstDay: number | null, S0: number, D0: number, retention: number, maxInt: number, mix: RatingMix,
           opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
           if (firstDay === null) return null
@@ -144,12 +150,12 @@ export function DueForecastProjection() {
             { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
             mcSeed++,
           )
-          for (const st of steps) { arr[st.day]! += st.weight; runTotals[st.run!]![st.day]! += 1 }
+          for (const st of steps) { arr[st.day]! += st.weight; runs[st.run!]![st.day]! += 1 }
           return dormantDay
         }
         // Smart variant: each review is typed while its interval is below `threshold`, else self-graded.
         const emitSmart = (
-          typedArr: Float64Array, selfgArr: Float64Array, firstDay: number | null, S0: number, D0: number,
+          typedArr: Float64Array, selfgArr: Float64Array, runs: Float64Array[], firstDay: number | null, S0: number, D0: number,
           retention: number, maxInt: number, threshold: number, mix: RatingMix, opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
           if (firstDay === null) return null
@@ -160,7 +166,7 @@ export function DueForecastProjection() {
           for (const st of steps) {
             const arr = st.intervalDays < threshold ? typedArr : selfgArr
             arr[st.day]! += st.weight
-            runTotals[st.run!]![st.day]! += 1
+            runs[st.run!]![st.day]! += 1
           }
           return dormantDay
         }
@@ -219,6 +225,7 @@ export function DueForecastProjection() {
           const key = `${deck.sourceLanguage}|${deck.targetLanguage}`
           const mix = mixByPair.get(key) ?? DEFAULT_RATING_MIX
           const sr = seriesFor(key)
+          const runs = runsFor(key)
           const fwd = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
           const dormantDayByCard = new Map<string, number>()
 
@@ -231,15 +238,15 @@ export function DueForecastProjection() {
             const prodOn = c.typedOn || c.smartOn
             const dS = seedD(s.difficulty)
             if (prodOn && s.typedDueAt) {
-              dormantDay = emit(sr.typed, offset(s.typedDueAt ?? s.dueAt), seedS(s.stability, s.typedIntervalDays ?? s.intervalDays, c.typedP), dS, c.typedP, c.maxInt, mix, remOpts)
+              dormantDay = emit(sr.typed, runs, offset(s.typedDueAt ?? s.dueAt), seedS(s.stability, s.typedIntervalDays ?? s.intervalDays, c.typedP), dS, c.typedP, c.maxInt, mix, remOpts)
             }
             if (prodOn && s.smartDueAt) {
-              const sd = emitSmart(sr.typed, sr.selfg, offset(s.smartDueAt), seedS(s.stability, s.smartIntervalDays ?? s.intervalDays, c.smartP), dS, c.smartP, c.maxInt, c.smartThreshold, mix, remOpts)
+              const sd = emitSmart(sr.typed, sr.selfg, runs, offset(s.smartDueAt), seedS(s.stability, s.smartIntervalDays ?? s.intervalDays, c.smartP), dS, c.smartP, c.maxInt, c.smartThreshold, mix, remOpts)
               if (dormantDay == null) dormantDay = sd
             }
             if (c.selfgOn && s.recallDueAt) {
               const recallOpts = dormantDay != null ? { stopDay: dormantDay } : remOpts
-              const rd = emit(sr.selfg, offset(s.recallDueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.selfgP), dS, c.selfgP, c.maxInt, mix, recallOpts)
+              const rd = emit(sr.selfg, runs, offset(s.recallDueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.selfgP), dS, c.selfgP, c.maxInt, mix, recallOpts)
               if (dormantDay == null) dormantDay = rd
             }
             if (dormantDay != null) dormantDayByCard.set(s.cardId, dormantDay)
@@ -251,7 +258,7 @@ export function DueForecastProjection() {
             if (fwdState?.dormant) continue
             if (!(c.reverseOn && fwdState?.graduated)) continue
             const stopDay = dormantDayByCard.get(s.cardId)
-            emit(sr.recog, offset(s.recallDueAt ?? s.dueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.reverseP), seedD(s.difficulty), c.reverseP, c.maxInt, mix,
+            emit(sr.recog, runs, offset(s.recallDueAt ?? s.dueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.reverseP), seedD(s.difficulty), c.reverseP, c.maxInt, mix,
               stopDay != null ? { stopDay } : undefined)
           }
         }
@@ -261,7 +268,7 @@ export function DueForecastProjection() {
         // per-run cumulative reviews are superposed over daily cohorts; intake is capped at the
         // language's remaining new cards, so load(d) = goal · (cum(d) − cum(d − intakeDays)). ──
         const emitNew = (
-          targetArr: Float64Array, retention: number, i0: number, d0: number, mix: RatingMix, maxInt: number,
+          targetArr: Float64Array, runs: Float64Array[], retention: number, i0: number, d0: number, mix: RatingMix, maxInt: number,
           dailyGoal: number, intakeDays: number, splitArr?: Float64Array, splitBelow?: number,
         ) => {
           const { steps } = monteCarloSteps({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt, horizon: HORIZON, mix, K, fuzz: true }, mcSeed++)
@@ -283,7 +290,7 @@ export function DueForecastProjection() {
               const t = tRun[k]![d]! - (back >= 0 ? tRun[k]![back]! : 0)
               const g = gRun ? gRun[k]![d]! - (back >= 0 ? gRun[k]![back]! : 0) : 0
               mt += t; mg += g
-              runTotals[k]![d]! += dailyGoal * (t + g)
+              runs[k]![d]! += dailyGoal * (t + g)
             }
             targetArr[d]! += dailyGoal * mt / K
             if (splitArr && gRun) splitArr[d]! += dailyGoal * mg / K
@@ -298,10 +305,11 @@ export function DueForecastProjection() {
           const remaining = remainingNewByPair.get(k) ?? Infinity
           const intakeDays = Math.min(HORIZON + 1, Math.ceil((Number.isFinite(remaining) ? remaining : HORIZON * c.dailyGoal) / c.dailyGoal))
           if (intakeDays <= 0) continue
-          if (c.typedOn)   emitNew(sr.typed, c.typedP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
-          if (c.smartOn)   emitNew(sr.typed, c.smartP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
-          if (c.selfgOn)   emitNew(sr.selfg, c.selfgP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
-          if (c.reverseOn) emitNew(sr.recog, c.reverseP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
+          const runs = runsFor(k)
+          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
+          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
+          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
+          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
         }
 
         // Downsample each pair's series to STEP-day points (windowed average).
@@ -319,16 +327,27 @@ export function DueForecastProjection() {
           .filter(([k]) => pairSeries.some(p => p.key === k))
           .map(([k, days]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), days, difficulty: diffByPair.get(k) ?? DEFAULT_DIFFICULTY }))
 
-        // Confidence band (total load): downsample each run, then take p10/p90 across runs per window.
-        const perRunDown = runTotals.map(downsample)
-        const bandLo: number[] = [], bandHi: number[] = []
-        for (let i = 0; i < sampleDays.length; i++) {
-          const col = perRunDown.map(r => r[i]!)
-          bandLo.push(percentile(col, 0.1))
-          bandHi.push(percentile(col, 0.9))
+        // Confidence band per selection: downsample each run, then take p10/p90 across runs per window.
+        // Stored per pair key + '__all__' (runs summed across pairs by index) so every language filter
+        // — and the all-languages view — gets its own band.
+        const bandFrom = (runs: Float64Array[]): { lo: number[]; hi: number[] } => {
+          const down = runs.map(downsample)
+          const lo: number[] = [], hi: number[] = []
+          for (let i = 0; i < sampleDays.length; i++) {
+            const col = down.map(r => r[i]!)
+            lo.push(percentile(col, 0.1)); hi.push(percentile(col, 0.9))
+          }
+          return { lo, hi }
         }
+        const bands: Record<string, { lo: number[]; hi: number[] }> = {}
+        const allRuns = Array.from({ length: K }, () => new Float64Array(HORIZON + 1))
+        for (const [key, runs] of runsByPair) {
+          bands[key] = bandFrom(runs)
+          for (let k = 0; k < K; k++) { const a = allRuns[k]!, r = runs[k]!; for (let d = 0; d <= HORIZON; d++) a[d]! += r[d]! }
+        }
+        bands.__all__ = bandFrom(allRuns)
 
-        if (!cancelled) setData({ pairs: pairSeries, sampleDays, models, hasGoals: anyGoal, bandLo, bandHi })
+        if (!cancelled) setData({ pairs: pairSeries, sampleDays, models, hasGoals: anyGoal, bands })
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       }
@@ -350,7 +369,7 @@ export function DueForecastProjection() {
   const svg = useMemo(() => {
     if (!points) return null
     const W = 720, H = 280, mL = 44, mR = 12, mT = 12, mB = 26
-    const band = filterKey === null && data ? data.bandHi : []
+    const band = data ? (data.bands[filterKey ?? '__all__']?.hi ?? []) : []
     const maxY = Math.max(10, ...points.map(p => p.total), ...band) * 1.1
     const x = (day: number) => mL + (day / HORIZON) * (W - mL - mR)
     const y = (v: number) => H - mB - (v / maxY) * (H - mT - mB)
@@ -433,13 +452,17 @@ export function DueForecastProjection() {
               <circle cx={x(hoverPt.day)} cy={y(hoverPt.total)} r={3} fill="#E6E8F5" />
             </g>
           )}
-          {/* p10–p90 confidence band on total (all-languages view only) */}
-          {filterKey === null && data.bandLo.length > 0 && (
-            <path
-              d={`${data.sampleDays.map((day, i) => `${i === 0 ? 'M' : 'L'}${x(day).toFixed(1)},${y(data.bandHi[i]!).toFixed(1)}`).join(' ')} ${data.sampleDays.map((day, i) => ({ day, i })).reverse().map(({ day, i }) => `L${x(day).toFixed(1)},${y(data.bandLo[i]!).toFixed(1)}`).join(' ')} Z`}
-              fill="#E6E8F5" opacity={0.09} stroke="none"
-            />
-          )}
+          {/* p10–p90 confidence band on total (for the selected language, or all) */}
+          {(() => {
+            const b = data.bands[filterKey ?? '__all__']
+            if (!b || b.lo.length === 0) return null
+            return (
+              <path
+                d={`${data.sampleDays.map((day, i) => `${i === 0 ? 'M' : 'L'}${x(day).toFixed(1)},${y(b.hi[i]!).toFixed(1)}`).join(' ')} ${data.sampleDays.map((day, i) => ({ day, i })).reverse().map(({ day, i }) => `L${x(day).toFixed(1)},${y(b.lo[i]!).toFixed(1)}`).join(' ')} Z`}
+                fill="#E6E8F5" opacity={0.09} stroke="none"
+              />
+            )
+          })()}
           {/* series */}
           <path d={path('total')} fill="none" stroke="#E6E8F5" strokeWidth={2.5} />
           <path d={path('typed')} fill="none" stroke="#6640FF" strokeWidth={2} opacity={0.9} />
@@ -470,12 +493,10 @@ export function DueForecastProjection() {
             {l.label}{hoverPt ? ` (${Math.round(hoverPt[l.key])})` : ''}
           </span>
         ))}
-        {filterKey === null && (
-          <span className="flex items-center gap-1.5 text-ink-faint">
-            <span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: '#E6E8F5', opacity: 0.18 }} />
-            p10–p90 range
-          </span>
-        )}
+        <span className="flex items-center gap-1.5 text-ink-faint">
+          <span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: '#E6E8F5', opacity: 0.18 }} />
+          p10–p90 range
+        </span>
       </div>
 
       {/* measured per-language model (initial interval + average difficulty), fed into the forecast */}
