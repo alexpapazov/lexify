@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/client'
 import type { CardConfusionLink, ConfusionKind, ConfusionSimilarityTag, UserId, CardId } from '@/domain'
+import { isOfflineActive } from '@/lib/offline/mode'
 
 function rowToLink(row: Record<string, unknown>): CardConfusionLink {
   return {
@@ -30,6 +31,7 @@ export class SupabaseCardConfusionLinkRepository {
 
   /** Return every confusion link for the user (for interleaving, distractors, the distinguish tool). */
   async listForUser(userId: UserId): Promise<CardConfusionLink[]> {
+    if (isOfflineActive()) return []   // confusion interleaving is a best-effort online extra
     const { data, error } = await this.db
       .from('card_confusion_links')
       .select('*')

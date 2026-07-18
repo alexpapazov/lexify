@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/client'
 import type { LanguagePair, UserId } from '@/domain'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localLanguagePairs } from '@/lib/offline/localRepos'
 
 function rowToPair(row: Record<string, unknown>): LanguagePair {
   return {
@@ -20,6 +22,7 @@ export class SupabaseLanguagePairRepository {
 
   /** All language pairings for the user, ordered for display. */
   async list(userId: UserId): Promise<LanguagePair[]> {
+    if (isOfflineActive()) return localLanguagePairs(userId)
     const { data, error } = await this.db
       .from('language_pairs')
       .select('*')

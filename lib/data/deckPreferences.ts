@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/client'
 import type { DeckPreferences, UserId, DeckId } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import type { DeckPreferencesRepository } from './interfaces'
+import { isOfflineActive } from '@/lib/offline/mode'
 
 function rowToPrefs(row: Record<string, unknown>): DeckPreferences {
   return {
@@ -23,6 +24,7 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
   private get db() { return createClient() }
 
   async get(userId: UserId, deckId: DeckId): Promise<DeckPreferences | null> {
+    if (isOfflineActive()) return null   // offline → callers fall back to defaults
     const { data, error } = await this.db
       .from('user_deck_preferences')
       .select('*')

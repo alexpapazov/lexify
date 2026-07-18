@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useMemo } from 'react'
+import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { routes } from '@/lib/routes'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -300,7 +301,7 @@ export default function StudyPage() {
 
     const [decks, profileRes] = await Promise.all([
       deckRepo.list(session.user.id),
-      supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single(),
+      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single()),
     ])
 
     const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'

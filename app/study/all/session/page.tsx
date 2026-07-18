@@ -6,6 +6,7 @@
  */
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
+import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { apiUrl } from '@/lib/apiBase'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
@@ -230,7 +231,7 @@ function AllDueSessionInner() {
       const [decks, pipeline, profileData] = await Promise.all([
         deckRepo.list(session.user.id),
         pipelineRepo.getDefault(),
-        supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single(),
+        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
       ])
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'

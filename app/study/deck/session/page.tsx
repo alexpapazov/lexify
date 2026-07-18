@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -408,7 +409,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         cardRepo.listByDeck(deckId),
         pipelineRepo.getDefault(),
         prefRepo.get(session.user.id, deckId),
-        supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single(),
+        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
       ])
 
       const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'

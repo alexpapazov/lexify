@@ -7,6 +7,7 @@
  */
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
+import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -221,7 +222,7 @@ function FolderSessionInner() {
         folderRepo.list(session.user.id),
         pipelineRepo.getDefault(),
         folderRepo.get(folderId),
-        supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single(),
+        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
       ])
       setFolder(thisFolder)
 

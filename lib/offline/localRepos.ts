@@ -6,7 +6,7 @@
  * Reads come straight from the local store. Writes update the local store AND append to the outbox,
  * which the sync engine (Stage 5) pushes to Supabase when you go back online.
  */
-import type { Card, CardState, Ladder, TypedAnswerOverride } from '@/domain'
+import type { Card, CardState, Ladder, TypedAnswerOverride, LanguagePair } from '@/domain'
 import type { ClimbState } from '@/engine/ladderEngine'
 import type { LadderEventInput } from '@/lib/data/ladderEvents'
 import type { SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
@@ -47,6 +47,25 @@ export async function localSchedulerParams(): Promise<SchedulerParamsRow[]> {
 }
 export async function localOverridesForUser(): Promise<Omit<TypedAnswerOverride, 'userId'>[]> {
   return (await getLocalStore().allOverrides()).map(o => ({ cardId: o.cardId, answerSide: o.answerSide as TypedAnswerOverride['answerSide'], answerText: o.answerText }))
+}
+/** Offline language pairs are derived from the downloaded decks (each carries source/target). No
+ *  custom goals/flags offline — enough for the dashboard/library to render and route into study. */
+export async function localLanguagePairs(userId: string): Promise<LanguagePair[]> {
+  const decks = await getLocalStore().allDecks()
+  const seen = new Map<string, LanguagePair>()
+  let pos = 0
+  for (const d of decks) {
+    const key = `${d.sourceLanguage}|${d.targetLanguage}`
+    if (seen.has(key)) continue
+    seen.set(key, {
+      id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage,
+      position: pos++, flag: null, instructions: null, createdAt: '', goals: null,
+    })
+  }
+  return [...seen.values()]
+}
+export async function localConfusionLinksForUser(): Promise<Record<string, unknown>[]> {
+  return getLocalStore().allConfusionLinks()
 }
 
 // ── Writes (local store + outbox) ──────────────────────────────────────────────

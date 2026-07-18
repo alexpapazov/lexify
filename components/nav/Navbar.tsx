@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -30,9 +31,9 @@ export function Navbar() {
   const [menuOpen,    setMenuOpen]    = useState(false)
 
   async function loadProfile(uid: string) {
-    const { data } = await supabase.from('profiles').select('display_name, avatar_url').eq('user_id', uid).single()
-    setDisplayName(data?.display_name ?? null)
-    setAvatarUrl(data?.avatar_url ?? null)
+    const { data } = await loadProfileRow(() => supabase.from('profiles').select('display_name, avatar_url').eq('user_id', uid).single())
+    setDisplayName((data?.display_name as string | null) ?? null)
+    setAvatarUrl((data?.avatar_url as string | null) ?? null)
   }
 
   useEffect(() => {
