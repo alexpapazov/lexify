@@ -41,10 +41,12 @@ function scheduled(difficulty: number, stability: number, cfg: FsrsConfig): DueN
   }
 }
 
-/** Extra context for a review. `softLapse` marks an Again that came from a typed *near-miss*
+/** Extra context for a review. `hintGrowthFactor` (0–1) dampens the stability gain on a hinted
+ *  correct answer — a hint means the recall wasn't cold, so the interval should grow less.
+ *  `softLapse` marks an Again that came from a typed *near-miss*
  *  ("almost") rather than a full wrong answer — it still relearns, but must not count toward the
  *  3-in-a-row → back-to-ladder un-graduation (only full wrong answers should). */
-export interface ReviewOpts { softLapse?: boolean }
+export interface ReviewOpts { softLapse?: boolean; hintGrowthFactor?: number }
 
 /**
  * Processes one Due Now review. `elapsedDays` = days since the card was last seen.
@@ -138,7 +140,17 @@ export function scheduleGraduatedFsrs(cur: GraduatedFsrsInput, grade: Rating, cf
   }
   const { state: next, action } = reviewDueNow(state, grade, cur.elapsedDays, cfg, opts)
   const base = { difficulty: next.difficulty, stability: next.stability, relearning: next.relearning, goodStreak: next.goodStreak, againStreak: next.againStreak }
-  if (action.kind === 'schedule') return { ...base, intervalDays: action.intervalDays, dueInMinutes: null, sendToLadder: false }
+  if (action.kind === 'schedule') {
+    // Hint dampening: interpolate the *gained* stability back toward the pre-review value, so a
+    // hinted correct answer grows the interval less. gf=1 (or unset) → no change; gf<1 → less growth.
+    const gf = opts.hintGrowthFactor
+    const grew = next.stability > state.stability
+    const stability = (gf != null && gf < 1 && grew)
+      ? state.stability + Math.max(0, gf) * (next.stability - state.stability)
+      : next.stability
+    const intervalDays = Math.max(1, intervalForRetention(stability, cfg.requestRetention))
+    return { ...base, stability, intervalDays, dueInMinutes: null, sendToLadder: false }
+  }
   if (action.kind === 'relearn')  return { ...base, intervalDays: null, dueInMinutes: action.minutes, sendToLadder: false }
   return { ...base, intervalDays: null, dueInMinutes: null, sendToLadder: true }
 }

@@ -955,7 +955,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention }, { softLapse: nearMiss })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
         // The recall/reverse track only ever recognises the native side, so failing it
         // never sends a card back to the ladder — only failing target-language production
         // (the forward path) does. A recall sendToLadder is treated as one more 5-min loop.
@@ -1032,7 +1032,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention }, { softLapse: nearMiss })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
 
         let smartNewState: CardState
         if (fsrs.sendToLadder) {
@@ -1158,7 +1158,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention }, { softLapse: nearMiss })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
         if (fsrs.sendToLadder) {
           // Three Agains in a row producing the target language → un-graduate and
           // restart the CURRENT ladder (drop any stale climb row so it re-enters

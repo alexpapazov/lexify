@@ -103,6 +103,20 @@ describe('scheduleGraduatedFsrs', () => {
     expect(out.intervalDays).toBeNull()
     expect(out.relearning).toBe(true)
   })
+  it('a hint dampens the stability gain and shortens the interval on a correct answer', () => {
+    const plain   = scheduleGraduatedFsrs(cur, 'good')
+    const hinted  = scheduleGraduatedFsrs(cur, 'good', undefined, { hintGrowthFactor: 0.5 })
+    const noHint  = scheduleGraduatedFsrs(cur, 'good', undefined, { hintGrowthFactor: 1 })
+    expect(hinted.stability).toBeLessThan(plain.stability)
+    expect(hinted.intervalDays!).toBeLessThan(plain.intervalDays!)
+    expect(hinted.stability).toBeGreaterThan(20)          // still grows, just less
+    expect(noHint.intervalDays).toBe(plain.intervalDays)  // gf=1 → identical to unhinted
+  })
+  it('the hint dampener never applies to an Again (no stability gain to dampen)', () => {
+    const out = scheduleGraduatedFsrs(cur, 'again', undefined, { hintGrowthFactor: 0.3 })
+    expect(out.intervalDays).toBeNull()
+    expect(out.relearning).toBe(true)
+  })
 })
 
 describe('reviewDueNow — near-miss (softLapse) does not un-graduate', () => {
