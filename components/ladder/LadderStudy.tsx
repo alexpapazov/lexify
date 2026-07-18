@@ -28,6 +28,13 @@ import type { Card, CardChoices, Deck, Ladder, RungType } from '@/domain'
 const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_PIPELINE_ID = '00000000-0000-0000-0000-000000000001'
 
+// Ladder session id persists across refreshes (so a reload continues the same replay) as long as
+// you're studying the same scope and haven't been away longer than this gap.
+const SESSION_KEY = 'lexify-ladder-session'
+const SESSION_GAP_MS = 45 * 60_000
+const newSessionId = () =>
+  typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+
 const RUNG_LABEL: Record<RungType, string> = {
   mcq: 'Recognize', typing: 'Type', self_graded: 'Recall', dictation: 'Dictation',
 }
@@ -65,7 +72,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const startStepsRef  = useRef(0)
   const tzRef          = useRef('UTC')
   const turnoverRef    = useRef(0)
-  const sessionIdRef   = useRef<string>(typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.round(Math.random() * 1e9)}`)
+  const sessionIdRef   = useRef<string>(newSessionId())
   const shownAtRef     = useRef<number>(Date.now())
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
@@ -80,6 +87,27 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     const dId = deckByCard.get(cardId)
     return dId ? decksById.get(dId) : undefined
   }, [deckByCard, decksById])
+
+  // Stable key for what's being studied — used to decide whether a reload continues the same session.
+  const scopeKeyStr = scope.kind === 'deck' ? `deck:${scope.deckId}`
+    : scope.kind === 'folder' ? `folder:${scope.folderId}`
+    : `all:${scope.source}|${scope.target}`
+
+  const touchSession = useCallback(() => {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ id: sessionIdRef.current, scope: scopeKeyStr, lastAt: Date.now() })) } catch { /* ignore */ }
+  }, [scopeKeyStr])
+
+  // On mount, reuse the persisted session id if you're studying the same scope and were here recently
+  // (so a page refresh continues one movie); otherwise start a fresh session.
+  useEffect(() => {
+    let id = sessionIdRef.current
+    try {
+      const prev = JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null') as { id?: string; scope?: string; lastAt?: number } | null
+      if (prev?.id && prev.scope === scopeKeyStr && Date.now() - (prev.lastAt ?? 0) < SESSION_GAP_MS) id = prev.id
+    } catch { /* ignore */ }
+    sessionIdRef.current = id
+    touchSession()
+  }, [scopeKeyStr, touchSession])
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     if (!userId) return
@@ -290,6 +318,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       outcome, advanced: res.advanced, graduated: res.state.graduated,
       durationMs: Math.min(5 * 60_000, Math.max(0, now - shownAtRef.current)),  // cap at 5 min (ignore idle)
     }]).catch(() => {})
+    touchSession()  // slide the freshness window so a refresh keeps continuing this session
 
     setUndoStack(prev => [...prev.slice(-19), {
       cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
