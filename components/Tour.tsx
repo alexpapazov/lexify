@@ -86,8 +86,9 @@ export function Tour() {
 
   return (
     <div className="fixed inset-0 z-[100] pointer-events-none">
-      {/* Spotlight: a ring around the anchor that dims everything else. */}
-      {onPage && rect ? (
+      {/* Spotlight: a ring around the anchor that dims everything else. Steps
+          without a resolved anchor leave the page untouched (no full-page dim). */}
+      {onPage && rect && (
         <div
           className="absolute rounded-xl transition-all duration-200"
           style={{
@@ -97,8 +98,6 @@ export function Tour() {
             outline: '2px solid rgb(var(--c-accent))',
           }}
         />
-      ) : (
-        <div className="absolute inset-0 bg-black/50" />
       )}
 
       {/* Explanation card — fixed at the bottom so it never mis-positions. */}

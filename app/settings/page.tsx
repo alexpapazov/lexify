@@ -655,7 +655,7 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-semibold text-ink">Settings</h1>
 
       {/* Appearance */}
-      <div className="panel space-y-4">
+      <div className="panel space-y-4" data-tour="settings-theme">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Appearance</h2>
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <p className="text-sm text-ink-muted">Theme</p>
@@ -682,7 +682,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Timezone */}
-      <div className="panel space-y-4">
+      <div className="panel space-y-4" data-tour="settings-timezone">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Time zone</h2>
         <div className="space-y-1.5">
           <label className="text-sm text-ink-muted">Your time zone</label>
@@ -730,7 +730,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Study defaults */}
-      <div className="panel space-y-3">
+      <div className="panel space-y-3" data-tour="settings-ladder">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Learning ladders</h2>
         <p className="text-xs text-ink-faint">Build the sequence of exercises a card climbs before it graduates — set a default, and customize it per language.</p>
         <a href="/settings/ladders" className="btn-ghost inline-block text-sm py-1.5 px-3">Edit learning ladders →</a>
@@ -968,7 +968,7 @@ export default function SettingsPage() {
 
       {/* Language Sync */}
       {userId && (
-        <div className="panel space-y-4">
+        <div className="panel space-y-4" data-tour="settings-sync">
           <div>
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Language Sync</h2>
             <p className="text-xs text-ink-faint mt-1">

@@ -219,7 +219,7 @@ export default function OnboardingPage() {
 
         {step === 4 && (
           <div className="space-y-5">
-            <StepHeader title="Daily pace" subtitle="How many new words per day? Drives your daily goal and workload forecast." />
+            <StepHeader title="Daily pace" subtitle="How many new words per day, per language? Drives your daily goal and workload forecast." />
             <div className="space-y-2">
               {PACES.map(p => (
                 <ChoiceCard key={p.id} selected={pace === p.id} onClick={() => setPace(p.id)}
