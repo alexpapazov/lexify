@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { routes } from '@/lib/routes'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
@@ -48,8 +49,8 @@ export type LadderScope =
   | { kind: 'all';    source: string; target: string }
 
 function backHref(scope: LadderScope): string {
-  if (scope.kind === 'deck')   return `/study/${scope.deckId}`
-  if (scope.kind === 'folder') return `/library/${scope.folderId}`
+  if (scope.kind === 'deck')   return routes.deck(scope.deckId)
+  if (scope.kind === 'folder') return routes.library(scope.folderId)
   return `/library?source=${scope.source}&target=${scope.target}`
 }
 

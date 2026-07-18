@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useMemo, useEffect } from 'react'
+import { apiUrl } from '@/lib/apiBase'
+import { routes } from '@/lib/routes'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }              from '@/lib/data/decks'
@@ -362,7 +364,7 @@ export default function UploadPage() {
         ? { mode: 'wordlist', content: rawText, instructions: pairDefaultInstructions, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
         : { mode: 'extraction', text: rawText, instructions: pairDefaultInstructions, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
 
-      const res  = await fetch('/api/cards/generate', {
+      const res  = await fetch(apiUrl('/api/cards/generate'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -598,7 +600,7 @@ export default function UploadPage() {
         ...mergedCards.map(c => ({ id: c.id, front: c.front, back: c.back })),
       ]
       if (syncEnabled && cardsToSync.length > 0) {
-        void fetch('/api/sync', {
+        void fetch(apiUrl('/api/sync'), {
           method:  'POST',
           headers: {
             'content-type':  'application/json',
@@ -626,7 +628,7 @@ export default function UploadPage() {
       }))
       void prefetchChoices(prefetchItems, () => {})
 
-      router.push(`/study/${deck.id}`)
+      router.push(routes.deck(deck.id))
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save deck')
       setSaving(false)

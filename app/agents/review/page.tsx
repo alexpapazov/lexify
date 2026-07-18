@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseChangeSetRepository } from '@/lib/data/changeSets'
 import { applyProposal } from '@/lib/agents/runClient'
@@ -27,8 +27,8 @@ function ProposalView({ item }: { item: ChangeSetItem }) {
   )
 }
 
-export default function ReviewPage() {
-  const { changeSetId } = useParams<{ changeSetId: string }>()
+function ReviewInner() {
+  const changeSetId = useSearchParams().get('cs') ?? ''
   const [userId, setUserId] = useState<string | null>(null)
   const [cs, setCs] = useState<ChangeSet | null>(null)
   const [statuses, setStatuses] = useState<Record<string, ChangeItemStatus>>({})
@@ -119,4 +119,8 @@ export default function ReviewPage() {
       )}
     </div>
   )
+}
+
+export default function ReviewPage() {
+  return <Suspense fallback={<p className="text-sm text-ink-faint">Loading…</p>}><ReviewInner /></Suspense>
 }

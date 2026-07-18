@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { apiUrl } from '@/lib/apiBase'
+import { routes } from '@/lib/routes'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }            from '@/lib/data/decks'
@@ -197,7 +199,7 @@ function SyncReviewModal({ card, userId, sourceLanguage, targetLanguage, onClose
         let warning:    string | null = existingLink?.warning    ?? null
 
         if (!generatedFront) {
-          const res = await fetch('/api/sync-translate', {
+          const res = await fetch(apiUrl('/api/sync-translate'), {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
@@ -1170,7 +1172,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
 // ─── Deck detail page ─────────────────────────────────────────────────────────
 
 export default function DeckDetailPage() {
-  const { deckId } = useParams<{ deckId: string }>()
+  const deckId = useSearchParams().get('deck') ?? ''
   const router     = useRouter()
   const supabase   = createClient()
 
@@ -1736,7 +1738,7 @@ export default function DeckDetailPage() {
         <div className="min-w-0">
           <Link
             href={parentFolder
-              ? `/library/${parentFolder.id}?source=${deck.sourceLanguage}&target=${deck.targetLanguage}`
+              ? routes.library(parentFolder.id, { source: deck.sourceLanguage, target: deck.targetLanguage })
               : '/library'}
             className="text-xs text-ink-muted hover:text-ink mb-2 inline-block"
           >
@@ -1777,9 +1779,9 @@ export default function DeckDetailPage() {
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
             </svg>
           </button>
-          <Link href={`/study/${deckId}/add`}     className="btn-ghost text-sm">Add cards</Link>
-          <Link href={`/study/${deckId}/edit`}    className="btn-ghost text-sm">Edit</Link>
-          <Link href={`/study/ladder/${deckId}`}  className="btn-primary text-sm">Study</Link>
+          <Link href={routes.deckAdd(deckId)}     className="btn-ghost text-sm">Add cards</Link>
+          <Link href={routes.deckEdit(deckId)}    className="btn-ghost text-sm">Edit</Link>
+          <Link href={routes.ladderDeck(deckId)}  className="btn-primary text-sm">Study</Link>
         </div>
       </div>
 
@@ -1821,7 +1823,7 @@ export default function DeckDetailPage() {
           return (
             <Link
               key={label}
-              href={isActive ? `/study/${deckId}` : `/study/${deckId}?filter=${filter}`}
+              href={isActive ? routes.deck(deckId) : routes.deck(deckId, { filter })}
               className={`panel border-t-2 ${border} text-center transition-colors w-full block space-y-1
                 ${isActive ? 'bg-surface-raised ring-1 ring-ink/10' : 'hover:bg-surface-raised/50'}`}
             >
@@ -1837,7 +1839,7 @@ export default function DeckDetailPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Cards</h2>
           {activeFilter && (
-            <Link href={`/study/${deckId}`} className="text-xs text-accent hover:text-accent-soft transition-colors">
+            <Link href={routes.deck(deckId)} className="text-xs text-accent hover:text-accent-soft transition-colors">
               Show all ✕
             </Link>
           )}
@@ -1850,8 +1852,8 @@ export default function DeckDetailPage() {
           // (graduated / due / dormant) stay on the long-term review flow.
           const isLearningPhase = activeFilter === 'new' || activeFilter === 'learning'
           const studyHref = isLearningPhase
-            ? `/study/ladder/${deckId}?category=${activeFilter}`
-            : `/study/${deckId}/session?category=${activeFilter}`
+            ? routes.ladderDeck(deckId, { category: activeFilter })
+            : routes.deckSession(deckId, { category: activeFilter })
           return filterCount > 0 ? (
             <Link
               href={studyHref}

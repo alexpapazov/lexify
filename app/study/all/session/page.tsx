@@ -6,6 +6,7 @@
  */
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
+import { apiUrl } from '@/lib/apiBase'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -592,7 +593,7 @@ function AllDueSessionInner() {
     if (!current) return
     const { card, sourceLanguage } = current
     if (ipaCache.has(card.id) || card.ipa) return
-    fetch('/api/ipa', {
+    fetch(apiUrl('/api/ipa'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: card.front, language: sourceLanguage }),
@@ -1430,7 +1431,7 @@ function AllDueSessionInner() {
     // Calibrate after any real due-review session (including category=due, which is
     // flagged elective) — only skip true study-ahead / early-review electives.
     if (!done || !userId || (electiveSession && category !== 'due')) return
-    fetch('/api/calibrate', {
+    fetch(apiUrl('/api/calibrate'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(sourceLanguage && targetLanguage ? { userId, sourceLanguage, targetLanguage } : { userId }),

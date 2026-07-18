@@ -1247,9 +1247,45 @@ Lexify is now an installable PWA that boots offline from the home-screen icon.
   production only, so test against the Vercel deploy, not `npm run dev`).
 - Bumping the SW cache: change `CACHE = 'lexify-shell-v1'` in `public/sw.js` to force old shells out.
 
-- **REMAINING**: **Stage 8** = Capacitor native app (needs Apple Developer acct + Xcode/CocoaPods on the
-  user's Mac — flag before starting). **Offline study + sync must be tested on-device** — they can't be
-  runtime-verified here.
+### Native app: query-param routes + static export + Capacitor (Stage 8 in progress, 2026-07-18)
+
+The bundled native app requires a fully static web export, which Next can't do with dynamic route
+SEGMENTS (arbitrary `/study/[deckId]` ids hard-404 in export; `dynamicParams:true` is forbidden with
+`output:export`; iOS Capacitor WKWebView can't run a service-worker SPA fallback). **Solution: all
+data-driven routes were converted from path segments to QUERY PARAMS** — this works identically
+server-rendered on Vercel AND as a static export, and client navigation to any id works (verified in a
+served `out/`: `/study/deck?deck=<anyid>` renders, no 404).
+
+- **`lib/routes.ts`** — the single source of truth for these URLs. ALWAYS build them via `routes.*`
+  (`routes.deck(id)`, `routes.deckSession`, `routes.deckAdd`, `routes.deckEdit`, `routes.folderSession`,
+  `routes.ladderDeck`, `routes.ladderFolder`, `routes.library`, `routes.agentsReview`), never hand-write
+  the path. Extra query params go in the 2nd arg: `routes.deck(id, { filter, card })`.
+- **Route moves** (old dynamic → new query-param):
+  `/study/[deckId]`→`/study/deck?deck=`, `.../session|add|edit` similar; `/study/folder/[folderId]/session`
+  →`/study/folder/session?folder=`; `/study/ladder/[deckId]`→`/study/ladder/deck?deck=`;
+  `/study/ladder/folder/[folderId]`→`/study/ladder/folder?folder=`; `/library/[folderId]`→`/library/folder?folder=`;
+  `/agents/review/[changeSetId]`→`/agents/review?cs=`. Each page reads its id via `useSearchParams()`
+  (agents/review wrapped in `<Suspense>` for it). **No dynamic route segments remain** in `app/`.
+- **`next.config.ts`** — `output:'export'` + `images.unoptimized` gated on `CAPACITOR_BUILD=1`; the normal
+  Vercel build is unaffected (routes render server-side).
+- **`scripts/cap-build.mjs`** (`npm run build:cap`) — stashes `app/api` + `app/manifest.ts` (can't be
+  statically exported), runs the export with `CAPACITOR_BUILD=1` and `NEXT_PUBLIC_API_ORIGIN`
+  (default `https://lexify-flax.vercel.app`), then restores. Output → `out/` (gitignored, + `.cap-stash/`).
+- **`lib/apiBase.ts`** — `apiUrl(path)` prefixes `NEXT_PUBLIC_API_ORIGIN` (empty on web = relative; the
+  deployed origin in the native bundle). ALL `fetch('/api/...')` call sites now use `fetch(apiUrl('/api/...'))`
+  so the native app's online-only AI features (card gen, distractors, TTS, IPA, sync, agents) reach Vercel.
+- **Capacitor** — `@capacitor/core`+`cli`+`ios` installed; `capacitor.config.ts` (appId `com.lexify.app`
+  — CHANGE before `cap add ios`; `webDir:'out'`). npm scripts: `build:cap`, `cap:sync`, `cap:ios`.
+
+- **REMAINING (user must run locally — needs their machine + account):**
+  1. Install **Xcode** (full app) and **CocoaPods** (`brew install cocoapods`).
+  2. Change `appId` in `capacitor.config.ts` to your own reverse-DNS id.
+  3. `npx cap add ios` (generates `ios/` — commit it), then `npm run cap:ios` (builds export, syncs, opens
+     Xcode). In Xcode: set the signing Team (needs an **Apple Developer account** — free tier runs on
+     device 7 days; $99/yr paid tier for App Store + longer). Run on a simulator/device.
+  4. Test offline study + reconnect sync ON DEVICE (can't be verified here).
+  Optional polish later: splash screen / app icons for iOS (`@capacitor/assets`), Android platform,
+  status-bar plugin.
 
 ## Known backlog / open issues
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { apiUrl } from '@/lib/apiBase'
 import type { Card, Rung, GradingSettings, CardChoices, CardSide } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
 import type { RungAttemptOutcome } from '@/engine/ladderEngine'
@@ -49,7 +50,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   useEffect(() => {
     if (!showIpa || card.ipa || fetchedIpa) return
     let cancelled = false
-    fetch('/api/ipa', {
+    fetch(apiUrl('/api/ipa'), {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: card.front, language: sourceLanguage }),
     })

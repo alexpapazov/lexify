@@ -1,11 +1,11 @@
 'use client'
 
 import { Suspense } from 'react'
-import { useParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import { LadderStudy } from '@/components/ladder/LadderStudy'
 
 function Inner() {
-  const { folderId } = useParams<{ folderId: string }>()
+  const folderId = useSearchParams().get('folder') ?? ''
   return <LadderStudy scope={{ kind: 'folder', folderId }} />
 }
 

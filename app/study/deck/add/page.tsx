@@ -17,7 +17,9 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { apiUrl } from '@/lib/apiBase'
+import { routes } from '@/lib/routes'
+import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
@@ -87,7 +89,7 @@ function reasonToMessage(reason: string): string {
 }
 
 export default function AddCardsPage() {
-  const { deckId } = useParams<{ deckId: string }>()
+  const deckId = useSearchParams().get('deck') ?? ''
   const router   = useRouter()
   const supabase = createClient()
 
@@ -168,7 +170,7 @@ export default function AddCardsPage() {
         ? { mode, content, instructions, improvedTranslations, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
         : { mode, text, instructions, improvedTranslations, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
 
-      const res  = await fetch('/api/cards/generate', {
+      const res  = await fetch(apiUrl('/api/cards/generate'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -253,7 +255,7 @@ export default function AddCardsPage() {
         if (syncEnabled) {
           const { data: { session: syncSession } } = await supabase.auth.getSession()
           if (syncSession) {
-            void fetch('/api/sync', {
+            void fetch(apiUrl('/api/sync'), {
               method:  'POST',
               headers: {
                 'content-type':  'application/json',
@@ -312,7 +314,7 @@ export default function AddCardsPage() {
         }
       }
 
-      router.push(`/study/${deckId}`)
+      router.push(routes.deck(deckId))
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save cards')
       setStage('review')
@@ -332,7 +334,7 @@ export default function AddCardsPage() {
   return (
     <div className="space-y-6 max-w-3xl mx-auto pb-12">
       <div className="flex items-center gap-3">
-        <Link href={`/study/${deckId}`} className="text-ink-muted hover:text-ink text-sm shrink-0">← Back</Link>
+        <Link href={routes.deck(deckId)} className="text-ink-muted hover:text-ink text-sm shrink-0">← Back</Link>
         <h1 className="text-xl font-semibold text-ink">Add cards · {deck.name}</h1>
       </div>
 

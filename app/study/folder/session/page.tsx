@@ -7,7 +7,9 @@
  */
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
-import { useRouter, useParams, useSearchParams } from 'next/navigation'
+import { apiUrl } from '@/lib/apiBase'
+import { routes } from '@/lib/routes'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }        from '@/lib/data/decks'
@@ -102,10 +104,9 @@ export default function FolderSessionPage() {
 
 function FolderSessionInner() {
   const router   = useRouter()
-  const params   = useParams()
-  const folderId = params.folderId as string
   const supabase = createClient()
   const searchParams = useSearchParams()
+  const folderId = searchParams.get('folder') ?? ''
   const categoryParam = searchParams.get('category')
   const category: StudyCategory | null =
     categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant'
@@ -510,7 +511,7 @@ function FolderSessionInner() {
     if (!current) return
     const { card, sourceLanguage } = current
     if (ipaCache.has(card.id) || card.ipa) return
-    fetch('/api/ipa', {
+    fetch(apiUrl('/api/ipa'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: card.front, language: sourceLanguage }),
@@ -1342,7 +1343,7 @@ function FolderSessionInner() {
     // Calibrate after any real due-review session (including category=due, which is
     // flagged elective) — only skip true study-ahead / early-review electives.
     if (!done || !userId || (electiveSession && category !== 'due')) return
-    fetch('/api/calibrate', {
+    fetch(apiUrl('/api/calibrate'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(sourceLanguage && targetLanguage ? { userId, sourceLanguage, targetLanguage } : { userId }),
@@ -1352,7 +1353,7 @@ function FolderSessionInner() {
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
-  const backHref = folder ? `/library/${folder.id}` : '/library'
+  const backHref = folder ? routes.library(folder.id) : '/library'
 
   if (done) {
     const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant' }
@@ -1368,7 +1369,7 @@ function FolderSessionInner() {
           <Link href={backHref} className="btn-primary">Back to library</Link>
           {electiveSession && category && (
             <button
-              onClick={() => router.push(`/study/folder/${folderId}/session?category=${category}`)}
+              onClick={() => router.push(routes.folderSession(folderId, { category }))}
               className="btn-ghost"
             >
               Study ahead ({CATEGORY_LABELS[category]})

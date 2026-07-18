@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { apiUrl } from '@/lib/apiBase'
 
 /**
  * Fire-and-forget: tells the server to fill any pending blank synced cards for
@@ -14,7 +15,7 @@ export function triggerSyncFill(): void {
   const supabase = createClient()
   supabase.auth.getSession().then(({ data: { session } }) => {
     if (!session?.access_token) return
-    fetch('/api/sync', {
+    fetch(apiUrl('/api/sync'), {
       method:  'POST',
       headers: {
         'content-type':  'application/json',

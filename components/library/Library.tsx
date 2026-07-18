@@ -12,6 +12,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react'
+import { routes } from '@/lib/routes'
 import Link from 'next/link'
 import type { Folder, Deck, UserId, FolderId } from '@/domain'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
@@ -87,7 +88,7 @@ function DeckRow({ deck, allFolders, onMove, onPin }: {
 
   return (
     <div className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-surface-raised/50 group">
-      <Link href={`/study/${deck.id}`} className="flex-1 text-sm text-ink truncate min-w-0">
+      <Link href={routes.deck(deck.id)} className="flex-1 text-sm text-ink truncate min-w-0">
         {deck.name}
       </Link>
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
@@ -128,7 +129,7 @@ function DeckRow({ deck, allFolders, onMove, onPin }: {
             </div>
           )}
         </div>
-        <Link href={`/study/ladder/${deck.id}`}
+        <Link href={routes.ladderDeck(deck.id)}
           className="text-xs text-accent hover:text-accent-soft transition-colors px-1"
           title="Study">
           ▶

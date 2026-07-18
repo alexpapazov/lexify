@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { apiUrl } from '@/lib/apiBase'
+import { routes } from '@/lib/routes'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository }            from '@/lib/data/decks'
@@ -105,9 +107,9 @@ function shuffle<T>(arr: T[]): T[] {
 // ─── Session ─────────────────────────────────────────────────────────────────
 
 export default function SessionPage() {
-  const { deckId } = useParams<{ deckId: string }>()
   const router     = useRouter()
   const searchParams = useSearchParams()
+  const deckId     = searchParams.get('deck') ?? ''
   const supabase   = createClient()
 
   // ?category=new|learning|graduated|due — set by the per-stat "Study" buttons
@@ -121,7 +123,7 @@ export default function SessionPage() {
 
   // When a category session completes, return to the deck page with the same
   // filter active so the user can immediately study that category again.
-  const deckUrl = category ? `/study/${deckId}?filter=${category}` : `/study/${deckId}`
+  const deckUrl = category ? routes.deck(deckId, { filter: category }) : routes.deck(deckId)
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [allCards,        setAllCards]        = useState<Card[]>([])
@@ -416,7 +418,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       tzRef.current       = tz
       turnoverRef.current = turnoverHour
 
-      if (!deck || cards.length === 0) { router.push(`/study/${deckId}`); return }
+      if (!deck || cards.length === 0) { router.push(routes.deck(deckId)); return }
       if (!deck.syncingComplete) triggerSyncFill()
       setDeckName(deck.name)
       setGradingSettings(deck.gradingSettings)
@@ -720,7 +722,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     // Calibrate after any real due-review session (including category=due, which is
     // flagged elective) — only skip true study-ahead / early-review electives.
     if (!done || !userId || (electiveSession && category !== 'due')) return
-    fetch('/api/calibrate', {
+    fetch(apiUrl('/api/calibrate'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(sourceLanguage && targetLanguage ? { userId, sourceLanguage, targetLanguage } : { userId }),
@@ -756,7 +758,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     if (!showIPA || !currentCardId) return
     const card = queue[index]?.card
     if (!card || ipaCache.has(card.id) || card.ipa) return
-    fetch('/api/ipa', {
+    fetch(apiUrl('/api/ipa'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: card.front, language: sourceLanguage }),

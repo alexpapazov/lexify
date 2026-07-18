@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useEffect, useRef, useState } from 'react'
+import { routes } from '@/lib/routes'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -802,7 +803,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
               {rootCardResults.map(({ card, deck }) => (
                 <Link
                   key={`${card.id}-${deck.id}`}
-                  href={`/study/${deck.id}`}
+                  href={routes.deck(deck.id)}
                   className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
                 >
                   <div className="flex gap-6 text-sm min-w-0">
@@ -1391,7 +1392,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
               {groupedCards.map(({ card, decks, status }) => (
                 <Link
                   key={card.id}
-                  href={`/study/${decks[0]?.id ?? ''}?filter=${activeFilter}`}
+                  href={routes.deck(decks[0]?.id ?? '', { filter: activeFilter })}
                   className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
                 >
                   <div className="flex gap-6 text-sm min-w-0">
@@ -1442,7 +1443,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             {pairCardResults.map(({ card, deckId, deckName }) => (
               <Link
                 key={`${card.id}-${deckId}`}
-                href={`/study/${deckId}`}
+                href={routes.deck(deckId)}
                 className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
               >
                 <div className="flex gap-6 text-sm min-w-0">
@@ -1497,7 +1498,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                 >
                   <FolderIcon />
                   <Link
-                    href={`/library/${folder.id}?source=${pairSource}&target=${pairTarget}`}
+                    href={routes.library(folder.id, { source: pairSource, target: pairTarget })}
                     className="flex-1 min-w-0"
                     onClick={e => { if (dragging) e.preventDefault() }}
                   >
@@ -1558,7 +1559,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                 >
                   <DeckIcon />
                   <div className="flex-1 min-w-0">
-                    <Link href={`/study/${deck.id}`} className="text-sm font-medium text-ink truncate block hover:text-accent transition-colors">
+                    <Link href={routes.deck(deck.id)} className="text-sm font-medium text-ink truncate block hover:text-accent transition-colors">
                       {deck.name}
                     </Link>
                     <div className="text-xs text-ink-muted mt-0.5">{deck.targetLanguage.toUpperCase()}</div>
@@ -1568,7 +1569,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                       className="text-ink-faint hover:text-warning transition-colors text-sm">
                       {deck.isPinned ? '★' : '☆'}
                     </button>
-                    <Link href={`/study/ladder/${deck.id}`} className="btn-primary text-xs py-1 px-3">Study</Link>
+                    <Link href={routes.ladderDeck(deck.id)} className="btn-primary text-xs py-1 px-3">Study</Link>
                   </div>
                 </div>
 

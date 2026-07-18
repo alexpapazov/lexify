@@ -9,6 +9,7 @@
  */
 
 import type { CallModel } from './anthropic'
+import { apiUrl } from '@/lib/apiBase'
 import type { Grant, GatewayContext, ChangeSetItem, UserId } from '@/domain'
 import { createSupabaseGatewayDeps } from './deps'
 import { runAgent } from './runner'
@@ -18,7 +19,7 @@ import * as gw from './gateway'
 
 function proxyCallModel(agentId: string): CallModel {
   return async messages => {
-    const res = await fetch('/api/agents/claude', {
+    const res = await fetch(apiUrl('/api/agents/claude'), {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ agentId, messages }),
     })

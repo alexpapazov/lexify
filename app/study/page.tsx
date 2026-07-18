@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useMemo } from 'react'
+import { routes } from '@/lib/routes'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -819,7 +820,7 @@ export default function StudyPage() {
                   {filteredCards.map(({ card, deckName, deckId, status, sourceLanguage, targetLanguage }) => (
                     <Link
                       key={card.id}
-                      href={`/study/${deckId}?filter=${activeFilter}`}
+                      href={routes.deck(deckId, { filter: activeFilter })}
                       className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
                     >
                       <div className="flex gap-6 text-sm min-w-0">
@@ -1112,7 +1113,7 @@ export default function StudyPage() {
                     {forecastCards.map(({ card, deckName, deckId, sourceLanguage, targetLanguage, reviewDirection }) => (
                       <Link
                         key={`${card.id}-${reviewDirection}`}
-                        href={`/study/${deckId}?card=${card.id}`}
+                        href={routes.deck(deckId, { card: card.id })}
                         className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
                       >
                         <div className="flex gap-6 text-sm min-w-0">

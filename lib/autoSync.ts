@@ -23,6 +23,7 @@
  */
 
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
+import { apiUrl } from '@/lib/apiBase'
 import { SupabaseLanguagePairRepository }      from '@/lib/data/languagePairs'
 import { SupabaseSyncedCardLinkRepository }    from '@/lib/data/syncedCardLinks'
 import { SupabaseCardRepository }              from '@/lib/data/cards'
@@ -135,7 +136,7 @@ export async function autoSyncNewCards(
     // Per-card processor (closed over mutable destCards/destFronts/nextPosition)
     async function processOneCard(card: Card): Promise<Card | null> {
       try {
-        const res = await fetch('/api/sync-translate', {
+        const res = await fetch(apiUrl('/api/sync-translate'), {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({

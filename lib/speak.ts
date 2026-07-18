@@ -1,3 +1,4 @@
+import { apiUrl } from '@/lib/apiBase'
 // Maps app language codes to BCP 47 tags where the 2-letter code alone
 // isn't enough for the Web Speech API to pick the right voice.
 const SPEECH_LANG: Record<string, string> = {
@@ -118,7 +119,7 @@ export async function fetchAudioSource(
   fallback = false,
 ): Promise<{ audioData: string | null; source?: 'elevenlabs' | 'forvo'; fellBackFrom?: string; reason?: string }> {
   try {
-    const res = await fetch('/api/tts', {
+    const res = await fetch(apiUrl('/api/tts'), {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text, language, source, fallback }),
     })
@@ -138,7 +139,7 @@ export async function speakViaTts(text: string, language: string): Promise<strin
   // Robotic default → don't generate a clip; the caller falls back to on-device speech.
   if (source === 'browser') return null
   try {
-    const res = await fetch('/api/tts', {
+    const res = await fetch(apiUrl('/api/tts'), {
       method: 'POST', headers: { 'content-type': 'application/json' },
       // Use the effective source for this language; Forvo auto-falls back to ElevenLabs when it has no recording.
       body: JSON.stringify({ text, language, source, fallback: source === 'forvo' }),

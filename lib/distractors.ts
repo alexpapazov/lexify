@@ -20,6 +20,7 @@
  */
 
 import type { Card, CardSide, CardChoices, CardConfusion } from '@/domain'
+import { apiUrl } from '@/lib/apiBase'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
@@ -140,7 +141,7 @@ async function fetchAiChoices(
   avoidBackExtra?: string[],
 ): Promise<CardChoices | null> {
   try {
-    const res = await fetch('/api/distractors', {
+    const res = await fetch(apiUrl('/api/distractors'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -449,7 +450,7 @@ async function fetchAndCacheAudio(
   const src = getAudioSourceForLanguage(sourceLanguage)
   if (src === 'browser') return   // robotic default → nothing to pre-generate; playback uses on-device speech
   try {
-    const res = await fetch('/api/tts', {
+    const res = await fetch(apiUrl('/api/tts'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       // Use the chosen default source; Forvo auto-falls back to ElevenLabs when it has no recording.

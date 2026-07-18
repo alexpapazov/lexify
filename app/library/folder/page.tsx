@@ -1,8 +1,9 @@
 'use client'
 
 import { Suspense, useEffect, useRef, useState } from 'react'
+import { routes } from '@/lib/routes'
 import Link from 'next/link'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
@@ -111,10 +112,9 @@ export default function FolderPage() {
 }
 
 function FolderPageInner() {
-  const params   = useParams()
   const router   = useRouter()
   const searchParams = useSearchParams()
-  const folderId = params.folderId as string
+  const folderId = searchParams.get('folder') ?? ''
 
   const pairSource = searchParams.get('source')
   const pairTarget = searchParams.get('target')
@@ -491,7 +491,7 @@ function FolderPageInner() {
       return
     }
 
-    router.push((parentId ? `/library/${parentId}` : '/library') + qs)
+    router.push(parentId ? routes.library(parentId, { source: pairSource, target: pairTarget }) : '/library' + qs)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -570,7 +570,7 @@ function FolderPageInner() {
                   : 'text-ink-muted hover:text-ink'
               }`}
             >
-              <Link href={`/library/${ancestor.id}${qs}`}>{ancestor.name}</Link>
+              <Link href={routes.library(ancestor.id, { source: pairSource, target: pairTarget })}>{ancestor.name}</Link>
             </span>
           </>
         ))}
@@ -664,8 +664,8 @@ function FolderPageInner() {
                 return cfg && cfg.value > 0 ? (
                   <Link
                     href={activeFilter === 'new' || activeFilter === 'learning'
-                      ? `/study/ladder/folder/${folderId}?category=${activeFilter}`
-                      : `/study/folder/${folderId}/session?category=${activeFilter}`}
+                      ? routes.ladderFolder(folderId, { category: activeFilter })
+                      : routes.folderSession(folderId, { category: activeFilter })}
                     className="btn-primary block w-full text-center"
                   >
                     Study {cfg.label}
@@ -680,7 +680,7 @@ function FolderPageInner() {
                   {filteredCards.map(({ card, deckName, deckId, status }) => (
                     <Link
                       key={card.id}
-                      href={`/study/${deckId}?filter=${activeFilter}`}
+                      href={routes.deck(deckId, { filter: activeFilter })}
                       className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
                     >
                       <div className="flex gap-6 text-sm min-w-0">
@@ -699,7 +699,7 @@ function FolderPageInner() {
           )}
 
           <Link
-            href={`/study/ladder/folder/${folderId}`}
+            href={routes.ladderFolder(folderId)}
             className={(counts.dueNow + counts.learning) === 0 ? 'btn-primary opacity-40 pointer-events-none inline-block' : 'btn-primary inline-block'}
           >
             Study folder ({counts.dueNow + counts.learning})
@@ -753,7 +753,7 @@ function FolderPageInner() {
             {folderCardResults.map(({ card, deckId, deckName }) => (
               <Link
                 key={`${card.id}-${deckId}`}
-                href={`/study/${deckId}`}
+                href={routes.deck(deckId)}
                 className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
               >
                 <div className="flex gap-6 text-sm min-w-0">
@@ -806,7 +806,7 @@ function FolderPageInner() {
                 >
                   <FolderIcon />
                   <Link
-                    href={`/library/${sub.id}${qs}`}
+                    href={routes.library(sub.id, { source: pairSource, target: pairTarget })}
                     className="flex-1 min-w-0"
                     onClick={e => { if (dragging) e.preventDefault() }}
                   >
@@ -864,7 +864,7 @@ function FolderPageInner() {
                 >
                   <DeckIcon />
                   <div className="flex-1 min-w-0">
-                    <Link href={`/study/${deck.id}`} className="text-sm font-medium text-ink truncate block hover:text-accent transition-colors">
+                    <Link href={routes.deck(deck.id)} className="text-sm font-medium text-ink truncate block hover:text-accent transition-colors">
                       {deck.name}
                     </Link>
                     <div className="text-xs text-ink-muted mt-0.5">{deck.targetLanguage.toUpperCase()}</div>
@@ -895,7 +895,7 @@ function FolderPageInner() {
                         Move to library
                       </button>
                     )}
-                    <Link href={`/study/ladder/${deck.id}`} className="btn-primary text-xs py-1 px-3">Study</Link>
+                    <Link href={routes.ladderDeck(deck.id)} className="btn-primary text-xs py-1 px-3">Study</Link>
                   </div>
                 </div>
                 {dt?.pos === 'after' && (

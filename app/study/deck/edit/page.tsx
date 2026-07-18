@@ -18,7 +18,8 @@
  */
 
 import { useEffect, useState, useCallback } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { routes } from '@/lib/routes'
+import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
@@ -137,7 +138,7 @@ function CardRow({ card, index, onChange, onDelete, onActionChange }: {
 // ─── Editor page ──────────────────────────────────────────────────────────────
 
 export default function DeckEditPage() {
-  const { deckId } = useParams<{ deckId: string }>()
+  const deckId = useSearchParams().get('deck') ?? ''
   const router     = useRouter()
   const supabase   = createClient()
 
@@ -409,7 +410,7 @@ export default function DeckEditPage() {
       }
 
       setSaved(true)
-      setTimeout(() => { setSaved(false); router.push(`/study/${deckId}`) }, 800)
+      setTimeout(() => { setSaved(false); router.push(routes.deck(deckId)) }, 800)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Save failed')
     } finally {
@@ -423,7 +424,7 @@ export default function DeckEditPage() {
     try {
       const deckRepo = new SupabaseDeckRepository()
       await deckRepo.softDelete(deckId)
-      router.push(folderId ? `/library/${folderId}` : '/library')
+      router.push(folderId ? routes.library(folderId) : '/library')
     } catch (err: unknown) {
       setDeleteError(err instanceof Error ? err.message : 'Delete failed')
       setDeleting(false)
@@ -444,7 +445,7 @@ export default function DeckEditPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
-          <Link href={`/study/${deckId}`} className="text-ink-muted hover:text-ink text-sm shrink-0">← Back</Link>
+          <Link href={routes.deck(deckId)} className="text-ink-muted hover:text-ink text-sm shrink-0">← Back</Link>
           <h1 className="text-xl font-semibold text-ink truncate">{deckName}</h1>
           <span className="text-xs text-ink-faint shrink-0">{cards.length} cards</span>
         </div>
@@ -545,7 +546,7 @@ export default function DeckEditPage() {
         <button onClick={handleSave} disabled={saving} className="btn-primary">
           {saveLabel}
         </button>
-        <Link href={`/study/${deckId}`} className="btn-ghost">Cancel</Link>
+        <Link href={routes.deck(deckId)} className="btn-ghost">Cancel</Link>
       </div>
 
       {/* Delete confirmation modal */}
