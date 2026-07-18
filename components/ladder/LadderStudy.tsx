@@ -15,7 +15,7 @@ import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
-import { pickNextCard, reshowDelayMs, type QueueItem } from '@/lib/ladderSession'
+import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay } from '@/lib/dates'
 import { initialCardState } from '@/engine/pipeline'
@@ -284,9 +284,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       setGraduated(g => g + 1)
       nextQueue = queue.filter(e => e.cardId !== currentId)
     } else {
-      const delay = res.reshow === 'advanced'
-        ? (ladder.betweenRungWaitSeconds ?? 180) * 1000
-        : reshowDelayMs(res.reshow)
+      const rung = ladder.rungs[currentClimb.rungIndex]!
+      const delay = rungReshowMs(rung, res, ladder.betweenRungWaitSeconds ?? 180)
       nextQueue = queue.map(e => e.cardId === currentId
         ? { cardId: currentId, readyAt: delay > 0 ? now + delay : 0, ratedAt: delay > 0 ? now : 0 }
         : e)

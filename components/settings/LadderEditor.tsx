@@ -216,6 +216,35 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
             })()}
           </div>
 
+          {/* Reshow timing — auto-checked rungs only (self-rated rungs use the rating windows) */}
+          {!(r.selfRated || r.type === 'self_graded' || r.intervalInit) && (() => {
+            const rules = (r.advanceRules && r.advanceRules.length > 0) ? r.advanceRules : [{ times: r.advanceTimes }]
+            const single = rules.some(x => (x.times ?? 1) <= 1)
+            const toMin = (secs: number) => Math.round(secs / 60)
+            return (
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs text-ink-faint">Reshow timing (minutes)</span>
+                <div className="flex flex-wrap items-center gap-4 text-sm">
+                  <label className="flex items-center gap-2">
+                    <span className="text-xs text-ink-muted">If wrong</span>
+                    <NumberStepper value={toMin(r.wrongWaitSeconds ?? 60)} title="minutes after a wrong answer" min={0}
+                      onChange={n => update(r.id, { wrongWaitSeconds: Math.max(0, n) * 60 })} />
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <span className="text-xs text-ink-muted">If correct</span>
+                    <NumberStepper value={toMin(r.correctWaitSeconds ?? 360)} title="minutes after a correct answer" min={0}
+                      onChange={n => update(r.id, { correctWaitSeconds: Math.max(0, n) * 60 })} />
+                  </label>
+                </div>
+                <span className="text-[11px] text-ink-faint">
+                  {single
+                    ? 'One correct advances this rung — “if correct” is the wait until the next rung (overrides “wait between rungs” above for this gap).'
+                    : 'This rung needs several correct in a row — these set how long the card rests before it comes back for the next attempt.'}
+                </span>
+              </div>
+            )
+          })()}
+
           {/* Drop-back rules */}
           <div className="flex flex-col gap-1">
             <span className="text-xs text-ink-faint">If it goes wrong, drop back:</span>

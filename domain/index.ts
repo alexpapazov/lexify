@@ -262,6 +262,14 @@ export interface Rung {
    * When absent, the legacy single rule (advanceTimes/advanceInARow/advanceRating) is used.
    */
   advanceRules?:     AdvanceRule[]
+  /**
+   * Auto-checked (non-self-rated) rungs only: how long a card rests before reappearing, in seconds,
+   * after a WRONG vs a CORRECT answer (defaults 60 / 360 = 1 min / 6 min). For a single-step rung
+   * the correct wait is the gap until the NEXT rung — overriding the ladder's global
+   * `betweenRungWaitSeconds` for that particular gap. Ignored on self-rated / interval-init rungs.
+   */
+  wrongWaitSeconds?:   number
+  correctWaitSeconds?: number
   dropBacks:         DropBackRule[]
 }
 

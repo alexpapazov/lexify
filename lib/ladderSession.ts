@@ -78,6 +78,37 @@ export function reshowDelayMs(hint: ReshowHint): number {
   }
 }
 
+export const DEFAULT_WRONG_WAIT_SECONDS = 60     // 1 min
+export const DEFAULT_CORRECT_WAIT_SECONDS = 360  // 6 min
+
+/** True when a single correct answer advances the rung (any advance rule needs ≤1). */
+export function rungIsSingleStep(rung: Rung): boolean {
+  const rules = rung.advanceRules && rung.advanceRules.length > 0 ? rung.advanceRules : [{ times: rung.advanceTimes }]
+  return rules.some(r => (r.times ?? 1) <= 1)
+}
+
+/**
+ * How long (ms) a card rests before reappearing after one attempt.
+ *  - Self-rated / self-graded rungs keep the rating-based windows (reshowDelayMs; global gap on advance).
+ *  - Auto-checked rungs use their manual wrong/correct waits (defaults 1 min / 6 min): a WRONG answer
+ *    waits `wrongWaitSeconds`; a CORRECT answer that doesn't yet advance waits `correctWaitSeconds`; and
+ *    a correct answer that advances a SINGLE-STEP rung waits `correctWaitSeconds` in place of the global
+ *    between-rungs gap (multi-step advances still use the global gap; drop-backs use the wrong wait).
+ */
+export function rungReshowMs(rung: Rung, res: { reshow: ReshowHint; advanced: boolean }, globalBetweenSeconds: number): number {
+  const globalMs = Math.max(0, globalBetweenSeconds) * 1000
+  if (rung.selfRated || rung.type === 'self_graded') {
+    return res.reshow === 'advanced' ? globalMs : reshowDelayMs(res.reshow)
+  }
+  const wrong = Math.max(0, rung.wrongWaitSeconds ?? DEFAULT_WRONG_WAIT_SECONDS) * 1000
+  const correct = Math.max(0, rung.correctWaitSeconds ?? DEFAULT_CORRECT_WAIT_SECONDS) * 1000
+  if (res.advanced) {
+    if (res.reshow !== 'advanced') return wrong                       // drop-back → treat as wrong
+    return rungIsSingleStep(rung) ? correct : globalMs                // single-step correct overrides global
+  }
+  return res.reshow === 'soon' ? wrong : correct                     // 'soon' = wrong; 'medium' = correct
+}
+
 function pctElapsed(e: QueueItem, now: number): number {
   return e.readyAt <= e.ratedAt ? 1 : (now - e.ratedAt) / (e.readyAt - e.ratedAt)
 }
