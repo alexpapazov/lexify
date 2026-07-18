@@ -59,6 +59,12 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
     return rowToEvent(data)
   }
 
+  /** Remove a logged event — used to roll back a review on undo (so undo+redo counts once). */
+  async delete(id: string): Promise<void> {
+    const { error } = await this.db.from('review_events').delete().eq('id', id)
+    if (error) throw new Error(error.message)
+  }
+
   async listForCard(userId: UserId, cardId: CardId, limit = 200): Promise<ReviewEvent[]> {
     const { data, error } = await this.db
       .from('review_events')

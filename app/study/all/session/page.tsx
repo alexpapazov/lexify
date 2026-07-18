@@ -143,8 +143,11 @@ function AllDueSessionInner() {
   const indexRef       = useRef(0)                    // current queue index (for async drill insertion)
   const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
-  const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
-  const [redoStack, setRedoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
+  type UndoEntry = { queueIndex: number; prevState: CardState; newState: CardState; eventId: string | null; overrideAdd: { cardId: string; answerSide: CardSide; answerText: string } | null }
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
+  const [redoStack, setRedoStack] = useState<UndoEntry[]>([])
+  // An override the current card newly added this attempt (so undo removes exactly it).
+  const pendingOverrideAddRef = useRef<{ cardId: string; answerSide: CardSide; answerText: string } | null>(null)
 
   const tzRef       = useRef('UTC')
   const turnoverRef = useRef(0)
@@ -173,6 +176,8 @@ function AllDueSessionInner() {
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
+    // Remember a NEW "mark correct" so undo can revert exactly this add (pre-existing overrides stay).
+    if (accept && !(overrides.get(key)?.has(answerText) ?? false)) pendingOverrideAddRef.current = { cardId, answerSide, answerText }
     setOverrides(prev => {
       const next = new Map(prev)
       const set  = new Set(next.get(key) ?? [])
@@ -183,7 +188,7 @@ function AllDueSessionInner() {
     })
     const op = accept ? repo.add(userId, cardId, answerSide, answerText) : repo.remove(userId, cardId, answerSide, answerText)
     op.catch(err => console.error('Failed to save typed-answer override:', err))
-  }, [userId])
+  }, [userId, overrides])
 
   const handleAddSynonym = useCallback((cardId: string, answerSide: CardSide, normalizedText: string) => {
     setQueue(prev => {
@@ -614,6 +619,11 @@ function AllDueSessionInner() {
     try {
       const { card, state, pipeline, gradingSettings, productionMode, reviewTrack, isReverse, deckCards, sourceLanguage, targetLanguage } = current
 
+      // A fresh answer invalidates any pending redo, and captures a just-added override for undo.
+      setRedoStack([])
+      const undoOverride = pendingOverrideAddRef.current?.cardId === card.id ? pendingOverrideAddRef.current : null
+      pendingOverrideAddRef.current = null
+
       // Hint + "Hard" on a due card: the recall wasn't cold, so re-show it this session instead of
       // granting a new interval. Only a hint-free Hard advances the schedule. (Any number of hints.)
       if (state.graduated && rating === 'hard' && hintRef.current) {
@@ -772,7 +782,7 @@ function AllDueSessionInner() {
           ...(isReverse ? { dueAt: newRecallDueAt } : {}),
         }
         await stateRepo.upsert(recallNewState)
-        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState }])
+        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
         if (recallNewState.relearningStep > 0) {
@@ -881,7 +891,7 @@ function AllDueSessionInner() {
         // Re-derive presentation from the new state: a lapse (relearning / interval back below
         // threshold) reverts the smart card to typed until it climbs past the threshold again.
         const smartMode = forwardProductionMode(smartNewState, 'smart', cardParams.smartTypingThresholdDays)
-        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: smartNewState }])
+        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: smartNewState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: smartNewState, productionMode: smartMode } : item))
         if (smartNewState.relearningStep > 0) {
@@ -1112,7 +1122,7 @@ function AllDueSessionInner() {
         })
       }
 
-      setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState }])
+      setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
       setRedoStack([])
 
       // 10-minute "Again" relearn loop: hold the card in the relearn pool until
@@ -1148,12 +1158,15 @@ function AllDueSessionInner() {
     try {
       const stateRepo = new SupabaseCardStateRepository()
       await stateRepo.upsert(entry.prevState)
+      // Delete the logged review (undo+redo counts once) and roll back a just-added override.
+      if (entry.eventId) new SupabaseReviewEventRepository().delete(entry.eventId).catch(() => {})
+      if (entry.overrideAdd) handleOverrideAnswer(entry.overrideAdd.cardId, entry.overrideAdd.answerSide, entry.overrideAdd.answerText, false)
       setQueue(prev => prev.map((item, i) => i === entry.queueIndex ? { ...item, state: entry.prevState } : item))
       setRelearnPool(prev => prev.filter(item => item.card.id !== entry.prevState.cardId))
       setDone(false)
       setIndex(entry.queueIndex)
     } catch (err) { console.error('Undo failed:', err) }
-  }, [undoStack, submitting])
+  }, [undoStack, submitting, handleOverrideAnswer])
 
   const handleRedo = useCallback(async () => {
     const entry = redoStack[redoStack.length - 1]

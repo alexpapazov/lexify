@@ -176,8 +176,10 @@ export default function SessionPage() {
   /** In-session IPA cache: cardId → IPA text (supplements card.ipa from DB). */
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
   /** Undo/redo stacks — each entry captures the card state before/after handleAnswer ran. */
-  const [undoStack, setUndoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([])
-  const [redoStack, setRedoStack] = useState<Array<{ queueIndex: number; prevState: CardState; newState: CardState }>>([]);
+  type UndoEntry = { queueIndex: number; prevState: CardState; newState: CardState; eventId: string | null; overrideAdd: { cardId: string; answerSide: CardSide; answerText: string } | null }
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
+  const [redoStack, setRedoStack] = useState<UndoEntry[]>([]);
+  const pendingOverrideAddRef = useRef<{ cardId: string; answerSide: CardSide; answerText: string } | null>(null)
 
   const indexRef       = useRef(0)   // current queue index (for async drill insertion)
   const tzRef          = useRef('UTC')
@@ -199,6 +201,7 @@ export default function SessionPage() {
 const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const key  = `${cardId}:${answerSide}`
+    if (accept && !(overrides.get(key)?.has(answerText) ?? false)) pendingOverrideAddRef.current = { cardId, answerSide, answerText }
     setOverrides(prev => {
       const next = new Map(prev)
       const set  = new Set(next.get(key) ?? [])
@@ -209,7 +212,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     })
     const op = accept ? repo.add(userId, cardId, answerSide, answerText) : repo.remove(userId, cardId, answerSide, answerText)
     op.catch(err => console.error('Failed to save typed-answer override:', err))
-  }, [userId])
+  }, [userId, overrides])
 
   const handleAddSynonym = useCallback((cardId: string, answerSide: CardSide, normalizedText: string) => {
     setQueue(prev => {
@@ -830,6 +833,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     try {
       const { card, state, pipeline, productionMode, reviewTrack, isReverse } = current
 
+      setRedoStack([])
+      const undoOverride = pendingOverrideAddRef.current?.cardId === card.id ? pendingOverrideAddRef.current : null
+      pendingOverrideAddRef.current = null
+
       // Hint + "Hard" on a due card: the recall wasn't cold, so re-show it this session instead of
       // granting a new interval. Only a hint-free Hard advances the schedule. (Any number of hints.)
       if (state.graduated && rating === 'hard' && hintRef.current) {
@@ -997,7 +1004,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           if (isReverse) return prev
           const n = new Map(prev); n.set(card.id, recallNewState); return n
         })
-        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState }])
+        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
         // Re-queue "again" in the relearn pool (same 10-min loop as forward reviews).
@@ -1112,7 +1119,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         setCardStates(prev => { const n = new Map(prev); n.set(card.id, smartNewState); return n })
         // Re-derive presentation: a lapsed smart card reverts to typed until it re-passes the threshold.
         const smartMode = forwardProductionMode(smartNewState, 'smart', schedulerParams.smartTypingThresholdDays)
-        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: smartNewState }])
+        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: smartNewState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: smartNewState, productionMode: smartMode } : item))
         if (smartNewState.relearningStep > 0) {
@@ -1387,7 +1394,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       })
 
       // Capture undo entry before any branch that advances the index.
-      setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState }])
+      setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
       setRedoStack([])
 
       // 10-minute "Again" relearn loop: hold the card in the relearn pool until
@@ -1445,13 +1452,15 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     try {
       const stateRepo = new SupabaseCardStateRepository()
       await stateRepo.upsert(entry.prevState)
+      if (entry.eventId) new SupabaseReviewEventRepository().delete(entry.eventId).catch(() => {})
+      if (entry.overrideAdd) handleOverrideAnswer(entry.overrideAdd.cardId, entry.overrideAdd.answerSide, entry.overrideAdd.answerText, false)
       setCardStates(prev => { const n = new Map(prev); n.set(entry.prevState.cardId, entry.prevState); return n })
       setQueue(prev => prev.map((item, i) => i === entry.queueIndex ? { ...item, state: entry.prevState } : item))
       setRelearnPool(prev => prev.filter(item => item.card.id !== entry.prevState.cardId))
       setDone(false)
       setIndex(entry.queueIndex)
     } catch (err) { console.error('Undo failed:', err) }
-  }, [undoStack, submitting])
+  }, [undoStack, submitting, handleOverrideAnswer])
 
   const handleRedo = useCallback(async () => {
     const entry = redoStack[redoStack.length - 1]

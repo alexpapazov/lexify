@@ -62,6 +62,23 @@ export class SupabaseLadderEventRepository {
     if (error) throw new Error(error.message)
   }
 
+  /** Log one attempt and return its id (so undo can delete it → undo+redo counts once). */
+  async log(userId: UserId, e: LadderEventInput): Promise<string | null> {
+    const { data, error } = await this.db.from('ladder_events').insert({
+      user_id: userId, session_id: e.sessionId, card_id: e.cardId, deck_id: e.deckId, label: e.label,
+      source_language: e.sourceLanguage, target_language: e.targetLanguage,
+      from_rung: e.fromRung, to_rung: e.toRung, rung_count: e.rungCount, rung_type: e.rungType,
+      outcome: e.outcome, advanced: e.advanced, graduated: e.graduated, overridden: e.overridden, duration_ms: e.durationMs,
+    }).select('id').single()
+    if (error) throw new Error(error.message)
+    return (data?.id as string) ?? null
+  }
+
+  async deleteById(id: string): Promise<void> {
+    const { error } = await this.db.from('ladder_events').delete().eq('id', id)
+    if (error) throw new Error(error.message)
+  }
+
   /** All of a user's ladder events, oldest-first (for grouping into sessions client-side). */
   async listForUser(userId: UserId, limit = 8000): Promise<LadderEvent[]> {
     const { data, error } = await this.db.from('ladder_events')

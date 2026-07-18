@@ -77,12 +77,16 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   // Pre-set dormancy (threshold/flag) per card, captured at load — preserved through graduation so a
   // dormancy set before studying isn't wiped when the card graduates.
   const dormancyByCardRef = useRef<Map<string, { threshold: number | null; dormant: boolean }>>(new Map())
+  // An override the CURRENT card newly added this attempt (so undo can remove exactly it).
+  const pendingOverrideAddRef = useRef<{ cardId: string; answerSide: CardSide; answerText: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
   const [undoStack, setUndoStack] = useState<Array<{
     cardId: string; prevClimb: ClimbState | undefined; prevQueueItem: QueueItem | undefined
     wasGraduated: boolean; prevAnswered: number; prevPaused: boolean
+    eventIdP: Promise<string | null> | null   // the logged ladder_event (deleted on undo)
+    overrideAdd: { cardId: string; answerSide: CardSide; answerText: string } | null  // override to roll back
   }>>([])
 
   // The deck a given card belongs to (for climb-save, grading, distractors).
@@ -115,6 +119,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     if (!userId) return
     const key = `${cardId}:${answerSide}`
+    const already = overrides.get(key)?.has(answerText) ?? false
+    // Remember a NEW "mark correct" so undo can revert exactly this add (pre-existing overrides stay).
+    if (accept && !already) pendingOverrideAddRef.current = { cardId, answerSide, answerText }
     setOverrides(prev => {
       const next = new Map(prev)
       const set  = new Set(next.get(key) ?? [])
@@ -125,7 +132,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     const repo = new SupabaseTypedAnswerOverrideRepository()
     const op = accept ? repo.add(userId, cardId, answerSide, answerText) : repo.remove(userId, cardId, answerSide, answerText)
     op.catch(err => console.error('Failed to save typed-answer override:', err))
-  }, [userId])
+  }, [userId, overrides])
 
   const handleChoiceEdit = useCallback(async (cardId: string, answerSide: CardSide, originalChoice: string, newText: string, isCorrect: boolean) => {
     const cardRepo = new SupabaseCardRepository()
@@ -284,8 +291,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const currentRung = ladder && currentClimb ? ladder.rungs[currentClimb.rungIndex] : undefined
   const currentDeck = currentId ? deckFor(currentId) : undefined
 
-  // Reset the per-card timer whenever a new card is shown (for duration logging).
-  useEffect(() => { shownAtRef.current = Date.now() }, [currentId])
+  // Reset the per-card timer + pending override whenever a new card is shown.
+  useEffect(() => { shownAtRef.current = Date.now(); pendingOverrideAddRef.current = null }, [currentId])
 
   function onChoicesCached(cardId: string, choices: CardChoices) {
     setCardsById(prev => { const c = prev.get(cardId); if (!c) return prev; return new Map(prev).set(cardId, { ...c, choices }) })
@@ -317,10 +324,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     // colour without changing drop-back behaviour.
     const loggedOutcome: RungAttemptOutcome = almost && outcome === 'miss' ? 'almost' : outcome
 
-    // Log this rung attempt (fire-and-forget) so Analytics → Logs can show session stats + a replay.
+    // Log this rung attempt so Analytics → Logs can show session stats + a replay. Capture the id so
+    // undo can delete it (undo+redo counts once).
     const rungCount = ladder.rungs.length
     const logDeck = deckFor(currentId)
-    new SupabaseLadderEventRepository().logMany(userId, [{
+    const eventIdP = new SupabaseLadderEventRepository().log(userId, {
       sessionId: sessionIdRef.current, cardId: currentId, deckId: deckByCard.get(currentId) ?? null,
       label: cardsById.get(currentId)?.front ?? null,
       sourceLanguage: logDeck?.sourceLanguage ?? null, targetLanguage: logDeck?.targetLanguage ?? null,
@@ -328,12 +336,14 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       rungType: ladder.rungs[currentClimb.rungIndex]?.type ?? null,
       outcome: loggedOutcome, advanced: res.advanced, graduated: res.state.graduated, overridden,
       durationMs: Math.min(5 * 60_000, Math.max(0, now - shownAtRef.current)),  // cap at 5 min (ignore idle)
-    }]).catch(() => {})
+    }).catch(() => null)
     touchSession()  // slide the freshness window so a refresh keeps continuing this session
 
+    const overrideAdd = pendingOverrideAddRef.current?.cardId === currentId ? pendingOverrideAddRef.current : null
+    pendingOverrideAddRef.current = null
     setUndoStack(prev => [...prev.slice(-19), {
       cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
-      wasGraduated: res.state.graduated, prevAnswered: answered, prevPaused: paused,
+      wasGraduated: res.state.graduated, prevAnswered: answered, prevPaused: paused, eventIdP, overrideAdd,
     }])
     await new SupabaseLadderClimbRepository().save(userId, currentId, deckByCard.get(currentId) ?? '', res.state).catch(console.error)
     setStates(prev => new Map(prev).set(currentId, res.state))
@@ -367,8 +377,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     const entry = undoStack[undoStack.length - 1]
     if (!entry || !userId) return
     setUndoStack(prev => prev.slice(0, -1))
-    const { cardId, prevClimb, prevQueueItem, wasGraduated, prevAnswered, prevPaused } = entry
+    const { cardId, prevClimb, prevQueueItem, wasGraduated, prevAnswered, prevPaused, eventIdP, overrideAdd } = entry
     const fallbackItem: QueueItem = prevQueueItem ?? { cardId, readyAt: 0, ratedAt: 0 }
+    // Delete the logged attempt (so undo+redo is one attempt) and roll back a just-added override.
+    if (eventIdP) eventIdP.then(id => { if (id) new SupabaseLadderEventRepository().deleteById(id).catch(() => {}) })
+    if (overrideAdd) handleOverrideAnswer(overrideAdd.cardId, overrideAdd.answerSide, overrideAdd.answerText, false)
     const climbRepo = new SupabaseLadderClimbRepository()
     if (prevClimb) {
       await climbRepo.save(userId, cardId, deckByCard.get(cardId) ?? '', prevClimb).catch(console.error)
@@ -389,7 +402,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     setAnswered(prevAnswered)
     setPaused(prevPaused)
     setCurrentId(cardId)
-  }, [undoStack, userId, deckByCard])
+  }, [undoStack, userId, deckByCard, handleOverrideAnswer])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
