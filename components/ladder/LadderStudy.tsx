@@ -13,6 +13,7 @@ import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { setAudioPlaybackRate, setAudioVolume, setAudioSourceDefault, setAudioSourceByLanguage } from '@/lib/speak'
 import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
+import { SupabaseLadderEventRepository } from '@/lib/data/ladderEvents'
 import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
@@ -64,6 +65,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const startStepsRef  = useRef(0)
   const tzRef          = useRef('UTC')
   const turnoverRef    = useRef(0)
+  const sessionIdRef   = useRef<string>(typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.round(Math.random() * 1e9)}`)
+  const shownAtRef     = useRef<number>(Date.now())
   const [loading, setLoading] = useState(true)
   const [infoOpen, setInfoOpen] = useState(false)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
@@ -247,6 +250,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const currentRung = ladder && currentClimb ? ladder.rungs[currentClimb.rungIndex] : undefined
   const currentDeck = currentId ? deckFor(currentId) : undefined
 
+  // Reset the per-card timer whenever a new card is shown (for duration logging).
+  useEffect(() => { shownAtRef.current = Date.now() }, [currentId])
+
   function onChoicesCached(cardId: string, choices: CardChoices) {
     setCardsById(prev => { const c = prev.get(cardId); if (!c) return prev; return new Map(prev).set(cardId, { ...c, choices }) })
   }
@@ -271,6 +277,20 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     if (!userId || !ladder || !currentId || !currentClimb) return
     const now = Date.now()
     const res = reviewRung(ladder, currentClimb, outcome, now)
+
+    // Log this rung attempt (fire-and-forget) so Analytics → Logs can show session stats + a replay.
+    const rungCount = ladder.rungs.length
+    const logDeck = deckFor(currentId)
+    new SupabaseLadderEventRepository().logMany(userId, [{
+      sessionId: sessionIdRef.current, cardId: currentId, deckId: deckByCard.get(currentId) ?? null,
+      label: cardsById.get(currentId)?.front ?? null,
+      sourceLanguage: logDeck?.sourceLanguage ?? null, targetLanguage: logDeck?.targetLanguage ?? null,
+      fromRung: currentClimb.rungIndex, toRung: res.state.graduated ? rungCount : res.state.rungIndex, rungCount,
+      rungType: ladder.rungs[currentClimb.rungIndex]?.type ?? null,
+      outcome, advanced: res.advanced, graduated: res.state.graduated,
+      durationMs: Math.min(5 * 60_000, Math.max(0, now - shownAtRef.current)),  // cap at 5 min (ignore idle)
+    }]).catch(() => {})
+
     setUndoStack(prev => [...prev.slice(-19), {
       cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
       wasGraduated: res.state.graduated, prevAnswered: answered, prevPaused: paused,

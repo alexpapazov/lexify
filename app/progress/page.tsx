@@ -6,6 +6,7 @@ import { displayText } from '@/lib/cardText'
 import { langName, LANG_COLOR_PALETTE } from '@/lib/languages'
 import { ConnectionGraph } from '@/components/analytics/ConnectionGraph'
 import { DueForecastProjection } from '@/components/analytics/DueForecastProjection'
+import { LadderLogs } from '@/components/analytics/LadderLogs'
 import { getToday } from '@/lib/dates'
 
 type RangeDays = 7 | 14 | 30 | 90
@@ -323,6 +324,9 @@ export default function AnalyticsPage() {
         </div>
         <DueForecastProjection />
       </div>
+
+      {/* Logs: learning-ladder sessions + replay */}
+      <LadderLogs />
 
       {/* Daily review history — this is what the range toggle controls */}
       <div className="flex items-center justify-between flex-wrap gap-3 pt-2">
