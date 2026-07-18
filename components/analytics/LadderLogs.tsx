@@ -56,6 +56,16 @@ export function LadderLogs() {
         }
         for (const s of grouped) for (const c of s.cards) c.label = frontById.get(c.cardId) ?? c.label
 
+        // A card's true graduation status lives in card_states (the climb flag can be stale if it
+        // graduated via a non-ladder path or a glitch). Use it so graduated cards jump to GRAD.
+        const gradByCard = new Set<string>()
+        const orphanIds = orphanClimbs.map(r => r.card_id as string)
+        if (orphanIds.length > 0) {
+          const { data } = await supabase.from('card_states')
+            .select('card_id').eq('review_direction', 'forward').eq('graduated', true).in('card_id', orphanIds)
+          for (const r of data ?? []) gradByCard.add(r.card_id as string)
+        }
+
         let reconstructed: SessionSummary[] = []
         if (orphanClimbs.length > 0) {
           const records: ClimbRecord[] = orphanClimbs
@@ -68,7 +78,7 @@ export function LadderLogs() {
                 front: frontById.get(r.card_id as string) ?? '—',
                 source: pair?.s ?? null, target: pair?.t ?? null,
                 rungHistory: st.rungHistory ?? [],
-                graduated: !!st.graduated,
+                graduated: !!st.graduated || gradByCard.has(r.card_id as string),
                 updatedAtMs: new Date(r.updated_at as string).getTime(),
               }
             })
