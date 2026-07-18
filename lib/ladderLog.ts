@@ -28,6 +28,7 @@ export interface SessionSummary {
   wallMs:         number   // wall-clock span (end - start)
   source:         string | null
   target:         string | null
+  reconstructed?: boolean  // rebuilt from rungHistory (no per-attempt timing / colours)
 }
 
 const ms = (iso: string) => new Date(iso).getTime()

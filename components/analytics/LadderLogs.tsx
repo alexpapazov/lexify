@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseLadderEventRepository } from '@/lib/data/ladderEvents'
 import { groupSessions, type SessionSummary } from '@/lib/ladderLog'
+import { reconstructEvents, type ClimbRecord } from '@/lib/ladderReconstruct'
 import { langName, langFlag } from '@/lib/languages'
 import { LadderReplay } from './LadderReplay'
 
@@ -33,15 +34,45 @@ export function LadderLogs() {
         if (!session) return
         const events = await new SupabaseLadderEventRepository().listForUser(session.user.id)
         const grouped = groupSessions(events)
-        // Relabel cards with their CURRENT front (so edits made during/after the pipeline show in the
-        // replay), falling back to the logged label for deleted cards.
-        const cardIds = [...new Set(events.map(e => e.cardId))]
-        if (cardIds.length > 0) {
-          const { data } = await supabase.from('cards').select('id, front').in('id', cardIds)
-          const frontById = new Map((data ?? []).map(r => [r.id as string, r.front as string]))
-          for (const s of grouped) for (const c of s.cards) c.label = frontById.get(c.cardId) ?? c.label
+        const loggedCardIds = new Set(events.map(e => e.cardId))
+
+        // Reconstruct sessions that predate event logging from surviving climb rung-histories.
+        const [climbRes, deckRes] = await Promise.all([
+          supabase.from('ladder_climb').select('card_id, deck_id, state, updated_at'),
+          supabase.from('decks').select('id, source_language, target_language'),
+        ])
+        const deckPair = new Map((deckRes.data ?? []).map(d => [d.id as string, { s: d.source_language as string | null, t: d.target_language as string | null }]))
+        const orphanClimbs = (climbRes.data ?? []).filter(r => {
+          const st = r.state as { graduated?: boolean; rungHistory?: number[] } | null
+          return st?.graduated && (st.rungHistory?.length ?? 0) > 1 && !loggedCardIds.has(r.card_id as string)
+        })
+
+        // Fetch current fronts for every card we'll show (logged + orphan).
+        const allCardIds = [...new Set([...loggedCardIds, ...orphanClimbs.map(r => r.card_id as string)])]
+        const frontById = new Map<string, string>()
+        if (allCardIds.length > 0) {
+          const { data } = await supabase.from('cards').select('id, front').in('id', allCardIds)
+          for (const r of data ?? []) frontById.set(r.id as string, r.front as string)
         }
-        setSessions(grouped)
+        for (const s of grouped) for (const c of s.cards) c.label = frontById.get(c.cardId) ?? c.label
+
+        let reconstructed: SessionSummary[] = []
+        if (orphanClimbs.length > 0) {
+          const records: ClimbRecord[] = orphanClimbs.map(r => {
+            const st = r.state as { rungHistory?: number[] }
+            const pair = deckPair.get(r.deck_id as string)
+            return {
+              cardId: r.card_id as string,
+              front: frontById.get(r.card_id as string) ?? '—',
+              source: pair?.s ?? null, target: pair?.t ?? null,
+              rungHistory: st.rungHistory ?? [],
+              graduatedAtMs: new Date(r.updated_at as string).getTime(),
+            }
+          })
+          reconstructed = groupSessions(reconstructEvents(records)).map(s => ({ ...s, reconstructed: true }))
+        }
+
+        setSessions([...grouped, ...reconstructed].sort((a, b) => b.start - a.start))
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }
@@ -73,6 +104,7 @@ export function LadderLogs() {
                   <div className="text-sm text-ink flex items-center gap-2">
                     <span className="text-ink-faint">{open ? '▾' : '▸'}</span>
                     <span className="truncate">{pair}</span>
+                    {s.reconstructed && <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-line/20 text-ink-faint">reconstructed</span>}
                   </div>
                   <div className="text-xs text-ink-faint pl-5">{fmtWhen(s.start)}</div>
                 </div>
@@ -85,6 +117,12 @@ export function LadderLogs() {
 
               {open && (
                 <div className="pl-2 pr-2 pt-3 space-y-4">
+                  {s.reconstructed && (
+                    <p className="text-[11px] text-ink-faint">
+                      Rebuilt from each card&apos;s rung history (this session predates event logging) — the climb is real,
+                      but there are no per-attempt times or rating colours.
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                     <Stat label="Attempts" value={String(s.attempts)} />
                     <Stat label="Active time" value={fmtDuration(s.activeMs)} />
