@@ -1191,13 +1191,39 @@ sync-back (Stage 5) and the conflict popup (Stage 6) are NOT built yet — see b
   detection). USER CONFIRMED RAN 095.
 - **Tests**: `lib/offline/__tests__/localStore.test.ts`, `download.test.ts`, `localRepos.test.ts`
   (fake-indexeddb). All green; tsc + `npm run build` pass.
-- **REMAINING**: **Stage 5** = the sync engine (on toggle-off, drain the outbox to Supabase, pull
-  server changes, rebase local baselines). **Stage 6** = conflict popup (per-card study-state diff +
-  bulk keep-device/keep-cloud) when a row changed both locally and on server since download. **Stage
-  7** = PWA. **Stage 8** = Capacitor native app (needs Apple Developer acct + Xcode/CocoaPods on the
-  user's Mac — flag before starting). Also: the toggle currently just flips the flag; going online
-  does NOT yet sync (Stage 5). **Offline study must be tested on-device** before relying on it — it
-  can't be runtime-verified in this environment.
+### Sync engine + conflict resolution (Stage 5 + 6 done, 2026-07-18)
+
+Toggling offline OFF now **syncs the outbox back to Supabase**.
+
+- **`lib/offline/coalesce.ts`** (pure, tested): `coalesceOutbox(entries)` collapses the outbox — state
+  entities (cardState/ladderClimb/override/card) are last-write-wins per key (accumulating all outbox
+  ids to clear on success); events (ladderEvent/reviewEvent) stay distinct appends.
+- **`lib/offline/sync.ts`**: `pushOutbox(userId, onProgress)` drains the outbox. Non-cardState writes
+  (events, overrides, card edits, ladder climb) push unconditionally via the normal Supabase repos
+  (which are online because the toggle flipped first). **cardState writes are conflict-checked**: it
+  compares the server row's `updated_at` to the local download baseline (`serverUpdatedAt`, preserved
+  across offline edits by `localUpsertCardState`); if the server changed too, the local write is held
+  back as a `CardStateConflict`. `resolveConflicts(userId, conflicts, choices)` applies per-card
+  keep-device (push local) / keep-cloud (adopt server locally). Reuses `cardStateToRow`/`rowToCardState`
+  (now exported from `lib/data/cardStates.ts`).
+- **`components/settings/SyncConflictModal.tsx`**: per-card device-vs-cloud diff (due/interval/reps/
+  lapses/rating/graduated/dormant/difficulty/stability/reviewed) with per-card + bulk keep-device/
+  keep-cloud, "Apply & finish sync", and "Decide later" (keeps the outbox for a later "Sync now").
+- **`OfflinePanel`** toggle: ON → `setOfflineMode(true)`; OFF → `setOfflineMode(false)` then `pushOutbox`
+  (progress line + conflict modal + result). A "Sync now (N)" link appears when online with a
+  non-empty outbox.
+- **reviewEvents offline guard (Stage 3 leftover, fixed here):** `lib/data/reviewEvents.ts` create/
+  delete are now offline-guarded (`localCreateReviewEvent`/`localDeleteReviewEvent` — local id +
+  outbox, undo removes the pending insert). Without this, offline **Due Now** reviews threw. (Ladder
+  events were already guarded.)
+- **Known v1 limits**: offline review_events push with server-default `reviewed_at` (push time, not
+  study time — analytics timing only); conflict detection is cardState-only (climb/override/card edits
+  are last-write-wins); `fetchServerState` uses `maybeSingle()` so duplicate forward rows would need
+  cleanup first. Confusion-linking during offline study is best-effort (fire-and-forget, fails silently
+  offline) — scheduling is unaffected.
+- **REMAINING**: **Stage 7** = PWA (installable, service worker for offline app shell). **Stage 8** =
+  Capacitor native app (needs Apple Developer acct + Xcode/CocoaPods on the user's Mac — flag before
+  starting). **Offline study + sync must be tested on-device** — they can't be runtime-verified here.
 
 ## Known backlog / open issues
 

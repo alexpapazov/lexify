@@ -4,7 +4,7 @@ import type { CardStateRepository } from './interfaces'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { localCardStatesByDeck, localUpsertCardState, localDeleteCardState } from '@/lib/offline/localRepos'
 
-function rowToCardState(row: Record<string, unknown>): CardState {
+export function rowToCardState(row: Record<string, unknown>): CardState {
   return {
     userId:           row.user_id as string,
     cardId:           row.card_id as string,
@@ -63,6 +63,56 @@ function rowToCardState(row: Record<string, unknown>): CardState {
   }
 }
 
+/** CardState → DB row (single source of truth for upsert/upsertBatch and the offline sync push). */
+export function cardStateToRow(state: CardState): Record<string, unknown> {
+  return {
+    user_id: state.userId, card_id: state.cardId, pipeline_id: state.pipelineId,
+    current_step_order: state.currentStepOrder, correct_in_step: state.correctInStep,
+    graduated: state.graduated, due_at: state.dueAt, interval_days: state.intervalDays,
+    scheduled_interval_days: state.scheduledIntervalDays,
+    reps: state.reps, lapses: state.lapses,
+    last_rating: state.lastRating, last_reviewed_at: state.lastReviewedAt,
+    introduced_date: state.introducedDate,
+    graduated_at: state.graduatedAt,
+    relearning_step: state.relearningStep,
+    typed_accuracy_window: state.typedAccuracyWindow, typed_review_count: state.typedReviewCount,
+    last_typed_review_at: state.lastTypedReviewAt, forced_typed_remaining: state.forcedTypedRemaining,
+    interval_history: state.intervalHistory,
+    typing_mistake_streak: state.typingMistakeStreak, typing_fail_cycles: state.typingFailCycles,
+    stage3_entered_date: state.stage3EnteredDate,
+    i_dont_know_count: state.iDontKnowCount,
+    pipeline_error_count:   state.pipelineErrorCount,
+    graduation_error_count: state.graduationErrorCount,
+    accent_mistake_count:     state.accentMistakeCount,
+    article_mistake_count:    state.articleMistakeCount,
+    gender_mistake_count:     state.genderMistakeCount,
+    typo_mistake_count:       state.typoMistakeCount,
+    semantic_mistake_count:   state.semanticMistakeCount,
+    wrong_synonym_count:      state.wrongSynonymCount,
+    dormant:                  state.dormant,
+    dormancy_threshold:       state.dormancyThreshold,
+    difficulty:               state.difficulty,
+    stability:                state.stability,
+    relearning:               state.relearning,
+    good_streak:              state.goodStreak,
+    again_streak:             state.againStreak,
+    accelerated_mode:         state.acceleratedMode,
+    accelerated_locked:       state.acceleratedLocked,
+    accelerated_wrong_streak: state.acceleratedWrongStreak,
+    accelerated_penalty:      state.acceleratedPenalty,
+    post_accel_restart_window: state.postAccelRestartWindow,
+    post_accel_wrong_count:    state.postAccelWrongCount,
+    typed_interval_days:      state.typedIntervalDays,
+    typed_due_at:             state.typedDueAt,
+    recall_interval_days:     state.recallIntervalDays,
+    recall_due_at:            state.recallDueAt,
+    smart_interval_days:      state.smartIntervalDays,
+    smart_due_at:             state.smartDueAt,
+    accelerated_typed_confirmed: state.acceleratedTypedConfirmed,
+    review_direction:         state.reviewDirection,
+  }
+}
+
 export class SupabaseCardStateRepository implements CardStateRepository {
   private get db() { return createClient() }
 
@@ -93,52 +143,9 @@ export class SupabaseCardStateRepository implements CardStateRepository {
 
   async upsert(state: CardState): Promise<CardState> {
     if (isOfflineActive()) return localUpsertCardState(state)
-    const { data, error } = await this.db.from('card_states').upsert({
-      user_id: state.userId, card_id: state.cardId, pipeline_id: state.pipelineId,
-      current_step_order: state.currentStepOrder, correct_in_step: state.correctInStep,
-      graduated: state.graduated, due_at: state.dueAt, interval_days: state.intervalDays,
-      scheduled_interval_days: state.scheduledIntervalDays,
-      reps: state.reps, lapses: state.lapses,
-      last_rating: state.lastRating, last_reviewed_at: state.lastReviewedAt,
-      introduced_date: state.introducedDate,
-      graduated_at: state.graduatedAt,
-      relearning_step: state.relearningStep,
-      typed_accuracy_window: state.typedAccuracyWindow, typed_review_count: state.typedReviewCount,
-      last_typed_review_at: state.lastTypedReviewAt, forced_typed_remaining: state.forcedTypedRemaining,
-      interval_history: state.intervalHistory,
-      typing_mistake_streak: state.typingMistakeStreak, typing_fail_cycles: state.typingFailCycles,
-      stage3_entered_date: state.stage3EnteredDate,
-      i_dont_know_count: state.iDontKnowCount,
-      pipeline_error_count:   state.pipelineErrorCount,
-      graduation_error_count: state.graduationErrorCount,
-      accent_mistake_count:     state.accentMistakeCount,
-      article_mistake_count:    state.articleMistakeCount,
-      gender_mistake_count:     state.genderMistakeCount,
-      typo_mistake_count:       state.typoMistakeCount,
-      semantic_mistake_count:   state.semanticMistakeCount,
-      wrong_synonym_count:      state.wrongSynonymCount,
-      dormant:                  state.dormant,
-      dormancy_threshold:       state.dormancyThreshold,
-      difficulty:               state.difficulty,
-      stability:                state.stability,
-      relearning:               state.relearning,
-      good_streak:              state.goodStreak,
-      again_streak:             state.againStreak,
-      accelerated_mode:         state.acceleratedMode,
-      accelerated_locked:       state.acceleratedLocked,
-      accelerated_wrong_streak: state.acceleratedWrongStreak,
-      accelerated_penalty:      state.acceleratedPenalty,
-      post_accel_restart_window: state.postAccelRestartWindow,
-      post_accel_wrong_count:    state.postAccelWrongCount,
-      typed_interval_days:      state.typedIntervalDays,
-      typed_due_at:             state.typedDueAt,
-      recall_interval_days:     state.recallIntervalDays,
-      recall_due_at:            state.recallDueAt,
-      smart_interval_days:      state.smartIntervalDays,
-      smart_due_at:             state.smartDueAt,
-      accelerated_typed_confirmed: state.acceleratedTypedConfirmed,
-      review_direction:         state.reviewDirection,
-    }, { onConflict: 'user_id,card_id,review_direction' }).select().single()
+    const { data, error } = await this.db.from('card_states')
+      .upsert(cardStateToRow(state), { onConflict: 'user_id,card_id,review_direction' })
+      .select().single()
     if (error) throw new Error(error.message)
     return rowToCardState(data)
   }
@@ -166,41 +173,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
 
   async upsertBatch(states: CardState[]): Promise<void> {
     if (states.length === 0) return
-    const rows = states.map(s => ({
-      user_id: s.userId, card_id: s.cardId, pipeline_id: s.pipelineId,
-      current_step_order: s.currentStepOrder, correct_in_step: s.correctInStep,
-      graduated: s.graduated, due_at: s.dueAt, interval_days: s.intervalDays,
-      scheduled_interval_days: s.scheduledIntervalDays,
-      reps: s.reps, lapses: s.lapses,
-      last_rating: s.lastRating, last_reviewed_at: s.lastReviewedAt,
-      introduced_date: s.introducedDate,
-      graduated_at: s.graduatedAt,
-      relearning_step: s.relearningStep,
-      typed_accuracy_window: s.typedAccuracyWindow, typed_review_count: s.typedReviewCount,
-      last_typed_review_at: s.lastTypedReviewAt, forced_typed_remaining: s.forcedTypedRemaining,
-      interval_history: s.intervalHistory,
-      typing_mistake_streak: s.typingMistakeStreak, typing_fail_cycles: s.typingFailCycles,
-      stage3_entered_date: s.stage3EnteredDate,
-      i_dont_know_count: s.iDontKnowCount,
-      pipeline_error_count:   s.pipelineErrorCount,
-      graduation_error_count: s.graduationErrorCount,
-      accent_mistake_count: s.accentMistakeCount, article_mistake_count: s.articleMistakeCount,
-      gender_mistake_count: s.genderMistakeCount, typo_mistake_count: s.typoMistakeCount,
-      semantic_mistake_count: s.semanticMistakeCount, wrong_synonym_count: s.wrongSynonymCount,
-      dormant: s.dormant, dormancy_threshold: s.dormancyThreshold,
-      difficulty: s.difficulty, stability: s.stability, relearning: s.relearning, good_streak: s.goodStreak, again_streak: s.againStreak,
-      accelerated_mode: s.acceleratedMode, accelerated_locked: s.acceleratedLocked,
-      accelerated_wrong_streak: s.acceleratedWrongStreak, accelerated_penalty: s.acceleratedPenalty,
-      post_accel_restart_window: s.postAccelRestartWindow, post_accel_wrong_count: s.postAccelWrongCount,
-      typed_interval_days:  s.typedIntervalDays,
-      typed_due_at:         s.typedDueAt,
-      recall_interval_days: s.recallIntervalDays,
-      recall_due_at:        s.recallDueAt,
-      smart_interval_days:  s.smartIntervalDays,
-      smart_due_at:         s.smartDueAt,
-      accelerated_typed_confirmed: s.acceleratedTypedConfirmed,
-      review_direction:     s.reviewDirection,
-    }))
+    const rows = states.map(cardStateToRow)
     const { error } = await this.db.from('card_states').upsert(rows, { onConflict: 'user_id,card_id,review_direction' })
     if (error) throw new Error(error.message)
   }

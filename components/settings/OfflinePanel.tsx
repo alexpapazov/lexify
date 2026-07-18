@@ -9,6 +9,8 @@ import { downloadForOffline } from '@/lib/offline/download'
 import { getLocalStore } from '@/lib/offline/localStore'
 import { setOfflineMode } from '@/lib/offline/mode'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
+import { pushOutbox, resolveConflicts, type CardStateConflict, type ConflictChoice, type SyncProgress } from '@/lib/offline/sync'
+import { SyncConflictModal } from '@/components/settings/SyncConflictModal'
 import type { Deck, Folder } from '@/domain'
 import type { Manifest, OfflineScope, OfflineScopeKind } from '@/lib/offline/types'
 
@@ -35,12 +37,18 @@ export function OfflinePanel() {
   const [error, setError] = useState<string | null>(null)
   const [manifest, setManifest] = useState<Manifest | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
+  const [userId, setUserId] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const [conflicts, setConflicts] = useState<CardStateConflict[]>([])
   const offline = useOfflineMode()
 
   useEffect(() => {
     ;(async () => {
       const { data: { session } } = await createClient().auth.getSession()
       if (!session) return
+      setUserId(session.user.id)
       const [ds, fs] = await Promise.all([
         new SupabaseDeckRepository().list(session.user.id),
         new SupabaseFolderRepository().list(session.user.id),
@@ -87,7 +95,49 @@ export function OfflinePanel() {
 
   async function clear() {
     await getLocalStore().clearAll()
-    setManifest(null); setResult(null)
+    setManifest(null); setResult(null); setPendingCount(0)
+  }
+
+  /** Toggling the switch: ON → go offline; OFF → go online and sync the outbox back. */
+  async function handleToggle(on: boolean) {
+    setSyncMsg(null)
+    setOfflineMode(on)               // flips the flag first — repos must be online before we push
+    if (on || !userId) return        // going offline: nothing to sync
+    await runSync()
+  }
+
+  async function runSync() {
+    if (!userId) return
+    setSyncing(true); setSyncProgress(null); setError(null)
+    try {
+      const { pushed, conflicts: found } = await pushOutbox(userId, p => setSyncProgress(p))
+      setPendingCount(await getLocalStore().outboxCount())
+      if (found.length > 0) {
+        setConflicts(found)
+      } else {
+        setSyncMsg(pushed > 0 ? `Synced ${pushed} change${pushed === 1 ? '' : 's'}.` : 'Everything was already up to date.')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSyncing(false); setSyncProgress(null)
+    }
+  }
+
+  async function applyConflictChoices(choices: Map<string, ConflictChoice>) {
+    if (!userId) return
+    setSyncing(true)
+    try {
+      await resolveConflicts(userId, conflicts, choices)
+      const remaining = await getLocalStore().outboxCount()
+      setPendingCount(remaining)
+      setConflicts([])
+      setSyncMsg('Sync complete.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSyncing(false)
+    }
   }
 
   return (
@@ -123,12 +173,30 @@ export function OfflinePanel() {
             </div>
             <input
               type="checkbox"
-              className="h-5 w-9 shrink-0 accent-accent cursor-pointer"
+              className="h-5 w-9 shrink-0 accent-accent cursor-pointer disabled:opacity-50"
               checked={offline}
-              onChange={e => setOfflineMode(e.target.checked)}
+              disabled={syncing}
+              onChange={e => void handleToggle(e.target.checked)}
             />
           </label>
+          {(syncing || syncProgress || syncMsg) && (
+            <div className="mt-2 text-xs">
+              {syncing && <span className="text-ink-faint">{syncProgress ? `${syncProgress.phase} — ${syncProgress.done}/${syncProgress.total}` : 'Syncing…'}</span>}
+              {!syncing && syncMsg && <span className="text-success">✓ {syncMsg}</span>}
+            </div>
+          )}
+          {!offline && pendingCount > 0 && !syncing && conflicts.length === 0 && (
+            <button onClick={() => void runSync()} className="mt-2 text-xs text-accent hover:underline">Sync now ({pendingCount})</button>
+          )}
         </div>
+      )}
+
+      {conflicts.length > 0 && (
+        <SyncConflictModal
+          conflicts={conflicts}
+          onResolve={choices => void applyConflictChoices(choices)}
+          onDefer={() => setConflicts([])}
+        />
       )}
 
       {/* Scope */}

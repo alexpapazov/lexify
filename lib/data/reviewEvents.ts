@@ -1,6 +1,8 @@
 import { createClient } from '@/lib/supabase/client'
 import type { ReviewEvent, UserId, CardId, Rating } from '@/domain'
 import type { ReviewEventRepository, CreateReviewEventInput } from './interfaces'
+import { isOfflineActive } from '@/lib/offline/mode'
+import { localCreateReviewEvent, localDeleteReviewEvent } from '@/lib/offline/localRepos'
 
 function rowToEvent(row: Record<string, unknown>): ReviewEvent {
   return {
@@ -36,6 +38,22 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
   private get db() { return createClient() }
 
   async create(input: CreateReviewEventInput): Promise<ReviewEvent> {
+    if (isOfflineActive()) {
+      const id = await localCreateReviewEvent(input)
+      // Return a best-effort local ReviewEvent (only `id` is used by callers — for undo).
+      return {
+        id, userId: input.userId, cardId: input.cardId, mode: input.mode,
+        promptSide: input.promptSide, answerSide: input.answerSide, promptShown: input.promptShown,
+        expected: input.expected, userAnswer: input.userAnswer, wasCorrect: input.wasCorrect,
+        rating: input.rating, responseMs: input.responseMs ?? null, reviewedAt: '',
+        reviewMode: input.reviewMode ?? null, wasTyped: input.wasTyped ?? null,
+        wasAccelerated: input.wasAccelerated ?? null, acceleratedPenalty: input.acceleratedPenalty ?? null,
+        reviewDirection: input.reviewDirection ?? null, reps: input.reps ?? 0, lapsed: false,
+        hintLevel: input.hintLevel ?? 0, nearMiss: input.nearMiss ?? false,
+        nearMissWeight: input.nearMissWeight ?? (input.nearMiss ? 0.2 : 0),
+        errorCategory: input.errorCategory ?? null, graduationErrorCount: input.graduationErrorCount ?? 0,
+      }
+    }
     const { data, error } = await this.db.from('review_events').insert({
       user_id: input.userId, card_id: input.cardId, mode: input.mode,
       prompt_side: input.promptSide, answer_side: input.answerSide,
@@ -61,6 +79,7 @@ export class SupabaseReviewEventRepository implements ReviewEventRepository {
 
   /** Remove a logged event — used to roll back a review on undo (so undo+redo counts once). */
   async delete(id: string): Promise<void> {
+    if (isOfflineActive()) return localDeleteReviewEvent(id)
     const { error } = await this.db.from('review_events').delete().eq('id', id)
     if (error) throw new Error(error.message)
   }

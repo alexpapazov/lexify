@@ -51,7 +51,10 @@ export async function localOverridesForUser(): Promise<Omit<TypedAnswerOverride,
 
 // ── Writes (local store + outbox) ──────────────────────────────────────────────
 export async function localUpsertCardState(state: CardState): Promise<CardState> {
-  await getLocalStore().putCardState(state)
+  // Preserve the download-time server baseline (serverUpdatedAt) across offline edits so the sync
+  // engine can still tell whether the server row changed while we were offline (→ conflict).
+  const existing = await getLocalStore().getCardState(state.cardId, state.reviewDirection)
+  await getLocalStore().putCardState({ ...state, serverUpdatedAt: existing?.serverUpdatedAt ?? null })
   await enqueue('cardState', `${state.cardId}:${state.reviewDirection}`, 'upsert', state)
   return state
 }
@@ -75,6 +78,16 @@ export async function localLogLadderEvent(e: LadderEventInput): Promise<string> 
 export async function localDeleteLadderEvent(id: string): Promise<void> {
   // The event only exists in the outbox (offline) — drop the pending insert so undo leaves no trace.
   const pending = (await getLocalStore().outbox()).filter(o => o.entity === 'ladderEvent' && o.key === id && o.id != null)
+  if (pending.length) await getLocalStore().deleteOutbox(pending.map(o => o.id!))
+}
+export async function localCreateReviewEvent(input: unknown): Promise<string> {
+  const id = localId()
+  await enqueue('reviewEvent', id, 'insert', { ...(input as object), _localId: id })
+  return id
+}
+export async function localDeleteReviewEvent(id: string): Promise<void> {
+  // The event only exists in the outbox offline — drop the pending insert so undo leaves no trace.
+  const pending = (await getLocalStore().outbox()).filter(o => o.entity === 'reviewEvent' && o.key === id && o.id != null)
   if (pending.length) await getLocalStore().deleteOutbox(pending.map(o => o.id!))
 }
 export async function localAddOverride(cardId: string, answerSide: string, answerText: string): Promise<void> {
