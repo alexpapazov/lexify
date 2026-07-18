@@ -298,29 +298,26 @@ export default function AgentsPage() {
               <label className="text-xs text-ink-faint">Scope — select what the agent may touch</label>
               <span className="text-xs text-ink-faint">{inScopeDeckCount} deck{inScopeDeckCount === 1 ? '' : 's'} in scope</span>
             </div>
-            <div className="border border-line/10 rounded-lg max-h-56 overflow-y-auto divide-y divide-line/5">
-              {pairs.length > 0 && (
-                <>
-                  <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-ink-faint bg-surface/50 sticky top-0">Whole language pair</div>
-                  {pairs.map(p => {
-                    const key = `pair:${p}`
-                    return (
-                      <label key={key} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface/40">
-                        <input type="checkbox" className="accent-accent" checked={selected.has(key)} onChange={() => toggle(key)} />
-                        <span className="text-sm text-ink">All {p.replace('|', ' → ')} decks</span>
-                      </label>
-                    )
-                  })}
-                </>
-              )}
-              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-ink-faint bg-surface/50 sticky top-0">Single deck</div>
-              {decks.map(d => {
-                const key = `deck:${d.id}`
+            <div className="border border-line/10 rounded-lg max-h-72 overflow-y-auto py-1">
+              {tree.length === 0 && <p className="px-3 py-3 text-sm text-ink-faint">No decks yet.</p>}
+              {tree.map(pair => (
+                <ScopeRow key={pair.key} node={pair} depth={0}
+                  selState={selState} expanded={expanded} onToggleSel={toggleDecks} onToggleExpand={toggleExpand} />
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-ink-faint">Card status <span className="text-ink-faint/70">(none = all statuses)</span></label>
+            <div className="flex flex-wrap gap-2">
+              {STATUS_META.map(s => {
+                const on = statuses.has(s.key)
                 return (
-                  <label key={key} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface/40">
-                    <input type="checkbox" className="accent-accent" checked={selected.has(key)} onChange={() => toggle(key)} />
-                    <span className="text-sm text-ink truncate">{d.name} <span className="text-ink-faint">({d.sourceLanguage}→{d.targetLanguage})</span></span>
-                  </label>
+                  <button key={s.key} type="button" onClick={() => toggleStatus(s.key)}
+                    className={`text-xs px-3 py-1.5 rounded-full border inline-flex items-center gap-1.5 transition-colors ${on ? 'border-accent bg-accent/15 text-ink' : 'border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40'}`}>
+                    <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
+                    {s.label}
+                  </button>
                 )
               })}
             </div>
@@ -403,5 +400,60 @@ function ProposalView({ p }: { p: EditProposal }) {
         <Row tone="after">{afterFront} <span className="opacity-60">=</span> {afterBack}</Row>
       </div>
     </div>
+  )
+}
+
+// A tri-state checkbox (none / some / all) — "some" shows the indeterminate dash.
+function TriCheckbox({ state, onChange }: { state: 'none' | 'some' | 'all'; onChange: () => void }) {
+  return (
+    <input
+      type="checkbox"
+      className="accent-accent shrink-0"
+      checked={state === 'all'}
+      ref={el => { if (el) el.indeterminate = state === 'some' }}
+      onChange={onChange}
+      onClick={e => e.stopPropagation()}
+    />
+  )
+}
+
+// One row of the scope tree. Pairs and folders expand/collapse and select all descendants at once;
+// decks are leaves. Recurses for children.
+function ScopeRow({ node, depth, selState, expanded, onToggleSel, onToggleExpand }: {
+  node: PairNode | FolderNode | DeckNode
+  depth: number
+  selState: (ids: string[]) => 'none' | 'some' | 'all'
+  expanded: Set<string>
+  onToggleSel: (ids: string[]) => void
+  onToggleExpand: (id: string) => void
+}) {
+  const pad = { paddingLeft: `${8 + depth * 16}px` }
+  if (node.kind === 'deck') {
+    return (
+      <label className="flex items-center gap-2 pr-3 py-1.5 cursor-pointer hover:bg-surface/40" style={pad}>
+        <span className="w-3.5 shrink-0" />
+        <TriCheckbox state={selState([node.id])} onChange={() => onToggleSel([node.id])} />
+        <span className="text-sm text-ink truncate">📄 {node.name}</span>
+      </label>
+    )
+  }
+  const id = node.kind === 'pair' ? `pair:${node.key}` : node.id
+  const open = expanded.has(id)
+  return (
+    <>
+      <div className="flex items-center gap-2 pr-3 py-1.5 hover:bg-surface/40" style={pad}>
+        <button type="button" onClick={() => onToggleExpand(id)} className="w-3.5 shrink-0 text-ink-faint hover:text-ink text-xs">{open ? '▾' : '▸'}</button>
+        <TriCheckbox state={selState(node.deckIds)} onChange={() => onToggleSel(node.deckIds)} />
+        <div className="cursor-pointer min-w-0 flex-1" onClick={() => onToggleExpand(id)}>
+          {node.kind === 'pair'
+            ? <span className="text-sm text-ink font-medium">{langFlag(node.source)} {node.source} → {node.target}</span>
+            : <span className="text-sm text-ink truncate">📁 {node.name}</span>}
+        </div>
+      </div>
+      {open && node.children.map(c => (
+        <ScopeRow key={c.kind === 'deck' ? `d:${c.id}` : `f:${c.id}`} node={c} depth={depth + 1}
+          selState={selState} expanded={expanded} onToggleSel={onToggleSel} onToggleExpand={onToggleExpand} />
+      ))}
+    </>
   )
 }
