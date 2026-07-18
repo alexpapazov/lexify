@@ -636,42 +636,6 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     }
   }
 
-  async function handleDeletePair() {
-    if (!pairSource || !pairTarget) return
-    const confirmed = confirm(
-      `Delete ${langName(pairSource)} / ${langName(pairTarget)}?\n\nThis will permanently delete ALL cards and folders in this language pairing, along with their progress. This cannot be undone.`
-    )
-    if (!confirmed) return
-
-    // Folders shown in this pairing's view (and all their subfolders) get
-    // deleted along with the pairing — same as the decks inside them.
-    const { rootFolders } = getVisibleRoots()
-    const folderIdsToDelete = new Set<string>()
-    for (const folder of rootFolders) {
-      folderIdsToDelete.add(folder.id)
-      const queue = [folder.id]
-      while (queue.length > 0) {
-        const current = queue.shift()!
-        for (const f of allFolders) {
-          if (f.parentId === current && !folderIdsToDelete.has(f.id)) {
-            folderIdsToDelete.add(f.id)
-            queue.push(f.id)
-          }
-        }
-      }
-    }
-
-    const pairRepo   = new SupabaseLanguagePairRepository()
-    const folderRepo = new SupabaseFolderRepository()
-    try {
-      await pairRepo.deletePair(pairSource, pairTarget)
-      await Promise.all([...folderIdsToDelete].map(id => folderRepo.softDelete(id)))
-    } catch (err) {
-      alert(`Couldn't delete this language pairing: ${err instanceof Error ? err.message : String(err)}`)
-      return
-    }
-    router.push('/library')
-  }
 
   // ── Language-pair grid helpers ─────────────────────────────────────────────
 
@@ -1358,12 +1322,6 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             className="text-sm text-accent hover:text-accent-soft transition-colors"
           >
             + New folder
-          </button>
-          <button
-            onClick={handleDeletePair}
-            className="text-sm text-danger hover:text-danger/80 transition-colors"
-          >
-            Delete language
           </button>
         </div>
       </div>

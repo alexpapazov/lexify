@@ -7,6 +7,7 @@ import { SupabaseDeckPreferencesRepository }  from '@/lib/data/deckPreferences'
 import { SupabaseCardStateRepository }        from '@/lib/data/cardStates'
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
 import { SupabaseLanguagePairRepository }     from '@/lib/data/languagePairs'
+import { SupabaseFolderRepository }           from '@/lib/data/folders'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import type { LanguagePair, LanguageSyncRule, CardState } from '@/domain'
 import { langName, langFlag, assignLanguageColors, LANG_COLOR_PALETTE } from '@/lib/languages'
@@ -409,9 +410,46 @@ export default function SettingsPage() {
   const [goalDrafts,             setGoalDrafts]             = useState<Record<string, Record<string, string>>>({})
   const [goalModes,              setGoalModes]              = useState<Record<string, 'daily' | 'weekday'>>({})
   const [goalSavingKey,          setGoalSavingKey]          = useState<string | null>(null)
+  const [confirmDeletePair,      setConfirmDeletePair]      = useState<string | null>(null)  // "src|tgt", first warning
+  const [deletingPair,           setDeletingPair]           = useState(false)
+  const [deletePairError,        setDeletePairError]        = useState<string | null>(null)
 
   const router   = useRouter()
   const supabase = createClient()
+
+  // Two-step language deletion: the inline "Delete" → confirmation panel is the first
+  // warning; this native confirm is the second. Then it wipes the pair's cards, decks,
+  // and folders (irreversible).
+  async function handleDeleteLanguage(source: string, target: string) {
+    if (!userId) return
+    const ok = window.confirm(
+      `Final confirmation — this cannot be undone.\n\nPermanently delete ${langName(source)} → ${langName(target)} and ALL of its cards, folders, and study progress?`
+    )
+    if (!ok) return
+    setDeletingPair(true)
+    setDeletePairError(null)
+    try {
+      const folderRepo = new SupabaseFolderRepository()
+      const folders = await folderRepo.list(userId)
+      await Promise.all(
+        folders
+          .filter(f => f.sourceLanguage === source && f.targetLanguage === target)
+          .map(f => folderRepo.softDelete(f.id)),
+      )
+      await new SupabaseLanguagePairRepository().deletePair(source, target)
+      const remaining = langPairs.filter(p => !(p.sourceLanguage === source && p.targetLanguage === target))
+      setLangPairs(remaining)
+      // Drop the learned language from the profile pills if no other pair still uses it.
+      if (!remaining.some(p => p.sourceLanguage === source)) {
+        setSelectedLangs(sel => sel.filter(c => c !== source))
+      }
+      setConfirmDeletePair(null)
+    } catch (e) {
+      setDeletePairError(e instanceof Error ? e.message : 'Delete failed')
+    } finally {
+      setDeletingPair(false)
+    }
+  }
 
   useEffect(() => {
     // Populate timezone list from browser (en-CA locale gives YYYY-MM-DD dates)
@@ -1019,6 +1057,61 @@ export default function SettingsPage() {
         >
           ↺ Global reset — clear all backlogs
         </button>
+
+        {langPairs.length > 0 && (
+          <div className="border-t border-danger/20 pt-4 mt-4 space-y-3">
+            <p className="text-xs text-ink-muted">
+              Delete a language pairing and <strong className="text-ink">everything in it</strong> — all
+              cards, folders, and progress. This cannot be undone.
+            </p>
+            {deletePairError && <p className="text-danger text-xs">{deletePairError}</p>}
+            {(() => {
+              const seen = new Set<string>()
+              const uniquePairs = langPairs.filter(p => {
+                const key = `${p.sourceLanguage}|${p.targetLanguage}`
+                if (seen.has(key)) return false
+                seen.add(key); return true
+              })
+              return uniquePairs.map(p => {
+                const key = `${p.sourceLanguage}|${p.targetLanguage}`
+                const confirming = confirmDeletePair === key
+                return (
+                  <div key={key} className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${confirming ? 'border-danger/40 bg-danger/5' : 'border-line/10'}`}>
+                    <span className="text-sm text-ink">
+                      {langFlag(p.sourceLanguage)} {langName(p.sourceLanguage)} <span className="text-ink-faint">→ {langName(p.targetLanguage)}</span>
+                    </span>
+                    {confirming ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-danger hidden sm:inline">Delete everything?</span>
+                        <button
+                          disabled={deletingPair}
+                          onClick={() => handleDeleteLanguage(p.sourceLanguage, p.targetLanguage)}
+                          className="text-xs bg-danger/90 hover:bg-danger text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          {deletingPair ? 'Deleting…' : 'Yes, delete'}
+                        </button>
+                        <button
+                          disabled={deletingPair}
+                          onClick={() => { setConfirmDeletePair(null); setDeletePairError(null) }}
+                          className="text-xs text-ink-faint hover:text-ink px-2 py-1.5"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setConfirmDeletePair(key); setDeletePairError(null) }}
+                        className="text-xs border border-danger/30 text-danger/80 hover:text-danger hover:border-danger/60 px-3 py-1.5 rounded-lg transition-colors"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                )
+              })
+            })()}
+          </div>
+        )}
       </div>
     </div>
   )
