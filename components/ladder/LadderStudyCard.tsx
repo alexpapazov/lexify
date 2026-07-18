@@ -43,9 +43,29 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   const promptSide = native ? 'front' : 'back'   // produce native → show the target word; produce target → show the native gloss
   const answerSide = native ? 'back' : 'front'
   const [showIpa, setShowIpa] = useState(false)
+  const [fetchedIpa, setFetchedIpa] = useState<string | null>(null)
+  // Fetch (and persist) IPA on demand when the user reveals it and the card has none — mirrors the
+  // session pages, so the "IPA" button works even for cards that were never transcribed.
+  useEffect(() => {
+    if (!showIpa || card.ipa || fetchedIpa) return
+    let cancelled = false
+    fetch('/api/ipa', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: card.front, language: sourceLanguage }),
+    })
+      .then(r => r.json())
+      .then((d: { ok: boolean; ipa?: string }) => {
+        if (cancelled || !d.ok || !d.ipa) return
+        setFetchedIpa(d.ipa)
+        new SupabaseCardRepository().update(card.id, { ipa: d.ipa }).catch(() => {})
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [showIpa, card.id, card.ipa, card.front, sourceLanguage, fetchedIpa])
   // Shared "corner button" wiring: ? (give up → a miss/again), IPA toggle, and info.
   const missOutcome: RungAttemptOutcome = rung.selfRated ? 'again' : 'miss'
-  const ipaProps = { ipaText: showIpa ? (card.ipa ?? undefined) : undefined, onToggleIPA: () => setShowIpa(v => !v) }
+  const effectiveIpa = card.ipa ?? fetchedIpa
+  const ipaProps = { ipaText: showIpa ? (effectiveIpa ?? undefined) : undefined, onToggleIPA: () => setShowIpa(v => !v) }
 
   if (rung.type === 'mcq') {
     return (
