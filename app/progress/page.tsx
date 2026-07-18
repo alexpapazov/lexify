@@ -6,6 +6,7 @@ import { displayText } from '@/lib/cardText'
 import { langName, LANG_COLOR_PALETTE } from '@/lib/languages'
 import { DueForecastProjection } from '@/components/analytics/DueForecastProjection'
 import { AnalyticsTabs } from '@/components/analytics/AnalyticsTabs'
+import { ReviewCalendar } from '@/components/analytics/ReviewCalendar'
 import { getToday } from '@/lib/dates'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
@@ -328,6 +329,15 @@ export default function AnalyticsPage() {
           <p className="text-xs text-ink-faint">Your existing cards plus new cards from your daily goals, simulated on the FSRS model by Monte Carlo per language — each language&apos;s measured initial interval, average difficulty, and rating mix (again/hard/good/easy). Every card is played forward many times, drawing a real rating each review; the lines are the average and the shaded band is the p10–p90 range. Your daily goals are treated as ongoing learning (steady new-card intake). Split into typed, self-graded (recall + smart-typing past its threshold), and reverse recognition.</p>
         </div>
         <DueForecastProjection />
+      </div>
+
+      {/* Review history calendar */}
+      <div className="panel p-5 space-y-3">
+        <div>
+          <h2 className="text-sm font-semibold text-ink">Review history</h2>
+          <p className="text-xs text-ink-faint">Each day&apos;s ring shows the language mix; the center is % of that day&apos;s goal (green only if every language also hit its own goal).</p>
+        </div>
+        <ReviewCalendar />
       </div>
 
       {/* Daily new cards list */}
