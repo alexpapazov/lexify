@@ -67,16 +67,11 @@ export function DueForecastProjection() {
         void supabase.from('profiles').select('language_colors').eq('user_id', uid).single()
           .then(r => { if (!cancelled) setLangColors((r.data?.language_colors as Record<string, string> | null) ?? {}) })
 
-        const [decks, paramRows, pairs, cardRows] = await Promise.all([
+        const [decks, paramRows, pairs] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
           new SupabaseUserSchedulerParamsRepository().listForUser(uid),
           new SupabaseLanguagePairRepository().list(uid),
-          supabase.from('cards').select('deck_id').eq('owner_id', uid).is('deleted_at', null),
         ])
-        // Total (non-deleted) cards per deck — used to cap future new-card intake at each
-        // language's finite remaining cards.
-        const cardsByDeck = new Map<string, number>()
-        for (const r of (cardRows.data ?? []) as { deck_id: string }[]) cardsByDeck.set(r.deck_id, (cardsByDeck.get(r.deck_id) ?? 0) + 1)
 
         // Per-pair config keyed `${src}|${tgt}`.
         const cfg = new Map<string, PairCfg>()
@@ -200,23 +195,6 @@ export function DueForecastProjection() {
           initI0Map.set(k, estimateInitialInterval(initSamples.get(k) ?? [], DEFAULT_I0))
         }
 
-        // Remaining new cards per language = total cards − already-graduated (forward). Caps future
-        // new-card intake so the projection's tail reflects a finite deck, not infinite daily intake.
-        const remainingNewByPair = new Map<string, number>()
-        {
-          const totalByPair = new Map<string, number>()
-          for (const d of decks) {
-            const key = `${d.sourceLanguage}|${d.targetLanguage}`
-            totalByPair.set(key, (totalByPair.get(key) ?? 0) + (cardsByDeck.get(d.id) ?? 0))
-          }
-          for (const [key, sts] of statesByPair) {
-            let g = 0
-            for (const s of sts) if (s.reviewDirection !== 'reverse' && s.graduated) g++
-            remainingNewByPair.set(key, Math.max(0, (totalByPair.get(key) ?? 0) - g))
-          }
-          for (const [key, total] of totalByPair) if (!remainingNewByPair.has(key)) remainingNewByPair.set(key, total)
-        }
-
         // ── Pass 2: simulate existing graduated cards (real per-card D/S + language mix) ──
         for (let di = 0; di < decks.length; di++) {
           const deck = decks[di]!
@@ -265,11 +243,11 @@ export function DueForecastProjection() {
 
         // ── New cards — renewal from daily goals, seeded at each language's measured initial interval
         // and average difficulty, grown by Monte Carlo with its rating mix. A representative card's
-        // per-run cumulative reviews are superposed over daily cohorts; intake is capped at the
-        // language's remaining new cards, so load(d) = goal · (cum(d) − cum(d − intakeDays)). ──
+        // per-run cumulative reviews are superposed over daily cohorts (continuous intake), so daily
+        // load at age t = dailyGoal · cum(t). The daily goal is treated as ongoing learning. ──
         const emitNew = (
           targetArr: Float64Array, runs: Float64Array[], retention: number, i0: number, d0: number, mix: RatingMix, maxInt: number,
-          dailyGoal: number, intakeDays: number, splitArr?: Float64Array, splitBelow?: number,
+          dailyGoal: number, splitArr?: Float64Array, splitBelow?: number,
         ) => {
           const { steps } = monteCarloSteps({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt, horizon: HORIZON, mix, K, fuzz: true }, mcSeed++)
           const tRun = Array.from({ length: K }, () => new Float64Array(HORIZON + 1))
@@ -284,11 +262,10 @@ export function DueForecastProjection() {
             for (let d = 0; d <= HORIZON; d++) { ct += tRun[k]![d]!; tRun[k]![d] = ct; if (gRun) { cg += gRun[k]![d]!; gRun[k]![d] = cg } }
           }
           for (let d = 0; d <= HORIZON; d++) {
-            const back = d - intakeDays
             let mt = 0, mg = 0
             for (let k = 0; k < K; k++) {
-              const t = tRun[k]![d]! - (back >= 0 ? tRun[k]![back]! : 0)
-              const g = gRun ? gRun[k]![d]! - (back >= 0 ? gRun[k]![back]! : 0) : 0
+              const t = tRun[k]![d]!
+              const g = gRun ? gRun[k]![d]! : 0
               mt += t; mg += g
               runs[k]![d]! += dailyGoal * (t + g)
             }
@@ -302,14 +279,11 @@ export function DueForecastProjection() {
           const i0 = initI0Map.get(k) ?? DEFAULT_I0
           const d0 = diffByPair.get(k) ?? DEFAULT_DIFFICULTY
           const mix = mixByPair.get(k) ?? DEFAULT_RATING_MIX
-          const remaining = remainingNewByPair.get(k) ?? Infinity
-          const intakeDays = Math.min(HORIZON + 1, Math.ceil((Number.isFinite(remaining) ? remaining : HORIZON * c.dailyGoal) / c.dailyGoal))
-          if (intakeDays <= 0) continue
           const runs = runsFor(k)
-          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
-          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
-          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
-          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, mix, c.maxInt, c.dailyGoal, intakeDays)
+          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, mix, c.maxInt, c.dailyGoal)
+          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, mix, c.maxInt, c.dailyGoal, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
+          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, mix, c.maxInt, c.dailyGoal)
+          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, mix, c.maxInt, c.dailyGoal)
         }
 
         // Downsample each pair's series to STEP-day points (windowed average).
