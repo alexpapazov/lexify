@@ -4,9 +4,8 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { displayText } from '@/lib/cardText'
 import { langName, LANG_COLOR_PALETTE } from '@/lib/languages'
-import { ConnectionGraph } from '@/components/analytics/ConnectionGraph'
 import { DueForecastProjection } from '@/components/analytics/DueForecastProjection'
-import { LadderLogs } from '@/components/analytics/LadderLogs'
+import { AnalyticsTabs } from '@/components/analytics/AnalyticsTabs'
 import { getToday } from '@/lib/dates'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
@@ -320,6 +319,7 @@ export default function AnalyticsPage() {
   return (
     <div className="max-w-4xl mx-auto px-4 py-10 space-y-8">
       <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
+      <AnalyticsTabs />
 
       {/* Forward projection: Due Now load over the next 2 years */}
       <div className="panel p-5 space-y-3" data-tour="projected-due">
@@ -329,181 +329,6 @@ export default function AnalyticsPage() {
         </div>
         <DueForecastProjection />
       </div>
-
-      {/* Daily review history — this is what the range toggle controls */}
-      <div className="flex items-center justify-between flex-wrap gap-3 pt-2">
-        <h2 className="text-sm font-semibold text-ink">Daily review history</h2>
-        <div className="flex items-center gap-1 bg-surface-raised rounded-card p-1">
-          {RANGES.map(r => (
-            <button
-              key={r.value}
-              onClick={() => setRange(r.value)}
-              className={`px-3 py-1 rounded text-sm transition-colors ${
-                range === r.value
-                  ? 'bg-accent text-white font-medium'
-                  : 'text-ink-muted hover:text-ink'
-              }`}
-            >{r.label}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* Legend — per language pair + reviews + lapses, all color-pickable */}
-      <div className="flex items-center gap-4 flex-wrap">
-        {[...langColorMap.entries()].map(([key, color]) => {
-          const [src, tgt] = key.split('|') as [string, string]
-          return renderSwatch(key, color, langPairLabel(src, tgt))
-        })}
-        {renderSwatch('__reviews__', reviewsColor, 'Reviews due')}
-        {renderSwatch('__lapses__', lapsesColor, 'Lapsed (back to learning)')}
-      </div>
-
-      {/* Chart */}
-      <div ref={chartRef} className="relative select-none" onMouseLeave={() => setTooltip(null)} onClick={() => setTooltip(null)}>
-        {loading ? (
-          <div style={{ height: chartH + 36 }} className="flex items-center justify-center text-ink-faint text-sm">Loading…</div>
-        ) : !hasAny ? (
-          <div style={{ height: chartH + 36 }} className="flex items-center justify-center text-ink-faint text-sm">No data for this period.</div>
-        ) : (
-          <div className="flex flex-col">
-            {/* Bar area */}
-            <div className="flex items-end gap-0.5" style={{ height: chartH }}>
-              {data.map((day, i) => {
-                const grad    = totalGrad(day)
-                const total   = grad + day.reviewed + day.lapses
-                const totalH  = (total / maxVal) * chartH
-                const gradH   = (grad / maxVal) * chartH
-                const revH    = (day.reviewed / maxVal) * chartH
-                const lapseH  = (day.lapses / maxVal) * chartH
-                const isEmpty = total === 0
-
-                return (
-                  <div
-                    key={day.date}
-                    className="flex flex-col justify-end flex-1 min-w-0 h-full cursor-default"
-                    onMouseEnter={e => {
-                      const rect   = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                      const parent = (e.currentTarget as HTMLElement).closest('.relative')!.getBoundingClientRect()
-                      setTooltip({ day, x: rect.left - parent.left + rect.width / 2, y: rect.top - parent.top })
-                    }}
-                    onClick={e => {
-                      e.stopPropagation()
-                      if (tooltip?.day.date === day.date) { setTooltip(null); return }
-                      const rect   = (e.currentTarget as HTMLElement).getBoundingClientRect()
-                      const parent = (e.currentTarget as HTMLElement).closest('.relative')!.getBoundingClientRect()
-                      setTooltip({ day, x: rect.left - parent.left + rect.width / 2, y: rect.top - parent.top })
-                    }}
-                  >
-                    <div className="w-full flex flex-col" style={{ height: totalH || (isEmpty ? 2 : 0) }}>
-                      {/* Reviews due — top segment */}
-                      {day.reviewed > 0 && (
-                        <div className="w-full rounded-t-sm shrink-0" style={{ height: revH, background: reviewsColor + 'b3' }} />
-                      )}
-                      {/* Lapses — sent back to learning pipeline */}
-                      {day.lapses > 0 && (
-                        <div
-                          className={`w-full shrink-0 ${day.reviewed === 0 ? 'rounded-t-sm' : ''}`}
-                          style={{ height: lapseH, background: lapsesColor + 'b3' }}
-                        />
-                      )}
-                      {/* Graduated — stacked language segments */}
-                      {grad > 0 && (() => {
-                        const segments = day.graduated.filter(g => g.count > 0)
-                        return (
-                          <div
-                            className={`w-full flex flex-col ${day.reviewed === 0 && day.lapses === 0 ? 'rounded-t-sm' : ''} overflow-hidden`}
-                            style={{ height: gradH }}
-                          >
-                            {segments.map((g, si) => {
-                              const segH = (g.count / grad) * gradH
-                              const color = langColorMap.get(`${g.sourceLanguage}|${g.targetLanguage}`) ?? LANG_PALETTE[0]!
-                              return (
-                                <div
-                                  key={si}
-                                  className="w-full shrink-0"
-                                  style={{ height: segH, background: color + 'b3' /* ~70% opacity */ }}
-                                />
-                              )
-                            })}
-                          </div>
-                        )
-                      })()}
-                      {isEmpty && <div className="w-full bg-line/5 rounded-sm" style={{ height: 2 }} />}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* X-axis labels — vertical text avoids overlap at any density */}
-            <div className="flex gap-0.5 mt-1" style={{ height: 36 }}>
-              {data.map((day, i) => {
-                const labelEvery = range <= 14 ? 1 : range <= 30 ? 3 : 7
-                const showLabel  = i % labelEvery === 0 || i === data.length - 1
-                return (
-                  <div key={day.date} className="flex-1 min-w-0 flex justify-center items-start overflow-visible">
-                    {showLabel && (
-                      <span
-                        className="text-[9px] text-ink-faint leading-none whitespace-nowrap"
-                        style={{
-                          writingMode: 'vertical-rl',
-                          transform:   'rotate(180deg)',
-                          display:     'block',
-                          maxHeight:   34,
-                        }}
-                      >
-                        {labelDate(day.date, range)}
-                      </span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Hover tooltip */}
-        {tooltip && (() => {
-          const tooltipW   = 192 // w-48
-          const chartWidth = chartRef.current?.offsetWidth ?? 9999
-          const clampedLeft = Math.min(Math.max(tooltip.x - tooltipW / 2, 4), chartWidth - tooltipW - 4)
-          return (
-          <div
-            className="absolute z-10 pointer-events-none bg-surface-raised border border-line/10 rounded-card shadow-lg px-3 py-2 text-xs space-y-1 w-48"
-            style={{ left: clampedLeft, top: tooltip.y - 10, transform: 'translateY(-100%)' }}
-          >
-            <p className="font-medium text-ink">{fullDate(tooltip.day.date, todayStr, yesterdayStr)}</p>
-            {tooltip.day.graduated.map(g => {
-              const color = langColorMap.get(`${g.sourceLanguage}|${g.targetLanguage}`) ?? LANG_PALETTE[0]!
-              return (
-                <p key={`${g.sourceLanguage}|${g.targetLanguage}`} className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-sm inline-block shrink-0" style={{ background: color }} />
-                  <span className="text-ink-muted">{langPairLabel(g.sourceLanguage, g.targetLanguage)}:</span>
-                  <span className="font-medium text-ink ml-auto">{g.count}</span>
-                </p>
-              )
-            })}
-            {tooltip.day.reviewed > 0 && (
-              <p className="text-accent/80">Reviews due: <span className="font-medium text-ink">{tooltip.day.reviewed}</span></p>
-            )}
-            {tooltip.day.lapses > 0 && (
-              <p style={{ color: '#F05068' }}>Lapsed: <span className="font-medium text-ink">{tooltip.day.lapses}</span></p>
-            )}
-            {tooltip.day.newCards.length > 0 && (
-              <p className="text-ink-faint">New introduced: {tooltip.day.newCards.length}</p>
-            )}
-          </div>
-          )
-        })()}
-      </div>
-
-      {/* Connection graph */}
-      {userId && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Card connections</h2>
-          <ConnectionGraph userId={userId} />
-        </div>
-      )}
 
       {/* Daily new cards list */}
       {data.filter(d => d.newCards.length > 0).length > 0 && (
@@ -547,9 +372,6 @@ export default function AnalyticsPage() {
           </div>
         </div>
       )}
-
-      {/* Logs: learning-ladder sessions + replay (bottom of the page) */}
-      <LadderLogs />
     </div>
   )
 }
