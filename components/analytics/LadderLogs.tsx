@@ -43,8 +43,8 @@ export function LadderLogs() {
         ])
         const deckPair = new Map((deckRes.data ?? []).map(d => [d.id as string, { s: d.source_language as string | null, t: d.target_language as string | null }]))
         const orphanClimbs = (climbRes.data ?? []).filter(r => {
-          const st = r.state as { graduated?: boolean; rungHistory?: number[] } | null
-          return st?.graduated && (st.rungHistory?.length ?? 0) > 1 && !loggedCardIds.has(r.card_id as string)
+          const st = r.state as { rungHistory?: number[] } | null
+          return (st?.rungHistory?.length ?? 0) > 1 && !loggedCardIds.has(r.card_id as string)
         })
 
         // Fetch current fronts for every card we'll show (logged + orphan).
@@ -58,17 +58,20 @@ export function LadderLogs() {
 
         let reconstructed: SessionSummary[] = []
         if (orphanClimbs.length > 0) {
-          const records: ClimbRecord[] = orphanClimbs.map(r => {
-            const st = r.state as { rungHistory?: number[] }
-            const pair = deckPair.get(r.deck_id as string)
-            return {
-              cardId: r.card_id as string,
-              front: frontById.get(r.card_id as string) ?? '—',
-              source: pair?.s ?? null, target: pair?.t ?? null,
-              rungHistory: st.rungHistory ?? [],
-              graduatedAtMs: new Date(r.updated_at as string).getTime(),
-            }
-          })
+          const records: ClimbRecord[] = orphanClimbs
+            .filter(r => frontById.has(r.card_id as string)) // skip deleted cards; the movie still shows the rest
+            .map(r => {
+              const st = r.state as { rungHistory?: number[]; graduated?: boolean }
+              const pair = deckPair.get(r.deck_id as string)
+              return {
+                cardId: r.card_id as string,
+                front: frontById.get(r.card_id as string) ?? '—',
+                source: pair?.s ?? null, target: pair?.t ?? null,
+                rungHistory: st.rungHistory ?? [],
+                graduated: !!st.graduated,
+                updatedAtMs: new Date(r.updated_at as string).getTime(),
+              }
+            })
           reconstructed = groupSessions(reconstructEvents(records)).map(s => ({ ...s, reconstructed: true }))
         }
 

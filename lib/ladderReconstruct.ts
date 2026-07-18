@@ -12,7 +12,8 @@ export interface ClimbRecord {
   source:        string | null
   target:        string | null
   rungHistory:   number[]
-  graduatedAtMs: number
+  graduated:     boolean
+  updatedAtMs:   number   // last climb save (≈ graduation time for graduated cards)
 }
 
 let synthSeq = 0
@@ -29,29 +30,45 @@ function synthEvent(
 }
 
 /**
- * Cluster graduated climbs (same pair, graduations within `gapMs`) into reconstructed sessions and
- * emit synthetic events for each. Reuse groupSessions() on the result to get SessionSummaries.
+ * Rebuild reconstructed sessions from surviving climbs. Sessions are anchored on GRADUATED climbs
+ * (same pair, graduations within `gapMs`); UNFINISHED climbs (glitched / deleted-before-graduating)
+ * that fall inside a cluster's time window are included too, climbing to whatever rung they reached
+ * (no graduation event). Emits synthetic events — reuse groupSessions() to get SessionSummaries.
  */
 export function reconstructEvents(climbs: ClimbRecord[], gapMs = 30 * 60_000): LadderEvent[] {
-  const valid = climbs.filter(c => c.rungHistory.length > 0).sort((a, b) => a.graduatedAtMs - b.graduatedAtMs)
+  const valid = climbs.filter(c => c.rungHistory.length > 1)
   if (valid.length === 0) return []
   const rungCount = Math.max(1, ...valid.map(c => Math.max(...c.rungHistory) + 1))
-  const events: LadderEvent[] = []
-  let clusterIdx = 0, prevKey = '', prevTime = -Infinity, clusterStart = 0
-  for (const c of valid) {
-    const key = `${c.source}|${c.target}`
-    if (key !== prevKey || c.graduatedAtMs - prevTime > gapMs) {
-      clusterIdx++; clusterStart = c.graduatedAtMs; prevKey = key
-    }
-    prevTime = c.graduatedAtMs
-    const sessionId = `recon-${clusterIdx}`
-    const n = c.rungHistory.length
-    const span = Math.max(1000, c.graduatedAtMs - clusterStart) // ≥1s so even the first card climbs
-    for (let i = 0; i < n; i++) {
-      const from = i === 0 ? c.rungHistory[0]! : c.rungHistory[i - 1]!
-      events.push(synthEvent(sessionId, c, from, c.rungHistory[i]!, rungCount, clusterStart + (span * i) / n, false))
-    }
-    events.push(synthEvent(sessionId, c, c.rungHistory[n - 1]!, rungCount, rungCount, c.graduatedAtMs, true))
+  const key = (c: ClimbRecord) => `${c.source}|${c.target}`
+
+  // Anchor clusters on graduated cards.
+  const grads = valid.filter(c => c.graduated).sort((a, b) => a.updatedAtMs - b.updatedAtMs)
+  const clusters: { key: string; start: number; end: number; cards: ClimbRecord[] }[] = []
+  for (const c of grads) {
+    const last = clusters[clusters.length - 1]
+    if (last && last.key === key(c) && c.updatedAtMs - last.end <= gapMs) { last.cards.push(c); last.end = c.updatedAtMs }
+    else clusters.push({ key: key(c), start: c.updatedAtMs, end: c.updatedAtMs, cards: [c] })
   }
+  // Attach unfinished cards to the cluster whose window (± gap) contains their last activity.
+  for (const c of valid) {
+    if (c.graduated) continue
+    const cl = clusters.find(cl => cl.key === key(c) && c.updatedAtMs >= cl.start - gapMs && c.updatedAtMs <= cl.end + gapMs)
+    if (cl) cl.cards.push(c)
+  }
+
+  const events: LadderEvent[] = []
+  clusters.forEach((cl, idx) => {
+    const sessionId = `recon-${idx + 1}`
+    for (const c of cl.cards) {
+      const n = c.rungHistory.length
+      const endMs = Math.max(cl.start, c.updatedAtMs)
+      const span = Math.max(1000, endMs - cl.start) // ≥1s so even the first card climbs
+      for (let i = 0; i < n; i++) {
+        const from = i === 0 ? c.rungHistory[0]! : c.rungHistory[i - 1]!
+        events.push(synthEvent(sessionId, c, from, c.rungHistory[i]!, rungCount, cl.start + (span * i) / n, false))
+      }
+      if (c.graduated) events.push(synthEvent(sessionId, c, c.rungHistory[n - 1]!, rungCount, rungCount, c.updatedAtMs, true))
+    }
+  })
   return events
 }
