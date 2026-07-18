@@ -467,10 +467,6 @@ export function DueForecastProjection() {
             {l.label}{hoverPt ? ` (${Math.round(hoverPt[l.key])})` : ''}
           </span>
         ))}
-        <span className="flex items-center gap-1.5 text-ink-faint">
-          <span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: '#E6E8F5', opacity: 0.18 }} />
-          p10–p90 range
-        </span>
       </div>
 
       {/* measured per-language model (initial interval + average difficulty), fed into the forecast */}
