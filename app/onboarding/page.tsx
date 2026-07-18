@@ -140,7 +140,7 @@ export default function OnboardingPage() {
   const learnableLangs = LANGUAGES.filter(l => l.code !== native)
 
   return (
-    <div className="max-w-lg mx-auto py-6">
+    <div className="max-w-lg mx-auto w-full min-h-[calc(100dvh-7.5rem)] flex flex-col py-6">
       {/* Progress dots (config steps only) */}
       {step > 0 && (
         <div className="flex justify-center gap-1.5 mb-8">
@@ -150,7 +150,7 @@ export default function OnboardingPage() {
         </div>
       )}
 
-      <div className="min-h-[26rem]">
+      <div className="flex-1 flex flex-col justify-center">
         {step === 0 && (
           <div className="text-center space-y-5 pt-10">
             <div className="text-6xl">📚</div>

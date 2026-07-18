@@ -821,7 +821,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             No languages yet. Press &quot;+ New language&quot; to start a new vocabulary collection.
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" data-tour="library-pairs">
             {allPairs.map(p => {
               const key        = `${p.sourceLanguage}|${p.targetLanguage}`
               const isDragging = draggingPairKey === key
@@ -1459,7 +1459,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           Nothing here yet. Create a folder or move decks here from Study.
         </div>
       ) : (
-        <div className="space-y-0">
+        <div className="space-y-0" data-tour="library-folders">
           {/* Root folders */}
           {rootFolders.map(folder => {
             const dt            = dropTarget?.id === folder.id ? dropTarget : null

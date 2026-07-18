@@ -1,10 +1,14 @@
 // Guided product tour steps, in page order. `anchor` (a data-tour="…" attribute on a
 // page element) is spotlighted when present; steps without one just navigate + explain.
+// `gate` names an interaction the user must perform before "Next" unlocks (checked by
+// the Tour component against the live DOM); `hint` is the nudge shown while it's locked.
 export interface TourStep {
   path:   string
   anchor?: string
   title:  string
   body:   string
+  gate?:  'library-open' | 'upload-ai'
+  hint?:  string
 }
 
 export const TOUR_STEPS: TourStep[] = [
@@ -14,14 +18,20 @@ export const TOUR_STEPS: TourStep[] = [
     body: 'A forecast of your review workload over the next couple of weeks, so you can see busy days before they arrive.' },
   { path: '/study', anchor: 'todays-goals', title: 'Today’s goals',
     body: 'Your daily new-word target per language — set during setup, and changeable anytime in Settings.' },
-  { path: '/library', anchor: 'library-counter', title: 'Library',
-    body: 'Everything you’re learning. The counters up top summarize your cards by status: unlearned, learning, graduated, and due.' },
-  { path: '/library', title: 'Organizing your library',
-    body: 'Group decks into folders, and drag decks or folders to reorder them. Open any card’s ⓘ menu to view and edit its details, audio, and schedule.' },
+  { path: '/library', anchor: 'library-pairs', title: 'Library',
+    body: 'Every language you’re learning lives here. Open one to see what’s inside.',
+    gate: 'library-open', hint: 'Go ahead — click a language to open it.' },
+  { path: '/library', anchor: 'library-counter', title: 'Card counters',
+    body: 'These summarize the language’s cards by status: unlearned, learning, graduated, due, and dormant.' },
+  { path: '/library', anchor: 'library-folders', title: 'Organize & inspect',
+    body: 'Try dragging a folder or deck to reorder it. And once you open a deck, any card’s ⓘ menu lets you view and edit its details, audio, and schedule.' },
   { path: '/browse', title: 'Browse',
     body: 'This is where you can add sets created by other users to your own library.' },
-  { path: '/upload', title: 'Upload',
-    body: 'Create a new set of cards here — add your own, or use the card-making AI agent to generate them for you.' },
+  { path: '/upload', anchor: 'upload-ai-toggle', title: 'Upload',
+    body: 'Create a new set of cards — paste your own, or let the AI agent format a raw word list into clean cards. Give it a try.',
+    gate: 'upload-ai', hint: 'Click “Format with AI agent” to continue.' },
+  { path: '/upload', anchor: 'upload-ai-prompt', title: 'Tell the agent what to do',
+    body: 'This prompt is where you describe how to build the cards — e.g. “Extract Spanish → English pairs”. Paste your text below and the agent generates the deck for you.' },
   { path: '/agents', title: 'Agents',
     body: 'The hub for agents that can automate making edits to the cards in your library.' },
   { path: '/progress', anchor: 'projected-due', title: 'Analytics',

@@ -951,7 +951,7 @@ export default function UploadPage() {
 
       <div className="space-y-2">
         <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
+          <label className="flex items-center gap-2 cursor-pointer select-none" data-tour="upload-ai-toggle">
             <input type="checkbox" checked={aiFormatEnabled} onChange={e => handleAiToggle(e.target.checked)} className="accent-accent w-4 h-4" />
             <span className="text-sm text-ink">Format with AI agent</span>
           </label>
@@ -959,7 +959,7 @@ export default function UploadPage() {
         </div>
 
         {aiFormatEnabled && (
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" data-tour="upload-ai-prompt">
             <div className="flex items-center justify-between">
               <label className="text-sm text-ink-muted">Prompt</label>
               <span className="text-xs text-ink-faint">{aiPrompt.length} / {INSTRUCTIONS_CHAR_CAP}</span>

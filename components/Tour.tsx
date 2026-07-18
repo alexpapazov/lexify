@@ -6,6 +6,13 @@ import { TOUR_STEPS } from '@/lib/tour'
 
 const KEY = 'lexify-tour'
 
+// A step's `gate` unlocks "Next" only once the user performs the interaction. Each
+// gate is a live-DOM predicate polled while its step is active.
+const GATE_CHECKS: Record<NonNullable<import('@/lib/tour').TourStep['gate']>, () => boolean> = {
+  'library-open': () => !!document.querySelector('[data-tour="library-counter"]'),
+  'upload-ai':    () => !!document.querySelector('[data-tour="upload-ai-prompt"]'),
+}
+
 /** Signals the tour to start (used by onboarding finish + a "Replay tutorial" button). */
 export function startTour() {
   try { localStorage.setItem(KEY, 'running') } catch { /* ignore */ }
@@ -20,6 +27,7 @@ export function Tour() {
   const [running, setRunning] = useState(false)
   const [i, setI] = useState(0)
   const [rect, setRect] = useState<DOMRect | null>(null)
+  const [gatePassed, setGatePassed] = useState(false)
 
   // Start on the custom event (and on mount if a previous session left it running).
   useEffect(() => {
@@ -66,6 +74,16 @@ export function Tour() {
     }
   }, [step, pathname])
 
+  // Interaction gate: poll the live DOM until the required action is done, then unlock Next.
+  useEffect(() => {
+    setGatePassed(false)
+    if (!step?.gate || pathname !== step.path) return
+    const check = GATE_CHECKS[step.gate]
+    if (check()) { setGatePassed(true); return }
+    const t = setInterval(() => { if (check()) { setGatePassed(true); clearInterval(t) } }, 350)
+    return () => clearInterval(t)
+  }, [step, pathname])
+
   // Keep the spotlight aligned on scroll/resize.
   useEffect(() => {
     if (!step?.anchor) return
@@ -82,6 +100,7 @@ export function Tour() {
 
   const isLast  = i === TOUR_STEPS.length - 1
   const onPage  = pathname === step.path
+  const locked  = !!step.gate && !gatePassed
   const pad = 8
 
   return (
@@ -108,13 +127,21 @@ export function Tour() {
             <span className="text-xs text-ink-faint">{i + 1} / {TOUR_STEPS.length}</span>
           </div>
           <p className="text-sm text-ink-muted leading-relaxed">{step.body}</p>
+          {locked && step.hint && (
+            <p className="text-xs text-accent flex items-center gap-1.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+              {step.hint}
+            </p>
+          )}
           <div className="flex items-center justify-between gap-2 pt-1">
             <button className="text-xs text-ink-faint hover:text-ink" onClick={stop}>Skip tour</button>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
               {i > 0 && <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => setI(n => n - 1)}>Back</button>}
-              <button className="btn-primary text-sm py-1.5 px-4" onClick={() => (isLast ? stop() : setI(n => n + 1))}>
-                {isLast ? 'Finish' : 'Next'}
-              </button>
+              {locked
+                ? <button className="text-xs text-ink-faint hover:text-ink px-2" onClick={() => setI(n => n + 1)}>Skip step →</button>
+                : <button className="btn-primary text-sm py-1.5 px-4" onClick={() => (isLast ? stop() : setI(n => n + 1))}>
+                    {isLast ? 'Finish' : 'Next'}
+                  </button>}
             </div>
           </div>
         </div>
