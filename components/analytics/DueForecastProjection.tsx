@@ -215,7 +215,15 @@ export function DueForecastProjection() {
           modelByPair.set(k, measureRatingModel(statesByPair.get(k) ?? []))
           const ds = diffSamples.get(k) ?? []
           diffByPair.set(k, ds.length ? ds.reduce((a, b) => a + b, 0) / ds.length : DEFAULT_DIFFICULTY)
-          i0ByPair.set(k, estimateInitialInterval(i0Samples.get(k) ?? [], GRADUATION_I0_FALLBACK))
+          // A new card graduates from the ladder SHORT (~1 day) and is TYPED until its interval crosses
+          // the smart threshold. On a mature deck with few/no freshly-graduated cards, the fresh-card
+          // sample gets polluted by long-interval cards and the "starting" interval balloons — and if it
+          // lands at/above the smart threshold, every new card would model as skipping the typed phase
+          // (typed load → 0, which looked like "typing cards going away"). A graduation interval can't be
+          // ≥ the threshold, so treat that as a bad measurement and fall back to the graduation interval.
+          const c = cfg.get(k)!
+          const i0Measured = estimateInitialInterval(i0Samples.get(k) ?? [], GRADUATION_I0_FALLBACK)
+          i0ByPair.set(k, i0Measured >= c.smartThreshold ? GRADUATION_I0_FALLBACK : i0Measured)
         }
 
         // ── Pass 2: simulate existing graduated cards (real per-card D/S + language mix) ──
