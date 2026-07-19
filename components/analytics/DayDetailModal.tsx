@@ -136,6 +136,7 @@ export function DayDetailModal({ date, tz, turnover, minDate, maxDate, onClose }
       for (const e of ladRes.data ?? []) { if (onDay(e.created_at as string)) ladderMs += (e.duration_ms as number | null) ?? 0 }
 
       setLearned(learnedCards)
+      setAuto(autoCards)
       setGroups([...gmap.values()].sort((a, b) => b.ms - a.ms))
       setDueMs(reviewMs)
       setTotalMs(reviewMs + ladderMs)
@@ -161,10 +162,14 @@ export function DayDetailModal({ date, tz, turnover, minDate, maxDate, onClose }
       <div className="overflow-y-auto flex-1 px-4 sm:px-6 py-6 max-w-2xl mx-auto w-full space-y-6 pb-[calc(env(safe-area-inset-bottom)+2rem)]">
           {loading ? <p className="text-sm text-ink-faint">Loading…</p> : (
             <>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="rounded-lg border border-line/10 p-3 text-center">
                   <div className="text-xl font-semibold text-success">{learned.length}</div>
                   <div className="text-xs text-ink-faint mt-0.5">Cards learned</div>
+                </div>
+                <div className="rounded-lg border border-line/10 p-3 text-center">
+                  <div className="text-xl font-semibold text-accent-soft">{auto.length}</div>
+                  <div className="text-xs text-ink-faint mt-0.5">Auto-graduated</div>
                 </div>
                 <div className="rounded-lg border border-line/10 p-3 text-center">
                   <div className="text-xl font-semibold text-ink">{fmtDuration(totalMs)}</div>
@@ -254,6 +259,29 @@ export function DayDetailModal({ date, tz, turnover, minDate, maxDate, onClose }
                   </div>
                 )}
               </div>
+
+              {/* Auto-graduated that day (skipped the ladder) */}
+              {auto.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-xs font-medium text-ink-muted uppercase tracking-wider">Auto-graduated ({auto.length})</h3>
+                  <div className="rounded-lg border border-line/10 divide-y divide-line/5">
+                    {auto.map(c => {
+                      const inner = (
+                        <div className="flex items-center gap-3 px-3 py-2 text-sm">
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${c.accelerated ? 'bg-accent/20 text-accent-soft' : 'bg-line/10 text-ink-muted'}`}>{c.accelerated ? 'Accelerated' : 'Auto'}</span>
+                          <span className="font-medium text-ink truncate max-w-[35%]">{c.front}</span>
+                          <span className="text-ink-faint">→</span>
+                          <span className="text-ink-muted truncate flex-1">{c.back}</span>
+                          {c.deckId && <span className="text-accent-soft text-xs shrink-0">{c.deckName ?? 'deck'} ↗</span>}
+                        </div>
+                      )
+                      return c.deckId
+                        ? <Link key={c.cardId} href={routes.deck(c.deckId, { card: c.cardId })} className="block hover:bg-surface-raised/50 transition-colors">{inner}</Link>
+                        : <div key={c.cardId}>{inner}</div>
+                    })}
+                  </div>
+                </div>
+              )}
             </>
           )}
       </div>

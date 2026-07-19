@@ -6,7 +6,6 @@ import { displayText } from '@/lib/cardText'
 import { langName, LANG_COLOR_PALETTE } from '@/lib/languages'
 import { DueForecastProjection } from '@/components/analytics/DueForecastProjection'
 import { AnalyticsTabs } from '@/components/analytics/AnalyticsTabs'
-import { AutoGraduatedSection } from '@/components/analytics/AutoGraduatedSection'
 import { getToday } from '@/lib/dates'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
@@ -330,8 +329,6 @@ export default function AnalyticsPage() {
         </div>
         <DueForecastProjection />
       </div>
-
-      <AutoGraduatedSection />
 
       {/* Daily new cards list */}
       {data.filter(d => d.newCards.length > 0).length > 0 && (
