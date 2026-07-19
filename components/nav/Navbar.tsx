@@ -160,7 +160,10 @@ export function Navbar() {
             {navLinks.map(({ href, label }) => {
               if (href === '/progress') return (
                 <div key={href} className="space-y-1">
-                  <div className="px-3 pt-1 text-xs font-medium text-ink-faint uppercase tracking-wider">Analytics</div>
+                  <Link href="/progress" className={[
+                    'block px-3 py-2.5 rounded-md text-sm font-medium transition-colors',
+                    pathname === '/progress' ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
+                  ].join(' ')}>Analytics</Link>
                   {ANALYTICS_SUBS.map(s => (
                     <Link key={s.href} href={s.href} className={[
                       'block px-5 py-2 rounded-md text-sm font-medium transition-colors',
@@ -211,8 +214,8 @@ export function Navbar() {
   )
 }
 
+// "Analytics" itself links to the Overview (/progress); only these sub-pages appear on hover / in the drawer.
 const ANALYTICS_SUBS = [
-  { href: '/progress',             label: 'Overview'    },
   { href: '/progress/connections', label: 'Connections' },
   { href: '/progress/logs',        label: 'Logs'        },
 ]

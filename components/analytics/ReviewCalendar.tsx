@@ -160,7 +160,7 @@ export function ReviewCalendar() {
         })}
       </div>
 
-      {selected && <DayDetailModal date={selected} tz={tz} turnover={turnover} minDate={minDate} maxDate={todayStr} onClose={() => setSelected(null)} />}
+      {selected && <DayDetailModal date={selected} tz={tz} turnover={turnover} minDate={minDate} maxDate={todayStr} colorFor={colorFor} onClose={() => setSelected(null)} />}
     </div>
   )
 }
@@ -178,13 +178,15 @@ function DayCell({ day, date, info, goals, colorFor, onSelect }: {
   const allIndividualMet = [...goals.entries()].every(([key, g]) => (info?.counts.get(key) ?? 0) >= g)
 
   let pctColor = 'text-ink-faint'
+  let status: 'danger' | 'warning' | 'success' | null = null
   if (pct !== null) {
-    if (pct < 50) pctColor = 'text-danger'
-    else if (pct < 100) pctColor = 'text-warning'
-    else pctColor = allIndividualMet ? 'text-success' : 'text-warning'
+    if (pct < 50) { pctColor = 'text-danger'; status = 'danger' }
+    else if (pct < 100) { pctColor = 'text-warning'; status = 'warning' }
+    else if (allIndividualMet) { pctColor = 'text-success'; status = 'success' }
+    else { pctColor = 'text-warning'; status = 'warning' }
   }
 
-  // Ring: conic-gradient of language segments by share of the day's total.
+  // Ring: conic-gradient of language segments by share of the day's total (desktop only).
   let ring = 'transparent'
   if (total > 0 && info) {
     let acc = 0
@@ -198,16 +200,21 @@ function DayCell({ day, date, info, goals, colorFor, onSelect }: {
     ring = `conic-gradient(${stops.join(', ')})`
   }
 
+  // On phones the per-language ring is too busy, so the cell is just a status-tinted box (red/yellow/
+  // green by goal completion). Desktop keeps the full ring + counts. `max-sm:` scopes the tint to mobile.
+  const mobileTint = status ? MOBILE_TINT[status] : 'max-sm:bg-surface-raised/30 max-sm:border-line/10'
+
   return (
     <button
       onClick={() => onSelect(date)}
-      className="aspect-square rounded-lg border border-line/10 bg-surface-raised/40 p-1.5 flex flex-col text-left hover:border-accent/40 hover:bg-surface-raised/70 transition-colors"
+      className={`aspect-square rounded-lg border p-1.5 flex flex-col text-left transition-colors hover:border-accent/40 sm:bg-surface-raised/40 sm:border-line/10 sm:hover:bg-surface-raised/70 ${mobileTint}`}
     >
       <div className="flex items-start justify-between leading-none">
         <span className="text-[11px] text-ink-muted">{day}</span>
-        {pct !== null && <span className={`text-[10px] font-semibold ${pctColor}`}>{pct}%</span>}
+        {pct !== null && <span className={`hidden sm:inline text-[10px] font-semibold ${pctColor}`}>{pct}%</span>}
       </div>
-      <div className="flex-1 flex items-center justify-center">
+      {/* Desktop: language-mix ring with the day's total in the center. */}
+      <div className="hidden sm:flex flex-1 items-center justify-center">
         <div className="relative flex items-center justify-center" style={{ width: 'min(96%, 80px)', aspectRatio: '1' }}>
           {total > 0 && (
             <div className="absolute inset-0 rounded-full" style={{
@@ -216,9 +223,20 @@ function DayCell({ day, date, info, goals, colorFor, onSelect }: {
               mask: 'radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 5px))',
             }} />
           )}
-          <span className={`text-sm sm:text-base font-semibold ${pctColor}`}>{total > 0 ? total : ''}</span>
+          <span className={`text-base font-semibold ${pctColor}`}>{total > 0 ? total : ''}</span>
         </div>
+      </div>
+      {/* Mobile: just the count, centered — the box tint conveys goal status. */}
+      <div className="flex sm:hidden flex-1 items-center justify-center">
+        <span className={`text-sm font-semibold ${pctColor}`}>{total > 0 ? total : ''}</span>
       </div>
     </button>
   )
+}
+
+/** Mobile-only status tint (scoped with `max-sm:` so desktop keeps the neutral ring cell). */
+const MOBILE_TINT: Record<'danger' | 'warning' | 'success', string> = {
+  danger:  'max-sm:bg-danger/15 max-sm:border-danger/40',
+  warning: 'max-sm:bg-warning/15 max-sm:border-warning/40',
+  success: 'max-sm:bg-success/15 max-sm:border-success/40',
 }

@@ -39,7 +39,7 @@ interface DueGroup { key: string; source: string; target: string; direction: 'fo
 interface LearnedCard { cardId: string; front: string; back: string; source: string; deckId: string | null; deckName: string | null }
 interface AutoCard extends LearnedCard { accelerated: boolean }
 
-export function DayDetailModal({ date, tz, turnover, minDate, maxDate, onClose }: { date: string; tz: string; turnover: number; minDate: string | null; maxDate: string; onClose: () => void }) {
+export function DayDetailModal({ date, tz, turnover, minDate, maxDate, colorFor, onClose }: { date: string; tz: string; turnover: number; minDate: string | null; maxDate: string; colorFor: (key: string) => string; onClose: () => void }) {
   const [viewDate, setViewDate] = useState(date)
   const [loading, setLoading] = useState(true)
   const [learned, setLearned] = useState<LearnedCard[]>([])
@@ -147,6 +147,25 @@ export function DayDetailModal({ date, tz, turnover, minDate, maxDate, onClose }
   const learnedLangs = useMemo(() => [...new Set(learned.map(c => c.source))], [learned])
   const shownLearned = langFilter ? learned.filter(c => c.source === langFilter) : learned
 
+  // Language mix of the cards learned that day (matches the calendar cell's ring), for the top pie.
+  const learnedByLang = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const c of learned) m.set(c.source, (m.get(c.source) ?? 0) + 1)
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  }, [learned])
+  const mixRing = useMemo(() => {
+    if (learned.length === 0) return 'transparent'
+    let acc = 0
+    const stops: string[] = []
+    for (const [lang, cnt] of learnedByLang) {
+      const start = (acc / learned.length) * 100
+      acc += cnt
+      const end = (acc / learned.length) * 100
+      stops.push(`${colorFor(lang)} ${start}% ${end}%`)
+    }
+    return `conic-gradient(${stops.join(', ')})`
+  }, [learnedByLang, learned.length, colorFor])
+
   return (
     <div className="fixed inset-0 z-[80] bg-surface-deep flex flex-col">
       <div className="px-4 sm:px-6 py-3 border-b border-line/10 flex items-center justify-between gap-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
@@ -162,6 +181,32 @@ export function DayDetailModal({ date, tz, turnover, minDate, maxDate, onClose }
       <div className="overflow-y-auto flex-1 px-4 sm:px-6 py-6 max-w-2xl mx-auto w-full space-y-6 pb-[calc(env(safe-area-inset-bottom)+2rem)]">
           {loading ? <p className="text-sm text-ink-faint">Loading…</p> : (
             <>
+              {/* Language mix — the calendar cell's ring, expanded (both phone + desktop). */}
+              {learned.length > 0 && (
+                <div className="rounded-lg border border-line/10 p-4 flex items-center gap-5">
+                  <div className="relative shrink-0" style={{ width: 92, height: 92 }}>
+                    <div className="absolute inset-0 rounded-full" style={{
+                      background: mixRing,
+                      WebkitMask: 'radial-gradient(farthest-side, transparent calc(100% - 11px), #000 calc(100% - 11px))',
+                      mask: 'radial-gradient(farthest-side, transparent calc(100% - 11px), #000 calc(100% - 11px))',
+                    }} />
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-lg font-semibold text-ink leading-none">{learned.length}</span>
+                      <span className="text-[10px] text-ink-faint mt-0.5">learned</span>
+                    </div>
+                  </div>
+                  <div className="flex-1 grid grid-cols-2 gap-x-4 gap-y-1 text-xs min-w-0">
+                    {learnedByLang.map(([lang, cnt]) => (
+                      <span key={lang} className="flex items-center gap-1.5 text-ink-muted min-w-0">
+                        <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: colorFor(lang) }} />
+                        <span className="truncate">{langName(lang)}</span>
+                        <span className="text-ink font-medium ml-auto shrink-0">{cnt}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="rounded-lg border border-line/10 p-3 text-center">
                   <div className="text-xl font-semibold text-success">{learned.length}</div>

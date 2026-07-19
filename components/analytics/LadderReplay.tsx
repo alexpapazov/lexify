@@ -5,6 +5,7 @@ import { cardLevelAt, type SessionSummary } from '@/lib/ladderLog'
 
 const LANE_H = 44
 const CHIP_W = 84   // column step + max chip width; chips size to their word up to this
+const CHIP_H = 22   // chip height — kept skinny so the word isn't swimming in empty space
 const GUTTER = 76   // left label gutter
 
 // Flash colour when a card just moved, by the rating/outcome of that attempt.
@@ -126,11 +127,13 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
               <div
                 key={c.cardId}
                 title={`${c.label} — ${c.attempts} attempt${c.attempts === 1 ? '' : 's'}, ${fmtClock(c.activeMs)}`}
-                className={`absolute rounded-md px-2 py-1 text-[11px] font-medium truncate transition-all duration-500 ease-out border ${
+                className={`absolute flex items-center rounded-md px-2 text-[11px] font-medium truncate transition-all duration-500 ease-out border ${
                   flash ? 'text-ink' : grad ? 'bg-accent/25 border-accent/50 text-ink' : 'bg-surface-raised border-line/15 text-ink-muted'
                 }`}
                 style={{
-                  top: laneTop(level), left: GUTTER + col * (CHIP_W + 8), width: 'max-content', maxWidth: CHIP_W, height: LANE_H - 12,
+                  // Skinnier chip (CHIP_H) than the lane, kept at the same vertical center as before.
+                  top: laneTop(level) + (LANE_H - 12 - CHIP_H) / 2, left: GUTTER + col * (CHIP_W + 8),
+                  width: 'max-content', maxWidth: CHIP_W, height: CHIP_H,
                   ...(flash ? { backgroundColor: flash + '40', borderColor: flash } : {}),
                 }}>
                 {c.label}
