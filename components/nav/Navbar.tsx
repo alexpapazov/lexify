@@ -81,6 +81,7 @@ export function Navbar() {
             </Link>
 
             {navLinks.map(({ href, label }) => {
+              if (href === '/progress') return <AnalyticsMenu key={href} pathname={pathname} />
               const isActive = pathname === href
               const onClick = href === '/library' && pathname === '/library'
                 ? () => window.dispatchEvent(new CustomEvent('lexify:library-reset'))
@@ -157,6 +158,17 @@ export function Navbar() {
             onClick={e => e.stopPropagation()}
           >
             {navLinks.map(({ href, label }) => {
+              if (href === '/progress') return (
+                <div key={href} className="space-y-1">
+                  <div className="px-3 pt-1 text-xs font-medium text-ink-faint uppercase tracking-wider">Analytics</div>
+                  {ANALYTICS_SUBS.map(s => (
+                    <Link key={s.href} href={s.href} className={[
+                      'block px-5 py-2 rounded-md text-sm font-medium transition-colors',
+                      pathname === s.href ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
+                    ].join(' ')}>{s.label}</Link>
+                  ))}
+                </div>
+              )
               const isActive = pathname === href
               const onClick = href === '/library' && pathname === '/library'
                 ? () => window.dispatchEvent(new CustomEvent('lexify:library-reset'))
@@ -196,5 +208,34 @@ export function Navbar() {
         </div>
       )}
     </>
+  )
+}
+
+const ANALYTICS_SUBS = [
+  { href: '/progress',             label: 'Overview'    },
+  { href: '/progress/connections', label: 'Connections' },
+  { href: '/progress/logs',        label: 'Logs'        },
+]
+
+/** Desktop nav "Analytics" item — a hover dropdown to its sub-pages. */
+function AnalyticsMenu({ pathname }: { pathname: string }) {
+  const [open, setOpen] = useState(false)
+  const active = pathname.startsWith('/progress')
+  return (
+    <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <Link href="/progress" className={[
+        'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150 whitespace-nowrap inline-flex items-center gap-1',
+        active ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
+      ].join(' ')}>Analytics <span className="text-[10px]">▾</span></Link>
+      {open && (
+        <div className="absolute top-full left-0 pt-1 z-50">
+          <div className="bg-surface-deep border border-line/10 rounded-lg py-1 min-w-[150px] shadow-lg">
+            {ANALYTICS_SUBS.map(s => (
+              <Link key={s.href} href={s.href} className={`block px-3 py-1.5 text-sm ${pathname === s.href ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50'}`}>{s.label}</Link>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

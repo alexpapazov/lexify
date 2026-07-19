@@ -160,21 +160,6 @@ export function ReviewCalendar() {
         })}
       </div>
 
-      {/* Legend */}
-      {pairs.length > 0 && (
-        <div className="flex flex-wrap gap-x-4 gap-y-1.5 pt-1">
-          {[...new Set(pairs.map(p => `${p.sourceLanguage}|${p.targetLanguage}`))].sort().map(key => {
-            const [src, tgt] = key.split('|') as [string, string]
-            return (
-              <div key={key} className="flex items-center gap-1.5 text-xs text-ink-muted">
-                <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: colorFor(key) }} />
-                {langName(src)} → {langName(tgt)}
-              </div>
-            )
-          })}
-        </div>
-      )}
-
       {selected && <DayDetailModal date={selected} tz={tz} turnover={turnover} minDate={minDate} maxDate={todayStr} onClose={() => setSelected(null)} />}
     </div>
   )

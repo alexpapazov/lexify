@@ -183,9 +183,14 @@ export function estimateInitialInterval(
 ): number {
   const pick = (maxReps: number) =>
     intervalsByReps.filter(c => c.reps <= maxReps && c.intervalDays > 0).map(c => c.intervalDays)
-  for (const maxReps of [1, 2, 3]) {
+  // Prefer the freshest cards (reps<=1) — they reflect the true graduation interval. Only widen to
+  // older, longer-interval cards when there are NO fresh ones (otherwise a language dominated by
+  // auto-graduated / heavily-reviewed cards reports an inflated "initial" interval).
+  const fresh = pick(1)
+  if (fresh.length > 0) return median(fresh)
+  for (const maxReps of [2, 3]) {
     const sample = pick(maxReps)
-    if (sample.length >= 3 || (maxReps === 3 && sample.length > 0)) return median(sample)
+    if (sample.length > 0) return median(sample)
   }
   return fallback
 }

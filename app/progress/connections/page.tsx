@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ConnectionGraph } from '@/components/analytics/ConnectionGraph'
-import { AnalyticsTabs } from '@/components/analytics/AnalyticsTabs'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 
@@ -20,7 +19,6 @@ export default function ConnectionsPage() {
   return (
     <div className="max-w-4xl mx-auto px-4 py-10 space-y-6">
       <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
-      <AnalyticsTabs />
       <div className="space-y-3">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Card connections</h2>
         {userId ? <ConnectionGraph userId={userId} /> : <p className="text-sm text-ink-faint">Loading…</p>}
