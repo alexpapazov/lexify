@@ -130,7 +130,7 @@ export default function SessionPage() {
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [allCards,        setAllCards]        = useState<Card[]>([])
   const [index,           setIndex]           = useState(0)
-  const reviewTimer = useActiveTimer()
+  const reviewTimer = useActiveTimer(30_000)
   useEffect(() => { reviewTimer.current?.restart() }, [index])
   const [loading,         setLoading]         = useState(true)
   const [userId,          setUserId]          = useState('')

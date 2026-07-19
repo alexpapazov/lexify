@@ -14,12 +14,15 @@ import { displayText } from '@/lib/cardText'
 import { routes } from '@/lib/routes'
 
 function fmtDuration(ms: number): string {
+  if (ms <= 0) return '—'   // no timing data (e.g. older days recorded before timing shipped)
   const s = Math.round(ms / 1000)
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
   if (h > 0) return `${h}h ${m}m`
   if (m > 0) return `${m}m ${sec}s`
   return `${sec}s`
 }
+const addDays = (dateStr: string, n: number) =>
+  new Date(new Date(dateStr + 'T00:00:00Z').getTime() + n * 86400000).toISOString().slice(0, 10)
 function fullDate(dateStr: string): string {
   return new Date(dateStr + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 }
@@ -34,29 +37,36 @@ interface ReviewRow { rating: string; wasCorrect: boolean }
 interface DueCard { cardId: string; front: string; back: string; deckId: string | null; deckName: string | null; reviews: ReviewRow[]; intervalDays: number | null }
 interface DueGroup { key: string; source: string; target: string; direction: 'forward' | 'reverse'; count: number; ms: number; cards: DueCard[] }
 interface LearnedCard { cardId: string; front: string; back: string; source: string; deckId: string | null; deckName: string | null }
+interface AutoCard extends LearnedCard { accelerated: boolean }
 
-export function DayDetailModal({ date, tz, turnover, onClose }: { date: string; tz: string; turnover: number; onClose: () => void }) {
+export function DayDetailModal({ date, tz, turnover, minDate, maxDate, onClose }: { date: string; tz: string; turnover: number; minDate: string | null; maxDate: string; onClose: () => void }) {
+  const [viewDate, setViewDate] = useState(date)
   const [loading, setLoading] = useState(true)
   const [learned, setLearned] = useState<LearnedCard[]>([])
+  const [auto, setAuto] = useState<AutoCard[]>([])
   const [groups, setGroups] = useState<DueGroup[]>([])
   const [totalMs, setTotalMs] = useState(0)
   const [dueMs, setDueMs] = useState(0)
   const [openGroup, setOpenGroup] = useState<string | null>(null)
   const [langFilter, setLangFilter] = useState<string | null>(null)
 
+  const canPrev = !minDate || viewDate > minDate
+  const canNext = viewDate < maxDate
+
   useEffect(() => {
+    setLoading(true); setOpenGroup(null); setLangFilter(null)
     ;(async () => {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { setLoading(false); return }
       const uid = session.user.id
-      const qStart = new Date(new Date(date + 'T00:00:00Z').getTime() - 86400000).toISOString()
-      const qEnd   = new Date(new Date(date + 'T00:00:00Z').getTime() + 2 * 86400000).toISOString()
-      const onDay = (ts: string) => localDateWithTurnover(ts, tz, turnover) === date
+      const qStart = new Date(new Date(viewDate + 'T00:00:00Z').getTime() - 86400000).toISOString()
+      const qEnd   = new Date(new Date(viewDate + 'T00:00:00Z').getTime() + 2 * 86400000).toISOString()
+      const onDay = (ts: string) => localDateWithTurnover(ts, tz, turnover) === viewDate
 
       const [gradsRes, revsRes, ladRes] = await Promise.all([
         supabase.from('card_states')
-          .select('card_id, graduated_at, cards(front, back, source_language, target_language)')
+          .select('card_id, graduated_at, accelerated_mode, cards(front, back, source_language, target_language)')
           .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse')
           .gte('graduated_at', qStart).lte('graduated_at', qEnd),
         supabase.from('review_events')
@@ -69,9 +79,11 @@ export function DayDetailModal({ date, tz, turnover, onClose }: { date: string; 
 
       // Which cards do we need fronts / decks / intervals for?
       const reviewRows = (revsRes.data ?? []).filter(r => onDay(r.reviewed_at as string))
-      const learnedRows = (gradsRes.data ?? []).filter(g => onDay(g.graduated_at as string))
+      const dayGrads = (gradsRes.data ?? []).filter(g => onDay(g.graduated_at as string))
+      const learnedRows = dayGrads.filter(g => ((g.accelerated_mode as string | null) ?? 'none') === 'none')
+      const autoRows    = dayGrads.filter(g => ((g.accelerated_mode as string | null) ?? 'none') !== 'none')
       const reviewedIds = [...new Set(reviewRows.map(r => r.card_id as string))]
-      const allIds = [...new Set([...reviewedIds, ...learnedRows.map(g => g.card_id as string)])]
+      const allIds = [...new Set([...reviewedIds, ...dayGrads.map(g => g.card_id as string)])]
 
       const [cardsRes, linksRes, statesRes] = await Promise.all([
         allIds.length ? supabase.from('cards').select('id, front, back').in('id', allIds) : Promise.resolve({ data: [] as { id: string; front: string; back: string }[] }),
@@ -85,12 +97,14 @@ export function DayDetailModal({ date, tz, turnover, onClose }: { date: string; 
       }
       const intervalByCard = new Map((statesRes.data ?? []).map(s => [s.card_id as string, s.interval_days as number]))
 
-      // Cards learned
-      const learnedCards: LearnedCard[] = learnedRows.map(g => {
+      const toCard = (g: { card_id: unknown; cards: unknown }): LearnedCard => {
         const c = g.cards as unknown as { front: string; back: string; source_language: string } | null
         const deck = deckByCard.get(g.card_id as string)
         return { cardId: g.card_id as string, front: displayText(c?.front ?? ''), back: displayText(c?.back ?? ''), source: c?.source_language ?? '?', deckId: deck?.id ?? null, deckName: deck?.name ?? null }
-      })
+      }
+      // Cards learned (ladder) vs auto-graduated (skipped the ladder)
+      const learnedCards: LearnedCard[] = learnedRows.map(toCard)
+      const autoCards: AutoCard[] = autoRows.map(g => ({ ...toCard(g), accelerated: (g.accelerated_mode as string) === 'import_known' }))
 
       // Due Now groups → cards → review sequences
       const gmap = new Map<string, DueGroup>()
@@ -127,20 +141,24 @@ export function DayDetailModal({ date, tz, turnover, onClose }: { date: string; 
       setTotalMs(reviewMs + ladderMs)
       setLoading(false)
     })()
-  }, [date, tz, turnover])
+  }, [viewDate, tz, turnover])
 
   const learnedLangs = useMemo(() => [...new Set(learned.map(c => c.source))], [learned])
   const shownLearned = langFilter ? learned.filter(c => c.source === langFilter) : learned
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div className="bg-surface-deep border border-line/10 rounded-xl max-w-lg w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-line/10 flex items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-ink">{fullDate(date)}</h2>
-          <button onClick={onClose} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
+    <div className="fixed inset-0 z-[80] bg-surface-deep flex flex-col">
+      <div className="px-4 sm:px-6 py-3 border-b border-line/10 flex items-center justify-between gap-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
+        <button onClick={onClose} className="text-sm text-ink-muted hover:text-ink shrink-0">← Analytics</button>
+        <div className="flex items-center gap-2 sm:gap-3">
+          <button onClick={() => canPrev && setViewDate(addDays(viewDate, -1))} disabled={!canPrev} className="text-ink-muted hover:text-ink disabled:opacity-25 text-lg px-1">←</button>
+          <h2 className="text-sm sm:text-base font-semibold text-ink text-center min-w-[9rem] sm:min-w-[13rem]">{fullDate(viewDate)}</h2>
+          <button onClick={() => canNext && setViewDate(addDays(viewDate, 1))} disabled={!canNext} className="text-ink-muted hover:text-ink disabled:opacity-25 text-lg px-1">→</button>
         </div>
+        <div className="w-[4.5rem] shrink-0" />
+      </div>
 
-        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
+      <div className="overflow-y-auto flex-1 px-4 sm:px-6 py-6 max-w-2xl mx-auto w-full space-y-6 pb-[calc(env(safe-area-inset-bottom)+2rem)]">
           {loading ? <p className="text-sm text-ink-faint">Loading…</p> : (
             <>
               <div className="grid grid-cols-3 gap-3">
@@ -238,7 +256,6 @@ export function DayDetailModal({ date, tz, turnover, onClose }: { date: string; 
               </div>
             </>
           )}
-        </div>
       </div>
     </div>
   )

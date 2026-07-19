@@ -119,7 +119,7 @@ function AllDueSessionInner() {
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [index,           setIndex]           = useState(0)
-  const reviewTimer = useActiveTimer()
+  const reviewTimer = useActiveTimer(30_000)
   useEffect(() => { reviewTimer.current?.restart() }, [index])
   const [loading,         setLoading]         = useState(true)
   const [userId,          setUserId]          = useState('')

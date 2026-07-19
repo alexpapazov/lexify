@@ -127,6 +127,14 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         onPromptEdit={onCardEdit ? (t => onCardEdit(card.id, promptSide, t)) : undefined}
         onAnswerEdit={onCardEdit ? (t => onCardEdit(card.id, answerSide, t)) : undefined}
         synonyms={answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+        onAddSynonym={answerSide === 'front' ? (normalizedText => {
+          // Accept this typed answer as a synonym: persist it onto the card and update local state so
+          // it's accepted immediately (and next time). Repo is offline-guarded, so this works offline.
+          const existing: CardChoices = card.choices ?? { front: [], back: [] }
+          const next: CardChoices = { ...existing, frontSynonyms: [...(existing.frontSynonyms ?? []), normalizedText] }
+          onChoicesCached?.(card.id, next)
+          void new SupabaseCardRepository().update(card.id, { choices: next }).catch(() => {})
+        }) : undefined}
         onRepeat={onRepeat}
         onNearMiss={isAlmost => { almostRef.current = isAlmost }}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}

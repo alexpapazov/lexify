@@ -60,8 +60,9 @@ export function ReviewCalendar() {
 
       const [{ data: grads }, pairList] = await Promise.all([
         supabase.from('card_states')
-          .select('graduated_at, cards(source_language, target_language)')
+          .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
           .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse')
+          .eq('accelerated_mode', 'none')   // exclude auto-graduated cards from the daily goal counts
           .not('graduated_at', 'is', null),
         new SupabaseLanguagePairRepository().list(uid),
       ])
@@ -174,7 +175,7 @@ export function ReviewCalendar() {
         </div>
       )}
 
-      {selected && <DayDetailModal date={selected} tz={tz} turnover={turnover} onClose={() => setSelected(null)} />}
+      {selected && <DayDetailModal date={selected} tz={tz} turnover={turnover} minDate={minDate} maxDate={todayStr} onClose={() => setSelected(null)} />}
     </div>
   )
 }
@@ -222,10 +223,15 @@ function DayCell({ day, date, info, goals, colorFor, onSelect }: {
         {pct !== null && <span className={`text-[10px] font-semibold ${pctColor}`}>{pct}%</span>}
       </div>
       <div className="flex-1 flex items-center justify-center">
-        <div className="relative rounded-full" style={{ width: 'min(96%, 80px)', aspectRatio: '1', background: ring }}>
-          <div className="absolute inset-[15%] rounded-full bg-surface-deep flex items-center justify-center">
-            <span className={`text-sm sm:text-base font-semibold ${pctColor}`}>{total > 0 ? total : ''}</span>
-          </div>
+        <div className="relative flex items-center justify-center" style={{ width: 'min(96%, 80px)', aspectRatio: '1' }}>
+          {total > 0 && (
+            <div className="absolute inset-0 rounded-full" style={{
+              background: ring,
+              WebkitMask: 'radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 5px))',
+              mask: 'radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 5px))',
+            }} />
+          )}
+          <span className={`text-sm sm:text-base font-semibold ${pctColor}`}>{total > 0 ? total : ''}</span>
         </div>
       </div>
     </button>
