@@ -19,6 +19,7 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langName, LANG_COLOR_PALETTE } from '@/lib/languages'
 import { localDateWithTurnover, getToday } from '@/lib/dates'
+import { DayDetailModal } from '@/components/analytics/DayDetailModal'
 import type { LanguagePair } from '@/domain'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -36,6 +37,9 @@ export function ReviewCalendar() {
   const [minDate, setMinDate] = useState<string | null>(null)
   const [todayStr, setTodayStr] = useState<string>('')
   const [loading, setLoading] = useState(true)
+  const [tz, setTz] = useState('UTC')
+  const [turnover, setTurnover] = useState(0)
+  const [selected, setSelected] = useState<string | null>(null)
   // Displayed month (year, month 0-based)
   const [view, setView] = useState<{ y: number; m: number } | null>(null)
 
@@ -47,9 +51,10 @@ export function ReviewCalendar() {
       const uid = session.user.id
 
       const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', uid).single()
-      const tz = (profile?.timezone as string | null) ?? 'UTC'
-      const turnover = (profile?.day_turnover_hour as number | null) ?? 0
-      const today = getToday(tz, turnover)
+      const tzv = (profile?.timezone as string | null) ?? 'UTC'
+      const turnoverv = (profile?.day_turnover_hour as number | null) ?? 0
+      const today = getToday(tzv, turnoverv)
+      setTz(tzv); setTurnover(turnoverv)
 
       const [{ data: grads }, pairList] = await Promise.all([
         supabase.from('card_states')
@@ -64,7 +69,7 @@ export function ReviewCalendar() {
       for (const s of grads ?? []) {
         const card = s.cards as unknown as { source_language: string | null; target_language: string | null } | null
         if (!card?.source_language || !card?.target_language) continue
-        const d = localDateWithTurnover(s.graduated_at as string, tz, turnover)
+        const d = localDateWithTurnover(s.graduated_at as string, tzv, turnoverv)
         if (d > today) continue
         if (!earliest || d < earliest) earliest = d
         const key = `${card.source_language}|${card.target_language}`
@@ -147,7 +152,7 @@ export function ReviewCalendar() {
               </div>
             )
           }
-          return <DayCell key={date} day={day} date={date} info={byDay.get(date)} goals={goalsByWeekday.get(weekdayOf(date))!} colorFor={colorFor} />
+          return <DayCell key={date} day={day} date={date} info={byDay.get(date)} goals={goalsByWeekday.get(weekdayOf(date))!} colorFor={colorFor} onSelect={setSelected} />
         })}
       </div>
 
@@ -165,13 +170,16 @@ export function ReviewCalendar() {
           })}
         </div>
       )}
+
+      {selected && <DayDetailModal date={selected} tz={tz} turnover={turnover} onClose={() => setSelected(null)} />}
     </div>
   )
 }
 
-function DayCell({ day, date, info, goals, colorFor }: {
+function DayCell({ day, date, info, goals, colorFor, onSelect }: {
   day: number; date: string; info: DayInfo | undefined
   goals: Map<string, number>; colorFor: (k: string) => string
+  onSelect: (date: string) => void
 }) {
   const total = info?.total ?? 0
   const totalGoal = [...goals.values()].reduce((a, b) => a + b, 0)
@@ -202,17 +210,23 @@ function DayCell({ day, date, info, goals, colorFor }: {
   }
 
   return (
-    <div className="aspect-square rounded-lg border border-line/10 bg-surface-raised/40 p-1.5 flex flex-col">
-      <span className="text-[11px] text-ink-muted leading-none">{day}</span>
+    <button
+      onClick={() => onSelect(date)}
+      className="aspect-square rounded-lg border border-line/10 bg-surface-raised/40 p-1.5 flex flex-col text-left hover:border-accent/40 hover:bg-surface-raised/70 transition-colors"
+    >
+      <div className="flex items-start justify-between leading-none">
+        <span className="text-[11px] text-ink-muted">{day}</span>
+        {total > 0 && <span className="text-[10px] font-semibold text-accent-soft">{total}</span>}
+      </div>
       <div className="flex-1 flex items-center justify-center">
-        <div className="relative rounded-full" style={{ width: 'min(80%, 44px)', aspectRatio: '1', background: ring }}>
-          <div className="absolute inset-[18%] rounded-full bg-surface-deep flex items-center justify-center">
-            <span className={`text-[10px] sm:text-xs font-semibold ${pctColor}`}>
+        <div className="relative rounded-full" style={{ width: 'min(94%, 76px)', aspectRatio: '1', background: ring }}>
+          <div className="absolute inset-[26%] rounded-full bg-surface-deep flex items-center justify-center">
+            <span className={`text-[11px] sm:text-sm font-semibold ${pctColor}`}>
               {pct !== null ? `${pct}%` : (total > 0 ? total : '')}
             </span>
           </div>
         </div>
       </div>
-    </div>
+    </button>
   )
 }
