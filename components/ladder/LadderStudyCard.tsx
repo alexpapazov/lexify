@@ -22,7 +22,7 @@ import { displayText } from '@/lib/cardText'
  * is a small custom screen (no existing equivalent). Each screen's result is
  * mapped to a single ladder outcome via `onOutcome`.
  */
-export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onCardEdit, onRepeat, onOutcome, onChoicesCached, onInfo }: {
+export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onCardEdit, onRepeat, onOutcome, onChoicesCached, onInfo, ipaOn, onToggleIpa, onIpaFetched }: {
   card:           Card
   rung:           Rung
   deckCards:      Card[]
@@ -39,14 +39,19 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   onOutcome:      (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onInfo?:        () => void
+  /** Session-sticky "show IPA" flag: once on, every card shows IPA until turned off. */
+  ipaOn?:         boolean
+  onToggleIpa?:   () => void
+  /** Report a freshly-transcribed IPA up so the parent can cache it on the card. */
+  onIpaFetched?:  (cardId: string, ipa: string) => void
 }) {
   const native = producesNative(rung)
   const promptSide = native ? 'front' : 'back'   // produce native → show the target word; produce target → show the native gloss
   const answerSide = native ? 'back' : 'front'
-  const [showIpa, setShowIpa] = useState(false)
+  const showIpa = !!ipaOn   // controlled by the session-level flag, so it sticks across cards
   const [fetchedIpa, setFetchedIpa] = useState<string | null>(null)
-  // Fetch (and persist) IPA on demand when the user reveals it and the card has none — mirrors the
-  // session pages, so the "IPA" button works even for cards that were never transcribed.
+  // Fetch (and persist) IPA on demand when IPA is on and this card has none — mirrors the session pages,
+  // so it works even for cards that were never transcribed.
   useEffect(() => {
     if (!showIpa || card.ipa || fetchedIpa) return
     let cancelled = false
@@ -58,15 +63,16 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
       .then((d: { ok: boolean; ipa?: string }) => {
         if (cancelled || !d.ok || !d.ipa) return
         setFetchedIpa(d.ipa)
+        onIpaFetched?.(card.id, d.ipa)
         new SupabaseCardRepository().update(card.id, { ipa: d.ipa }).catch(() => {})
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [showIpa, card.id, card.ipa, card.front, sourceLanguage, fetchedIpa])
+  }, [showIpa, card.id, card.ipa, card.front, sourceLanguage, fetchedIpa, onIpaFetched])
   // Shared "corner button" wiring: ? (give up → a miss/again), IPA toggle, and info.
   const missOutcome: RungAttemptOutcome = rung.selfRated ? 'again' : 'miss'
   const effectiveIpa = card.ipa ?? fetchedIpa
-  const ipaProps = { ipaText: showIpa ? (effectiveIpa ?? undefined) : undefined, onToggleIPA: () => setShowIpa(v => !v) }
+  const ipaProps = { ipaText: showIpa ? (effectiveIpa ?? undefined) : undefined, onToggleIPA: () => onToggleIpa?.() }
 
   // Track whether this attempt was marked correct via override (accept=true), so the replay can
   // flash the overridden result rather than the natural grade. Resets each card (component remounts).

@@ -12,7 +12,7 @@ type View = 'past' | 'present' | 'future'
 
 export default function AnalyticsPage() {
   const offline = useOfflineMode()
-  const [view, setView] = useState<View>('future')
+  const [view, setView] = useState<View>('present')
 
   if (offline) return <OfflineUnavailable feature="Analytics" />
 

@@ -22,6 +22,7 @@ import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay } from '@/lib/dates'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
+import { apiUrl } from '@/lib/apiBase'
 import { UndoFab } from '@/components/session/UndoFab'
 import { CardEditModal } from '@/components/CardEditModal'
 import { isOfflineActive } from '@/lib/offline/mode'
@@ -64,6 +65,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const [cardsById, setCardsById] = useState<Map<string, Card>>(new Map())
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
+  // Session-sticky "show IPA": once you turn IPA on for any card, every card shows it until you turn it
+  // off — no need to keep re-toggling. We also transcribe upcoming cards ahead of time (see below).
+  const [ipaOn, setIpaOn] = useState(false)
   const [total, setTotal] = useState(0)
   const [states, setStates] = useState<Map<string, ClimbState>>(new Map())
   const [graduated, setGraduated] = useState(0)
@@ -313,6 +317,33 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   // Reset the per-card timer + pending override whenever a new card is shown.
   useEffect(() => { shownAtRef.current = Date.now(); reviewTimer.current?.restart(); pendingOverrideAddRef.current = null }, [currentId])
 
+  // Get ahead of the curve: while IPA is on, transcribe the next few upcoming cards that don't have IPA
+  // yet (cache + persist), so it's ready the instant they appear — no waiting per card.
+  useEffect(() => {
+    if (!ipaOn) return
+    let cancelled = false
+    ;(async () => {
+      const ahead = queue.map(q => q.cardId).filter(id => id !== currentId).slice(0, 6)
+      for (const id of ahead) {
+        if (cancelled) return
+        const c = cardsById.get(id)
+        if (!c || c.ipa) continue
+        try {
+          const res = await fetch(apiUrl('/api/ipa'), {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ text: c.front, language: c.sourceLanguage }),
+          })
+          const d = await res.json() as { ok: boolean; ipa?: string }
+          if (cancelled || !d.ok || !d.ipa) continue
+          setCardsById(prev => { const cc = prev.get(id); return cc && !cc.ipa ? new Map(prev).set(id, { ...cc, ipa: d.ipa! }) : prev })
+          new SupabaseCardRepository().update(id, { ipa: d.ipa }).catch(() => {})
+        } catch { /* best-effort — offline / transient */ }
+      }
+    })()
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ipaOn, currentId, queue])
+
   function onChoicesCached(cardId: string, choices: CardChoices) {
     setCardsById(prev => { const c = prev.get(cardId); if (!c) return prev; return new Map(prev).set(cardId, { ...c, choices }) })
   }
@@ -544,6 +575,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         }}
         onRepeat={handleRepeat}
         onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
+        ipaOn={ipaOn} onToggleIpa={() => setIpaOn(v => !v)}
+        onIpaFetched={(id, ipa) => setCardsById(prev => { const c = prev.get(id); return c ? new Map(prev).set(id, { ...c, ipa }) : prev })}
       />
 
       <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />

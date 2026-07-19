@@ -57,6 +57,14 @@ export function PresentSnapshot() {
   const [data, setData] = useState<Data | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [active, setActive] = useState<Category | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())  // `${deckId}:${cardId}`
+  const [langFilter, setLangFilter] = useState<string | null>(null) // `${source}|${target}`
+  const [copied, setCopied] = useState(false)
+
+  function openCategory(key: Category) {
+    setActive(prev => prev === key ? null : key)
+    setSelected(new Set()); setLangFilter(null); setCopied(false)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -182,7 +190,27 @@ export function PresentSnapshot() {
   if (error) return <p className="text-sm text-danger">Couldn&apos;t load: {error}</p>
   if (!data) return <p className="text-sm text-ink-faint">Loading today…</p>
 
-  const shown = active ? data.lists[active] : []
+  const list = active ? data.lists[active] : []
+  const keyOf = (e: CardEntry) => `${e.deckId}:${e.card.id}`
+  const pairKeys = [...new Set(list.map(e => `${e.source}|${e.target}`))]
+  const shown = langFilter ? list.filter(e => `${e.source}|${e.target}` === langFilter) : list
+  const allShownSelected = shown.length > 0 && shown.every(e => selected.has(keyOf(e)))
+  const selectedCount = list.filter(e => selected.has(keyOf(e))).length
+
+  const toggleOne = (e: CardEntry) => setSelected(prev => {
+    const n = new Set(prev); const k = keyOf(e); n.has(k) ? n.delete(k) : n.add(k); return n
+  })
+  const toggleSelectAll = () => setSelected(prev => {
+    const n = new Set(prev)
+    if (allShownSelected) shown.forEach(e => n.delete(keyOf(e)))
+    else shown.forEach(e => n.add(keyOf(e)))
+    return n
+  })
+  const copySelected = () => {
+    const chosen = list.filter(e => selected.has(keyOf(e)))
+    const text = chosen.map(e => `${e.card.front}\t${e.card.back}`).join('\n')
+    navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
+  }
 
   return (
     <div className="space-y-6">
@@ -191,7 +219,7 @@ export function PresentSnapshot() {
         {CATS.map(({ key, label, color, border, desc }) => {
           const isActive = active === key
           return (
-            <button key={key} onClick={() => setActive(isActive ? null : key)}
+            <button key={key} onClick={() => openCategory(key)}
               className={`panel border-t-2 ${border} space-y-1 text-center w-full transition-colors ${isActive ? 'bg-surface-raised ring-1 ring-ink/10' : 'hover:bg-surface-raised/50'}`}>
               <div className={`text-2xl font-semibold ${color}`}>{data.counts[key]}</div>
               <div className="text-xs font-medium text-ink">{label}</div>
@@ -203,25 +231,48 @@ export function PresentSnapshot() {
 
       {active && (
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <h3 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
               {CATS.find(c => c.key === active)?.label} — {shown.length} card{shown.length !== 1 ? 's' : ''}
             </h3>
-            <button onClick={() => setActive(null)} className="text-xs text-accent hover:text-accent-soft">Close ✕</button>
+            <div className="flex items-center gap-3 text-xs">
+              <button onClick={toggleSelectAll} className="text-ink-muted hover:text-ink">{allShownSelected ? 'Deselect all' : 'Select all'}</button>
+              <button onClick={copySelected} disabled={selectedCount === 0} className="text-accent hover:text-accent-soft disabled:opacity-40">
+                {copied ? 'Copied ✓' : `Copy${selectedCount > 0 ? ` (${selectedCount})` : ''}`}
+              </button>
+              <button onClick={() => setActive(null)} className="text-accent hover:text-accent-soft">Close ✕</button>
+            </div>
           </div>
+
+          {/* Language filter */}
+          {pairKeys.length > 1 && (
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              <button onClick={() => setLangFilter(null)}
+                className={`px-2 py-0.5 rounded-full border ${langFilter === null ? 'bg-accent/20 border-accent text-ink' : 'border-line/15 text-ink-muted hover:text-ink'}`}>All</button>
+              {pairKeys.map(pk => { const [s, t] = pk.split('|'); return (
+                <button key={pk} onClick={() => setLangFilter(pk)}
+                  className={`px-2 py-0.5 rounded-full border ${langFilter === pk ? 'bg-accent/20 border-accent text-ink' : 'border-line/15 text-ink-muted hover:text-ink'}`}>
+                  {langName(s!)} → {langName(t!)}
+                </button>
+              )})}
+            </div>
+          )}
+
           {shown.length === 0 ? (
             <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
           ) : (
             <div className="panel divide-y divide-line/5 p-0 overflow-hidden max-h-96 overflow-y-auto">
-              {shown.map(({ card, deckId, deckName, source, target }) => (
-                <Link key={`${deckId}:${card.id}`} href={routes.deck(deckId, { card: card.id })}
-                  className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors">
-                  <div className="flex gap-6 text-sm min-w-0">
-                    <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
-                    <span className="text-ink-muted truncate">{card.back}</span>
-                  </div>
-                  <span className="text-xs text-ink-faint hidden sm:block shrink-0 ml-2">{langName(source)} → {langName(target)} · {deckName}</span>
-                </Link>
+              {shown.map(e => (
+                <div key={keyOf(e)} className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors">
+                  <input type="checkbox" className="accent-accent shrink-0 w-4 h-4" checked={selected.has(keyOf(e))} onChange={() => toggleOne(e)} />
+                  <Link href={routes.deck(e.deckId, { card: e.card.id })} className="flex items-center justify-between gap-4 min-w-0 flex-1">
+                    <div className="flex gap-6 text-sm min-w-0">
+                      <span className="text-ink font-medium w-36 truncate shrink-0">{e.card.front}</span>
+                      <span className="text-ink-muted truncate">{e.card.back}</span>
+                    </div>
+                    <span className="text-xs text-ink-faint hidden sm:block shrink-0 ml-2">{langName(e.source)} → {langName(e.target)} · {e.deckName}</span>
+                  </Link>
+                </div>
               ))}
             </div>
           )}
@@ -259,12 +310,12 @@ export function PresentSnapshot() {
         </div>
         <div className="grid grid-cols-2 gap-3 pt-1">
           <div className="rounded-lg border border-line/10 p-3">
-            <div className="text-lg font-semibold text-accent-soft">~{fmtDuration(data.projDueMs)}</div>
-            <div className="text-xs text-ink-faint mt-0.5">to clear today&apos;s Due Now reviews</div>
+            <div className="text-lg font-semibold text-accent-soft">{data.counts.due === 0 ? '0 min' : `~${fmtDuration(data.projDueMs)}`}</div>
+            <div className="text-xs text-ink-faint mt-0.5">{data.counts.due === 0 ? 'Due Now reviews all done today ✓' : "to clear today's Due Now reviews"}</div>
           </div>
           <div className="rounded-lg border border-line/10 p-3">
-            <div className="text-lg font-semibold text-warning">~{fmtDuration(data.projNewMs)}</div>
-            <div className="text-xs text-ink-faint mt-0.5">to learn {data.remainingNew} new word{data.remainingNew === 1 ? '' : 's'} toward today&apos;s goals</div>
+            <div className="text-lg font-semibold text-warning">{data.remainingNew === 0 ? '0 min' : `~${fmtDuration(data.projNewMs)}`}</div>
+            <div className="text-xs text-ink-faint mt-0.5">{data.remainingNew === 0 ? "Today's new-word goals met ✓" : `to learn ${data.remainingNew} new word${data.remainingNew === 1 ? '' : 's'} toward today's goals`}</div>
           </div>
         </div>
         <p className="text-[11px] text-ink-faint">Projections use your recent pace — median time per Due Now review and average time to learn a new word over the last 14 days.</p>
