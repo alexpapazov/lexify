@@ -19,6 +19,7 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
+import { AccuracyTrend } from './AccuracyTrend'
 import { langName } from '@/lib/languages'
 import { routes } from '@/lib/routes'
 import type { Card, Deck, LanguagePair } from '@/domain'
@@ -37,35 +38,59 @@ function paceKey(src: string, tgt: string, dir: 'forward' | 'reverse', typed: bo
   return `${src}|${tgt}|${dir}|${typed ? 't' : 's'}`
 }
 
+// The estimates re-tune themselves daily: every past review/graduation is weighted by how recent it
+// is, so as you get faster (or slower) the projection follows within about a week without anyone
+// touching a setting. A longer window than before is safe precisely because old data decays away.
+const WINDOW_DAYS = 30        // history pulled in (older data still counts, just very little)
+const HALF_LIFE_DAYS = 7      // a review 7 days old counts half as much as one from today
+const MIN_EFF_SAMPLES = 3     // minimum *weighted* samples before a bucket is trusted on its own
+
+/** Exponential recency weight: 1.0 today → 0.5 at one half-life → 0.25 at two, etc. */
+function recencyWeight(ageDays: number): number {
+  return Math.pow(0.5, Math.max(0, ageDays) / HALF_LIFE_DAYS)
+}
+
+interface WSample { v: number; w: number }
+const totalWeight = (xs: WSample[]) => xs.reduce((t, p) => t + p.w, 0)
+
 /**
- * Median response time for a bucket, widening when a bucket is too thin to trust: exact
- * (language × direction × typed) → same language+direction → same direction+typed across languages →
- * global → fixed fallback. `MIN_SAMPLES` guards against one slow review skewing a sparse bucket.
+ * Weighted median — stays robust to the occasional "walked away mid-review" outlier the way a plain
+ * median does, while letting recent reviews dominate. (A weighted *mean* would be wrecked by a single
+ * 4-minute response.) Returns the value at the 50% mark of accumulated weight.
  */
-const MIN_SAMPLES = 5
+function weightedMedian(xs: WSample[]): number | null {
+  if (xs.length === 0) return null
+  const s = [...xs].sort((a, b) => a.v - b.v)
+  const total = totalWeight(s)
+  if (total <= 0) return null
+  let acc = 0
+  for (const p of s) { acc += p.w; if (acc >= total / 2) return p.v }
+  return s[s.length - 1]!.v
+}
+
+/**
+ * Recency-weighted median response time for a bucket, widening when a bucket is too thin to trust:
+ * exact (language × direction × typed) → same language+direction → same direction+typed across
+ * languages → global → fixed fallback. Thinness is judged on *weighted* samples, so three reviews
+ * from last week count for less than three from today.
+ */
 function pace(
-  samples: Map<string, number[]>, src: string, tgt: string, dir: 'forward' | 'reverse', typed: boolean,
+  samples: Map<string, WSample[]>, src: string, tgt: string, dir: 'forward' | 'reverse', typed: boolean,
 ): number {
   const tryKeys = [
     paceKey(src, tgt, dir, typed),
-    `${src}|${tgt}|${dir}`,       // same language + direction, either presentation
+    `${src}|${tgt}|${dir}`,        // same language + direction, either presentation
     `${dir}|${typed ? 't' : 's'}`, // same direction + presentation, any language
     'all',
   ]
   for (const k of tryKeys) {
     const xs = samples.get(k)
-    if (xs && xs.length >= MIN_SAMPLES) { const m = median(xs); if (m != null && m > 0) return m }
+    if (xs && totalWeight(xs) >= MIN_EFF_SAMPLES) { const m = weightedMedian(xs); if (m != null && m > 0) return m }
   }
-  const any = median(samples.get('all') ?? [])
+  const any = weightedMedian(samples.get('all') ?? [])
   return any && any > 0 ? any : DEFAULT_DUE_MS
 }
 
-function median(xs: number[]): number | null {
-  if (xs.length === 0) return null
-  const s = [...xs].sort((a, b) => a - b)
-  const m = Math.floor(s.length / 2)
-  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2
-}
 function fmtDuration(ms: number): string {
   if (ms <= 0) return '—'
   const totalMin = Math.round(ms / 60000)
@@ -184,26 +209,28 @@ export function PresentSnapshot() {
         const counts = { new: lists.new.length, learning: lists.learning.length, graduated: lists.graduated.length, due: lists.due.length, dormant: lists.dormant.length }
 
         // ── Today's goals + how many new words graduated today (per pair) ──
-        const since14 = new Date(now - 14 * DAY_MS).toISOString()
+        const sinceWindow = new Date(now - WINDOW_DAYS * DAY_MS).toISOString()
         const [gradsRes, ladderRes, dueRes] = await Promise.all([
           supabase.from('card_states').select('graduated_at, accelerated_mode, cards(source_language, target_language)')
-            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null).gte('graduated_at', since14),
-          supabase.from('ladder_events').select('created_at, duration_ms, source_language, target_language').eq('user_id', uid).gte('created_at', since14),
-          supabase.from('review_events').select('reviewed_at, response_ms, source_language, target_language, review_direction, was_typed').eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since14).order('reviewed_at', { ascending: false }).limit(3000),
+            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null).gte('graduated_at', sinceWindow),
+          supabase.from('ladder_events').select('created_at, duration_ms, source_language, target_language').eq('user_id', uid).gte('created_at', sinceWindow).limit(20000),
+          supabase.from('review_events').select('reviewed_at, response_ms, source_language, target_language, review_direction, was_typed').eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', sinceWindow).order('reviewed_at', { ascending: false }).limit(20000),
         ])
 
         const gradToday = new Map<string, number>()
-        const grad14ByPair = new Map<string, number>()
-        let grad14 = 0
+        // Recency-weighted graduation counts — the denominator of "time per new word".
+        const gradWByPair = new Map<string, number>()
+        let gradWAll = 0
         for (const row of (gradsRes.data ?? [])) {
           const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
           if (!r.graduated_at || !r.cards) continue
           if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
           const key = `${r.cards.source_language}|${r.cards.target_language}`
-          grad14++
-          grad14ByPair.set(key, (grad14ByPair.get(key) ?? 0) + 1)
+          const w = recencyWeight((now - new Date(r.graduated_at).getTime()) / DAY_MS)
+          gradWAll += w
+          gradWByPair.set(key, (gradWByPair.get(key) ?? 0) + w)
           if (localDateWithTurnover(r.graduated_at, tz, turnover) !== today) continue
-          gradToday.set(key, (gradToday.get(key) ?? 0) + 1)
+          gradToday.set(key, (gradToday.get(key) ?? 0) + 1)   // goal progress stays an exact count
         }
 
         const goals = pairs
@@ -218,29 +245,35 @@ export function PresentSnapshot() {
         // ── Time today + projections ──
         // Learning pace is measured PER LANGUAGE (ladder time ÷ words graduated), since a Korean word
         // takes far longer to climb the ladder than a Spanish one.
-        let ladderTodayMs = 0, ladder14Ms = 0
-        const ladder14ByPair = new Map<string, number>()
+        let ladderTodayMs = 0, ladderWAll = 0
+        const ladderWByPair = new Map<string, number>()   // Σ (recency weight × ms)
         for (const e of (ladderRes.data ?? [])) {
           const ms = (e.duration_ms as number | null) ?? 0
-          ladder14Ms += ms
+          const at = e.created_at as string
+          if (localDateWithTurnover(at, tz, turnover) === today) ladderTodayMs += ms
+          if (ms <= 0) continue
+          const w = recencyWeight((now - new Date(at).getTime()) / DAY_MS)
+          ladderWAll += ms * w
           const src = e.source_language as string | null, tgt = e.target_language as string | null
-          if (src && tgt) ladder14ByPair.set(`${src}|${tgt}`, (ladder14ByPair.get(`${src}|${tgt}`) ?? 0) + ms)
-          if (localDateWithTurnover(e.created_at as string, tz, turnover) === today) ladderTodayMs += ms
+          if (src && tgt) ladderWByPair.set(`${src}|${tgt}`, (ladderWByPair.get(`${src}|${tgt}`) ?? 0) + ms * w)
         }
-        // Review pace bucketed by language × direction × typed-or-not (plus the widening fallbacks).
+        // Review pace bucketed by language × direction × typed-or-not (plus the widening fallbacks),
+        // each sample carrying its recency weight.
         let dueTodayMs = 0
-        const paceSamples = new Map<string, number[]>()
-        const push = (k: string, ms: number) => { const a = paceSamples.get(k); if (a) a.push(ms); else paceSamples.set(k, [ms]) }
+        const paceSamples = new Map<string, WSample[]>()
+        const push = (k: string, s: WSample) => { const a = paceSamples.get(k); if (a) a.push(s); else paceSamples.set(k, [s]) }
         for (const e of (dueRes.data ?? [])) {
           const ms = (e.response_ms as number | null) ?? 0
-          if (localDateWithTurnover(e.reviewed_at as string, tz, turnover) === today) dueTodayMs += ms
+          const at = e.reviewed_at as string
+          if (localDateWithTurnover(at, tz, turnover) === today) dueTodayMs += ms
           if (ms <= 0) continue
+          const s: WSample = { v: ms, w: recencyWeight((now - new Date(at).getTime()) / DAY_MS) }
           const src = (e.source_language as string | null) ?? '', tgt = (e.target_language as string | null) ?? ''
           const dir: 'forward' | 'reverse' = (e.review_direction as string | null) === 'reverse' ? 'reverse' : 'forward'
           const typed = !!(e.was_typed as boolean | null)
-          push('all', ms)
-          push(`${dir}|${typed ? 't' : 's'}`, ms)
-          if (src && tgt) { push(`${src}|${tgt}|${dir}`, ms); push(paceKey(src, tgt, dir, typed), ms) }
+          push('all', s)
+          push(`${dir}|${typed ? 't' : 's'}`, s)
+          if (src && tgt) { push(`${src}|${tgt}|${dir}`, s); push(paceKey(src, tgt, dir, typed), s) }
         }
 
         // Project each due bucket at its own pace, then sum — instead of (all due) × (one global median).
@@ -249,15 +282,17 @@ export function PresentSnapshot() {
           const [src, tgt, dir, pres] = k.split('|') as [string, string, 'forward' | 'reverse', string]
           projDueMs += n * pace(paceSamples, src, tgt, dir, pres === 't')
         }
-        // Same for new words: each language's remaining goal at that language's own learning pace.
-        const globalLearnMs = grad14 > 0 && ladder14Ms > 0 ? ladder14Ms / grad14 : DEFAULT_LEARN_MS
+        // Same for new words: each language's remaining goal at that language's own learning pace —
+        // recency-weighted ladder time ÷ recency-weighted words graduated (both sides weighted, so
+        // the ratio is a true "time per word lately" rather than a flat 30-day average).
+        const globalLearnMs = gradWAll >= 2 && ladderWAll > 0 ? ladderWAll / gradWAll : DEFAULT_LEARN_MS
         let projNewMs = 0
         for (const g of goals) {
           const remaining = Math.max(0, g.goal - g.done)
           if (remaining === 0) continue
-          const gradN = grad14ByPair.get(g.key) ?? 0
-          const ms = ladder14ByPair.get(g.key) ?? 0
-          projNewMs += remaining * (gradN >= 3 && ms > 0 ? ms / gradN : globalLearnMs)
+          const gw = gradWByPair.get(g.key) ?? 0
+          const lw = ladderWByPair.get(g.key) ?? 0
+          projNewMs += remaining * (gw >= 2 && lw > 0 ? lw / gw : globalLearnMs)
         }
 
         if (!cancelled) setData({
@@ -413,8 +448,11 @@ export function PresentSnapshot() {
             <div className="text-xs text-ink-faint mt-0.5">{data.remainingNew === 0 ? "Today's new-word goals met ✓" : `to learn ${data.remainingNew} new word${data.remainingNew === 1 ? '' : 's'} toward today's goals`}</div>
           </div>
         </div>
-        <p className="text-[11px] text-ink-faint">Projections use your recent pace from the last 14 days, measured separately per language and direction — median review time for each language × direction × typed-or-self-graded bucket, and each language&apos;s own average time to learn a new word.</p>
+        <p className="text-[11px] text-ink-faint">These re-tune themselves every day. Pace is measured separately per language and direction — median review time for each language × direction × typed-or-self-graded bucket, and each language&apos;s own time per new word — over the last {WINDOW_DAYS} days, with recent days counting more (a review from {HALF_LIFE_DAYS} days ago counts half as much as today&apos;s). So as you speed up or slow down, the estimates follow within about a week.</p>
       </div>
+
+      {/* 4. Accuracy trend — % correct per language, filterable by scope / direction / card type */}
+      <AccuracyTrend />
     </div>
   )
 }
