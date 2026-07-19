@@ -25,8 +25,10 @@ const LEGEND = [
 const SPEEDS = [0.25, 0.5, 1, 2]
 
 const W = 400, H = 360, CX = W / 2, CY = H / 2
-const R_INNER = 26, R_MAX = 156, R_RELEARN = R_INNER + 14, ESCAPE = 360   // dormant cards fly past the edge
-const MIN_I = 1 / 144, MAX_I = 730          // 10 minutes … 2 years
+const R_INNER = 22, R_MAX = 168, R_RELEARN = R_INNER + 8, ESCAPE = 380   // dormant cards fly past the edge
+// MIN_I close to a day pulls the 1-day ring in near the sun; the wide range spreads weeks/months and
+// pushes the 1-year ring far out (cards there almost reach the edge — that's intended).
+const MIN_I = 0.5, MAX_I = 730              // 12 hours … 2 years
 const GOLDEN = 2.399963236
 const MAX_GAP_MS = 2500        // cap dead time between consecutive reviews → an "active-only" timeline
 const MS_PER_REVIEW = 1700     // target real playback time per review (paces a big day to ~2 min at 1×)
@@ -251,8 +253,8 @@ export function OrbitReplay({ session }: { session: DueSession }) {
 
           {(() => { const pulse = 1 + 0.06 * Math.sin(t / 650); return (
             <g>
-              <circle cx={CX} cy={CY} r={46 * pulse} fill="url(#orbit-sun)" />
-              <circle cx={CX} cy={CY} r={10} fill="#FFE39A" />
+              <circle cx={CX} cy={CY} r={34 * pulse} fill="url(#orbit-sun)" />
+              <circle cx={CX} cy={CY} r={8} fill="#FFE39A" />
               <text x={CX} y={CY + 1} textAnchor="middle" dominantBaseline="middle" fontSize={7} fontWeight={700} fill="rgba(0,0,0,0.65)">TODAY</text>
             </g>
           )})()}

@@ -4,10 +4,22 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { cardLevelAt, type SessionSummary } from '@/lib/ladderLog'
 
 const LANE_H = 44
-const CHIP_W = 62   // max chip width; chips size to their word up to this
-const CHIP_GAP = 4  // horizontal space between columns
+const CHIP_GAP = 6  // horizontal space between columns
 const CHIP_H = 22   // chip height — kept skinny so the word isn't swimming in empty space
 const GUTTER = 76   // left label gutter
+
+/** Estimate a chip's width from its text (11px medium) so columns fit each word without truncating.
+ *  CJK / Hangul / Kana glyphs are ~full-width; Latin/Cyrillic ~0.6em. Plus px-2 padding + border. */
+function estChipWidth(label: string): number {
+  let w = 0
+  for (const ch of label) {
+    const cp = ch.codePointAt(0) ?? 0
+    if (ch === ' ') w += 3.4
+    else if ((cp >= 0x1100 && cp <= 0x11FF) || (cp >= 0x3000 && cp <= 0x9FFF) || (cp >= 0xAC00 && cp <= 0xD7A3) || (cp >= 0xF900 && cp <= 0xFAFF)) w += 11.6
+    else w += 6.7
+  }
+  return Math.ceil(w) + 18
+}
 
 // Flash colour when a card just moved, by the rating/outcome of that attempt.
 const OUTCOME_COLOR: Record<string, string> = {
@@ -44,11 +56,18 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
   const laneCount = rungCount + 1              // rungs 0..n-1 + graduated
   const laneTop = (level: number) => (rungCount - level) * LANE_H + 6
 
-  // Stable column per card (first-seen order) so movement reads as vertical climbing.
-  const columns = useMemo(() => {
-    const m = new Map<string, number>()
-    cards.forEach((c, i) => m.set(c.cardId, i))
-    return m
+  // Stable column X per card (first-seen order) so movement reads as vertical climbing. Each column is
+  // sized to ITS word (estimated) — tight for short words, wide enough for long ones — so nothing is
+  // truncated and short words don't leave big gaps.
+  const { colX, colW, totalW } = useMemo(() => {
+    const xm = new Map<string, number>(), wm = new Map<string, number>()
+    let x = GUTTER
+    for (const c of cards) {
+      const w = estChipWidth(c.label)
+      xm.set(c.cardId, x); wm.set(c.cardId, w)
+      x += w + CHIP_GAP
+    }
+    return { colX: xm, colW: wm, totalW: x }
   }, [cards])
 
   const PLAY_MS = 9000
@@ -67,7 +86,7 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
   }, [playing])
 
   const laneLabel = (level: number) => level === rungCount ? '✓ Grad' : `Rung ${level + 1}`
-  const containerW = GUTTER + cards.length * (CHIP_W + CHIP_GAP) + 16
+  const containerW = totalW + 16
 
   return (
     <div className="space-y-3">
@@ -121,7 +140,6 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
             const level = (c.graduated && !climbed)
               ? (t <= start ? 0 : rungCount)
               : cardLevelAt(c.events, t)
-            const col = columns.get(c.cardId) ?? 0
             const grad = level >= rungCount
             // A card "pulses" briefly right after an attempt lands, coloured by that attempt's rating.
             const lastEvt = c.events.filter(e => new Date(e.createdAt).getTime() <= t).slice(-1)[0]
@@ -134,13 +152,13 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
               <div
                 key={c.cardId}
                 title={`${c.label} — ${c.attempts} attempt${c.attempts === 1 ? '' : 's'}, ${fmtClock(c.activeMs)}`}
-                className={`absolute flex items-center rounded-md px-2 text-[11px] font-medium truncate transition-all duration-500 ease-out border ${
+                className={`absolute flex items-center rounded-md px-2 text-[11px] font-medium whitespace-nowrap transition-all duration-500 ease-out border ${
                   flash ? 'text-ink' : grad ? 'bg-accent/25 border-accent/50 text-ink' : 'bg-surface-raised border-line/15 text-ink-muted'
                 }`}
                 style={{
-                  // Skinnier chip (CHIP_H) than the lane, kept at the same vertical center as before.
-                  top: laneTop(level) + (LANE_H - 12 - CHIP_H) / 2, left: GUTTER + col * (CHIP_W + CHIP_GAP),
-                  width: 'max-content', maxWidth: CHIP_W, height: CHIP_H,
+                  // Column X + width fit the word exactly (no truncation, tight columns). Skinny height.
+                  top: laneTop(level) + (LANE_H - 12 - CHIP_H) / 2, left: colX.get(c.cardId) ?? GUTTER,
+                  width: colW.get(c.cardId), height: CHIP_H,
                   ...(flash ? { backgroundColor: flash + '40', borderColor: flash } : {}),
                 }}>
                 {c.label}

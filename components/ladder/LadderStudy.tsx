@@ -85,6 +85,10 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   // Pre-set dormancy (threshold/flag) per card, captured at load — preserved through graduation so a
   // dormancy set before studying isn't wiped when the card graduates.
   const dormancyByCardRef = useRef<Map<string, { threshold: number | null; dormant: boolean }>>(new Map())
+  // Rolling pipeline (pipeline cap ON + "wait for full batch" OFF): keep ≤cap cards in the pipeline and
+  // pull in a new fresh card each time one graduates, until the whole set is done.
+  const rollingRef = useRef(false)
+  const pendingFreshRef = useRef<string[]>([])
   // An override the CURRENT card newly added this attempt (so undo can remove exactly it).
   const pendingOverrideAddRef = useRef<{ cardId: string; answerSide: CardSide; answerText: string } | null>(null)
   const [loading, setLoading] = useState(true)
@@ -275,6 +279,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       }
 
       let q: string[]
+      rollingRef.current = false
+      pendingFreshRef.current = []
       if (category === 'new')          q = shuffle(fresh)
       else if (category === 'learning') {
         // "Study Learning" = every card the deck's Learning filter shows: a non-graduated forward state
@@ -288,9 +294,15 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         const cap = prefs?.cardsPerSession ?? null
         if (cap != null && cap > 0) {
           if (prefs!.learningBatchMode) {
+            // Batch: a fixed group of `cap`, wait for the whole batch to graduate before the next batch.
             q = learning.length > 0 ? shuffle(learning) : shuffle(fresh).slice(0, cap)
           } else {
-            q = [...shuffle(learning), ...shuffle(fresh)].slice(0, cap)
+            // Rolling: keep ≤cap in the pipeline, refill from the rest as cards graduate → work through
+            // the whole set (progress is out of the full set, not a batch of `cap`).
+            const all = [...shuffle(learning), ...shuffle(fresh)]
+            q = all.slice(0, cap)
+            pendingFreshRef.current = all.slice(cap)
+            rollingRef.current = pendingFreshRef.current.length > 0
           }
         } else {
           const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
@@ -302,8 +314,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       startStepsRef.current = items.reduce((s, it) => s + Math.min(reconciled.get(it.cardId)?.rungIndex ?? 0, ladderLen0), 0)
       progressPctRef.current = 0
       setAnswered(0); setPaused(false)
-      setQueue(items); setTotal(items.length)
-      setHasMore((fresh.length + learning.length) > items.length)
+      setQueue(items); setTotal(rollingRef.current ? items.length + pendingFreshRef.current.length : items.length)
+      // Rolling mode already holds the whole set (queue + pending) → nothing more to load afterwards.
+      setHasMore(rollingRef.current ? false : (fresh.length + learning.length) > items.length)
       setCurrentId(pickNextCard(items, Date.now())?.cardId ?? null)
       setLoading(false)
 
@@ -415,6 +428,12 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       await graduate(currentId, res.state.targetInterval, res.state.nativeInterval)
       setGraduated(g => g + 1)
       nextQueue = queue.filter(e => e.cardId !== currentId)
+      // Rolling pipeline: as this card graduates, pull in the next fresh card so the pipeline stays full
+      // (≤ cap) and we keep flowing through the whole set instead of stopping at a batch of `cap`.
+      if (rollingRef.current && pendingFreshRef.current.length > 0) {
+        const nextFresh = pendingFreshRef.current.shift()!
+        nextQueue = [...nextQueue, { cardId: nextFresh, readyAt: 0, ratedAt: 0 }]
+      }
     } else {
       const rung = ladder.rungs[currentClimb.rungIndex]!
       const delay = rungReshowMs(rung, res, ladder.betweenRungWaitSeconds ?? 180)

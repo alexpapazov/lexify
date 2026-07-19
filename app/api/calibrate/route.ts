@@ -199,11 +199,18 @@ async function calibrateBucket(
   // recent retention rate, which the workload forecast (analytics + "Coming up") reads per track.
   const retentionRate = events.reduce((sum, e) => sum + successWeight(e), 0) / events.length
 
+  const calibratedAt = new Date().toISOString()
   await updateParams(userId, sourceLang, targetLang, answerField, {
-    calibrated_at:         new Date().toISOString(),
+    calibrated_at:         calibratedAt,
     total_due_reviews:     newTotal,
     recent_retention_rate: retentionRate,
   })
+  // Log a history snapshot on EVERY retention change (not only when grad intervals shift), so the
+  // calibration history is a complete per-track log and its newest row always matches the live value
+  // shown above — otherwise the live number can look out of sync with a sparser history.
+  if (params.recentRetentionRate !== retentionRate) {
+    await saveHistory({ ...params, recentRetentionRate: retentionRate, totalDueReviews: newTotal, calibratedAt })
+  }
 }
 
 /**
