@@ -21,6 +21,7 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseLadderEventRepository } from '@/lib/data/ladderEvents'
 import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
 import { SupabaseCardRepository } from '@/lib/data/cards'
+import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import type { ClimbState } from '@/engine/ladderEngine'
 import type { LadderEventInput } from '@/lib/data/ladderEvents'
 import type { CreateReviewEventInput } from '@/lib/data/interfaces'
@@ -124,6 +125,16 @@ async function pushNonState(userId: string, op: CoalescedOp): Promise<void> {
         pipeline_id: d.pipelineId, folder_id: d.folderId ?? null, position: d.position ?? 0,
       }, { onConflict: 'id', ignoreDuplicates: true })
       if (error) throw new Error(error.message)
+      return
+    }
+    case 'ladderSave': {
+      const { source, target, ladder } = p as { source: string; target: string; ladder: Parameters<SupabaseLadderRepository['saveForPair']>[3] }
+      await new SupabaseLadderRepository().saveForPair(userId, source, target, ladder)
+      return
+    }
+    case 'ladderReset': {
+      const { source, target } = p as { source: string; target: string }
+      await new SupabaseLadderRepository().resetPair(userId, source, target)
       return
     }
     case 'deckCardLink': {

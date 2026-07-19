@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/client'
 import type { Ladder, Rung, UserId } from '@/domain'
 import { isOfflineActive } from '@/lib/offline/mode'
-import { localLadderForPair } from '@/lib/offline/localRepos'
+import { localLadderForPair, localAllLadders, localSaveLadder, localResetLadder } from '@/lib/offline/localRepos'
 
 /** The default ladder is stored under empty-string source/target. */
 const DEFAULT_KEY = { source: '', target: '' }
@@ -32,12 +32,14 @@ export class SupabaseLadderRepository {
 
   /** Every saved ladder (including the default), for listing which pairs are customized. */
   async list(userId: UserId): Promise<{ source: string; target: string; ladder: Ladder }[]> {
+    if (isOfflineActive()) return localAllLadders()
     const { data, error } = await this.db.from('learning_ladders').select('*').eq('user_id', userId)
     if (error) throw new Error(error.message)
     return (data ?? []).map(r => ({ source: r.source_language as string, target: r.target_language as string, ladder: rowToLadder(r) }))
   }
 
   async saveForPair(userId: UserId, source: string, target: string, ladder: Ladder): Promise<void> {
+    if (isOfflineActive()) return localSaveLadder(source, target, ladder)
     const { error } = await this.db.from('learning_ladders').upsert(
       { user_id: userId, source_language: source, target_language: target, rungs: ladder.rungs, between_rung_wait_seconds: ladder.betweenRungWaitSeconds ?? 180, updated_at: new Date().toISOString() },
       { onConflict: 'user_id,source_language,target_language' },
@@ -51,6 +53,7 @@ export class SupabaseLadderRepository {
 
   /** Removes a pair's custom ladder so it falls back to the default again. */
   async resetPair(userId: UserId, source: string, target: string): Promise<void> {
+    if (isOfflineActive()) return localResetLadder(source, target)
     const { error } = await this.db.from('learning_ladders')
       .delete().eq('user_id', userId).eq('source_language', source).eq('target_language', target)
     if (error) throw new Error(error.message)

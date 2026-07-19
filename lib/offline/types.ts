@@ -39,7 +39,7 @@ export interface StoredDeckCard { key: string; deckId: string; cardId: string }
 // ── Outbox: local changes queued for the next online sync ────────────────────
 export type OutboxEntity =
   | 'cardState' | 'ladderClimb' | 'ladderEvent' | 'reviewEvent' | 'override' | 'card' | 'cardCreate'
-  | 'deckCreate' | 'folderCreate' | 'deckCardLink'
+  | 'deckCreate' | 'folderCreate' | 'deckCardLink' | 'ladderSave' | 'ladderReset'
 export interface OutboxEntry {
   id?:            number       // Dexie auto-increment
   entity:         OutboxEntity

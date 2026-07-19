@@ -142,6 +142,11 @@ export class LocalStore {
   async putDeck(deck: Deck): Promise<void> { await this.db.decks.put(deck) }
   async putFolder(folder: Folder): Promise<void> { await this.db.folders.put(folder) }
 
+  // ── Ladders (offline-editable config) ──
+  async putLadder(row: StoredLadder): Promise<void> { await this.db.ladders.put(row) }
+  async deleteLadder(key: string): Promise<void> { await this.db.ladders.delete(key) }
+  allLadders(): Promise<StoredLadder[]> { return this.db.ladders.toArray() }
+
   // ── Config reads ──
   getLadder(key: string): Promise<StoredLadder | undefined> { return this.db.ladders.get(key) }
   allSchedulerParams(): Promise<StoredParam[]> { return this.db.schedulerParams.toArray() }

@@ -48,6 +48,22 @@ export async function localLadderForPair(source: string, target: string): Promis
 export async function localLadderDefault(): Promise<Ladder | null> {
   return ((await getLocalStore().getLadder('default'))?.ladder as Ladder) ?? null
 }
+/** Every saved ladder (pairs + the default), for the "which pairs are customized" list offline. */
+export async function localAllLadders(): Promise<{ source: string; target: string; ladder: Ladder }[]> {
+  return (await getLocalStore().allLadders()).map(l => ({ source: l.source ?? '', target: l.target ?? '', ladder: l.ladder as Ladder }))
+}
+/** Save a ladder offline (local + outbox). Empty source/target = the user default (key 'default'). */
+export async function localSaveLadder(source: string, target: string, ladder: Ladder): Promise<void> {
+  const key = ladderKey(source, target)
+  await getLocalStore().putLadder({ key, source: source || null, target: target || null, ladder })
+  await enqueue('ladderSave', key, 'upsert', { source, target, ladder })
+}
+/** Reset a pair's ladder offline (removes the custom override so it falls back to the default). */
+export async function localResetLadder(source: string, target: string): Promise<void> {
+  const key = ladderKey(source, target)
+  await getLocalStore().deleteLadder(key)
+  await enqueue('ladderReset', key, 'delete', { source, target })
+}
 export async function localSchedulerParams(): Promise<SchedulerParamsRow[]> {
   return (await getLocalStore().allSchedulerParams()).map(p => p.row as SchedulerParamsRow)
 }

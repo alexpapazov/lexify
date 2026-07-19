@@ -229,7 +229,7 @@ function AnalyticsMenu({ pathname }: { pathname: string }) {
       <Link href="/progress" className={[
         'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150 whitespace-nowrap inline-flex items-center gap-1',
         active ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
-      ].join(' ')}>Analytics <span className="text-[10px]">▾</span></Link>
+      ].join(' ')}>Analytics</Link>
       {open && (
         <div className="absolute top-full left-0 pt-1 z-50">
           <div className="bg-surface-deep border border-line/10 rounded-lg py-1 min-w-[150px] shadow-lg">

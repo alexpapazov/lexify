@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
 import { useRouter } from 'next/navigation'
@@ -21,10 +21,11 @@ import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { folderMatchesPair, descendantDeckIds } from '@/lib/folderStats'
 import { langName } from '@/lib/languages'
 import {
+  INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
   analyzeDuplicate, type DuplicateAnalysis,
   tier1Match, tier2Match,
 } from '@/lib/duplicates'
-import type { Card, Folder, Deck } from '@/domain'
+import type { Card, Folder, Deck, LanguagePair } from '@/domain'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUploadForm } from '@/components/upload/OfflineUploadForm'
 
@@ -65,9 +66,16 @@ function buildFolderOptions(folders: Folder[], decks: Deck[], sourceLanguage: st
 }
 
 type SeparatorOption = 'tab' | 'newline' | 'custom'
+type AiMode = 'wordlist' | 'extraction'
 type Stage = 'edit' | 'preview'
 
 interface ParsedCard { front: string; back: string }
+
+interface CandidateCard {
+  front:           string
+  back:            string
+  languageWarning: 'front' | 'back' | 'both' | null
+}
 
 interface PreviewItem {
   front:           string
@@ -92,6 +100,25 @@ function sepChar(opt: SeparatorOption, custom: string): string {
   if (opt === 'tab')     return '\t'
   if (opt === 'newline') return '\n'
   return custom || '\t'
+}
+
+function wordCount(text: string): number {
+  const trimmed = text.trim()
+  if (!trimmed) return 0
+  return trimmed.split(/\s+/).filter(Boolean).length
+}
+
+function reasonToMessage(reason: string): string {
+  switch (reason) {
+    case 'no-api-key':            return 'AI card generation is not configured for this app yet.'
+    case 'content-too-long':      return `Your word list exceeds the ${INPUT_WORD_CAP}-word limit.`
+    case 'text-too-long':         return `Your text exceeds the ${INPUT_WORD_CAP}-word limit.`
+    case 'instructions-too-long': return `Prompt exceeds the ${INSTRUCTIONS_CHAR_CAP}-character limit.`
+    case 'empty-content':         return 'Please enter some content first.'
+    case 'parse-error':           return 'Could not understand the AI response. Please try again.'
+    case 'api-error':             return 'AI service error. Please try again.'
+    default:                       return 'Something went wrong running the agent. Please try again.'
+  }
 }
 
 /** Example words per language code: [apple, water] */
@@ -169,6 +196,28 @@ function SeparatorPicker({ label, value, onChange, custom, onCustomChange }: {
   )
 }
 
+/** Pill-style toggle between "Wordlist" and "Extract Text". */
+function ModeSwitch({ value, onChange }: { value: AiMode; onChange: (v: AiMode) => void }) {
+  return (
+    <div className="inline-flex items-center rounded-full border border-line/10 bg-surface p-1 text-sm shrink-0">
+      <button
+        type="button"
+        onClick={() => onChange('wordlist')}
+        className={`px-3 py-1 rounded-full transition-colors ${value === 'wordlist' ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
+      >
+        Wordlist
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('extraction')}
+        className={`px-3 py-1 rounded-full transition-colors ${value === 'extraction' ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
+      >
+        Extract Text
+      </button>
+    </div>
+  )
+}
+
 export default function CreatePage() {
   const offline = useOfflineMode()
   return offline ? <OfflineUploadForm /> : <OnlineCreatePage />
@@ -181,6 +230,15 @@ function OnlineCreatePage() {
   const [cardSepOpt,    setCardSepOpt]    = useState<SeparatorOption>('newline')
   const [customPairSep, setCustomPairSep] = useState('')
   const [customCardSep, setCustomCardSep] = useState('')
+
+  const [aiFormatEnabled, setAiFormatEnabled] = useState(false)
+  const [aiMode,          setAiMode]          = useState<AiMode>('wordlist')
+  const [aiPrompt,        setAiPrompt]        = useState('')
+  const [agentRunning,    setAgentRunning]    = useState(false)
+  const [agentRan,        setAgentRan]        = useState(false)
+  const [agentError,      setAgentError]      = useState<string | null>(null)
+  /** Indices (into `parsed`) of agent-result cards whose front/back language still looks off after auto-fixing reversed pairs. */
+  const [agentWarningLines, setAgentWarningLines] = useState<number[]>([])
 
   const [targetLang,    setTargetLang]    = useState('')
   const [basisLang,     setBasisLang]     = useState('')
@@ -208,16 +266,29 @@ function OnlineCreatePage() {
   const [fastTrackCardIds,  setFastTrackCardIds]  = useState<Set<number>>(new Set())
   const [syncFastTrackMode, setSyncFastTrackMode] = useState<'none' | 'new_only'>('new_only')
 
+  // All language pairs for the current user (loaded on mount for instructions fallback)
+  const [allPairsCache, setAllPairsCache] = useState<LanguagePair[]>([])
+
   const router   = useRouter()
   const supabase = createClient()
+
+  useEffect(() => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) return
+      const pairRepo = new SupabaseLanguagePairRepository()
+      const pairs = await pairRepo.list(session.user.id)
+      setAllPairsCache(pairs)
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const placeholder = useMemo(
     () => buildPlaceholder(pairSepOpt, customPairSep, cardSepOpt, customCardSep, targetLang, basisLang),
     [pairSepOpt, customPairSep, cardSepOpt, customCardSep, targetLang, basisLang]
   )
 
-  const effectivePairSep = sepChar(pairSepOpt, customPairSep)
-  const effectiveCardSep = sepChar(cardSepOpt, customCardSep)
+  const effectivePairSep = aiFormatEnabled ? '\t' : sepChar(pairSepOpt, customPairSep)
+  const effectiveCardSep = aiFormatEnabled ? '\n' : sepChar(cardSepOpt, customCardSep)
 
   const parsed = useMemo(() => {
     if (!rawText.trim()) return []
@@ -245,12 +316,99 @@ function OnlineCreatePage() {
     setRawText(unique.map(c => `${c.front}${effectivePairSep}${c.back}`).join(effectiveCardSep))
   }
 
+  const textareaLabel = aiFormatEnabled && aiMode === 'wordlist' ? 'Paste words here' : 'Paste text here'
+
+  const textareaPlaceholder = !aiFormatEnabled
+    ? placeholder
+    : aiMode === 'wordlist'
+      ? 'Enter words to be formatted by AI agent'
+      : 'Paste text for word extraction here'
+
   function ensureLanguages(): boolean {
     if (!targetLang || !basisLang) {
       setShowLangPopup(true)
       return false
     }
     return true
+  }
+
+  function handleRawTextChange(value: string) {
+    setRawText(value)
+    setAgentRan(false)
+    setAgentWarningLines([])
+  }
+
+  function handleAiToggle(checked: boolean) {
+    setAiFormatEnabled(checked)
+    setAgentRan(false)
+    setAgentError(null)
+    setAgentWarningLines([])
+  }
+
+  function handleAiModeChange(mode: AiMode) {
+    setAiMode(mode)
+    setAgentRan(false)
+    setAgentError(null)
+    setAgentWarningLines([])
+  }
+
+  async function handleRunAgent() {
+    setAgentError(null)
+    if (!ensureLanguages()) return
+    if (!rawText.trim()) { setAgentError('Enter some content first.'); return }
+    if (wordCount(rawText) > INPUT_WORD_CAP) {
+      setAgentError(`Your ${aiMode === 'wordlist' ? 'word list' : 'text'} exceeds the ${INPUT_WORD_CAP}-word limit.`)
+      return
+    }
+
+    setAgentRunning(true)
+    try {
+      // If user hasn't typed a custom prompt, fall back to the language pair's saved instructions
+      const pairDefaultInstructions = aiPrompt.trim()
+        ? aiPrompt
+        : (allPairsCache.find(p => p.sourceLanguage === targetLang && p.targetLanguage === basisLang)?.instructions ?? '')
+      const body = aiMode === 'wordlist'
+        ? { mode: 'wordlist', content: rawText, instructions: pairDefaultInstructions, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
+        : { mode: 'extraction', text: rawText, instructions: pairDefaultInstructions, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
+
+      const res  = await fetch(apiUrl('/api/cards/generate'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+
+      if (!data.ok) {
+        setAgentError(reasonToMessage(data.reason))
+        return
+      }
+
+      // If the agent flagged a card as 'both' sides being in the wrong
+      // language, it's almost always a fully reversed pair (front/back
+      // swapped) — auto-fix by swapping them back. Cards still flagged on
+      // just one side afterwards are surfaced as warnings for the user to
+      // review, since those usually mean a mistranslation rather than a
+      // simple swap.
+      const warningLines: number[] = []
+      const fixedCards = (data.cards as CandidateCard[]).map((c, idx) => {
+        if (c.languageWarning === 'both') {
+          return { front: c.back, back: c.front }
+        }
+        if (c.languageWarning === 'front' || c.languageWarning === 'back') {
+          warningLines.push(idx)
+        }
+        return { front: c.front, back: c.back }
+      })
+
+      const formatted = fixedCards.map(c => `${c.front}\t${c.back}`).join('\n')
+      setRawText(formatted)
+      setAgentWarningLines(warningLines)
+      setAgentRan(true)
+    } catch {
+      setAgentError('Something went wrong running the agent. Please try again.')
+    } finally {
+      setAgentRunning(false)
+    }
   }
 
   function handlePreview() {
@@ -550,6 +708,8 @@ function OnlineCreatePage() {
     setRawText('')
     setDeckName('')
     setError(null)
+    setAgentError(null)
+    setAgentRan(false)
     setStage('edit')
     setPreviewItems([])
     setDupChecked(false)
@@ -798,22 +958,59 @@ function OnlineCreatePage() {
         <LanguageCombobox label="Basis language"  value={basisLang}  onChange={setBasisLang}  />
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <SeparatorPicker label="Front / back separator" value={pairSepOpt} onChange={setPairSepOpt} custom={customPairSep} onCustomChange={setCustomPairSep} />
-        <SeparatorPicker label="Between-card separator" value={cardSepOpt} onChange={setCardSepOpt} custom={customCardSep} onCustomChange={setCustomCardSep} />
+      <div className="space-y-2">
+        <div className="flex items-center gap-4">
+          <label className="flex items-center gap-2 cursor-pointer select-none" data-tour="upload-ai-toggle">
+            <input type="checkbox" checked={aiFormatEnabled} onChange={e => handleAiToggle(e.target.checked)} className="accent-accent w-4 h-4" />
+            <span className="text-sm text-ink">Format with AI agent</span>
+          </label>
+          {aiFormatEnabled && <ModeSwitch value={aiMode} onChange={handleAiModeChange} />}
+        </div>
+
+        {aiFormatEnabled && (
+          <div className="space-y-1.5" data-tour="upload-ai-prompt">
+            <div className="flex items-center justify-between">
+              <label className="text-sm text-ink-muted">Prompt</label>
+              <span className="text-xs text-ink-faint">{aiPrompt.length} / {INSTRUCTIONS_CHAR_CAP}</span>
+            </div>
+            <textarea
+              className="input min-h-[60px] resize-y text-sm"
+              maxLength={INSTRUCTIONS_CHAR_CAP}
+              placeholder="Prompt: e.g. 'Extract Spanish → English pairs'"
+              value={aiPrompt}
+              onChange={e => setAiPrompt(e.target.value)}
+            />
+          </div>
+        )}
       </div>
 
+      {!aiFormatEnabled && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <SeparatorPicker label="Front / back separator" value={pairSepOpt} onChange={setPairSepOpt} custom={customPairSep} onCustomChange={setCustomPairSep} />
+          <SeparatorPicker label="Between-card separator" value={cardSepOpt} onChange={setCardSepOpt} custom={customCardSep} onCustomChange={setCustomCardSep} />
+        </div>
+      )}
+
       <div className="space-y-1.5">
-        <label className="text-sm text-ink-muted">Paste text here</label>
+        <div className="flex items-center justify-between">
+          <label className="text-sm text-ink-muted">{textareaLabel}</label>
+          {aiFormatEnabled && (
+            <span className="text-xs text-ink-faint">
+              {wordCount(rawText)} / {INPUT_WORD_CAP} words
+            </span>
+          )}
+        </div>
         <textarea
           className="input min-h-[220px] resize-y font-mono text-sm leading-relaxed"
-          placeholder={placeholder}
+          placeholder={textareaPlaceholder}
           value={rawText}
-          onChange={e => setRawText(e.target.value)}
+          onChange={e => handleRawTextChange(e.target.value)}
         />
       </div>
 
-      {parsed.length > 0 && (
+      {agentError && <p className="text-danger text-sm">{agentError}</p>}
+
+      {!aiFormatEnabled && parsed.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
@@ -837,16 +1034,46 @@ function OnlineCreatePage() {
         </div>
       )}
 
+      {aiFormatEnabled && agentRan && parsed.length > 0 && (
+        <div className="space-y-2">
+          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
+            Agent result — {parsed.length} card{parsed.length !== 1 ? 's' : ''} detected
+          </h2>
+          <div className="panel space-y-2 max-h-56 overflow-y-auto">
+            {parsed.map((card, i) => (
+              <div key={i} className={`flex gap-4 text-sm ${agentWarningLines.includes(i) ? 'text-warning' : ''}`}>
+                <span className={`w-1/2 truncate ${agentWarningLines.includes(i) ? '' : 'text-ink'}`}>{card.front}</span>
+                <span className={`w-1/2 truncate ${agentWarningLines.includes(i) ? '' : 'text-ink-muted'}`}>{card.back}</span>
+              </div>
+            ))}
+          </div>
+          {agentWarningLines.length > 0 && (
+            <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
+              {agentWarningLines.length === 1 ? 'Card' : 'Cards'} {agentWarningLines.map(i => `#${i + 1}`).join(', ')} {agentWarningLines.length === 1 ? 'doesn\'t' : 'don\'t'} look like {agentWarningLines.length === 1 ? "it's" : "they're"} in the expected language on one side — double-check the highlighted row{agentWarningLines.length !== 1 ? 's' : ''} above before saving.
+            </div>
+          )}
+        </div>
+      )}
+
       {error && <p className="text-danger text-sm">{error}</p>}
 
       <div className="flex gap-3">
         <button
           className="btn-primary"
-          disabled={!deckName.trim() || saving || parsed.length === 0}
+          disabled={!deckName.trim() || saving || (aiFormatEnabled ? (!agentRan || parsed.length === 0) : parsed.length === 0)}
           onClick={handlePreview}
         >
           Preview deck
         </button>
+        {aiFormatEnabled && (
+          <button
+            className="btn-ghost"
+            disabled={agentRunning || !rawText.trim()}
+            onClick={handleRunAgent}
+          >
+            {agentRunning ? 'Running…' : 'Run agent'}
+          </button>
+        )}
         <button className="btn-ghost" onClick={handleClear}>
           Clear
         </button>

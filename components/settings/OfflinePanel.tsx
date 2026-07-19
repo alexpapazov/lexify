@@ -44,7 +44,25 @@ export function OfflinePanel() {
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
   const [conflicts, setConflicts] = useState<CardStateConflict[]>([])
+  // Whether the local download exactly matches the cloud (no pending local changes AND nothing changed
+  // server-side since the download). You can only switch to Offline from an up-to-date state — otherwise
+  // you'd study a stale copy. `null` = not yet checked (treated as allowed, to avoid trapping the user).
+  const [upToDate, setUpToDate] = useState<boolean | null>(null)
   const offline = useOfflineMode()
+
+  /** Up to date = no pending outbox changes and no server-side card/state edits since the download. */
+  async function computeUpToDate(m: Manifest | null, uid: string | null): Promise<boolean> {
+    if (!m || !uid) return true
+    try {
+      if ((await getLocalStore().outboxCount()) > 0) return false
+      const supabase = createClient()
+      const [c1, c2] = await Promise.all([
+        supabase.from('cards').select('id', { count: 'exact', head: true }).eq('owner_id', uid).gt('updated_at', m.downloadedAt),
+        supabase.from('card_states').select('card_id', { count: 'exact', head: true }).eq('user_id', uid).gt('updated_at', m.downloadedAt),
+      ])
+      return (c1.count ?? 0) === 0 && (c2.count ?? 0) === 0
+    } catch { return true }  // fail-open: don't trap the user if we can't verify
+  }
 
   useEffect(() => {
     ;(async () => {
@@ -56,9 +74,12 @@ export function OfflinePanel() {
         new SupabaseFolderRepository().list(session.user.id),
       ])
       setDecks(ds); setFolders(fs)
-      setManifest((await getLocalStore().getManifest()) ?? null)
+      const m = (await getLocalStore().getManifest()) ?? null
+      setManifest(m)
       setPendingCount(await getLocalStore().outboxCount())
+      setUpToDate(await computeUpToDate(m, session.user.id))
     })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offline])
 
   const pairs = useMemo(() => {
@@ -85,18 +106,26 @@ export function OfflinePanel() {
   async function run() {
     const scopes = buildScopes()
     if (scopes.length === 0) { setError('Pick at least one thing to download (or choose Whole library).'); return }
-    setBusy(true); setError(null); setResult(null); setProgress(null)
+    setBusy(true); setError(null); setResult(null); setProgress(null); setSyncMsg(null)
     try {
+      // Updating an existing bundle: push any pending local changes first (resolving conflicts) so we
+      // don't re-download over unsynced reviews, then refresh — so afterwards local == cloud.
+      if (manifest && userId && pendingCount > 0) {
+        const { conflicts: found } = await pushOutbox(userId, p => setSyncProgress(p))
+        setPendingCount(await getLocalStore().outboxCount())
+        if (found.length > 0) { setConflicts(found); setBusy(false); setSyncProgress(null); return }
+      }
       const { manifest: m, bytes } = await downloadForOffline({
         scopes, dueWindowDays: windowDays, includeAudio,
         onProgress: (phase, done, total) => setProgress({ phase, done, total }),
       })
       setResult({ cardCount: m.cardCount, bytes })
       setManifest(m)
+      setUpToDate(true)   // just refreshed against the cloud
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy(false); setProgress(null)
+      setBusy(false); setProgress(null); setSyncProgress(null)
     }
   }
 
@@ -120,7 +149,7 @@ export function OfflinePanel() {
         scopes: manifest.scopes, dueWindowDays: manifest.dueWindowDays, includeAudio: manifest.includeAudio,
         onProgress: (phase, done, total) => setProgress({ phase, done, total }),
       })
-      setManifest(m); setSyncMsg('Download updated — matches the cloud.')
+      setManifest(m); setUpToDate(true); setSyncMsg('Download updated — matches the cloud.')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -146,6 +175,7 @@ export function OfflinePanel() {
         setConflicts(found)
       } else {
         setSyncMsg(pushed > 0 ? `Synced ${pushed} change${pushed === 1 ? '' : 's'}.` : 'Everything was already up to date.')
+        setUpToDate(await computeUpToDate(manifest, userId))
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -163,6 +193,7 @@ export function OfflinePanel() {
       setPendingCount(remaining)
       setConflicts([])
       setSyncMsg('Sync complete.')
+      setUpToDate(await computeUpToDate(manifest, userId))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -198,7 +229,12 @@ export function OfflinePanel() {
       )}
 
       {/* Offline toggle — only meaningful once a bundle is downloaded */}
-      {manifest && (
+      {manifest && (() => {
+        // Can only switch INTO offline from an up-to-date download (else you'd study a stale copy).
+        // Going back Online is always allowed. `upToDate === false` = confirmed stale.
+        const stale = upToDate === false
+        const toggleDisabled = syncing || busy || (!offline && stale)
+        return (
         <div className={`rounded-lg border px-3 py-2 ${offline ? 'border-accent/40 bg-accent/5' : 'border-line/10'}`}>
           <div className="flex items-center justify-between gap-3">
             <div>
@@ -206,22 +242,24 @@ export function OfflinePanel() {
               <div className="text-xs text-ink-faint mt-0.5">
                 {offline
                   ? 'Reviews are saved on this device. Switch to Online when you have a connection to sync them back.'
-                  : pendingCount > 0
-                    ? `${pendingCount} local change${pendingCount === 1 ? '' : 's'} waiting to sync.`
-                    : 'Study without a connection using your downloaded cards.'}
+                  : stale
+                    ? 'Your download is out of date — press Update below before switching to Offline.'
+                    : pendingCount > 0
+                      ? `${pendingCount} local change${pendingCount === 1 ? '' : 's'} waiting to sync.`
+                      : 'Study without a connection using your downloaded cards.'}
               </div>
             </div>
-            {/* Online ⟷ Offline switch (Online is the default). */}
-            <div className="shrink-0 inline-flex rounded-full border border-line/15 bg-surface-raised p-0.5 text-xs font-medium select-none">
+            {/* Online ⟷ Offline switch (Online is the default). Grayed until the download is up to date. */}
+            <div className={`shrink-0 inline-flex rounded-full border border-line/15 bg-surface-raised p-0.5 text-xs font-medium select-none ${toggleDisabled ? 'opacity-50' : ''}`}>
               <button
-                onClick={() => { if (!syncing && offline) void handleToggle(false) }}
-                disabled={syncing}
-                className={`px-3 py-1 rounded-full transition-colors disabled:opacity-60 ${!offline ? 'bg-accent text-white' : 'text-ink-muted'}`}
+                onClick={() => { if (!toggleDisabled && offline) void handleToggle(false) }}
+                disabled={toggleDisabled}
+                className={`px-3 py-1 rounded-full transition-colors ${!offline ? 'bg-accent text-white' : 'text-ink-muted'}`}
               >Online</button>
               <button
-                onClick={() => { if (!syncing && !offline) void handleToggle(true) }}
-                disabled={syncing}
-                className={`px-3 py-1 rounded-full transition-colors disabled:opacity-60 ${offline ? 'bg-amber-500 text-black' : 'text-ink-muted'}`}
+                onClick={() => { if (!toggleDisabled && !offline) void handleToggle(true) }}
+                disabled={toggleDisabled}
+                className={`px-3 py-1 rounded-full transition-colors ${offline ? 'bg-amber-500 text-black' : 'text-ink-muted'}`}
               >Offline</button>
             </div>
           </div>
@@ -235,7 +273,8 @@ export function OfflinePanel() {
             <button onClick={() => void runSync()} className="mt-2 text-xs text-accent hover:underline">Sync now ({pendingCount})</button>
           )}
         </div>
-      )}
+        )
+      })()}
 
       {conflicts.length > 0 && (
         <SyncConflictModal
@@ -317,7 +356,7 @@ export function OfflinePanel() {
       {error && <p className="text-xs text-danger">{error}</p>}
 
       <button onClick={run} disabled={busy} className="btn-primary text-sm disabled:opacity-50">
-        {busy ? 'Downloading…' : manifest ? 'Re-download' : 'Download for offline'}
+        {busy ? (manifest ? 'Updating…' : 'Downloading…') : manifest ? 'Update' : 'Download for offline'}
       </button>
     </div>
   )
