@@ -89,8 +89,8 @@ export default function AgentsPage() {
       ])
       setDecks(ds)
       setFolders(fs)
-      // Expand every pair by default so the tree opens showing top-level folders/decks.
-      setExpanded(new Set(Array.from(new Set(ds.map(d => `pair:${d.sourceLanguage}|${d.targetLanguage}`)))))
+      // Start fully collapsed — just the language pairs — so the scope tree is easy to scan and expand
+      // only what you need.
     })()
   }, [])
 
