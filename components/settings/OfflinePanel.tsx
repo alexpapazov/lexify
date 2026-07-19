@@ -284,6 +284,9 @@ export function OfflinePanel() {
         />
       )}
 
+      {/* Download configuration — hidden entirely offline: you can't set up or run a download without a
+          connection. (The Downloaded summary + Online/Offline toggle above stay visible.) */}
+      {!offline && (<>
       {/* Scope — multi-select: whole library, or any mix of languages / folders / decks */}
       <div className="space-y-2 text-sm">
         <div className="text-xs text-ink-muted">What to download</div>
@@ -355,9 +358,16 @@ export function OfflinePanel() {
       {result && <p className="text-xs text-success">✓ Downloaded {result.cardCount} cards · {fmtBytes(result.bytes)}</p>}
       {error && <p className="text-xs text-danger">{error}</p>}
 
-      <button onClick={run} disabled={busy} className="btn-primary text-sm disabled:opacity-50">
+      {/* Update is only meaningful when the download is stale — grayed out when a bundle already exists
+          and is up to date. (First-time "Download for offline" is always available online.) */}
+      <button
+        onClick={run}
+        disabled={busy || (!!manifest && upToDate === true)}
+        className="btn-primary text-sm disabled:opacity-50"
+      >
         {busy ? (manifest ? 'Updating…' : 'Downloading…') : manifest ? 'Update' : 'Download for offline'}
       </button>
+      </>)}
     </div>
   )
 }
