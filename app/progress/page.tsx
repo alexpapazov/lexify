@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { DueForecastProjection } from '@/components/analytics/DueForecastProjection'
+import { PresentSnapshot } from '@/components/analytics/PresentSnapshot'
 import { ReviewCalendar } from '@/components/analytics/ReviewCalendar'
 import { Segmented } from '@/components/analytics/Segmented'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
@@ -34,9 +35,7 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {view === 'present' && (
-        <div className="panel p-10 text-center text-sm text-ink-muted">Coming soon — today at a glance.</div>
-      )}
+      {view === 'present' && <PresentSnapshot />}
 
       {view === 'future' && (
         <div className="panel p-5 space-y-3">
