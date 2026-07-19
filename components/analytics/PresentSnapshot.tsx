@@ -17,7 +17,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
-import { buildEnabledTracksMap, trackEnabled } from '@/lib/sessionLimits'
+import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import { routes } from '@/lib/routes'
@@ -29,6 +29,36 @@ interface CardEntry { card: Card; deckId: string; deckName: string; source: stri
 const DAY_MS = 86_400_000
 const DEFAULT_DUE_MS = 8_000     // fallback per-review time if we have no timing history
 const DEFAULT_LEARN_MS = 90_000  // fallback per-new-card learning time
+
+/** Bucket key for review pace: a typed Spanish production review and a reverse Korean recognition
+ *  take very different amounts of time, so pace is measured per language × direction × typed-or-not
+ *  rather than as one global median. */
+function paceKey(src: string, tgt: string, dir: 'forward' | 'reverse', typed: boolean): string {
+  return `${src}|${tgt}|${dir}|${typed ? 't' : 's'}`
+}
+
+/**
+ * Median response time for a bucket, widening when a bucket is too thin to trust: exact
+ * (language × direction × typed) → same language+direction → same direction+typed across languages →
+ * global → fixed fallback. `MIN_SAMPLES` guards against one slow review skewing a sparse bucket.
+ */
+const MIN_SAMPLES = 5
+function pace(
+  samples: Map<string, number[]>, src: string, tgt: string, dir: 'forward' | 'reverse', typed: boolean,
+): number {
+  const tryKeys = [
+    paceKey(src, tgt, dir, typed),
+    `${src}|${tgt}|${dir}`,       // same language + direction, either presentation
+    `${dir}|${typed ? 't' : 's'}`, // same direction + presentation, any language
+    'all',
+  ]
+  for (const k of tryKeys) {
+    const xs = samples.get(k)
+    if (xs && xs.length >= MIN_SAMPLES) { const m = median(xs); if (m != null && m > 0) return m }
+  }
+  const any = median(samples.get('all') ?? [])
+  return any && any > 0 ? any : DEFAULT_DUE_MS
+}
 
 function median(xs: number[]): number | null {
   if (xs.length === 0) return null
@@ -91,6 +121,20 @@ export function PresentSnapshot() {
         ])
         const deckById = new Map(decks.map(d => [d.id, d]))
         const enabledMap = buildEnabledTracksMap(paramRows)   // for track-aware Due Now (matches the dashboard)
+        // Smart-typing threshold per pair (canonical on forward_typed) — decides whether a due
+        // production review is presented TYPED or self-graded, which dominates how long it takes.
+        const thresholdByPair = new Map<string, number>()
+        for (const r of paramRows) {
+          if (r.answerField === 'forward_typed') thresholdByPair.set(`${r.sourceLanguage}|${r.targetLanguage}`, r.smartTypingThresholdDays)
+        }
+        // Due REVIEWS bucketed by language × direction × presentation. A card due both forward and
+        // reverse is two reviews (dedupeDueReviews keys on cardId:direction), so this is the real
+        // workload — the Due Now *card* count below stays one-per-card to match the dashboard.
+        const dueBuckets = new Map<string, number>()
+        const addDue = (src: string, tgt: string, dir: 'forward' | 'reverse', typed: boolean) => {
+          const k = paceKey(src, tgt, dir, typed)
+          dueBuckets.set(k, (dueBuckets.get(k) ?? 0) + 1)
+        }
         const isDue = (dateStr: string | null | undefined) => !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= today
 
         // Per-deck cards + states + climb → status buckets.
@@ -118,9 +162,19 @@ export function PresentSnapshot() {
             if (s?.dormant) { lists.dormant.push(entry(card)); continue }
             if (s?.graduated) {
               lists.graduated.push(entry(card))
-              const due = prodDue(s) || recallDue(s)
-                || states.some(r => r.cardId === card.id && r.reviewDirection === 'reverse' && reverseDue(r))
-              if (due) lists.due.push(entry(card))
+              const fwdProd = prodDue(s), fwdRecall = recallDue(s)
+              const revDue = states.some(r => r.cardId === card.id && r.reviewDirection === 'reverse' && reverseDue(r))
+              // One forward review at most (production outranks recall in dedupeDueReviews); reverse is
+              // its own review. Presentation decides pace: production may be typed, recall/reverse never.
+              if (fwdProd) {
+                const track = activeProductionTrack(en)
+                const typed = !!track && forwardProductionMode(s, track, thresholdByPair.get(`${deck.sourceLanguage}|${deck.targetLanguage}`) ?? 20) === 'typed'
+                addDue(deck.sourceLanguage, deck.targetLanguage, 'forward', typed)
+              } else if (fwdRecall) {
+                addDue(deck.sourceLanguage, deck.targetLanguage, 'forward', false)
+              }
+              if (revDue) addDue(deck.sourceLanguage, deck.targetLanguage, 'reverse', false)
+              if (fwdProd || fwdRecall || revDue) lists.due.push(entry(card))
               continue
             }
             if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) lists.learning.push(entry(card))
@@ -134,19 +188,21 @@ export function PresentSnapshot() {
         const [gradsRes, ladderRes, dueRes] = await Promise.all([
           supabase.from('card_states').select('graduated_at, accelerated_mode, cards(source_language, target_language)')
             .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null).gte('graduated_at', since14),
-          supabase.from('ladder_events').select('created_at, duration_ms').eq('user_id', uid).gte('created_at', since14),
-          supabase.from('review_events').select('reviewed_at, response_ms').eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since14).order('reviewed_at', { ascending: false }).limit(600),
+          supabase.from('ladder_events').select('created_at, duration_ms, source_language, target_language').eq('user_id', uid).gte('created_at', since14),
+          supabase.from('review_events').select('reviewed_at, response_ms, source_language, target_language, review_direction, was_typed').eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since14).order('reviewed_at', { ascending: false }).limit(3000),
         ])
 
         const gradToday = new Map<string, number>()
+        const grad14ByPair = new Map<string, number>()
         let grad14 = 0
         for (const row of (gradsRes.data ?? [])) {
           const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
           if (!r.graduated_at || !r.cards) continue
           if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
-          grad14++
-          if (localDateWithTurnover(r.graduated_at, tz, turnover) !== today) continue
           const key = `${r.cards.source_language}|${r.cards.target_language}`
+          grad14++
+          grad14ByPair.set(key, (grad14ByPair.get(key) ?? 0) + 1)
+          if (localDateWithTurnover(r.graduated_at, tz, turnover) !== today) continue
           gradToday.set(key, (gradToday.get(key) ?? 0) + 1)
         }
 
@@ -160,27 +216,55 @@ export function PresentSnapshot() {
         const remainingNew = goals.reduce((sum, g) => sum + Math.max(0, g.goal - g.done), 0)
 
         // ── Time today + projections ──
+        // Learning pace is measured PER LANGUAGE (ladder time ÷ words graduated), since a Korean word
+        // takes far longer to climb the ladder than a Spanish one.
         let ladderTodayMs = 0, ladder14Ms = 0
+        const ladder14ByPair = new Map<string, number>()
         for (const e of (ladderRes.data ?? [])) {
           const ms = (e.duration_ms as number | null) ?? 0
           ladder14Ms += ms
+          const src = e.source_language as string | null, tgt = e.target_language as string | null
+          if (src && tgt) ladder14ByPair.set(`${src}|${tgt}`, (ladder14ByPair.get(`${src}|${tgt}`) ?? 0) + ms)
           if (localDateWithTurnover(e.created_at as string, tz, turnover) === today) ladderTodayMs += ms
         }
+        // Review pace bucketed by language × direction × typed-or-not (plus the widening fallbacks).
         let dueTodayMs = 0
-        const dueSamples: number[] = []
+        const paceSamples = new Map<string, number[]>()
+        const push = (k: string, ms: number) => { const a = paceSamples.get(k); if (a) a.push(ms); else paceSamples.set(k, [ms]) }
         for (const e of (dueRes.data ?? [])) {
           const ms = (e.response_ms as number | null) ?? 0
-          if (ms > 0) dueSamples.push(ms)
           if (localDateWithTurnover(e.reviewed_at as string, tz, turnover) === today) dueTodayMs += ms
+          if (ms <= 0) continue
+          const src = (e.source_language as string | null) ?? '', tgt = (e.target_language as string | null) ?? ''
+          const dir: 'forward' | 'reverse' = (e.review_direction as string | null) === 'reverse' ? 'reverse' : 'forward'
+          const typed = !!(e.was_typed as boolean | null)
+          push('all', ms)
+          push(`${dir}|${typed ? 't' : 's'}`, ms)
+          if (src && tgt) { push(`${src}|${tgt}|${dir}`, ms); push(paceKey(src, tgt, dir, typed), ms) }
         }
-        const avgDueMs = median(dueSamples) ?? DEFAULT_DUE_MS
-        const avgLearnMs = grad14 > 0 && ladder14Ms > 0 ? ladder14Ms / grad14 : DEFAULT_LEARN_MS
+
+        // Project each due bucket at its own pace, then sum — instead of (all due) × (one global median).
+        let projDueMs = 0
+        for (const [k, n] of dueBuckets) {
+          const [src, tgt, dir, pres] = k.split('|') as [string, string, 'forward' | 'reverse', string]
+          projDueMs += n * pace(paceSamples, src, tgt, dir, pres === 't')
+        }
+        // Same for new words: each language's remaining goal at that language's own learning pace.
+        const globalLearnMs = grad14 > 0 && ladder14Ms > 0 ? ladder14Ms / grad14 : DEFAULT_LEARN_MS
+        let projNewMs = 0
+        for (const g of goals) {
+          const remaining = Math.max(0, g.goal - g.done)
+          if (remaining === 0) continue
+          const gradN = grad14ByPair.get(g.key) ?? 0
+          const ms = ladder14ByPair.get(g.key) ?? 0
+          projNewMs += remaining * (gradN >= 3 && ms > 0 ? ms / gradN : globalLearnMs)
+        }
 
         if (!cancelled) setData({
           lists, counts, goals,
           timeTodayMs: ladderTodayMs + dueTodayMs,
-          projDueMs: counts.due * avgDueMs,
-          projNewMs: remainingNew * avgLearnMs,
+          projDueMs,
+          projNewMs,
           remainingNew,
         })
       } catch (e) {
@@ -329,7 +413,7 @@ export function PresentSnapshot() {
             <div className="text-xs text-ink-faint mt-0.5">{data.remainingNew === 0 ? "Today's new-word goals met ✓" : `to learn ${data.remainingNew} new word${data.remainingNew === 1 ? '' : 's'} toward today's goals`}</div>
           </div>
         </div>
-        <p className="text-[11px] text-ink-faint">Projections use your recent pace — median time per Due Now review and average time to learn a new word over the last 14 days.</p>
+        <p className="text-[11px] text-ink-faint">Projections use your recent pace from the last 14 days, measured separately per language and direction — median review time for each language × direction × typed-or-self-graded bucket, and each language&apos;s own average time to learn a new word.</p>
       </div>
     </div>
   )
