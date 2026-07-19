@@ -135,4 +135,20 @@ describe('localRepos writes queue to the outbox', () => {
     expect((await localOwnedCards('es', 'en')).map(c => c.id).sort()).toEqual(['a', 'b'])
     expect(await localOwnedCards('fr', 'en')).toEqual([])
   })
+
+  it('saves and resets a ladder offline (local + outbox)', async () => {
+    const lad = { rungs: [], betweenRungWaitSeconds: 90 }
+    await localSaveLadder('es', 'en', lad)
+    expect((await localLadderForPair('es', 'en'))?.betweenRungWaitSeconds).toBe(90)
+    expect((await localAllLadders()).some(l => l.source === 'es' && l.target === 'en')).toBe(true)
+
+    await localSaveLadder('', '', { rungs: [], betweenRungWaitSeconds: 120 })  // the default
+    expect((await getLocalStore().getLadder('default'))?.ladder).toEqual({ rungs: [], betweenRungWaitSeconds: 120 })
+
+    await localResetLadder('es', 'en')
+    expect(await localLadderForPair('es', 'en')).toBeNull()
+
+    expect((await getLocalStore().outbox()).filter(o => o.entity === 'ladderSave' || o.entity === 'ladderReset').map(o => o.entity))
+      .toEqual(['ladderSave', 'ladderSave', 'ladderReset'])
+  })
 })

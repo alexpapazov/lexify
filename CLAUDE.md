@@ -1221,6 +1221,24 @@ Toggling offline OFF now **syncs the outbox back to Supabase**.
   are last-write-wins); `fetchServerState` uses `maybeSingle()` so duplicate forward rows would need
   cleanup first. Confusion-linking during offline study is best-effort (fire-and-forget, fails silently
   offline) — scheduling is unaffected.
+### Offline: create decks + edit ladders (2026-07-18)
+
+- **Create page** (`app/create/page.tsx`, formerly `/upload`): online form keeps the **AI agent**
+  ("Format with AI agent") — it's online-only (the offline `OfflineUploadForm` has no AI). Offline mode
+  is per-device localStorage (`lexify-offline-mode`); one device's offline state never affects another.
+- **Offline deck creation** (`OfflineUploadForm`): full flow (name, languages, separators, paste,
+  preview, exact+near dup check via the pure `analyzeDuplicate`, folder picker) writing to the local
+  store + outbox (`deckCreate`/`folderCreate`/`deckCardLink`/`cardCreate`, pushed FK-safe order on sync).
+- **Offline ladder editing**: `SupabaseLadderRepository.list/saveForPair/saveDefault/resetPair` are now
+  offline-guarded → `localAllLadders`/`localSaveLadder`/`localResetLadder` (local + outbox
+  `ladderSave`/`ladderReset`, synced on reconnect). `ladderKey('','')` = `'default'`. Every download
+  ALWAYS bundles all pair ladders + the default (whole-user config, any scope) so downloaded cards run
+  the pipeline accurately offline.
+- **Download distractors** persist to the server for cards that had none (direct `cards.update`).
+- **Toggle gating**: the Online/Offline switch is disabled unless the download is up to date (no pending
+  outbox + no server card/state edits since download); "Update" (renamed from Re-download) syncs then
+  re-downloads. Nav "Analytics" links to Overview; hover dropdown = Connections/Logs only (no arrow).
+
 ### PWA — installable + offline app shell (Stage 7 done, 2026-07-18)
 
 Lexify is now an installable PWA that boots offline from the home-screen icon.
