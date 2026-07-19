@@ -113,7 +113,13 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
           })}
           {/* Cards */}
           {cards.map(c => {
-            const level = cardLevelAt(c.events, t)
+            // Auto-graduated cards graduate in one jump (0 → GRAD) without occupying any intermediate
+            // rung — so instead of popping to the top at some mid-movie event time (which reads as
+            // "frozen"), spring them straight to GRAD at the very start of the movie.
+            const climbed = c.events.some(e => e.toRung > 0 && e.toRung < rungCount)
+            const level = (c.graduated && !climbed)
+              ? (t <= start ? 0 : rungCount)
+              : cardLevelAt(c.events, t)
             const col = columns.get(c.cardId) ?? 0
             const grad = level >= rungCount
             // A card "pulses" briefly right after an attempt lands, coloured by that attempt's rating.

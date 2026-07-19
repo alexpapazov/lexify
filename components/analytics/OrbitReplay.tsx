@@ -1,16 +1,17 @@
 'use client'
 
 /**
- * OrbitReplay — the "orbit" movie for one Due Now session, rendered as a pure function of session-time
- * so playback, scrubbing, and comet-tails all stay perfectly consistent. "Today" is a breathing sun at
- * the centre; each card orbits at a radius = its review interval (log-scaled). At t=0 every card is
- * clustered at the sun (all due today); as the session's reviews fire in time order each card is flung
- * outward — Good/Easy sail far, Again crashes it back into a tight relearn orbit near the sun — trailing
- * a rating-coloured comet tail and pulsing a ring on each review. Purely visual.
+ * OrbitReplay — the "orbit" movie for one DAY of Due Now reviews, rendered as a pure function of
+ * session-time (so playback, scrubbing, and comet-tails stay consistent). "Today" is a breathing sun at
+ * the centre. Every card starts clustered at the sun (all due today) and, as its reviews fire, is flung
+ * to its review interval — then it KEEPS orbiting at that radius, so the field fills up with concentric
+ * rings of cards. Good/Easy sail far, Again crashes into a tight relearn orbit, and a card turned
+ * DORMANT escapes the system entirely (shoots off-screen). Playback speed is adjustable.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DueSession, DueCard } from '@/lib/dueNowLog'
 import { displayText } from '@/lib/cardText'
+import { langName, langFlag } from '@/lib/languages'
 
 const RATING_COLOR: Record<string, string> = { again: '#F05068', hard: '#F0883E', good: '#4ADE80', easy: '#4C8DFF' }
 const LEGEND = [
@@ -19,15 +20,13 @@ const LEGEND = [
   { label: 'Good', color: '#4ADE80' },
   { label: 'Easy → far out', color: '#4C8DFF' },
 ]
+const SPEEDS = [0.25, 0.5, 1, 2]
 
 const W = 400, H = 360, CX = W / 2, CY = H / 2
-const R_INNER = 26, R_MAX = 156, R_RELEARN = R_INNER + 14
+const R_INNER = 26, R_MAX = 156, R_RELEARN = R_INNER + 14, ESCAPE = 360   // dormant cards fly past the edge
 const MIN_I = 1 / 144, MAX_I = 730          // 10 minutes … 2 years
-const GOLDEN = 2.399963236                  // radians — even spread around the circle
-const OMEGA = 0.00000045                    // base angular speed (rad per ms of session-time)
-const TAIL = 7                              // comet-tail samples
-const PLAY_MS = 12000
-const GUIDES = [{ d: 1, label: '1d' }, { d: 7, label: '1w' }, { d: 30, label: '1mo' }, { d: 365, label: '1yr' }]
+const GOLDEN = 2.399963236
+const BASE_PLAY_MS = 13000
 
 function orbitRadius(intervalDays: number): number {
   const iv = Math.min(MAX_I, Math.max(MIN_I, intervalDays || MIN_I))
@@ -43,24 +42,28 @@ function fmtInterval(days: number): string {
   if (days < 365) return `${Math.round(days / 30)}mo`
   return `${(days / 365).toFixed(days < 730 ? 1 : 0)}y`
 }
-/** Deterministic starfield (seeded LCG) so it doesn't flicker between renders. */
 function makeStars(n: number) {
   let s = 0x9e3779b9
   const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 0xffffffff)
   return Array.from({ length: n }, () => ({ x: rnd() * W, y: rnd() * H, r: 0.4 + rnd() * 1.1, o: 0.15 + rnd() * 0.45, tw: rnd() * 6.283 }))
 }
+const GUIDES = [{ d: 1, label: '1d' }, { d: 7, label: '1w' }, { d: 30, label: '1mo' }, { d: 365, label: '1yr' }]
 
-/** Target orbit radius a card should be at after its i-th review (piecewise crash/fling). */
+/** The card's final resting radius: dormant → escape; lapsed → tight relearn; else its interval orbit. */
+function finalRadius(c: DueCard): number { return c.dormant ? ESCAPE : c.lapsed ? R_RELEARN : orbitRadius(c.intervalDays) }
+/** How many full orbits this card sweeps over the whole movie — inner orbits are faster (Kepler-ish). */
+function orbitsOverMovie(rFinal: number): number { return Math.min(6, Math.max(0.7, 1.25 * Math.pow(R_MAX / Math.max(R_INNER, rFinal), 0.7))) }
+
 function targetForReview(card: DueCard, idx: number): number {
   const rev = card.reviews[idx]!
   const isLast = idx === card.reviews.length - 1
-  const rFinal = card.lapsed ? R_RELEARN : orbitRadius(card.intervalDays)
-  if (rev.rating === 'again') return R_RELEARN                       // crash back toward today
-  if (isLast) return rFinal
-  const progress = 0.45 + 0.55 * ((idx + 1) / card.reviews.length)   // partial fling on the way out
-  return R_INNER + (rFinal - R_INNER) * (rev.rating === 'easy' ? Math.min(1.06, progress + 0.15) : progress)
+  const rF = finalRadius(card)
+  if (card.dormant && isLast) return ESCAPE
+  if (rev.rating === 'again' && !card.dormant) return R_RELEARN
+  if (isLast) return rF
+  const progress = 0.45 + 0.55 * ((idx + 1) / card.reviews.length)
+  return R_INNER + (rF - R_INNER) * (rev.rating === 'easy' ? Math.min(1.06, progress + 0.15) : progress)
 }
-/** The card's radius at absolute session-time `t` — eased across its review keyframes. */
 function radiusAt(card: DueCard, t: number, flingMs: number): number {
   const rs = card.reviews
   if (rs.length === 0 || t < rs[0]!.at) return R_INNER
@@ -75,20 +78,30 @@ export function OrbitReplay({ session }: { session: DueSession }) {
   const { cards, start, wallMs } = session
   const [frac, setFrac] = useState(1)
   const [playing, setPlaying] = useState(false)
+  const [speed, setSpeed] = useState(1)
+  const [langFilter, setLangFilter] = useState<string | null>(null)   // watch just one language
   const rafRef = useRef<number | null>(null)
   const startRef = useRef(0)
 
+  const langs = useMemo(() => [...new Set(cards.map(c => c.source).filter((x): x is string => !!x))], [cards])
+  const shown = useMemo(() => langFilter ? cards.filter(c => c.source === langFilter) : cards, [cards, langFilter])
+
   const t = start + frac * Math.max(1, wallMs)
-  const flingMs = Math.max(350, wallMs * 0.05)
-  const stars = useMemo(() => makeStars(46), [])
-  const angle0 = useMemo(() => { const m = new Map<string, number>(); cards.forEach((c, i) => m.set(c.cardId, i * GOLDEN)); return m }, [cards])
-  const showLabels = cards.length <= 16
+  const flingMs = Math.max(300, wallMs * 0.03)
+  const stars = useMemo(() => makeStars(48), [])
+  const angle0 = useMemo(() => { const m = new Map<string, number>(); shown.forEach((c, i) => m.set(c.cardId, i * GOLDEN)); return m }, [shown])
+  // Per-card angular speed based on its FINAL orbit → smooth spiral-out (no angle jumps while flinging).
+  const spin = useMemo(() => { const m = new Map<string, number>(); shown.forEach(c => m.set(c.cardId, orbitsOverMovie(finalRadius(c)) * 2 * Math.PI)); return m }, [shown])
+  const big = shown.length > 120
+  const TAIL = big ? 4 : 7
+  const showLabels = shown.length <= 16
+  const playMs = BASE_PLAY_MS / speed
 
   useEffect(() => {
     if (!playing) { if (rafRef.current) cancelAnimationFrame(rafRef.current); return }
-    startRef.current = performance.now() - frac * PLAY_MS
+    startRef.current = performance.now() - frac * playMs
     const tick = () => {
-      const p = Math.min(1, (performance.now() - startRef.current) / PLAY_MS)
+      const p = Math.min(1, (performance.now() - startRef.current) / playMs)
       setFrac(p)
       if (p >= 1) { setPlaying(false); return }
       rafRef.current = requestAnimationFrame(tick)
@@ -96,17 +109,15 @@ export function OrbitReplay({ session }: { session: DueSession }) {
     rafRef.current = requestAnimationFrame(tick)
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing])
+  }, [playing, playMs])
 
-  // Position of a card at absolute session-time `tt` — pure, so tails just re-sample the past.
   const posAt = (c: DueCard, tt: number) => {
     const r = radiusAt(c, tt, flingMs)
-    // Kepler-ish: inner orbits sweep faster. Angle is a function of session-time only → deterministic tails.
-    const theta = (angle0.get(c.cardId) ?? 0) + (tt - start) * OMEGA * (R_MAX / Math.max(R_INNER, r))
+    const theta = (angle0.get(c.cardId) ?? 0) + ((tt - start) / Math.max(1, wallMs)) * (spin.get(c.cardId) ?? 0)
     return { x: CX + r * Math.cos(theta), y: CY + r * Math.sin(theta), r }
   }
 
-  const reviewedCount = cards.filter(c => (c.reviews[0]?.at ?? Infinity) <= t).length
+  const reviewedCount = shown.filter(c => (c.reviews[0]?.at ?? Infinity) <= t).length
   const tailDt = flingMs / TAIL
 
   return (
@@ -120,15 +131,39 @@ export function OrbitReplay({ session }: { session: DueSession }) {
         <span className="text-xs text-ink-muted tabular-nums w-16 text-right">{fmtClock(frac * wallMs)} / {fmtClock(wallMs)}</span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[11px] text-ink-faint">Speed</span>
+        <div className="inline-flex rounded-md overflow-hidden border border-line/15 text-[11px]">
+          {SPEEDS.map(s => (
+            <button key={s} onClick={() => setSpeed(s)} className={`px-2 py-0.5 ${speed === s ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}>{s}×</button>
+          ))}
+        </div>
+        <span className="ml-auto text-[11px] text-ink-muted tabular-nums">{reviewedCount}/{shown.length} launched</span>
+      </div>
+
+      {/* Language filter — watch just one language's cards */}
+      {langs.length > 1 && (
+        <div className="flex flex-wrap gap-1.5 text-[11px]">
+          <button onClick={() => setLangFilter(null)}
+            className={`px-2 py-0.5 rounded-full border ${langFilter === null ? 'bg-accent/20 border-accent text-ink' : 'border-line/15 text-ink-muted hover:text-ink'}`}>All</button>
+          {langs.map(l => (
+            <button key={l} onClick={() => setLangFilter(l)}
+              className={`px-2 py-0.5 rounded-full border inline-flex items-center gap-1 ${langFilter === l ? 'bg-accent/20 border-accent text-ink' : 'border-line/15 text-ink-muted hover:text-ink'}`}>
+              {langFlag(l)} {langName(l)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-faint">
         {LEGEND.map(l => (
           <span key={l.label} className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: l.color }} />{l.label}</span>
         ))}
-        <span className="ml-auto text-ink-muted tabular-nums">{reviewedCount}/{cards.length} launched</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full border border-ink-faint" />Dormant → escapes</span>
       </div>
 
       <div className="rounded-lg border border-line/10 overflow-hidden" style={{ background: 'radial-gradient(120% 120% at 50% 45%, #14162A 0%, #0B0C16 70%)' }}>
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 400 }}>
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420 }}>
           <defs>
             <radialGradient id="orbit-sun" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#FFF0C0" stopOpacity="1" />
@@ -142,12 +177,10 @@ export function OrbitReplay({ session }: { session: DueSession }) {
             </radialGradient>
           </defs>
 
-          {/* Starfield */}
           {stars.map((s, i) => (
             <circle key={i} cx={s.x} cy={s.y} r={s.r} fill="#CBD2F0" opacity={s.o * (0.7 + 0.3 * Math.sin(t / 900 + s.tw))} />
           ))}
 
-          {/* Orbit guide rings */}
           {GUIDES.map(g => {
             const r = orbitRadius(g.d)
             return (
@@ -158,7 +191,6 @@ export function OrbitReplay({ session }: { session: DueSession }) {
             )
           })}
 
-          {/* Sun (Today) — gentle breathing */}
           {(() => { const pulse = 1 + 0.06 * Math.sin(t / 650); return (
             <g>
               <circle cx={CX} cy={CY} r={46 * pulse} fill="url(#orbit-sun)" />
@@ -167,31 +199,29 @@ export function OrbitReplay({ session }: { session: DueSession }) {
             </g>
           )})()}
 
-          {/* Cards + comet tails */}
-          {cards.map(c => {
+          {shown.map(c => {
             const reviewed = (c.reviews[0]?.at ?? Infinity) <= t
             const here = posAt(c, t)
             const seen = c.reviews.filter(r => r.at <= t)
             const lastEvt = seen[seen.length - 1]
             const color = lastEvt ? (RATING_COLOR[lastEvt.rating] ?? '#4ADE80') : '#5A6079'
-            const justRated = !!lastEvt && (t - lastEvt.at) >= 0 && (t - lastEvt.at) < Math.max(500, wallMs * 0.045)
-            const pulseR = justRated && lastEvt ? 6 + 16 * ((t - lastEvt.at) / Math.max(500, wallMs * 0.045)) : 0
+            const justRated = !!lastEvt && (t - lastEvt.at) >= 0 && (t - lastEvt.at) < Math.max(400, wallMs * 0.03)
+            const pulseR = justRated && lastEvt ? 6 + 16 * ((t - lastEvt.at) / Math.max(400, wallMs * 0.03)) : 0
+            const offscreen = here.x < -20 || here.x > W + 20 || here.y < -20 || here.y > H + 20
+            if (offscreen) return null
             return (
               <g key={c.cardId}>
-                {/* comet tail — re-sampled past positions */}
                 {reviewed && Array.from({ length: TAIL }, (_, k) => {
                   const p = posAt(c, t - (k + 1) * tailDt)
                   const f = 1 - (k + 1) / (TAIL + 1)
-                  return <circle key={k} cx={p.x} cy={p.y} r={3.4 * f} fill={color} opacity={0.28 * f} />
+                  return <circle key={k} cx={p.x} cy={p.y} r={3.4 * f} fill={color} opacity={0.26 * f} />
                 })}
-                {/* review pulse ring */}
                 {pulseR > 0 && lastEvt && (
                   <circle cx={here.x} cy={here.y} r={pulseR} fill="none" stroke={RATING_COLOR[lastEvt.rating] ?? '#4ADE80'} strokeWidth={1.5} opacity={0.75 * (1 - pulseR / 22)} />
                 )}
-                {/* glow + head */}
-                {reviewed && <circle cx={here.x} cy={here.y} r={9} fill="url(#orbit-halo)" opacity={0.35} />}
-                <circle cx={here.x} cy={here.y} r={reviewed ? 4.6 : 3} fill={color} opacity={reviewed ? 1 : 0.5}>
-                  <title>{displayText(c.label)} · {fmtInterval(c.intervalDays)}{c.lapsed ? ' · relearning' : ''}</title>
+                {reviewed && !big && <circle cx={here.x} cy={here.y} r={9} fill="url(#orbit-halo)" opacity={0.32} />}
+                <circle cx={here.x} cy={here.y} r={reviewed ? 4.4 : 2.8} fill={c.dormant ? 'none' : color} stroke={c.dormant ? '#9AA3C8' : 'none'} strokeWidth={c.dormant ? 1.4 : 0} opacity={reviewed ? 1 : 0.5}>
+                  <title>{displayText(c.label)} · {c.dormant ? 'dormant' : fmtInterval(c.intervalDays)}{c.lapsed ? ' · relearning' : ''}</title>
                 </circle>
                 {(showLabels || justRated) && reviewed && (
                   <text x={here.x} y={here.y - 8} textAnchor="middle" fontSize={8} fill="#B8C0E0" style={{ pointerEvents: 'none' }}>
@@ -205,7 +235,7 @@ export function OrbitReplay({ session }: { session: DueSession }) {
       </div>
 
       <p className="text-[11px] text-ink-faint">
-        Every card starts at <span className="text-ink-muted">today</span> (the sun) and is flung to its review interval — inner rings are days, outer are months &amp; years (log scale). Colour = your rating; multiple reviews crash it in (Again) and fling it back out; a lapse settles in a tight relearn orbit near today.
+        The whole day in one movie: every card starts at <span className="text-ink-muted">today</span> (the sun) and is flung to its review interval, then keeps orbiting — so the rings fill up as the day goes on (inner = days, outer = months &amp; years, log scale). Colour = your rating; a lapse settles near today; a card you sent dormant escapes off-screen. Use the speed control to slow it down.
       </p>
     </div>
   )

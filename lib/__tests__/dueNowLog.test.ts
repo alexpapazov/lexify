@@ -1,25 +1,25 @@
-import { groupDueSessions, type RawDueEvent } from '@/lib/dueNowLog'
-
-const ev = (cardId: string, at: number, rating = 'good', over: Partial<RawDueEvent> = {}): RawDueEvent =>
-  ({ cardId, rating, at, ms: 3000, direction: 'forward', source: 'es', target: 'en', ...over })
+import { groupDueDays, type RawDueEvent } from '@/lib/dueNowLog'
 
 const MIN = 60_000
+const ev = (cardId: string, at: number, day: string, rating = 'good', over: Partial<RawDueEvent> = {}): RawDueEvent =>
+  ({ cardId, rating, at, ms: 3000, direction: 'forward', source: 'es', target: 'en', day, ...over })
 
-describe('groupDueSessions', () => {
-  it('splits on a > 45-minute gap and keeps close reviews together', () => {
-    const s = groupDueSessions([
-      ev('a', 0), ev('b', 5 * MIN), ev('c', 60 * MIN), ev('d', 62 * MIN),
+describe('groupDueDays', () => {
+  it('puts an entire local day into one session regardless of time gaps', () => {
+    const s = groupDueDays([
+      ev('a', 0, '2026-07-01'), ev('b', 6 * 60 * MIN, '2026-07-01'),   // 6h apart, same day → one session
+      ev('c', 30 * 60 * MIN, '2026-07-02'),                             // next day → separate
     ])
     expect(s).toHaveLength(2)
-    // newest session first
-    expect(s[0]!.cardCount).toBe(2)   // c, d
-    expect(s[1]!.cardCount).toBe(2)   // a, b
+    expect(s[0]!.day).toBe('2026-07-02')   // newest first
+    expect(s[1]!.day).toBe('2026-07-01')
+    expect(s[1]!.cardCount).toBe(2)
   })
 
-  it('tallies reviews, lapses, and active time; marks a card lapsed when its last review is again', () => {
-    const s = groupDueSessions([
-      ev('a', 0, 'again'), ev('a', 2 * MIN, 'good'),   // a recovered → not lapsed
-      ev('b', 3 * MIN, 'good'), ev('b', 4 * MIN, 'again'), // b ended on again → lapsed
+  it('tallies reviews, lapses, active time; marks lapsed when the last review is again', () => {
+    const s = groupDueDays([
+      ev('a', 0, 'd1', 'again'), ev('a', 2 * MIN, 'd1', 'good'),   // recovered → not lapsed
+      ev('b', 3 * MIN, 'd1', 'good'), ev('b', 4 * MIN, 'd1', 'again'), // ended again → lapsed
     ])
     expect(s).toHaveLength(1)
     const sess = s[0]!
@@ -32,6 +32,6 @@ describe('groupDueSessions', () => {
   })
 
   it('returns nothing for no events', () => {
-    expect(groupDueSessions([])).toEqual([])
+    expect(groupDueDays([])).toEqual([])
   })
 })

@@ -1,8 +1,8 @@
 /**
- * lib/dueNowLog.ts — pure grouping of Due Now review_events into sessions for the "orbit" replay.
- * Kept framework-free so it's unit-testable. Events are grouped by an inactivity gap (like the ladder
- * session rule); each session tallies its cards and their per-review ratings. `label` and `intervalDays`
- * are filled in by the loader (fronts + current schedule come from separate queries).
+ * lib/dueNowLog.ts — pure grouping of Due Now review_events into ONE session PER DAY for the orbit
+ * replay (the whole day's reviews play as a single movie). Framework-free so it's unit-testable. The
+ * caller tags each event with its local `day` (tz + turnover aware) and fills in `label`, `intervalDays`
+ * and `dormant` from separate queries.
  */
 export interface DueReview { rating: string; at: number; direction: 'forward' | 'reverse' }
 export interface DueCard {
@@ -11,11 +11,13 @@ export interface DueCard {
   source:       string | null
   target:       string | null
   reviews:      DueReview[]
-  intervalDays: number   // orbit radius source — the card's current interval (filled by the loader)
-  lapsed:       boolean  // last review was 'again' → it crashed back toward "today"
+  intervalDays: number   // orbit radius source — the card's current interval
+  lapsed:       boolean  // last review was 'again' → crashed back toward "today"
+  dormant:      boolean  // card is now dormant → it escapes the system (flies off screen)
 }
 export interface DueSession {
   sessionId:   string
+  day:         string    // YYYY-MM-DD (local)
   start:       number
   end:         number
   wallMs:      number
@@ -33,39 +35,32 @@ export interface RawDueEvent {
   direction: 'forward' | 'reverse'
   source:    string | null
   target:    string | null
+  day:       string
 }
 
-const GAP_MS = 45 * 60_000
+/** Group every Due Now review into one session per local day (all of that day's cards in one movie). */
+export function groupDueDays(events: RawDueEvent[]): DueSession[] {
+  const byDay = new Map<string, RawDueEvent[]>()
+  for (const e of events) (byDay.get(e.day) ?? byDay.set(e.day, []).get(e.day)!).push(e)
 
-export function groupDueSessions(events: RawDueEvent[], gapMs = GAP_MS): DueSession[] {
-  const sorted = [...events].sort((a, b) => a.at - b.at)
-  const sessions: DueSession[] = []
-  let cur: RawDueEvent[] = []
-
-  const flush = () => {
-    if (cur.length === 0) return
-    const start = cur[0]!.at, end = cur[cur.length - 1]!.at
+  const out: DueSession[] = []
+  for (const [day, evs] of byDay) {
+    const sorted = [...evs].sort((a, b) => a.at - b.at)
+    const start = sorted[0]!.at, end = sorted[sorted.length - 1]!.at
     const byCard = new Map<string, DueCard>()
     let again = 0, activeMs = 0
-    for (const e of cur) {
+    for (const e of sorted) {
       activeMs += Math.max(0, e.ms)
       if ((e.rating ?? '') === 'again') again++
       let c = byCard.get(e.cardId)
-      if (!c) { c = { cardId: e.cardId, label: '', source: e.source, target: e.target, reviews: [], intervalDays: 0, lapsed: false }; byCard.set(e.cardId, c) }
+      if (!c) { c = { cardId: e.cardId, label: '', source: e.source, target: e.target, reviews: [], intervalDays: 0, lapsed: false, dormant: false }; byCard.set(e.cardId, c) }
       c.reviews.push({ rating: e.rating ?? 'good', at: e.at, direction: e.direction })
     }
     for (const c of byCard.values()) c.lapsed = c.reviews[c.reviews.length - 1]?.rating === 'again'
-    sessions.push({
-      sessionId: `due-${start}`, start, end, wallMs: Math.max(1, end - start), activeMs,
-      cardCount: byCard.size, reviewCount: cur.length, againCount: again, cards: [...byCard.values()],
+    out.push({
+      sessionId: `day-${day}`, day, start, end, wallMs: Math.max(1, end - start), activeMs,
+      cardCount: byCard.size, reviewCount: sorted.length, againCount: again, cards: [...byCard.values()],
     })
-    cur = []
   }
-
-  for (const e of sorted) {
-    if (cur.length && e.at - cur[cur.length - 1]!.at > gapMs) flush()
-    cur.push(e)
-  }
-  flush()
-  return sessions.sort((a, b) => b.start - a.start)
+  return out.sort((a, b) => b.start - a.start)
 }

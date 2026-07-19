@@ -7,8 +7,9 @@
  */
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { groupDueSessions, type DueSession, type RawDueEvent } from '@/lib/dueNowLog'
+import { groupDueDays, type DueSession, type RawDueEvent } from '@/lib/dueNowLog'
 import { langName, langFlag } from '@/lib/languages'
+import { localDateWithTurnover } from '@/lib/dates'
 import { OrbitReplay } from './OrbitReplay'
 
 function fmtDuration(ms: number): string {
@@ -18,9 +19,8 @@ function fmtDuration(ms: number): string {
   if (m < 60) return `${m}m ${s % 60}s`
   return `${Math.floor(m / 60)}h ${m % 60}m`
 }
-function fmtWhen(epoch: number): string {
-  const d = new Date(epoch)
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+function fmtDay(day: string): string {
+  return new Date(day + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 }
 
 export function DueNowLogs() {
@@ -35,12 +35,17 @@ export function DueNowLogs() {
         const { data: { session } } = await supabase.auth.getSession()
         if (!session) return
         const uid = session.user.id
-        const since = new Date(Date.now() - 120 * 86_400_000).toISOString()  // last ~4 months
+        const since = new Date(Date.now() - 180 * 86_400_000).toISOString()  // last ~6 months
 
-        const { data: evs } = await supabase.from('review_events')
-          .select('card_id, rating, reviewed_at, response_ms, review_direction, source_language, target_language')
-          .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since)
-          .order('reviewed_at', { ascending: true }).limit(4000)
+        const [{ data: profile }, { data: evs }] = await Promise.all([
+          supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', uid).single(),
+          supabase.from('review_events')
+            .select('card_id, rating, reviewed_at, response_ms, review_direction, source_language, target_language')
+            .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since)
+            .order('reviewed_at', { ascending: true }).limit(20000),
+        ])
+        const tz = (profile?.timezone as string | null) ?? 'UTC'
+        const turnover = (profile?.day_turnover_hour as number | null) ?? 0
 
         const raw: RawDueEvent[] = (evs ?? []).map(e => ({
           cardId: e.card_id as string,
@@ -50,24 +55,30 @@ export function DueNowLogs() {
           direction: (e.review_direction as string) === 'reverse' ? 'reverse' : 'forward',
           source: (e.source_language as string | null) ?? null,
           target: (e.target_language as string | null) ?? null,
+          day: localDateWithTurnover(e.reviewed_at as string, tz, turnover),
         }))
-        const grouped = groupDueSessions(raw)
+        const grouped = groupDueDays(raw)
 
-        // Enrich each card with its front (label) + current interval (orbit radius).
+        // Enrich each card with its front (label), current interval (orbit radius), and dormancy (escapes).
         const cardIds = [...new Set(raw.map(r => r.cardId))]
         const frontById = new Map<string, string>()
         const intervalById = new Map<string, number>()
+        const dormantById = new Set<string>()
         if (cardIds.length > 0) {
           const [cardsRes, statesRes] = await Promise.all([
             supabase.from('cards').select('id, front').in('id', cardIds),
-            supabase.from('card_states').select('card_id, interval_days, scheduled_interval_days').eq('user_id', uid).eq('review_direction', 'forward').in('card_id', cardIds),
+            supabase.from('card_states').select('card_id, interval_days, scheduled_interval_days, dormant').eq('user_id', uid).eq('review_direction', 'forward').in('card_id', cardIds),
           ])
           for (const r of cardsRes.data ?? []) frontById.set(r.id as string, r.front as string)
-          for (const r of statesRes.data ?? []) intervalById.set(r.card_id as string, (r.scheduled_interval_days as number | null) ?? (r.interval_days as number | null) ?? 1)
+          for (const r of statesRes.data ?? []) {
+            intervalById.set(r.card_id as string, (r.scheduled_interval_days as number | null) ?? (r.interval_days as number | null) ?? 1)
+            if (r.dormant) dormantById.add(r.card_id as string)
+          }
         }
         for (const s of grouped) for (const c of s.cards) {
           c.label = frontById.get(c.cardId) ?? '—'
           c.intervalDays = intervalById.get(c.cardId) ?? 1
+          c.dormant = dormantById.has(c.cardId)
         }
 
         setSessions(grouped)
@@ -93,15 +104,17 @@ export function DueNowLogs() {
       <div className="divide-y divide-line/5">
         {sessions?.map(s => {
           const open = openId === s.sessionId
-          const src = s.cards[0]?.source
-          const pair = src ? `${langFlag(src)} ${langName(src)} → ${s.cards[0]?.target ? langName(s.cards[0]!.target!) : ''}` : 'Due Now session'
+          const srcs = [...new Set(s.cards.map(c => c.source).filter((x): x is string => !!x))]
+          const pair = srcs.length === 0 ? 'Due Now'
+            : srcs.length === 1 ? `${langFlag(srcs[0]!)} ${langName(srcs[0]!)} → English`
+            : `${srcs.map(langFlag).join(' ')} ${srcs.length} languages`
           return (
             <div key={s.sessionId} className="py-2">
               <button onClick={() => setOpenId(open ? null : s.sessionId)}
                 className="w-full flex items-center justify-between gap-3 text-left hover:bg-surface/40 rounded-lg px-2 py-1.5 transition-colors">
                 <div className="min-w-0">
-                  <div className="text-sm text-ink flex items-center gap-2"><span className="text-ink-faint">{open ? '▾' : '▸'}</span><span className="truncate">{pair}</span></div>
-                  <div className="text-xs text-ink-faint pl-5">{fmtWhen(s.start)}</div>
+                  <div className="text-sm text-ink flex items-center gap-2"><span className="text-ink-faint">{open ? '▾' : '▸'}</span><span className="truncate">{fmtDay(s.day)}</span></div>
+                  <div className="text-xs text-ink-faint pl-5">{pair}</div>
                 </div>
                 <div className="flex items-center gap-3 shrink-0 text-xs">
                   <span className="text-ink-muted">{s.cardCount} card{s.cardCount === 1 ? '' : 's'}</span>
