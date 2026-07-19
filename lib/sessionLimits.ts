@@ -206,6 +206,24 @@ export function calibrationFor(map: Map<string, number>, src: string, tgt: strin
   return map.get(`${src}|${tgt}:${field}`) ?? 1
 }
 
+// ─── Per-track target retention ─────────────────────────────────────────────────
+// request_retention lives on every answer_field row (not just forward_typed), so each track can aim
+// for its own retention. The session pages look it up per reviewed track.
+
+interface RetentionRow { sourceLanguage: string; targetLanguage: string; answerField: string; requestRetention: number }
+
+/** `${source}|${target}:${answer_field}` → target retention (default 0.90). */
+export function buildRetentionMap(rows: RetentionRow[]): Map<string, number> {
+  const map = new Map<string, number>()
+  for (const r of rows) map.set(`${r.sourceLanguage}|${r.targetLanguage}:${r.answerField}`, r.requestRetention ?? 0.90)
+  return map
+}
+
+/** The target retention for a given pair + answer_field (0.90 when unknown). */
+export function retentionFor(map: Map<string, number>, src: string, tgt: string, field: string): number {
+  return map.get(`${src}|${tgt}:${field}`) ?? 0.90
+}
+
 /**
  * The single enabled forward-production lane. Typed and smart are mutually exclusive per pair, but a
  * card's production due date can live in either the `typed_due_at` or `smart_due_at` column depending

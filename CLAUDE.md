@@ -1343,6 +1343,28 @@ underestimates their memory. Now the calibrate route measures this per track and
 - Note: this is the fix for "does the system take my high retention into account?" — before this it did NOT
   (measured retention only fed the forecast/display, never scheduling).
 
+## Per-track target retention (2026-07-19)
+
+`request_retention` is now set + read **per answer_field** instead of only canonically on forward_typed —
+so production, self-graded, and reverse recall can each aim for their own retention. No migration
+(`request_retention` already exists on every row, migration 076; default 0.90).
+
+- **Settings** (`app/library/page.tsx`): the single "Target retention" slider became **three** — "Typed /
+  production", "Self-graded", "Reverse recall". `handleSrsRetention(fields: string[], value)` writes to the
+  listed answer_field rows; the production slider writes **both** `forward_typed` + `forward_smart` (so
+  whichever production lane is active picks it up).
+- **Scheduling** (`lib/sessionLimits.ts` + 3 session pages): `buildRetentionMap(rows)` / `retentionFor(map,
+  src,tgt,field)` (parallel to the calibration map). Each `scheduleGraduatedFsrs` cfg now uses the reviewed
+  track's own target (`retRef`/`retMapRef`, keyed by answer_field: typed→forward_typed, smart→forward_smart,
+  recall→forward_recall, reverse→reverse_recall) instead of the shared `schedulerParams.requestRetention`.
+- **Calibration** (`app/api/calibrate/route.ts`): each bucket now calibrates toward its OWN
+  `params.requestRetention` (dropped the forward_typed `target` passed from `calibratePair`).
+- **Forecast** (`DueForecastProjection` + `app/study/page.tsx`): the projection's retention basis switched
+  from **measured** (`recent_retention_rate`) to each track's **target** (`request_retention`) + calibration —
+  which is exactly `interval = calibration · intervalForRetention(S, target)`, i.e. it now matches the live
+  scheduler (the old measured+calibration basis double-corrected and under-counted the stretch). So the
+  per-track sliders visibly move the chart. `PairCfg.{typed,selfg,smart,reverse}P` now hold target retention.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

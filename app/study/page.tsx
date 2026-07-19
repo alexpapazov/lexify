@@ -99,7 +99,7 @@ function daysBetween(a: string, b: string): number {
 
 /** Build per-pair forecast config from scheduler params (retention/maxInt) + measured rating mix. */
 function buildForecastCfg(
-  paramRows: { sourceLanguage: string; targetLanguage: string; maxIntervalDays: number; recentRetentionRate: number | null; retentionCalibration: number | null; answerField: string }[],
+  paramRows: { sourceLanguage: string; targetLanguage: string; maxIntervalDays: number; requestRetention: number; retentionCalibration: number | null; answerField: string }[],
   stats: DeckWithStats[],
 ): Map<string, PairForecastCfg> {
   const m = new Map<string, PairForecastCfg>()
@@ -111,7 +111,8 @@ function buildForecastCfg(
   for (const r of paramRows) {
     const c = ensure(`${r.sourceLanguage}|${r.targetLanguage}`)
     c.maxInt = r.maxIntervalDays
-    const p = r.recentRetentionRate ?? undefined
+    // Project at each track's TARGET retention + calibration (matches the live scheduler).
+    const p = r.requestRetention ?? undefined
     const cal = r.retentionCalibration ?? 1
     if (r.answerField === 'forward_typed')  { if (p) c.typedP  = p; c.typedCal  = cal }
     if (r.answerField === 'forward_recall') { if (p) c.selfgP  = p; c.selfgCal  = cal }

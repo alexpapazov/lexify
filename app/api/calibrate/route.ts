@@ -13,10 +13,9 @@ interface CalibratePayload {
 
 async function calibratePair(userId: string, sourceLanguage: string, targetLanguage: string) {
   const answerFields = ['forward_typed', 'forward_recall', 'reverse_recall', 'forward_smart'] as const
-  // Target retention is canonical on the forward_typed row; every track calibrates toward it.
-  const fwd = await getOrCreate(userId, sourceLanguage, targetLanguage, 'forward_typed')
   for (const answerField of answerFields) {
-    await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField, fwd.requestRetention)
+    // Each track calibrates toward its OWN target retention (request_retention per answer_field row).
+    await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField)
   }
   await calibrateGradIntervals(userId, sourceLanguage, targetLanguage)
 }
@@ -163,10 +162,10 @@ async function calibrateBucket(
   sourceLang: string,
   targetLang: string,
   answerField: 'forward_typed' | 'forward_recall' | 'reverse_recall' | 'forward_smart',
-  target: number,
 ) {
   const db     = createAdminClient()
   const params = await getOrCreate(userId, sourceLang, targetLang, answerField)
+  const target = params.requestRetention   // this track's own target retention
 
   const n              = params.totalDueReviews
   const windowSize     = Math.max(20, Math.min(150, Math.round(n * 0.15)))

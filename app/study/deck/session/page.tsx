@@ -40,7 +40,7 @@ import { SynonymDueNowMode } from '@/components/session/SynonymDueNowMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, buildCalibrationMap, calibrationFor, type EnabledTracks } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, buildCalibrationMap, calibrationFor, buildRetentionMap, retentionFor, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { UndoFab } from '@/components/session/UndoFab'
@@ -141,6 +141,8 @@ export default function SessionPage() {
   const [schedulerParams,  setSchedulerParams]  = useState<SchedulerParams>(DEFAULT_SCHEDULER_PARAMS)
   // Per-track FSRS interval calibration (measured-vs-target retention) for this deck's pair.
   const calRef = useRef<Record<string, number>>({})
+  // Per-track FSRS target retention for this deck's pair.
+  const retRef = useRef<Record<string, number>>({})
   const [forwardTypedEnabled, setForwardTypedEnabled] = useState(true)
   const [forwardRecallEnabled, setForwardRecallEnabled] = useState(true)
   const [done,            setDone]            = useState(false)
@@ -444,12 +446,19 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         const allRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
         enabledTracks = buildEnabledTracksMap(allRows).get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
         const cm = buildCalibrationMap(allRows)
+        const rm = buildRetentionMap(allRows)
         const s = deck.sourceLanguage, t = deck.targetLanguage
         calRef.current = {
           forward_typed:  calibrationFor(cm, s, t, 'forward_typed'),
           forward_smart:  calibrationFor(cm, s, t, 'forward_smart'),
           forward_recall: calibrationFor(cm, s, t, 'forward_recall'),
           reverse_recall: calibrationFor(cm, s, t, 'reverse_recall'),
+        }
+        retRef.current = {
+          forward_typed:  retentionFor(rm, s, t, 'forward_typed'),
+          forward_smart:  retentionFor(rm, s, t, 'forward_smart'),
+          forward_recall: retentionFor(rm, s, t, 'forward_recall'),
+          reverse_recall: retentionFor(rm, s, t, 'reverse_recall'),
         }
       } catch { /* fall back to defaults */ }
 
@@ -979,7 +988,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention, retentionCalibration: calRef.current[isReverse ? 'reverse_recall' : 'forward_recall'] ?? 1 }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: retRef.current[isReverse ? 'reverse_recall' : 'forward_recall'] ?? schedulerParams.requestRetention, retentionCalibration: calRef.current[isReverse ? 'reverse_recall' : 'forward_recall'] ?? 1 }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
         // The recall/reverse track only ever recognises the native side, so failing it
         // never sends a card back to the ladder — only failing target-language production
         // (the forward path) does. A recall sendToLadder is treated as one more 5-min loop.
@@ -1056,7 +1065,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention, retentionCalibration: calRef.current['forward_smart'] ?? 1 }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: retRef.current['forward_smart'] ?? schedulerParams.requestRetention, retentionCalibration: calRef.current['forward_smart'] ?? 1 }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
 
         let smartNewState: CardState
         if (fsrs.sendToLadder) {
@@ -1182,7 +1191,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention, retentionCalibration: calRef.current['forward_typed'] ?? 1 }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: retRef.current['forward_typed'] ?? schedulerParams.requestRetention, retentionCalibration: calRef.current['forward_typed'] ?? 1 }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
         if (fsrs.sendToLadder) {
           // Three Agains in a row producing the target language → un-graduate and
           // restart the CURRENT ladder (drop any stale climb row so it re-enters
@@ -1292,7 +1301,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           goodStreak:   state.goodStreak,
           againStreak:  state.againStreak,
           elapsedDays,
-        }, softWrongRecallRating, { ...DEFAULT_FSRS_CONFIG, requestRetention: schedulerParams.requestRetention, retentionCalibration: calRef.current[isReverse ? 'reverse_recall' : 'forward_recall'] ?? 1 }, {})
+        }, softWrongRecallRating, { ...DEFAULT_FSRS_CONFIG, requestRetention: retRef.current[isReverse ? 'reverse_recall' : 'forward_recall'] ?? schedulerParams.requestRetention, retentionCalibration: calRef.current[isReverse ? 'reverse_recall' : 'forward_recall'] ?? 1 }, {})
         if (recallFsrs.intervalDays != null) {
           const newRecallDueAt = snapDueAtToStartOfDay(new Date(nowDate.getTime() + recallFsrs.intervalDays * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
           newState = { ...newState, recallIntervalDays: recallFsrs.intervalDays, recallDueAt: newRecallDueAt }

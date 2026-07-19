@@ -598,14 +598,16 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     ))
   }
 
-  // Per-pair FSRS target retention (0.80–0.95) — stored canonically on the forward_typed row.
-  async function handleSrsRetention(value: number) {
+  // Per-TRACK FSRS target retention (0.80–0.95). Each track (production / self-graded / reverse) has
+  // its own request_retention row; the "typed/production" slider writes both production lanes
+  // (forward_typed + forward_smart) so whichever is active picks it up.
+  async function handleSrsRetention(fields: string[], value: number) {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
     const repo = new SupabaseUserSchedulerParamsRepository()
-    await repo.update(userId, src, tgt, 'forward_typed', { request_retention: value })
+    await Promise.all(fields.map(f => repo.update(userId, src, tgt, f, { request_retention: value })))
     setSrsParams(prev => prev.map(p =>
-      p.answerField === 'forward_typed' ? { ...p, requestRetention: value } : p
+      fields.includes(p.answerField) ? { ...p, requestRetention: value } : p
     ))
   }
 
@@ -1040,15 +1042,11 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                               {b.field === 'forward_smart' && (b.row?.forwardSmartEnabled ?? false) && (
                                 <div className="flex items-center gap-2 pl-6 flex-wrap">
                                   <span className="text-xs text-ink-muted">Type it until the interval reaches</span>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    max={3650}
-                                    value={smRow?.smartTypingThresholdDays ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays}
-                                    onChange={e => handleSrsSmartThreshold(Number(e.target.value)).catch(() => {})}
-                                    className="input text-sm w-16"
+                                  <SmartThresholdInput
+                                    value={ftRow?.smartTypingThresholdDays ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays}
+                                    onCommit={n => handleSrsSmartThreshold(n).catch(() => {})}
                                   />
-                                  <span className="text-xs text-ink-muted">days, then it becomes self-graded.</span>
+                                  <span className="text-xs text-ink-muted">days, then it becomes self-graded. Lower it to do more self-graded, sooner.</span>
                                 </div>
                               )}
                             </div>
@@ -1116,39 +1114,42 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                           })}
                         </div>
 
-                        {/* FSRS target retention — one slider per pair (0.80–0.95) */}
-                        {(() => {
-                          const retention = ftRow?.requestRetention ?? 0.90
-                          const pct = Math.round(retention * 100)
-                          const idx = Math.round((retention - 0.80) / 0.01)  // 0.80→0, 0.95→15
-                          return (
-                            <div className="flex flex-col gap-1">
-                              <div className="flex items-baseline justify-between">
-                                <span className="text-sm text-ink">Target retention</span>
-                                <span className="text-xs text-ink-muted">{pct}% — {
-                                  retention >= 0.93 ? 'more reviews, stronger recall'
-                                  : retention <= 0.83 ? 'fewer reviews, more forgetting'
-                                  : 'balanced (recommended ~90%)'
-                                }</span>
+                        {/* FSRS target retention — one slider PER TRACK (0.80–0.95) */}
+                        <div className="flex flex-col gap-3">
+                          <div>
+                            <span className="text-sm text-ink">Target retention</span>
+                            <p className="text-xs text-ink-faint">How likely you want to be to recall a card when it comes due, set separately per track. Higher = shorter intervals, more reviews.</p>
+                          </div>
+                          {([
+                            { label: 'Typed / production', fields: ['forward_typed', 'forward_smart'], row: ftRow ?? smRow },
+                            { label: 'Self-graded',        fields: ['forward_recall'],                row: frRow },
+                            { label: 'Reverse recall',     fields: ['reverse_recall'],               row: rrRow },
+                          ] as const).map(t => {
+                            const retention = t.row?.requestRetention ?? 0.90
+                            const pct = Math.round(retention * 100)
+                            const idx = Math.round((retention - 0.80) / 0.01)  // 0.80→0, 0.95→15
+                            return (
+                              <div key={t.label} className="flex flex-col gap-1">
+                                <div className="flex items-baseline justify-between">
+                                  <span className="text-xs text-ink-muted">{t.label}</span>
+                                  <span className="text-xs text-ink-muted">{pct}% — {
+                                    retention >= 0.93 ? 'more reviews, stronger recall'
+                                    : retention <= 0.83 ? 'fewer reviews, more forgetting'
+                                    : 'balanced (~90%)'
+                                  }</span>
+                                </div>
+                                <input
+                                  type="range" min={0} max={15} step={1} value={idx}
+                                  onChange={e => handleSrsRetention([...t.fields], Number((0.80 + Number(e.target.value) * 0.01).toFixed(2))).catch(() => {})}
+                                  className="accent-accent w-full"
+                                />
+                                <div className="flex justify-between text-[10px] text-ink-faint px-0.5">
+                                  <span>80%</span><span>90%</span><span>95%</span>
+                                </div>
                               </div>
-                              <p className="text-xs text-ink-faint mb-0.5">How likely you want to be to recall a card when it comes due. Higher = shorter intervals.</p>
-                              <input
-                                type="range"
-                                min={0}
-                                max={15}
-                                step={1}
-                                value={idx}
-                                onChange={e => handleSrsRetention(Number((0.80 + Number(e.target.value) * 0.01).toFixed(2))).catch(() => {})}
-                                className="accent-accent w-full"
-                              />
-                              <div className="flex justify-between text-[10px] text-ink-faint px-0.5">
-                                <span>80%</span>
-                                <span>90%</span>
-                                <span>95%</span>
-                              </div>
-                            </div>
-                          )
-                        })()}
+                            )
+                          })}
+                        </div>
 
                         {/* Measured retention per track (feeds the workload forecast) */}
                         <div className="flex flex-col gap-1">
@@ -1598,5 +1599,30 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         />
       )}
     </div>
+  )
+}
+
+/**
+ * Number input for the smart-typing threshold (days). Keeps a local text value while editing so typing
+ * feels natural (no clamp-to-1 mid-keystroke), and commits to the parent on blur or Enter. `value` is the
+ * canonical stored threshold (forward_typed row); it re-syncs the field whenever that changes.
+ */
+function SmartThresholdInput({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
+  const [text, setText] = useState(String(value))
+  useEffect(() => { setText(String(value)) }, [value])
+  const commit = () => {
+    const n = Math.max(1, Math.min(3650, Math.round(Number(text) || value)))
+    setText(String(n))
+    if (n !== value) onCommit(n)
+  }
+  return (
+    <input
+      type="number" min={1} max={3650}
+      value={text}
+      onChange={e => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur() } }}
+      className="input text-sm w-16"
+    />
   )
 }

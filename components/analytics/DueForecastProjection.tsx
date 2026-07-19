@@ -94,12 +94,16 @@ export function DueForecastProjection() {
         for (const r of paramRows) {
           const c = ensure(r.sourceLanguage, r.targetLanguage)
           c.maxInt = r.maxIntervalDays
-          const p = r.recentRetentionRate ?? undefined
+          // Simulate at each track's TARGET retention (request_retention) + its calibration factor —
+          // exactly what the live scheduler does (interval = calibration · intervalForRetention(S, target)).
+          // So the per-track target sliders move this chart, and measured retention only enters via the
+          // (already-computed) calibration factor.
+          const ret = r.requestRetention ?? undefined
           const cal = r.retentionCalibration ?? 1
-          if (r.answerField === 'forward_typed')  { c.typedOn = r.forwardTypedEnabled;  c.smartThreshold = r.smartTypingThresholdDays; if (p) c.typedP = p; c.typedCal = cal }
-          if (r.answerField === 'forward_recall') { c.selfgOn = r.forwardRecallEnabled; if (p) c.selfgP = p; c.selfgCal = cal }
-          if (r.answerField === 'forward_smart')  { c.smartOn = r.forwardSmartEnabled;  if (p) c.smartP = p; c.smartCal = cal }
-          if (r.answerField === 'reverse_recall') { c.reverseOn = r.reverseRecallEnabled; if (p) c.reverseP = p; c.reverseCal = cal }
+          if (r.answerField === 'forward_typed')  { c.typedOn = r.forwardTypedEnabled;  c.smartThreshold = r.smartTypingThresholdDays; if (ret) c.typedP = ret; c.typedCal = cal }
+          if (r.answerField === 'forward_recall') { c.selfgOn = r.forwardRecallEnabled; if (ret) c.selfgP = ret; c.selfgCal = cal }
+          if (r.answerField === 'forward_smart')  { c.smartOn = r.forwardSmartEnabled;  if (ret) c.smartP = ret; c.smartCal = cal }
+          if (r.answerField === 'reverse_recall') { c.reverseOn = r.reverseRecallEnabled; if (ret) c.reverseP = ret; c.reverseCal = cal }
         }
         let anyGoal = false
         for (const pr of pairs) {
