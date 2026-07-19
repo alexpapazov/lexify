@@ -219,14 +219,12 @@ function DayCell({ day, date, info, goals, colorFor, onSelect }: {
     >
       <div className="flex items-start justify-between leading-none">
         <span className="text-[11px] text-ink-muted">{day}</span>
-        {total > 0 && <span className="text-[10px] font-semibold text-accent-soft">{total}</span>}
+        {pct !== null && <span className={`text-[10px] font-semibold ${pctColor}`}>{pct}%</span>}
       </div>
       <div className="flex-1 flex items-center justify-center">
-        <div className="relative rounded-full" style={{ width: 'min(94%, 76px)', aspectRatio: '1', background: ring }}>
-          <div className="absolute inset-[26%] rounded-full bg-surface-deep flex items-center justify-center">
-            <span className={`text-[11px] sm:text-sm font-semibold ${pctColor}`}>
-              {pct !== null ? `${pct}%` : (total > 0 ? total : '')}
-            </span>
+        <div className="relative rounded-full" style={{ width: 'min(96%, 80px)', aspectRatio: '1', background: ring }}>
+          <div className="absolute inset-[15%] rounded-full bg-surface-deep flex items-center justify-center">
+            <span className={`text-sm sm:text-base font-semibold ${pctColor}`}>{total > 0 ? total : ''}</span>
           </div>
         </div>
       </div>
