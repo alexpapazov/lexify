@@ -208,7 +208,7 @@ export function OfflinePanel() {
         <p className="text-xs text-ink-faint mt-1">Download cards to study without a connection. Reviews sync back when you&apos;re online. (Card editing, the agent, language sync, and audio generation need a connection.)</p>
       </div>
 
-      {manifest && (
+      {!offline && manifest && (
         <div className="rounded-lg border border-line/10 px-3 py-2 space-y-2 text-sm">
           <div className="flex items-center justify-between gap-3">
             <div>

@@ -376,7 +376,7 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
   )
 }
 
-export default function SettingsPage() {
+export function SettingsScreen({ variant }: { variant: 'general' | 'language' }) {
   const [userId,        setUserId]        = useState('')
   const [displayName,   setDisplayName]   = useState('')
   const [selectedLangs, setSelectedLangs] = useState<string[]>([])
@@ -676,8 +676,9 @@ export default function SettingsPage() {
         />
       )}
 
-      <h1 className="text-2xl font-semibold text-ink">Settings</h1>
+      <h1 className="text-2xl font-semibold text-ink">{variant === 'general' ? 'Settings' : 'Language configuration'}</h1>
 
+      {variant === 'general' && (<>
       {/* Appearance */}
       <div className="panel space-y-4" data-tour="settings-theme">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Appearance</h2>
@@ -685,13 +686,18 @@ export default function SettingsPage() {
           <p className="text-sm text-ink-muted">Theme</p>
           <ThemeToggle />
         </div>
-        {!offline && (
-          <div className="flex items-center justify-between gap-4 flex-wrap border-t border-line/5 pt-4">
-            <p className="text-sm text-ink-muted">Take the guided tour again</p>
+      </div>
+
+      {/* Replay tutorial — its own section */}
+      {!offline && (
+        <div className="panel space-y-4">
+          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Replay tutorial</h2>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <p className="text-sm text-ink-muted">Take the guided product tour again.</p>
             <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => startTour()}>Replay tutorial</button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Profile */}
       <div className="panel space-y-4">
@@ -760,7 +766,13 @@ export default function SettingsPage() {
       {/* Offline */}
       <OfflinePanel />
 
-      {/* Study defaults */}
+      <div className="flex gap-3">
+        <button className="btn-primary" onClick={handleSave}>{saved ? 'Saved ✓' : 'Save settings'}</button>
+      </div>
+      </>)}
+
+      {variant === 'language' && (<>
+      {/* Learning ladders */}
       <div className="panel space-y-3" data-tour="settings-ladder">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Learning ladders</h2>
         <p className="text-xs text-ink-faint">Build the sequence of exercises a card climbs before it graduates — set a default, and customize it per language.</p>
@@ -974,12 +986,6 @@ export default function SettingsPage() {
         )
       })()}
 
-      <div className="flex gap-3">
-        <button className="btn-primary" onClick={handleSave}>
-          {saved ? 'Saved ✓' : 'Save settings'}
-        </button>
-      </div>
-
       {/* Language Sync — online only */}
       {!offline && userId && (
         <div className="panel space-y-4" data-tour="settings-sync">
@@ -1091,6 +1097,15 @@ export default function SettingsPage() {
         )}
       </div>
       )}
+
+      <div className="flex gap-3">
+        <button className="btn-primary" onClick={handleSave}>{saved ? 'Saved ✓' : 'Save settings'}</button>
+      </div>
+      </>)}
     </div>
   )
+}
+
+export default function SettingsPage() {
+  return <SettingsScreen variant="general" />
 }

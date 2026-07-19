@@ -124,7 +124,9 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
       const choices = await ensureChoicesGenerated(c, side, siblings, c.sourceLanguage, c.targetLanguage)
       if (choices) {
         cardsById.set(c.id, { ...cardsById.get(c.id)!, choices })
-        if (c.choices == null) persistBack.push({ id: c.id, choices })  // card that previously had none
+        // Persist EVERY generated card (not only ones that had zero choices) — a card with partial/legacy
+        // choices would otherwise keep failing needsChoices() and regenerate on every single download.
+        persistBack.push({ id: c.id, choices })
       }
     } catch { /* keep fallback */ }
     progress('Generating distractors', i + 1, missing.length)
