@@ -149,6 +149,8 @@ export interface RatingSampleState {
   reviewDirection?: string
   graduated:        boolean
   lastRating:       Rating | null
+  /** Card maturity (post-graduation review count) — used to bucket rating DRIFT over time. */
+  reps:             number
 }
 
 /**
@@ -162,6 +164,74 @@ export function measureRatingMix(states: RatingSampleState[]): RatingMix {
     counts[s.lastRating] = (counts[s.lastRating] ?? 0) + 1
   }
   return normalizeRatingMix(counts)
+}
+
+// ─── Maturity-varying rating model (rating DRIFT over a card's life) ──────────
+// A language's grade behaviour is not constant: a fresh graduate may be rated "hard" a lot and, as it
+// matures, drift toward "good"/"easy" (or the reverse). We approximate this drift cross-sectionally —
+// bucket a language's graduated cards by how many times they've been reviewed (reps) and read each
+// bucket's most-recent-rating mix. A card at reps≈2 stands in for "a young card"; one at reps≈30 for
+// "a mature card". Sparse buckets are shrunk toward the language's pooled mix, so thin data reports a
+// gentle (near-flat) curve rather than noise.
+
+/** One maturity bucket: the rating mix for cards that have been reviewed at least `minReps` times. */
+export interface RatingBucket { minReps: number; mix: RatingMix; n: number }
+/** A language's rating behaviour as a function of maturity — buckets sorted ascending by minReps. */
+export type RatingModel = RatingBucket[]
+
+/** Maturity breakpoints (post-graduation review counts): young → mature. */
+const REPS_BREAKS = [0, 3, 8, 20]
+/** Pseudo-observations pulling each bucket toward the pooled mix (shrinkage for sparse buckets). */
+const BUCKET_PRIOR = 6
+
+const RATINGS: Rating[] = ['again', 'hard', 'good', 'easy']
+
+/**
+ * Measure how a language's rating mix shifts with card maturity. Buckets graduated FORWARD cards by
+ * reps and computes each bucket's most-recent-rating mix, shrunk toward the language's pooled mix so
+ * a language with little data still yields a stable (near-flat) curve. Returns a step-function model
+ * consumed by `mixForReps`.
+ */
+export function measureRatingModel(states: RatingSampleState[]): RatingModel {
+  const pooled: Partial<Record<Rating, number>> = {}
+  const buckets = REPS_BREAKS.map(minReps => ({ minReps, counts: {} as Partial<Record<Rating, number>>, n: 0 }))
+  for (const s of states) {
+    if (s.reviewDirection === 'reverse' || !s.graduated || !s.lastRating) continue
+    pooled[s.lastRating] = (pooled[s.lastRating] ?? 0) + 1
+    let bi = 0
+    for (let i = 0; i < buckets.length; i++) if (s.reps >= buckets[i]!.minReps) bi = i
+    const b = buckets[bi]!
+    b.counts[s.lastRating] = (b.counts[s.lastRating] ?? 0) + 1
+    b.n++
+  }
+  const pooledMix = normalizeRatingMix(pooled)
+  return buckets.map(b => {
+    const blended: Partial<Record<Rating, number>> = {}
+    for (const r of RATINGS) blended[r] = (b.counts[r] ?? 0) + BUCKET_PRIOR * pooledMix[r]
+    return { minReps: b.minReps, n: b.n, mix: normalizeRatingMix(blended) }
+  })
+}
+
+/** The rating mix for a card that has been reviewed `reps` times (step function over the buckets). */
+export function mixForReps(model: RatingModel, reps: number): RatingMix {
+  if (model.length === 0) return { ...DEFAULT_RATING_MIX }
+  let chosen = model[0]!
+  for (const b of model) if (reps >= b.minReps) chosen = b
+  return chosen.mix
+}
+
+/**
+ * A short human label for a language's rating drift: compares "ease" (good/easy up, again/hard down)
+ * between its youngest and oldest POPULATED maturity buckets. '' when there's too little data to tell.
+ */
+export function driftLabel(model: RatingModel): string {
+  const pop = model.filter(b => b.n > 0)
+  if (pop.length < 2) return ''
+  const ease = (m: RatingMix) => m.good + m.easy * 1.5 - m.again * 1.5 - m.hard * 0.5
+  const d = ease(pop[pop.length - 1]!.mix) - ease(pop[0]!.mix)
+  if (d > 0.08) return 'easing with maturity'
+  if (d < -0.08) return 'getting harder with maturity'
+  return 'steady ratings'
 }
 
 /** Median of a numeric list (0 if empty). */
@@ -231,6 +301,9 @@ export function fsrsScheduleSampled(opts: {
   stability: number; difficulty: number; firstReviewDay: number
   retention: number; maxInt: number; horizon: number; mix: RatingMix
   rand: () => number; cfg?: FsrsConfig; fuzz?: boolean
+  /** Maturity-varying rating model. When set, the rating at each review is drawn from the mix for the
+   *  card's current review count (`startReps` + reviews taken so far) instead of the static `mix`. */
+  model?: RatingModel; startReps?: number
 }): ReviewStep[] {
   const cfg: FsrsConfig = { ...(opts.cfg ?? DEFAULT_FSRS_CONFIG), requestRetention: opts.retention }
   const steps: ReviewStep[] = []
@@ -238,10 +311,13 @@ export function fsrsScheduleSampled(opts: {
   let D = Math.min(10, Math.max(1, opts.difficulty))
   let day = opts.firstReviewDay
   let cur = Math.min(intervalForRetention(S, opts.retention), opts.maxInt) // interval that placed this review
+  let reps = opts.startReps ?? 0
   let guard = 0
   while (day <= opts.horizon && guard++ < 1000) {
     steps.push({ day, intervalDays: Math.max(0.5, cur) })
-    const rating = sampleRating(opts.mix, opts.rand())
+    const mixNow = opts.model ? mixForReps(opts.model, reps) : opts.mix
+    reps++
+    const rating = sampleRating(mixNow, opts.rand())
     const elapsed = Math.max(1, cur)
     const rev = reviewCard({ stability: S, difficulty: D }, rating, elapsed, cfg)
     S = rev.stability; D = rev.difficulty
@@ -272,6 +348,8 @@ export function monteCarloSteps(
     stability: number; difficulty: number; firstReviewDay: number
     retention: number; maxInt: number; horizon: number; mix: RatingMix
     K: number; fuzz?: boolean; cfg?: FsrsConfig; maxReviews?: number; stopDay?: number
+    /** Maturity-varying rating model + the card's starting review count (see fsrsScheduleSampled). */
+    model?: RatingModel; startReps?: number
   },
   seed: number,
 ): { steps: WeightedStep[]; dormantDay: number | null } {
@@ -284,6 +362,7 @@ export function monteCarloSteps(
     const path = fsrsScheduleSampled({
       stability: opts.stability, difficulty: opts.difficulty, firstReviewDay: opts.firstReviewDay,
       retention: opts.retention, maxInt: opts.maxInt, horizon: opts.horizon, mix: opts.mix, rand, cfg: opts.cfg, fuzz: opts.fuzz,
+      model: opts.model, startReps: opts.startReps,
     })
     let count = 0
     for (const st of path) {

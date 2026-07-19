@@ -1,4 +1,4 @@
-import { stabilityForInterval, fsrsSchedule, fsrsScheduleMix, normalizeRatingMix, DEFAULT_RATING_MIX, median, estimateInitialInterval, seedStability, seedDifficulty, measureRatingMix, DEFAULT_DIFFICULTY, mulberry32, sampleRating, fsrsScheduleSampled, monteCarloSteps, percentile } from '@/lib/forecastFsrs'
+import { stabilityForInterval, fsrsSchedule, fsrsScheduleMix, normalizeRatingMix, DEFAULT_RATING_MIX, median, estimateInitialInterval, seedStability, seedDifficulty, measureRatingMix, measureRatingModel, mixForReps, driftLabel, DEFAULT_DIFFICULTY, mulberry32, sampleRating, fsrsScheduleSampled, monteCarloSteps, percentile } from '@/lib/forecastFsrs'
 import { intervalForRetention } from '@/engine/fsrs'
 
 describe('stabilityForInterval', () => {
@@ -146,18 +146,54 @@ describe('seedStability / seedDifficulty (shared by analytics + Coming-up bars)'
 describe('measureRatingMix', () => {
   it('counts only graduated FORWARD rows and ignores reverse / ungraduated', () => {
     const mix = measureRatingMix([
-      { graduated: true,  lastRating: 'good' },
-      { graduated: true,  lastRating: 'good' },
-      { graduated: true,  lastRating: 'again' },
-      { graduated: true,  lastRating: 'hard', reviewDirection: 'reverse' }, // excluded (reverse)
-      { graduated: false, lastRating: 'easy' },                              // excluded (not graduated)
+      { graduated: true,  lastRating: 'good', reps: 3 },
+      { graduated: true,  lastRating: 'good', reps: 5 },
+      { graduated: true,  lastRating: 'again', reps: 2 },
+      { graduated: true,  lastRating: 'hard', reviewDirection: 'reverse', reps: 4 }, // excluded (reverse)
+      { graduated: false, lastRating: 'easy', reps: 0 },                             // excluded (not graduated)
     ])
     expect(mix.good).toBeCloseTo(2 / 3, 6)
     expect(mix.again).toBeCloseTo(1 / 3, 6)
     expect(mix.hard).toBe(0)
   })
   it('falls back to the default mix when there is no forward history', () => {
-    expect(measureRatingMix([{ graduated: true, lastRating: null, reviewDirection: 'reverse' }])).toEqual(DEFAULT_RATING_MIX)
+    expect(measureRatingMix([{ graduated: true, lastRating: null, reviewDirection: 'reverse', reps: 1 }])).toEqual(DEFAULT_RATING_MIX)
+  })
+})
+
+describe('measureRatingModel + mixForReps (rating drift over maturity)', () => {
+  // Young cards (low reps) rated mostly "hard"; mature cards (high reps) rated mostly "easy".
+  const states = [
+    ...Array.from({ length: 40 }, (_, i) => ({ graduated: true, lastRating: 'hard' as const, reps: 1 + (i % 2) })),
+    ...Array.from({ length: 40 }, (_, i) => ({ graduated: true, lastRating: 'easy' as const, reps: 25 + (i % 5) })),
+  ]
+  it('measures a younger→older drift toward easier ratings', () => {
+    const model = measureRatingModel(states)
+    const young = mixForReps(model, 1)
+    const mature = mixForReps(model, 30)
+    expect(young.hard).toBeGreaterThan(mature.hard)
+    expect(mature.easy).toBeGreaterThan(young.easy)
+  })
+  it('labels the drift as easing with maturity', () => {
+    expect(driftLabel(measureRatingModel(states))).toBe('easing with maturity')
+  })
+  it('reports no drift label when there is not enough data', () => {
+    expect(driftLabel(measureRatingModel([{ graduated: true, lastRating: 'good', reps: 4 }]))).toBe('')
+  })
+})
+
+describe('monteCarloSteps with a maturity model', () => {
+  it('draws early reviews from the young mix and later reviews from the mature mix', () => {
+    // Young = always Again (lapses → extra same-day reviews); mature = always Easy (long intervals).
+    const model = [
+      { minReps: 0, mix: { again: 1, hard: 0, good: 0, easy: 0 }, n: 50 },
+      { minReps: 5, mix: { again: 0, hard: 0, good: 0, easy: 1 }, n: 50 },
+    ]
+    const { steps } = monteCarloSteps(
+      { stability: 2, difficulty: 5, firstReviewDay: 1, retention: 0.9, maxInt: 365, horizon: 400, mix: DEFAULT_RATING_MIX, model, startReps: 0, K: 8, fuzz: false },
+      42,
+    )
+    expect(steps.length).toBeGreaterThan(0)
   })
 })
 

@@ -7,7 +7,7 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
-import { monteCarloSteps, percentile, measureRatingMix, seedStability, seedDifficulty, DEFAULT_RATING_MIX, DEFAULT_DIFFICULTY, stabilityForInterval, type RatingMix } from '@/lib/forecastFsrs'
+import { monteCarloSteps, percentile, measureRatingModel, mixForReps, driftLabel, estimateInitialInterval, seedStability, seedDifficulty, DEFAULT_DIFFICULTY, stabilityForInterval, type RatingModel } from '@/lib/forecastFsrs'
 
 // Forward projection of daily "Due Now" load, split into Typed / Self-graded / Reverse / Total,
 // simulated on the live FSRS stability model by MONTE CARLO. Each card is played forward many times;
@@ -23,12 +23,13 @@ const HORIZON = 730          // 2 years
 const STEP = 14              // chart sampling / smoothing window (days)
 const RUNS = 64              // Monte Carlo trajectories per card/track
 
-// A NEW card enters Due Now at the ladder's GRADUATION interval, not the average interval of your
-// existing (mostly mature / accelerated) cards. The ladder graduates the Good path at 1 day
-// (engine/ladderEngine.ts), and FSRS grows it from there — so new cards start well below the smart
-// threshold (typed), then spread out and cross into self-graded. Seeding at the mature average made
-// languages full of long-interval cards (e.g. accelerated imports) show ~0 typed load, which is wrong.
-const GRADUATION_I0 = 1
+// A NEW card enters Due Now at each language's MEASURED starting interval — the median interval of its
+// freshest graduated, non-accelerated cards (reps ≤ 1), which reflects the true ladder graduation
+// interval rather than the (much longer) average of mature/accelerated cards. When a language has no
+// fresh sample we fall back to the ladder's 1-day Good-path graduation interval. Seeding at the mature
+// average would make languages full of long-interval cards show ~0 typed load, which is wrong — so we
+// deliberately sample only the freshest cards (see estimateInitialInterval).
+const GRADUATION_I0_FALLBACK = 1
 
 interface PairCfg {
   typedP: number; selfgP: number; smartP: number; reverseP: number
@@ -39,7 +40,7 @@ interface PairCfg {
 }
 
 interface PairSeries { key: string; label: string; flag: string; typed: number[]; selfg: number[]; recog: number[] }
-interface PairModel { key: string; label: string; flag: string; days: number; difficulty: number }
+interface PairModel { key: string; label: string; flag: string; days: number; difficulty: number; drift: string }
 interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairModel[]; hasGoals: boolean; bands: Record<string, { lo: number[]; hi: number[] }> }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -144,12 +145,12 @@ export function DueForecastProjection() {
         // (1/K, so the sum is the mean load) and tally per-run totals (in `runs`) for the band. Returns
         // the median day runs hit `maxReviews` (dormancy), else null. Honors `stopDay`.
         const emit = (
-          arr: Float64Array, runs: Float64Array[], firstDay: number | null, S0: number, D0: number, retention: number, maxInt: number, mix: RatingMix,
-          opts?: { maxReviews?: number; stopDay?: number },
+          arr: Float64Array, runs: Float64Array[], firstDay: number | null, S0: number, D0: number, retention: number, maxInt: number,
+          model: RatingModel, startReps: number, opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
           if (firstDay === null) return null
           const { steps, dormantDay } = monteCarloSteps(
-            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
+            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix: mixForReps(model, startReps), model, startReps, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
             mcSeed++,
           )
           for (const st of steps) { arr[st.day]! += st.weight; runs[st.run!]![st.day]! += 1 }
@@ -158,11 +159,11 @@ export function DueForecastProjection() {
         // Smart variant: each review is typed while its interval is below `threshold`, else self-graded.
         const emitSmart = (
           typedArr: Float64Array, selfgArr: Float64Array, runs: Float64Array[], firstDay: number | null, S0: number, D0: number,
-          retention: number, maxInt: number, threshold: number, mix: RatingMix, opts?: { maxReviews?: number; stopDay?: number },
+          retention: number, maxInt: number, threshold: number, model: RatingModel, startReps: number, opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
           if (firstDay === null) return null
           const { steps, dormantDay } = monteCarloSteps(
-            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
+            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix: mixForReps(model, startReps), model, startReps, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
             mcSeed++,
           )
           for (const st of steps) {
@@ -174,29 +175,44 @@ export function DueForecastProjection() {
         }
 
         // ── Pass 1: measure each language's behaviour ─────────────────────────────
-        // Rating mix from every graduated forward card; average difficulty from the NON-accelerated
-        // population only (new cards go through the normal pipeline — we don't assume the user will
-        // accelerate future cards). New cards seed at the GRADUATION_I0 interval, not a measured one:
-        // existing cards are mature (long intervals) so their average would badly misrepresent a fresh
-        // card. Accelerated cards keep their own real D/S below.
+        // A maturity-varying RATING MODEL (how the again/hard/good/easy mix drifts as a card ages),
+        // the average difficulty, and the MEASURED starting interval — all from the NON-accelerated
+        // population (new cards go through the normal ladder; we don't assume the user will accelerate
+        // future cards, and accelerated imports graduate at long intervals a fresh card never sees).
+        // The starting interval samples the FRESHEST cards (reps ≤ 1) so it reflects the true ladder
+        // graduation interval, not a since-grown one. Accelerated cards keep their own real D/S below.
         const diffSamples  = new Map<string, number[]>()
+        const i0Samples    = new Map<string, { reps: number; intervalDays: number }[]>()
         const statesByPair = new Map<string, typeof deckStates[number]>()
         for (let di = 0; di < decks.length; di++) {
           const deck = decks[di]!, key = `${deck.sourceLanguage}|${deck.targetLanguage}`
           ;(statesByPair.get(key) ?? statesByPair.set(key, []).get(key)!).push(...deckStates[di]!)
           for (const s of deckStates[di]!) {
             if (s.reviewDirection === 'reverse' || !s.graduated) continue
-            if (s.acceleratedMode === 'none' && s.difficulty != null && s.difficulty > 0) {
+            // Difficulty + starting-interval samples come from the NON-accelerated population only —
+            // new cards go through the normal ladder, so their graduation interval/difficulty are what
+            // a future card will look like (accelerated imports graduate at long intervals we mustn't
+            // seed new cards from).
+            if (s.acceleratedMode !== 'none') continue
+            if (s.difficulty != null && s.difficulty > 0) {
               (diffSamples.get(key) ?? diffSamples.set(key, []).get(key)!).push(s.difficulty)
+            }
+            const iv = s.smartIntervalDays ?? s.typedIntervalDays ?? s.intervalDays
+            if (iv != null && iv > 0) {
+              (i0Samples.get(key) ?? i0Samples.set(key, []).get(key)!).push({ reps: s.reps, intervalDays: iv })
             }
           }
         }
-        const mixByPair  = new Map<string, RatingMix>()
-        const diffByPair = new Map<string, number>()
+        // Rating DRIFT model (mix as a function of maturity) + average difficulty + measured starting
+        // interval, per language.
+        const modelByPair = new Map<string, RatingModel>()
+        const diffByPair  = new Map<string, number>()
+        const i0ByPair    = new Map<string, number>()
         for (const [k] of cfg) {
-          mixByPair.set(k, measureRatingMix(statesByPair.get(k) ?? []))
+          modelByPair.set(k, measureRatingModel(statesByPair.get(k) ?? []))
           const ds = diffSamples.get(k) ?? []
           diffByPair.set(k, ds.length ? ds.reduce((a, b) => a + b, 0) / ds.length : DEFAULT_DIFFICULTY)
+          i0ByPair.set(k, estimateInitialInterval(i0Samples.get(k) ?? [], GRADUATION_I0_FALLBACK))
         }
 
         // ── Pass 2: simulate existing graduated cards (real per-card D/S + language mix) ──
@@ -205,7 +221,7 @@ export function DueForecastProjection() {
           const states = deckStates[di]!
           const c = ensure(deck.sourceLanguage, deck.targetLanguage)
           const key = `${deck.sourceLanguage}|${deck.targetLanguage}`
-          const mix = mixByPair.get(key) ?? DEFAULT_RATING_MIX
+          const model = modelByPair.get(key) ?? []
           const sr = seriesFor(key)
           const runs = runsFor(key)
           const fwd = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
@@ -220,15 +236,15 @@ export function DueForecastProjection() {
             const prodOn = c.typedOn || c.smartOn
             const dS = seedD(s.difficulty)
             if (prodOn && s.typedDueAt) {
-              dormantDay = emit(sr.typed, runs, offset(s.typedDueAt ?? s.dueAt), seedS(s.stability, s.typedIntervalDays ?? s.intervalDays, c.typedP), dS, c.typedP, c.maxInt, mix, remOpts)
+              dormantDay = emit(sr.typed, runs, offset(s.typedDueAt ?? s.dueAt), seedS(s.stability, s.typedIntervalDays ?? s.intervalDays, c.typedP), dS, c.typedP, c.maxInt, model, s.reps, remOpts)
             }
             if (prodOn && s.smartDueAt) {
-              const sd = emitSmart(sr.typed, sr.selfg, runs, offset(s.smartDueAt), seedS(s.stability, s.smartIntervalDays ?? s.intervalDays, c.smartP), dS, c.smartP, c.maxInt, c.smartThreshold, mix, remOpts)
+              const sd = emitSmart(sr.typed, sr.selfg, runs, offset(s.smartDueAt), seedS(s.stability, s.smartIntervalDays ?? s.intervalDays, c.smartP), dS, c.smartP, c.maxInt, c.smartThreshold, model, s.reps, remOpts)
               if (dormantDay == null) dormantDay = sd
             }
             if (c.selfgOn && s.recallDueAt) {
               const recallOpts = dormantDay != null ? { stopDay: dormantDay } : remOpts
-              const rd = emit(sr.selfg, runs, offset(s.recallDueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.selfgP), dS, c.selfgP, c.maxInt, mix, recallOpts)
+              const rd = emit(sr.selfg, runs, offset(s.recallDueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.selfgP), dS, c.selfgP, c.maxInt, model, s.reps, recallOpts)
               if (dormantDay == null) dormantDay = rd
             }
             if (dormantDay != null) dormantDayByCard.set(s.cardId, dormantDay)
@@ -240,7 +256,7 @@ export function DueForecastProjection() {
             if (fwdState?.dormant) continue
             if (!(c.reverseOn && fwdState?.graduated)) continue
             const stopDay = dormantDayByCard.get(s.cardId)
-            emit(sr.recog, runs, offset(s.recallDueAt ?? s.dueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.reverseP), seedD(s.difficulty), c.reverseP, c.maxInt, mix,
+            emit(sr.recog, runs, offset(s.recallDueAt ?? s.dueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.reverseP), seedD(s.difficulty), c.reverseP, c.maxInt, model, s.reps,
               stopDay != null ? { stopDay } : undefined)
           }
         }
@@ -250,10 +266,12 @@ export function DueForecastProjection() {
         // per-run cumulative reviews are superposed over daily cohorts (continuous intake), so daily
         // load at age t = dailyGoal · cum(t). The daily goal is treated as ongoing learning. ──
         const emitNew = (
-          targetArr: Float64Array, runs: Float64Array[], retention: number, i0: number, d0: number, mix: RatingMix, maxInt: number,
+          targetArr: Float64Array, runs: Float64Array[], retention: number, i0: number, d0: number, model: RatingModel, maxInt: number,
           dailyGoal: number, splitArr?: Float64Array, splitBelow?: number,
         ) => {
-          const { steps } = monteCarloSteps({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt, horizon: HORIZON, mix, K, fuzz: true }, mcSeed++)
+          // A new card starts life at reps 0, so its ratings are drawn from the YOUNG end of the drift
+          // model and mature as the trajectory advances.
+          const { steps } = monteCarloSteps({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt, horizon: HORIZON, mix: mixForReps(model, 0), model, startReps: 0, K, fuzz: true }, mcSeed++)
           const tRun = Array.from({ length: K }, () => new Float64Array(HORIZON + 1))
           const gRun = splitBelow != null ? Array.from({ length: K }, () => new Float64Array(HORIZON + 1)) : null
           for (const st of steps) {
@@ -280,16 +298,16 @@ export function DueForecastProjection() {
         for (const [k, c] of cfg) {
           if (c.dailyGoal <= 0) continue
           const sr = seriesFor(k)
-          // New cards seed at the graduation interval (they climb the ladder from scratch), NOT the
-          // measured mature-card interval — so their early load is typed and grows realistically.
-          const i0 = GRADUATION_I0
+          // New cards seed at the language's MEASURED starting interval (freshest graduates) and climb
+          // from there — so their early load is typed and grows realistically.
+          const i0 = i0ByPair.get(k) ?? GRADUATION_I0_FALLBACK
           const d0 = diffByPair.get(k) ?? DEFAULT_DIFFICULTY
-          const mix = mixByPair.get(k) ?? DEFAULT_RATING_MIX
+          const model = modelByPair.get(k) ?? []
           const runs = runsFor(k)
-          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, mix, c.maxInt, c.dailyGoal)
-          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, mix, c.maxInt, c.dailyGoal, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
-          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, mix, c.maxInt, c.dailyGoal)
-          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, mix, c.maxInt, c.dailyGoal)
+          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, model, c.maxInt, c.dailyGoal)
+          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, model, c.maxInt, c.dailyGoal, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
+          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, model, c.maxInt, c.dailyGoal)
+          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, model, c.maxInt, c.dailyGoal)
         }
 
         // Downsample each pair's series to STEP-day points (windowed average).
@@ -305,7 +323,7 @@ export function DueForecastProjection() {
           .filter(p => p.typed.some(x => x > 0) || p.selfg.some(x => x > 0) || p.recog.some(x => x > 0))
         const models: PairModel[] = [...diffByPair.entries()]
           .filter(([k]) => pairSeries.some(p => p.key === k))
-          .map(([k, difficulty]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), days: GRADUATION_I0, difficulty }))
+          .map(([k, difficulty]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), days: i0ByPair.get(k) ?? GRADUATION_I0_FALLBACK, difficulty, drift: driftLabel(modelByPair.get(k) ?? []) }))
 
         // Confidence band per selection: downsample each run, then take p10/p90 across runs per window.
         // Stored per pair key + '__all__' (runs summed across pairs by index) so every language filter
@@ -479,9 +497,9 @@ export function DueForecastProjection() {
           with each language's measured difficulty + rating mix */}
       {data.models.length > 0 && (
         <p className="text-xs text-ink-faint">
-          <span className="text-ink-muted">Per-language model</span> — new cards enter at the {GRADUATION_I0}-day graduation interval and grow by each language&apos;s measured average difficulty + rating mix:{' '}
+          <span className="text-ink-muted">Per-language model</span> — new cards enter at each language&apos;s measured starting interval and grow by its measured average difficulty + a maturity-varying rating mix (again/hard/good/easy that drifts as cards age):{' '}
           {(filterKey ? data.models.filter(s => s.key === filterKey) : data.models)
-            .map(s => `${s.flag} ${s.label} D ${s.difficulty.toFixed(1)}`).join('  ·  ')}
+            .map(s => `${s.flag} ${s.label} · starts ${s.days < 1.5 ? s.days.toFixed(1) : Math.round(s.days)}d · D ${s.difficulty.toFixed(1)}${s.drift ? ` · ${s.drift}` : ''}`).join('   ·   ')}
         </p>
       )}
 
