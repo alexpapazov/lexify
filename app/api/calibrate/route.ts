@@ -13,8 +13,10 @@ interface CalibratePayload {
 
 async function calibratePair(userId: string, sourceLanguage: string, targetLanguage: string) {
   const answerFields = ['forward_typed', 'forward_recall', 'reverse_recall', 'forward_smart'] as const
+  // Target retention is canonical on the forward_typed row; every track calibrates toward it.
+  const fwd = await getOrCreate(userId, sourceLanguage, targetLanguage, 'forward_typed')
   for (const answerField of answerFields) {
-    await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField)
+    await calibrateBucket(userId, sourceLanguage, targetLanguage, answerField, fwd.requestRetention)
   }
   await calibrateGradIntervals(userId, sourceLanguage, targetLanguage)
 }
@@ -92,6 +94,7 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     strictArticles: (row.articles_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
     requestRetention: (row.request_retention as number | null) ?? DEFAULT_SCHEDULER_PARAMS.requestRetention,
     smartTypingThresholdDays: (row.smart_typing_threshold_days as number | null) ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays,
+    retentionCalibration: (row.retention_calibration as number | null) ?? DEFAULT_SCHEDULER_PARAMS.retentionCalibration,
   }
 }
 
@@ -141,11 +144,26 @@ async function saveHistory(snapshot: SchedulerParamsRow): Promise<void> {
   })
 }
 
+// Clamp on the interval-calibration multiplier: never shrink below 0.5× or stretch beyond 2.5×, so a
+// noisy retention estimate can't blow up a card's schedule in one calibration pass.
+const CAL_MIN = 0.5
+const CAL_MAX = 2.5
+
+/** Interval multiplier that corrects the stock FSRS weights toward the learner's true memory:
+ *  ln(target)/ln(measured). measured > target → >1 (stretch); measured < target → <1 (shorten). */
+function retentionCalibrationFactor(measured: number, target: number): number {
+  const m = Math.min(0.995, Math.max(0.5, measured))   // guard: ln(1)=0 blows up; very low is noise
+  const t = Math.min(0.995, Math.max(0.5, target))
+  const raw = Math.log(t) / Math.log(m)
+  return Math.min(CAL_MAX, Math.max(CAL_MIN, raw))
+}
+
 async function calibrateBucket(
   userId: string,
   sourceLang: string,
   targetLang: string,
   answerField: 'forward_typed' | 'forward_recall' | 'reverse_recall' | 'forward_smart',
+  target: number,
 ) {
   const db     = createAdminClient()
   const params = await getOrCreate(userId, sourceLang, targetLang, answerField)
@@ -199,11 +217,16 @@ async function calibrateBucket(
   // recent retention rate, which the workload forecast (analytics + "Coming up") reads per track.
   const retentionRate = events.reduce((sum, e) => sum + successWeight(e), 0) / events.length
 
+  // Feed measured-vs-target back into scheduling: stretch (or shrink) this track's intervals so the
+  // learner actually lands near their target retention despite the stock weights' miscalibration.
+  const calibration = retentionCalibrationFactor(retentionRate, target)
+
   const calibratedAt = new Date().toISOString()
   await updateParams(userId, sourceLang, targetLang, answerField, {
     calibrated_at:         calibratedAt,
     total_due_reviews:     newTotal,
     recent_retention_rate: retentionRate,
+    retention_calibration: calibration,
   })
   // Log a history snapshot on EVERY retention change (not only when grad intervals shift), so the
   // calibration history is a complete per-track log and its newest row always matches the live value

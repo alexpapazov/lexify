@@ -1152,26 +1152,33 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
 
                         {/* Measured retention per track (feeds the workload forecast) */}
                         <div className="flex flex-col gap-1">
-                          <p className="text-xs text-ink-faint">Measured retention (used by the workload forecast):</p>
+                          <p className="text-xs text-ink-faint">Measured retention (used by the workload forecast). <span className="text-ink-muted">Interval ×</span> is how much your intervals are auto-stretched (or shrunk) so you hit your target retention — set from your measured vs target above.</p>
                           <div className="overflow-x-auto">
                             <table className="w-full text-xs border-collapse">
                               <thead>
                                 <tr className="text-ink-muted">
                                   <th className="text-left py-1 pr-2 font-medium">Track</th>
                                   <th className="text-right py-1 px-1 font-medium">Retention</th>
+                                  <th className="text-right py-1 px-1 font-medium">Interval ×</th>
                                   <th className="text-right py-1 pl-1 font-medium">Reviews</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {CONST_BUCKETS.map(b => (
+                                {CONST_BUCKETS.map(b => {
+                                  const cal = b.row?.retentionCalibration ?? 1
+                                  return (
                                   <tr key={b.field} className="border-t border-surface-border/50">
                                     <td className="py-1 pr-2 text-ink-muted">{b.label}</td>
                                     <td className="text-right py-1 px-1 text-ink">
                                       {b.row?.recentRetentionRate != null ? `${Math.round(b.row.recentRetentionRate * 100)}%` : '—'}
                                     </td>
+                                    <td className={`text-right py-1 px-1 ${cal > 1.02 ? 'text-success' : cal < 0.98 ? 'text-warning' : 'text-ink-faint'}`}>
+                                      {Math.abs(cal - 1) < 0.02 ? '—' : `×${cal.toFixed(2)}`}
+                                    </td>
                                     <td className="text-right py-1 pl-1 text-ink-faint">{b.row?.totalDueReviews ?? 0}</td>
                                   </tr>
-                                ))}
+                                  )
+                                })}
                               </tbody>
                             </table>
                           </div>

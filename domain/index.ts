@@ -342,6 +342,11 @@ export interface SchedulerParams {
   // Per-pair smart-typing threshold (days): the smart-typing track requires typing
   // while its interval is below this, then goes self-graded. Canonical on forward_typed.
   smartTypingThresholdDays: number
+  // Per-TRACK FSRS interval calibration (multiplier, 1 = none). Set by the calibrate route from your
+  // MEASURED vs TARGET retention: when you consistently recall better than your target, intervals are
+  // stretched (>1) so you review less at the same retention; when you recall worse, they shrink (<1).
+  // Unlike the others this is per answer_field (each track has its own measured retention).
+  retentionCalibration: number
 }
 
 export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
@@ -360,6 +365,7 @@ export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
   strictSpelling: 'penalize', strictAccents: 'penalize', strictArticles: 'penalize',
   requestRetention: 0.90,
   smartTypingThresholdDays: 20,
+  retentionCalibration: 1.0,
 }
 
 /** Defaults when converting an existing deck to flexible mode. */

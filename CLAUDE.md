@@ -1305,6 +1305,44 @@ served `out/`: `/study/deck?deck=<anyid>` renders, no 404).
   Optional polish later: splash screen / app icons for iOS (`@capacitor/assets`), Android platform,
   status-bar plugin.
 
+## Retention auto-calibration — feed measured retention back into intervals (2026-07-19)
+
+The stock FSRS weights aim every interval at the pair's TARGET retention (`request_retention`, the slider),
+but a learner who consistently recalls *better* than target has intervals shorter than they need — the model
+underestimates their memory. Now the calibrate route measures this per track and the scheduler stretches
+(or shrinks) intervals to actually land near target, at NO change to target retention.
+
+- **Migration `096_retention_calibration.sql`** (must apply): adds
+  `user_scheduler_params.retention_calibration REAL NOT NULL DEFAULT 1.0` — **per answer_field** (each track
+  has its own measured retention). `SchedulerParams.retentionCalibration` + `DEFAULT_SCHEDULER_PARAMS` (1.0) +
+  both repo `rowToParams` mappings updated.
+- **Calibrate route** (`app/api/calibrate/route.ts`): `calibrateBucket` now also stores
+  `retention_calibration = clamp(ln(target)/ln(measured), 0.5, 2.5)` (`retentionCalibrationFactor`), where
+  `target` = the pair's forward_typed `requestRetention` (passed down from `calibratePair`). measured > target
+  → >1 (stretch); < target → <1 (shrink). Only set once a bucket has ≥ its window of reviews (same gate as
+  `recent_retention_rate`); `measured` clamped to [0.5, 0.995] to avoid ln(1)=0 blow-ups.
+- **Engine** (`engine/fsrs.ts` + `engine/dueNow.ts`): `FsrsConfig.retentionCalibration?` (default 1). New
+  `scheduledIntervalDays(stability, cfg)` = `max(1, cal · intervalForRetention(S, requestRetention))`, used by
+  `scheduled()` and `scheduleGraduatedFsrs`. It multiplies the *scheduled interval only* — stored stability/
+  difficulty are untouched (FSRS state stays pristine; the correction is re-applied fresh each schedule, a
+  proportional controller that converges as `measured → target`).
+- **Session pages (all 3)**: build a per-(pair,track) calibration map from `listForUser()` rows
+  (`lib/sessionLimits.ts: buildCalibrationMap` / `calibrationFor`) and pass `retentionCalibration` into every
+  `scheduleGraduatedFsrs` cfg — keyed by the reviewed track's answer_field (typed→forward_typed,
+  smart→forward_smart, recall→forward_recall, reverse→reverse_recall). Deck session stores the 4 values in a
+  ref (single pair); all/folder key by `${src}|${tgt}:${field}`.
+- **Forecast reflects it**: `lib/forecastFsrs.ts` `fsrsScheduleSampled`/`monteCarloSteps` (analytics chart) and
+  `fsrsScheduleMix` (dashboard "Coming up") take an optional `calibration` multiplier on the scheduled interval.
+  `DueForecastProjection` (`PairCfg.{typed,selfg,smart,reverse}Cal`) and `app/study/page.tsx`
+  (`PairForecastCfg` + `emit(...calibration)`) read `retentionCalibration` per track and pass it, so projected
+  load drops to match the real schedule.
+- **Transparency**: the per-pair SRS modal (`app/library/page.tsx`) "Measured retention" table gained an
+  **Interval ×** column showing each track's calibration (green >1, amber <1, "—" at ~1).
+- Tests: `engine/__tests__/dueNow.test.ts` (calibration scales interval, not stability) +
+  `lib/__tests__/forecastFsrs.test.ts` (calibration>1 → fewer reviews in horizon). All green.
+- Note: this is the fix for "does the system take my high retention into account?" — before this it did NOT
+  (measured retention only fed the forecast/display, never scheduling).
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

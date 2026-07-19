@@ -182,6 +182,15 @@ describe('measureRatingModel + mixForReps (rating drift over maturity)', () => {
   })
 })
 
+describe('interval calibration (measured-vs-target retention)', () => {
+  it('a calibration > 1 stretches intervals, so fewer reviews land within the horizon', () => {
+    const common = { stability: 5, difficulty: 5, firstReviewDay: 1, retention: 0.9, maxInt: 3650, horizon: 730, mix: { again: 0, hard: 0, good: 1, easy: 0 }, K: 12, fuzz: false } as const
+    const base    = monteCarloSteps({ ...common }, 7)
+    const stretch = monteCarloSteps({ ...common, calibration: 1.6 }, 7)
+    expect(stretch.steps.length).toBeLessThan(base.steps.length)
+  })
+})
+
 describe('monteCarloSteps with a maturity model', () => {
   it('draws early reviews from the young mix and later reviews from the mature mix', () => {
     // Young = always Again (lapses → extra same-day reviews); mature = always Easy (long intervals).

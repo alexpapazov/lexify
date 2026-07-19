@@ -1,5 +1,6 @@
 import type { TypedStrictness } from '@/domain'
 import { reviewDueNow, gradeFromTyped, scheduleGraduatedFsrs, seedDifficulty, seedStability, RELEARN_MINUTES, type DueNowState } from '@/engine/dueNow'
+import { DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
 
 const clean = (over: Partial<DueNowState> = {}): DueNowState =>
   ({ difficulty: 5, stability: 10, relearning: false, goodStreak: 0, againStreak: 0, ...over })
@@ -96,6 +97,17 @@ describe('scheduleGraduatedFsrs', () => {
     expect(out.intervalDays).not.toBeNull()
     expect(out.intervalDays!).toBeGreaterThan(20)
     expect(out.relearning).toBe(false)
+  })
+  it('retentionCalibration stretches (or shrinks) the scheduled interval without changing stability', () => {
+    const base    = scheduleGraduatedFsrs(cur, 'good', { ...DEFAULT_FSRS_CONFIG })
+    const stretch = scheduleGraduatedFsrs(cur, 'good', { ...DEFAULT_FSRS_CONFIG, retentionCalibration: 2 })
+    const shrink  = scheduleGraduatedFsrs(cur, 'good', { ...DEFAULT_FSRS_CONFIG, retentionCalibration: 0.5 })
+    // Interval scales by the calibration factor…
+    expect(stretch.intervalDays!).toBeCloseTo(base.intervalDays! * 2, 5)
+    expect(shrink.intervalDays!).toBeCloseTo(base.intervalDays! * 0.5, 5)
+    // …but the stored stability (the memory model) is untouched.
+    expect(stretch.stability).toBeCloseTo(base.stability, 5)
+    expect(shrink.stability).toBeCloseTo(base.stability, 5)
   })
   it('an Again enters the relearn loop (dueInMinutes set, no interval)', () => {
     const out = scheduleGraduatedFsrs(cur, 'again')

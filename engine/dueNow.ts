@@ -32,12 +32,19 @@ export type DueNowAction =
 
 export interface DueNowResult { state: DueNowState; action: DueNowAction }
 
+/** The interval (days) a clean scheduled review earns: FSRS's stability→interval, times the per-track
+ *  retention calibration (measured-vs-target correction), floored at 1 day. Floor: a scheduled review
+ *  must never be sub-day, or snapping the due date to the start of the day lands it back on today →
+ *  the card is perpetually "due now". */
+function scheduledIntervalDays(stability: number, cfg: FsrsConfig): number {
+  const cal = cfg.retentionCalibration ?? 1
+  return Math.max(1, cal * intervalForRetention(stability, cfg.requestRetention))
+}
+
 function scheduled(difficulty: number, stability: number, cfg: FsrsConfig): DueNowResult {
   return {
     state: { difficulty, stability, relearning: false, goodStreak: 0, againStreak: 0 },
-    // Floor at 1 day: a *scheduled* (non-relearn) review must never be sub-day, or snapping the due
-    // date to the start of the day lands it back on today → the card is perpetually "due now".
-    action: { kind: 'schedule', intervalDays: Math.max(1, intervalForRetention(stability, cfg.requestRetention)) },
+    action: { kind: 'schedule', intervalDays: scheduledIntervalDays(stability, cfg) },
   }
 }
 
@@ -148,7 +155,7 @@ export function scheduleGraduatedFsrs(cur: GraduatedFsrsInput, grade: Rating, cf
     const stability = (gf != null && gf < 1 && grew)
       ? state.stability + Math.max(0, gf) * (next.stability - state.stability)
       : next.stability
-    const intervalDays = Math.max(1, intervalForRetention(stability, cfg.requestRetention))
+    const intervalDays = scheduledIntervalDays(stability, cfg)
     return { ...base, stability, intervalDays, dueInMinutes: null, sendToLadder: false }
   }
   if (action.kind === 'relearn')  return { ...base, intervalDays: null, dueInMinutes: action.minutes, sendToLadder: false }

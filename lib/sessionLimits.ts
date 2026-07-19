@@ -178,6 +178,34 @@ export function buildEnabledTracksMap(rows: TrackFlagRow[]): Map<string, Enabled
   return map
 }
 
+// ─── Per-track interval calibration (measured-vs-target retention) ──────────────
+// The calibrate route stores a per-answer_field multiplier on user_scheduler_params; the session
+// pages apply it to each FSRS schedule so a track the learner over-performs on earns longer intervals.
+
+interface CalibrationRow { sourceLanguage: string; targetLanguage: string; answerField: string; retentionCalibration: number }
+
+/** `${source}|${target}:${answer_field}` → interval-calibration multiplier (default 1). */
+export function buildCalibrationMap(rows: CalibrationRow[]): Map<string, number> {
+  const map = new Map<string, number>()
+  for (const r of rows) map.set(`${r.sourceLanguage}|${r.targetLanguage}:${r.answerField}`, r.retentionCalibration ?? 1)
+  return map
+}
+
+/** Which answer_field a live review track schedules against. Legacy typed → forward_typed. */
+export function reviewTrackField(
+  reviewTrack: 'typed' | 'recall' | 'legacy' | 'smart' | undefined, isReverse: boolean,
+): 'forward_typed' | 'forward_smart' | 'forward_recall' | 'reverse_recall' {
+  if (isReverse) return 'reverse_recall'
+  if (reviewTrack === 'smart')  return 'forward_smart'
+  if (reviewTrack === 'recall') return 'forward_recall'
+  return 'forward_typed'
+}
+
+/** The interval-calibration multiplier for a given pair + answer_field (1 when unknown). */
+export function calibrationFor(map: Map<string, number>, src: string, tgt: string, field: string): number {
+  return map.get(`${src}|${tgt}:${field}`) ?? 1
+}
+
 /**
  * The single enabled forward-production lane. Typed and smart are mutually exclusive per pair, but a
  * card's production due date can live in either the `typed_due_at` or `smart_due_at` column depending

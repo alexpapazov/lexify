@@ -84,11 +84,13 @@ interface ForecastFilters {
 // length), the max interval cap, and the language's measured rating mix.
 interface PairForecastCfg {
   typedP: number; selfgP: number; smartP: number; reverseP: number
+  // Per-track interval calibration (measured-vs-target retention) — matches the live scheduler.
+  typedCal: number; selfgCal: number; smartCal: number; reverseCal: number
   maxInt: number
   mix:    RatingMix
 }
 
-const DEFAULT_PAIR_CFG: PairForecastCfg = { typedP: 0.9, selfgP: 0.9, smartP: 0.9, reverseP: 0.9, maxInt: 1460, mix: DEFAULT_RATING_MIX }
+const DEFAULT_PAIR_CFG: PairForecastCfg = { typedP: 0.9, selfgP: 0.9, smartP: 0.9, reverseP: 0.9, typedCal: 1, selfgCal: 1, smartCal: 1, reverseCal: 1, maxInt: 1460, mix: DEFAULT_RATING_MIX }
 
 /** Whole-day difference between two YYYY-MM-DD strings (b − a). */
 function daysBetween(a: string, b: string): number {
@@ -97,7 +99,7 @@ function daysBetween(a: string, b: string): number {
 
 /** Build per-pair forecast config from scheduler params (retention/maxInt) + measured rating mix. */
 function buildForecastCfg(
-  paramRows: { sourceLanguage: string; targetLanguage: string; maxIntervalDays: number; recentRetentionRate: number | null; answerField: string }[],
+  paramRows: { sourceLanguage: string; targetLanguage: string; maxIntervalDays: number; recentRetentionRate: number | null; retentionCalibration: number | null; answerField: string }[],
   stats: DeckWithStats[],
 ): Map<string, PairForecastCfg> {
   const m = new Map<string, PairForecastCfg>()
@@ -110,12 +112,11 @@ function buildForecastCfg(
     const c = ensure(`${r.sourceLanguage}|${r.targetLanguage}`)
     c.maxInt = r.maxIntervalDays
     const p = r.recentRetentionRate ?? undefined
-    if (p) {
-      if (r.answerField === 'forward_typed')  c.typedP  = p
-      if (r.answerField === 'forward_recall') c.selfgP  = p
-      if (r.answerField === 'forward_smart')  c.smartP  = p
-      if (r.answerField === 'reverse_recall') c.reverseP = p
-    }
+    const cal = r.retentionCalibration ?? 1
+    if (r.answerField === 'forward_typed')  { if (p) c.typedP  = p; c.typedCal  = cal }
+    if (r.answerField === 'forward_recall') { if (p) c.selfgP  = p; c.selfgCal  = cal }
+    if (r.answerField === 'forward_smart')  { if (p) c.smartP  = p; c.smartCal  = cal }
+    if (r.answerField === 'reverse_recall') { if (p) c.reverseP = p; c.reverseCal = cal }
   }
   for (const { deck, states } of stats) {
     ensure(`${deck.sourceLanguage}|${deck.targetLanguage}`).mix = measureRatingMix(states)
@@ -161,13 +162,13 @@ function projectStateReviewDays(s: CardState, ctx: ProjectCtx): string[] {
   const emit = (
     ref: string | null | undefined,
     stability: number, difficulty: number, retention: number, mix: RatingMix,
-    accept: (st: WeightedStep) => boolean,
+    accept: (st: WeightedStep) => boolean, calibration = 1,
   ) => {
     if (!ref) return
     const refLocal = localDate(ref)
     // Overdue tracks are due today (offset 0); future ones start at their day offset.
     const firstOffset = Math.max(0, daysBetween(todayStr, refLocal < todayStr ? todayStr : refLocal))
-    const steps = fsrsScheduleMix({ stability, difficulty, firstReviewDay: firstOffset, retention, maxInt: pc.maxInt, horizon: horizonDays, mix })
+    const steps = fsrsScheduleMix({ stability, difficulty, firstReviewDay: firstOffset, retention, maxInt: pc.maxInt, horizon: horizonDays, mix, calibration })
     for (const st of steps) {
       const dateStr = addDays(todayStr, st.day)
       if (dateStr < startDate || dateStr > endDate) continue
@@ -182,7 +183,7 @@ function projectStateReviewDays(s: CardState, ctx: ProjectCtx): string[] {
     if (!dirAllows('reverse') || !showSelfGraded || !trackEnabled(en, 'recall', true) || s.dormant) return []
     emit(s.recallDueAt ?? s.dueAt,
       seedStability(s.stability, s.recallIntervalDays ?? s.intervalDays, pc.reverseP),
-      seedDifficulty(s.difficulty), pc.reverseP, pc.mix, () => true)
+      seedDifficulty(s.difficulty), pc.reverseP, pc.mix, () => true, pc.reverseCal)
   } else {
     // Production is one logical lane (typed/smart mutually exclusive), visible if EITHER mode is
     // enabled. Classify by TRACK for REVIEW TYPE (smart_due_at → Smart typing) and by PRESENTATION
@@ -198,12 +199,12 @@ function projectStateReviewDays(s: CardState, ctx: ProjectCtx): string[] {
       // each simulated review by whether that interval is below the threshold.
       const fixedTyped = forwardProductionMode(s, onSmart ? 'smart' : 'typed', threshold) === 'typed'
       emit(prodRef, seedStability(s.stability, interval, ret), seedDifficulty(s.difficulty), ret, pc.mix,
-        (st) => dirAllows((onSmart ? st.intervalDays < threshold : fixedTyped) ? 'forward-typed' : 'forward-selfgraded'))
+        (st) => dirAllows((onSmart ? st.intervalDays < threshold : fixedTyped) ? 'forward-typed' : 'forward-selfgraded'), onSmart ? pc.smartCal : pc.typedCal)
     }
     // Forward recall is a separate self-graded track (its own recall_due_at schedule).
     if (showSelfGraded && dirAllows('forward-selfgraded') && s.recallDueAt && trackEnabled(en, 'recall', false)) {
       emit(s.recallDueAt, seedStability(s.stability, s.recallIntervalDays ?? s.intervalDays, pc.selfgP),
-        seedDifficulty(s.difficulty), pc.selfgP, pc.mix, () => true)
+        seedDifficulty(s.difficulty), pc.selfgP, pc.mix, () => true, pc.selfgCal)
     }
   }
   return [...days]

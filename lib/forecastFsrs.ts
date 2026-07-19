@@ -91,27 +91,30 @@ const clampD = (d: number) => Math.min(10, Math.max(1, d))
 export function fsrsScheduleMix(opts: {
   stability: number; difficulty: number; firstReviewDay: number
   retention: number; maxInt: number; horizon: number; mix: RatingMix; cfg?: FsrsConfig
+  /** Per-track interval calibration (measured-vs-target retention); stretches/shrinks intervals. */
+  calibration?: number
 }): WeightedStep[] {
   const cfg = opts.cfg ?? DEFAULT_FSRS_CONFIG
   const w = cfg.weights, r = opts.retention, m = opts.mix
+  const cal = opts.calibration ?? 1
   const succTot = m.hard + m.good + m.easy
   // Blended hard-penalty / easy-bonus factor across the success grades.
   const successFactor = succTot > 0 ? (m.hard * w[15]! + m.good * 1 + m.easy * w[16]!) / succTot : 1
   const diffDelta = m.again * 2.0 + m.hard * 0.6 + m.easy * -2.0   // good delta = 0
   const steps: WeightedStep[] = []
   let S = Math.max(0.1, opts.stability), D = clampD(opts.difficulty), day = opts.firstReviewDay
-  let lead = Math.min(intervalForRetention(S, r), opts.maxInt)
+  let lead = Math.min(intervalForRetention(S, r) * cal, opts.maxInt)
   let guard = 0
   while (day <= opts.horizon && guard++ < 500) {
     steps.push({ day, intervalDays: Math.max(0.5, lead), weight: 1 + m.again })
-    const elapsed = Math.max(1, Math.min(intervalForRetention(S, r), opts.maxInt))
+    const elapsed = Math.max(1, Math.min(intervalForRetention(S, r) * cal, opts.maxInt))
     const R = retrievability(elapsed, S)
     const inc = Math.exp(w[8]!) * (11 - D) * Math.pow(S, -w[9]!) * (Math.exp(w[10]! * (1 - R)) - 1) * successFactor
     const sSucc = S * (1 + cfg.growth * inc)
     const sLapse = stabilityAfterLapse({ stability: S, difficulty: D }, elapsed, cfg)
     S = Math.max(0.1, (1 - m.again) * sSucc + m.again * sLapse)
     D = clampD(D + diffDelta)
-    lead = Math.min(intervalForRetention(S, r), opts.maxInt)
+    lead = Math.min(intervalForRetention(S, r) * cal, opts.maxInt)
     day += Math.max(1, Math.round(elapsed))
   }
   return steps
@@ -304,12 +307,15 @@ export function fsrsScheduleSampled(opts: {
   /** Maturity-varying rating model. When set, the rating at each review is drawn from the mix for the
    *  card's current review count (`startReps` + reviews taken so far) instead of the static `mix`. */
   model?: RatingModel; startReps?: number
+  /** Per-track interval calibration (measured-vs-target retention); stretches/shrinks each interval. */
+  calibration?: number
 }): ReviewStep[] {
   const cfg: FsrsConfig = { ...(opts.cfg ?? DEFAULT_FSRS_CONFIG), requestRetention: opts.retention }
   const steps: ReviewStep[] = []
   let S = Math.max(0.1, opts.stability)
   let D = Math.min(10, Math.max(1, opts.difficulty))
   let day = opts.firstReviewDay
+  const cal = opts.calibration ?? 1
   let cur = Math.min(intervalForRetention(S, opts.retention), opts.maxInt) // interval that placed this review
   let reps = opts.startReps ?? 0
   let guard = 0
@@ -324,7 +330,9 @@ export function fsrsScheduleSampled(opts: {
     if (rating === 'again' && day <= opts.horizon) {
       steps.push({ day, intervalDays: Math.max(0.5, cur) }) // relearn re-review lands the same day
     }
-    let next = Math.min(rev.intervalDays, opts.maxInt)
+    // Apply the per-track retention calibration to the *scheduled* interval, exactly as the live
+    // scheduler does (engine/dueNow) — so an over-performing track's projected load drops accordingly.
+    let next = Math.min(rev.intervalDays * cal, opts.maxInt)
     if (opts.fuzz && next >= 2.5) {
       const [lo, hi] = fsrsFuzzRange(next)
       next = lo + opts.rand() * (hi - lo)
@@ -350,6 +358,8 @@ export function monteCarloSteps(
     K: number; fuzz?: boolean; cfg?: FsrsConfig; maxReviews?: number; stopDay?: number
     /** Maturity-varying rating model + the card's starting review count (see fsrsScheduleSampled). */
     model?: RatingModel; startReps?: number
+    /** Per-track interval calibration (measured-vs-target retention). */
+    calibration?: number
   },
   seed: number,
 ): { steps: WeightedStep[]; dormantDay: number | null } {
@@ -362,7 +372,7 @@ export function monteCarloSteps(
     const path = fsrsScheduleSampled({
       stability: opts.stability, difficulty: opts.difficulty, firstReviewDay: opts.firstReviewDay,
       retention: opts.retention, maxInt: opts.maxInt, horizon: opts.horizon, mix: opts.mix, rand, cfg: opts.cfg, fuzz: opts.fuzz,
-      model: opts.model, startReps: opts.startReps,
+      model: opts.model, startReps: opts.startReps, calibration: opts.calibration,
     })
     let count = 0
     for (const st of path) {

@@ -27,6 +27,10 @@ export interface FsrsConfig {
   requestRetention: number
   /** Calibration knob (default 1): scales how much stability grows on a success. */
   growth: number
+  /** Per-track interval calibration (default 1): multiplies the *scheduled* interval to correct for
+   *  the stock weights under/over-estimating this learner's memory (from measured vs target retention).
+   *  Applied only when turning stability into a due date — it does NOT mutate stored stability. */
+  retentionCalibration?: number
 }
 
 export const DEFAULT_FSRS_CONFIG: FsrsConfig = {

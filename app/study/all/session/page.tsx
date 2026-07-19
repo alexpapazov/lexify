@@ -42,7 +42,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, buildCalibrationMap, calibrationFor, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { UndoFab } from '@/components/session/UndoFab'
@@ -160,6 +160,8 @@ function AllDueSessionInner() {
   const decksRef      = useRef<Deck[] | null>(null)
   const enabledMapRef = useRef<Map<string, EnabledTracks> | null>(null)
   const paramMapRef   = useRef<Map<string, SchedulerParamsRow> | null>(null)
+  // Per-(pair,track) FSRS interval calibration (measured-vs-target retention), keyed `${src}|${tgt}:${field}`.
+  const calMapRef     = useRef<Map<string, number>>(new Map())
   const [moreDue, setMoreDue] = useState(-1)   // -1 = not yet checked (avoids a wrong-state button flash)
   // Hint usage for the current card's review — consumed once in handleAnswer.
   const hintRef     = useRef<{ level: number; growthFactor: number } | null>(null)
@@ -281,6 +283,7 @@ function AllDueSessionInner() {
       // (filtered from Due Now) but their scheduling is preserved.
       const allParamRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
       const enabledTracksMap = buildEnabledTracksMap(allParamRows)
+      calMapRef.current = buildCalibrationMap(allParamRows)
       const sMap = new Map<string, TypedStrictness>()
       const pMap = new Map<string, SchedulerParamsRow>()
       for (const r of allParamRows) {
@@ -753,7 +756,7 @@ function AllDueSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention, retentionCalibration: calibrationFor(calMapRef.current, sourceLanguage, targetLanguage, isReverse ? 'reverse_recall' : 'forward_recall') }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
         // The recall/reverse track only ever recognises the native side, so failing it
         // never sends a card back to the ladder — only failing target-language production
         // (the forward path) does. A recall sendToLadder is treated as one more 5-min loop.
@@ -819,7 +822,7 @@ function AllDueSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention, retentionCalibration: calibrationFor(calMapRef.current, sourceLanguage, targetLanguage, 'forward_smart') }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
 
         let smartNewState: CardState
         if (fsrs.sendToLadder) {
@@ -942,7 +945,7 @@ function AllDueSessionInner() {
           goodStreak:  state.goodStreak,
           againStreak: state.againStreak,
           elapsedDays,
-        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
+        }, grade, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention, retentionCalibration: calibrationFor(calMapRef.current, sourceLanguage, targetLanguage, 'forward_typed') }, { softLapse: nearMiss, hintGrowthFactor: hint?.growthFactor })
         if (fsrs.sendToLadder) {
           // Un-graduate and restart the CURRENT ladder (drop any stale climb row).
           newState = {
@@ -1043,7 +1046,7 @@ function AllDueSessionInner() {
           goodStreak:   state.goodStreak,
           againStreak:  state.againStreak,
           elapsedDays,
-        }, softWrongRecallRating, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention }, {})
+        }, softWrongRecallRating, { ...DEFAULT_FSRS_CONFIG, requestRetention: cardParams.requestRetention, retentionCalibration: calibrationFor(calMapRef.current, sourceLanguage, targetLanguage, isReverse ? 'reverse_recall' : 'forward_recall') }, {})
         if (recallFsrs.intervalDays != null) {
           const newRecallDueAt = snapDueAtToStartOfDay(new Date(nowDate.getTime() + recallFsrs.intervalDays * 86_400_000).toISOString(), tzRef.current, turnoverRef.current)
           newState = { ...newState, recallIntervalDays: recallFsrs.intervalDays, recallDueAt: newRecallDueAt }

@@ -33,6 +33,8 @@ const GRADUATION_I0_FALLBACK = 1
 
 interface PairCfg {
   typedP: number; selfgP: number; smartP: number; reverseP: number
+  // Per-track interval calibration (measured-vs-target retention) — matches the live scheduler.
+  typedCal: number; selfgCal: number; smartCal: number; reverseCal: number
   typedOn: boolean; selfgOn: boolean; smartOn: boolean; reverseOn: boolean
   smartThreshold: number
   maxInt: number; dailyGoal: number
@@ -86,17 +88,18 @@ export function DueForecastProjection() {
         const ensure = (src: string, tgt: string): PairCfg => {
           const k = `${src}|${tgt}`
           let c = cfg.get(k)
-          if (!c) { c = { typedP: 0.85, selfgP: 0.9, smartP: 0.85, reverseP: 0.9, typedOn: true, selfgOn: true, smartOn: false, reverseOn: true, smartThreshold: 20, maxInt: 1460, dailyGoal: 0, src, tgt }; cfg.set(k, c) }
+          if (!c) { c = { typedP: 0.85, selfgP: 0.9, smartP: 0.85, reverseP: 0.9, typedCal: 1, selfgCal: 1, smartCal: 1, reverseCal: 1, typedOn: true, selfgOn: true, smartOn: false, reverseOn: true, smartThreshold: 20, maxInt: 1460, dailyGoal: 0, src, tgt }; cfg.set(k, c) }
           return c
         }
         for (const r of paramRows) {
           const c = ensure(r.sourceLanguage, r.targetLanguage)
           c.maxInt = r.maxIntervalDays
           const p = r.recentRetentionRate ?? undefined
-          if (r.answerField === 'forward_typed')  { c.typedOn = r.forwardTypedEnabled;  c.smartThreshold = r.smartTypingThresholdDays; if (p) c.typedP = p }
-          if (r.answerField === 'forward_recall') { c.selfgOn = r.forwardRecallEnabled; if (p) c.selfgP = p }
-          if (r.answerField === 'forward_smart')  { c.smartOn = r.forwardSmartEnabled;  if (p) c.smartP = p }
-          if (r.answerField === 'reverse_recall') { c.reverseOn = r.reverseRecallEnabled; if (p) c.reverseP = p }
+          const cal = r.retentionCalibration ?? 1
+          if (r.answerField === 'forward_typed')  { c.typedOn = r.forwardTypedEnabled;  c.smartThreshold = r.smartTypingThresholdDays; if (p) c.typedP = p; c.typedCal = cal }
+          if (r.answerField === 'forward_recall') { c.selfgOn = r.forwardRecallEnabled; if (p) c.selfgP = p; c.selfgCal = cal }
+          if (r.answerField === 'forward_smart')  { c.smartOn = r.forwardSmartEnabled;  if (p) c.smartP = p; c.smartCal = cal }
+          if (r.answerField === 'reverse_recall') { c.reverseOn = r.reverseRecallEnabled; if (p) c.reverseP = p; c.reverseCal = cal }
         }
         let anyGoal = false
         for (const pr of pairs) {
@@ -146,11 +149,11 @@ export function DueForecastProjection() {
         // the median day runs hit `maxReviews` (dormancy), else null. Honors `stopDay`.
         const emit = (
           arr: Float64Array, runs: Float64Array[], firstDay: number | null, S0: number, D0: number, retention: number, maxInt: number,
-          model: RatingModel, startReps: number, opts?: { maxReviews?: number; stopDay?: number },
+          model: RatingModel, startReps: number, calibration: number, opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
           if (firstDay === null) return null
           const { steps, dormantDay } = monteCarloSteps(
-            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix: mixForReps(model, startReps), model, startReps, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
+            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix: mixForReps(model, startReps), model, startReps, calibration, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
             mcSeed++,
           )
           for (const st of steps) { arr[st.day]! += st.weight; runs[st.run!]![st.day]! += 1 }
@@ -159,11 +162,11 @@ export function DueForecastProjection() {
         // Smart variant: each review is typed while its interval is below `threshold`, else self-graded.
         const emitSmart = (
           typedArr: Float64Array, selfgArr: Float64Array, runs: Float64Array[], firstDay: number | null, S0: number, D0: number,
-          retention: number, maxInt: number, threshold: number, model: RatingModel, startReps: number, opts?: { maxReviews?: number; stopDay?: number },
+          retention: number, maxInt: number, threshold: number, model: RatingModel, startReps: number, calibration: number, opts?: { maxReviews?: number; stopDay?: number },
         ): number | null => {
           if (firstDay === null) return null
           const { steps, dormantDay } = monteCarloSteps(
-            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix: mixForReps(model, startReps), model, startReps, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
+            { stability: S0, difficulty: D0, firstReviewDay: firstDay, retention, maxInt, horizon: HORIZON, mix: mixForReps(model, startReps), model, startReps, calibration, K, fuzz: true, maxReviews: opts?.maxReviews, stopDay: opts?.stopDay },
             mcSeed++,
           )
           for (const st of steps) {
@@ -236,15 +239,15 @@ export function DueForecastProjection() {
             const prodOn = c.typedOn || c.smartOn
             const dS = seedD(s.difficulty)
             if (prodOn && s.typedDueAt) {
-              dormantDay = emit(sr.typed, runs, offset(s.typedDueAt ?? s.dueAt), seedS(s.stability, s.typedIntervalDays ?? s.intervalDays, c.typedP), dS, c.typedP, c.maxInt, model, s.reps, remOpts)
+              dormantDay = emit(sr.typed, runs, offset(s.typedDueAt ?? s.dueAt), seedS(s.stability, s.typedIntervalDays ?? s.intervalDays, c.typedP), dS, c.typedP, c.maxInt, model, s.reps, c.typedCal, remOpts)
             }
             if (prodOn && s.smartDueAt) {
-              const sd = emitSmart(sr.typed, sr.selfg, runs, offset(s.smartDueAt), seedS(s.stability, s.smartIntervalDays ?? s.intervalDays, c.smartP), dS, c.smartP, c.maxInt, c.smartThreshold, model, s.reps, remOpts)
+              const sd = emitSmart(sr.typed, sr.selfg, runs, offset(s.smartDueAt), seedS(s.stability, s.smartIntervalDays ?? s.intervalDays, c.smartP), dS, c.smartP, c.maxInt, c.smartThreshold, model, s.reps, c.smartCal, remOpts)
               if (dormantDay == null) dormantDay = sd
             }
             if (c.selfgOn && s.recallDueAt) {
               const recallOpts = dormantDay != null ? { stopDay: dormantDay } : remOpts
-              const rd = emit(sr.selfg, runs, offset(s.recallDueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.selfgP), dS, c.selfgP, c.maxInt, model, s.reps, recallOpts)
+              const rd = emit(sr.selfg, runs, offset(s.recallDueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.selfgP), dS, c.selfgP, c.maxInt, model, s.reps, c.selfgCal, recallOpts)
               if (dormantDay == null) dormantDay = rd
             }
             if (dormantDay != null) dormantDayByCard.set(s.cardId, dormantDay)
@@ -256,7 +259,7 @@ export function DueForecastProjection() {
             if (fwdState?.dormant) continue
             if (!(c.reverseOn && fwdState?.graduated)) continue
             const stopDay = dormantDayByCard.get(s.cardId)
-            emit(sr.recog, runs, offset(s.recallDueAt ?? s.dueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.reverseP), seedD(s.difficulty), c.reverseP, c.maxInt, model, s.reps,
+            emit(sr.recog, runs, offset(s.recallDueAt ?? s.dueAt), seedS(s.stability, s.recallIntervalDays ?? s.intervalDays, c.reverseP), seedD(s.difficulty), c.reverseP, c.maxInt, model, s.reps, c.reverseCal,
               stopDay != null ? { stopDay } : undefined)
           }
         }
@@ -267,11 +270,11 @@ export function DueForecastProjection() {
         // load at age t = dailyGoal · cum(t). The daily goal is treated as ongoing learning. ──
         const emitNew = (
           targetArr: Float64Array, runs: Float64Array[], retention: number, i0: number, d0: number, model: RatingModel, maxInt: number,
-          dailyGoal: number, splitArr?: Float64Array, splitBelow?: number,
+          dailyGoal: number, calibration: number, splitArr?: Float64Array, splitBelow?: number,
         ) => {
           // A new card starts life at reps 0, so its ratings are drawn from the YOUNG end of the drift
           // model and mature as the trajectory advances.
-          const { steps } = monteCarloSteps({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt, horizon: HORIZON, mix: mixForReps(model, 0), model, startReps: 0, K, fuzz: true }, mcSeed++)
+          const { steps } = monteCarloSteps({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt, horizon: HORIZON, mix: mixForReps(model, 0), model, startReps: 0, calibration, K, fuzz: true }, mcSeed++)
           const tRun = Array.from({ length: K }, () => new Float64Array(HORIZON + 1))
           const gRun = splitBelow != null ? Array.from({ length: K }, () => new Float64Array(HORIZON + 1)) : null
           for (const st of steps) {
@@ -304,10 +307,10 @@ export function DueForecastProjection() {
           const d0 = diffByPair.get(k) ?? DEFAULT_DIFFICULTY
           const model = modelByPair.get(k) ?? []
           const runs = runsFor(k)
-          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, model, c.maxInt, c.dailyGoal)
-          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, model, c.maxInt, c.dailyGoal, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
-          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, model, c.maxInt, c.dailyGoal)
-          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, model, c.maxInt, c.dailyGoal)
+          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, model, c.maxInt, c.dailyGoal, c.typedCal)
+          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, model, c.maxInt, c.dailyGoal, c.smartCal, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
+          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, model, c.maxInt, c.dailyGoal, c.selfgCal)
+          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, model, c.maxInt, c.dailyGoal, c.reverseCal)
         }
 
         // Downsample each pair's series to STEP-day points (windowed average).

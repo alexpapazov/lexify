@@ -70,6 +70,7 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     strictArticles: (row.articles_mode as TypedStrictnessLevel | null) ?? DEFAULT_SCHEDULER_PARAMS.strictArticles,
     requestRetention: (row.request_retention as number | null) ?? DEFAULT_SCHEDULER_PARAMS.requestRetention,
     smartTypingThresholdDays: (row.smart_typing_threshold_days as number | null) ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays,
+    retentionCalibration: (row.retention_calibration as number | null) ?? DEFAULT_SCHEDULER_PARAMS.retentionCalibration,
   }
 }
 
