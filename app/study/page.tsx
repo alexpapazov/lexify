@@ -348,7 +348,9 @@ export default function StudyPage() {
         if (s?.dormant) return 'dormant'
         if (s?.graduated) return 'graduated'
         const cl = climb.get(cardId) as { rungIndex: number; graduated: boolean } | undefined
-        if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated && (s.reps > 0 || s.currentStepOrder > 0))) return 'learning'
+        // Any non-graduated forward state = in the pipeline (matches the deck page). A card climbing the
+        // ladder (rung ≥ 1) also counts even without a state row.
+        if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) return 'learning'
         return 'new'
       }
       const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)

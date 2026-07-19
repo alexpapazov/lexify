@@ -123,7 +123,7 @@ export function PresentSnapshot() {
               if (due) lists.due.push(entry(card))
               continue
             }
-            if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated && (s.reps > 0 || s.currentStepOrder > 0))) lists.learning.push(entry(card))
+            if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) lists.learning.push(entry(card))
             else lists.new.push(entry(card))
           }
         }))

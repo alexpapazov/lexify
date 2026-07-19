@@ -207,14 +207,16 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       const cardDeck = new Map<string, string>()
       const gradSet = new Set<string>()
       const learningStateSet = new Set<string>()
+      const pipelineStateSet = new Set<string>()   // ANY non-graduated forward state (incl. pristine / booted)
       for (const { deck, cards, states: cs } of perDeck) {
         for (const c of cards) { if (!cardDeck.has(c.id)) { allCards.push(c); cardDeck.set(c.id, deck.id) } }
         for (const s of cs) {
           if (s.reviewDirection === 'reverse') continue
           dormancyByCardRef.current.set(s.cardId, { threshold: s.dormancyThreshold ?? null, dormant: s.dormant })
-          // A pristine state (created only to pre-set dormancy — no reps, no progress) is still "fresh".
+          // For the DEFAULT queue, a pristine state (no reps/progress) is still "fresh" (budget-capped);
+          // but it IS in the pipeline for "Study Learning".
           if (s.graduated) gradSet.add(s.cardId)
-          else if (s.reps > 0 || s.currentStepOrder > 0) learningStateSet.add(s.cardId)
+          else { pipelineStateSet.add(s.cardId); if (s.reps > 0 || s.currentStepOrder > 0) learningStateSet.add(s.cardId) }
         }
       }
       setCardsById(new Map(allCards.map(c => [c.id, c])))
@@ -274,7 +276,14 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
       let q: string[]
       if (category === 'new')          q = shuffle(fresh)
-      else if (category === 'learning') q = shuffle(learning)
+      else if (category === 'learning') {
+        // "Study Learning" = every card the deck's Learning filter shows: a non-graduated forward state
+        // (pristine/booted included) or a climb in progress. Not budget-capped — climb them all to grad.
+        // Cards without a climb entry run from rung 0 via the initialClimbState fallback in render.
+        q = shuffle(allCards
+          .filter(c => { const cl = climb.get(c.id); return !gradSet.has(c.id) && (pipelineStateSet.has(c.id) || (!!cl && !cl.graduated)) })
+          .map(c => c.id))
+      }
       else {
         const cap = prefs?.cardsPerSession ?? null
         if (cap != null && cap > 0) {

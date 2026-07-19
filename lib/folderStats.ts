@@ -89,9 +89,9 @@ export async function computeDeckCounts(
       if (s?.dormant) return 'dormant'
       if (s?.graduated) return 'graduated'
       const cl = climb.get(cardId)
-      // A forward state counts as Learning only with real progress — a pristine state (created just to
-      // pre-set dormancy) keeps the card Unlearned until it's actually studied.
-      if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated && (s.reps > 0 || s.currentStepOrder > 0))) return 'learning'
+      // Any non-graduated forward state = in the pipeline (matches the deck page + Study dashboard), so a
+      // booted-back / restored card is studyable via "Study Learning". A card climbing the ladder counts too.
+      if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) return 'learning'
       return 'new'
     }
     return {
