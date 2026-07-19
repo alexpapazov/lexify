@@ -98,6 +98,7 @@ export function OrbitReplay({ session }: { session: DueSession }) {
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
   const [langFilter, setLangFilter] = useState<string | null>(null)   // watch just one language
+  const [selectedId, setSelectedId] = useState<string | null>(null)   // clicked card → info panel
   const rafRef = useRef<number | null>(null)
   const startRef = useRef(0)
 
@@ -185,7 +186,35 @@ export function OrbitReplay({ session }: { session: DueSession }) {
         <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full border border-ink-faint" />Dormant → escapes</span>
       </div>
 
-      <div className="rounded-lg border border-line/10 overflow-hidden" style={{ background: 'radial-gradient(120% 120% at 50% 45%, #14162A 0%, #0B0C16 70%)' }}>
+      <div className="relative rounded-lg border border-line/10 overflow-hidden" style={{ background: 'radial-gradient(120% 120% at 50% 45%, #14162A 0%, #0B0C16 70%)' }}>
+        {(() => {
+          const sel = shown.find(c => c.cardId === selectedId)
+          if (!sel) return null
+          return (
+            <div className="absolute top-2 left-2 z-10 max-w-[240px] rounded-lg border border-line/15 bg-surface-deep/95 backdrop-blur px-3 py-2.5 shadow-xl text-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-ink font-medium truncate">{displayText(sel.label)}</div>
+                  {sel.back && <div className="text-ink-muted text-xs truncate">{displayText(sel.back)}</div>}
+                </div>
+                <button onClick={() => setSelectedId(null)} className="text-ink-faint hover:text-ink text-xs shrink-0">✕</button>
+              </div>
+              <div className="mt-1.5 flex items-center gap-2 text-[11px] text-ink-faint">
+                {sel.source && <span>{langFlag(sel.source)} {langName(sel.source)}</span>}
+                <span className="text-ink-muted">· {sel.dormant ? 'dormant' : `interval ${fmtInterval(sel.intervalDays)}`}{sel.lapsed ? ' · relearning' : ''}</span>
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                <span className="text-[10px] text-ink-faint mr-0.5">rated:</span>
+                {sel.reviews.map((r, i) => (
+                  <span key={i} className="inline-block w-2.5 h-2.5 rounded-full" title={r.rating} style={{ backgroundColor: RATING_COLOR[r.rating] ?? '#5A6079' }} />
+                ))}
+              </div>
+              {sel.deckId && (
+                <Link href={routes.deck(sel.deckId, { card: sel.cardId })} className="mt-2 inline-block text-xs text-accent hover:text-accent-soft">Open card ↗</Link>
+              )}
+            </div>
+          )
+        })()}
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 420 }}>
           <defs>
             <radialGradient id="orbit-sun" cx="50%" cy="50%" r="50%">
@@ -232,6 +261,7 @@ export function OrbitReplay({ session }: { session: DueSession }) {
             const pulseR = justRated && lastEvt ? 6 + 16 * ((t - lastEvt.at) / Math.max(400, wallMs * 0.03)) : 0
             const offscreen = here.x < -20 || here.x > W + 20 || here.y < -20 || here.y > H + 20
             if (offscreen) return null
+            const isSel = selectedId === c.cardId
             return (
               <g key={c.cardId}>
                 {reviewed && Array.from({ length: TAIL }, (_, k) => {
@@ -242,15 +272,19 @@ export function OrbitReplay({ session }: { session: DueSession }) {
                 {pulseR > 0 && lastEvt && (
                   <circle cx={here.x} cy={here.y} r={pulseR} fill="none" stroke={RATING_COLOR[lastEvt.rating] ?? '#4ADE80'} strokeWidth={1.5} opacity={0.75 * (1 - pulseR / 22)} />
                 )}
+                {isSel && <circle cx={here.x} cy={here.y} r={9} fill="none" stroke="#FFFFFF" strokeWidth={1.5} opacity={0.95} />}
                 {reviewed && !big && <circle cx={here.x} cy={here.y} r={9} fill="url(#orbit-halo)" opacity={0.32} />}
-                <circle cx={here.x} cy={here.y} r={reviewed ? 4.4 : 2.8} fill={c.dormant ? 'none' : color} stroke={c.dormant ? '#9AA3C8' : 'none'} strokeWidth={c.dormant ? 1.4 : 0} opacity={reviewed ? 1 : 0.5}>
-                  <title>{displayText(c.label)} · {c.dormant ? 'dormant' : fmtInterval(c.intervalDays)}{c.lapsed ? ' · relearning' : ''}</title>
-                </circle>
-                {(showLabels || justRated) && reviewed && (
-                  <text x={here.x} y={here.y - 8} textAnchor="middle" fontSize={8} fill="#B8C0E0" style={{ pointerEvents: 'none' }}>
+                <circle cx={here.x} cy={here.y} r={isSel ? 6 : reviewed ? 4.4 : 2.8} fill={c.dormant ? 'none' : color} stroke={c.dormant ? '#9AA3C8' : 'none'} strokeWidth={c.dormant ? 1.4 : 0} opacity={reviewed ? 1 : 0.5} />
+                {(showLabels || justRated || isSel) && reviewed && (
+                  <text x={here.x} y={here.y - 8} textAnchor="middle" fontSize={8} fill={isSel ? '#FFFFFF' : '#B8C0E0'} style={{ pointerEvents: 'none' }}>
                     {displayText(c.label).slice(0, 16)}
                   </text>
                 )}
+                {/* Bigger transparent hit target so the small dot is clickable; click pauses + opens info. */}
+                <circle cx={here.x} cy={here.y} r={11} fill="transparent" style={{ cursor: 'pointer' }}
+                  onClick={() => { setSelectedId(c.cardId); setPlaying(false) }}>
+                  <title>{displayText(c.label)} · {c.dormant ? 'dormant' : fmtInterval(c.intervalDays)}{c.lapsed ? ' · relearning' : ''}</title>
+                </circle>
               </g>
             )
           })}
