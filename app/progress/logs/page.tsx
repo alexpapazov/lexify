@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { LadderLogs } from '@/components/analytics/LadderLogs'
+import { DueNowLogs } from '@/components/analytics/DueNowLogs'
 import { Segmented } from '@/components/analytics/Segmented'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
@@ -24,9 +25,7 @@ export default function LogsPage() {
       />
 
       {view === 'learning' && <LadderLogs />}
-      {view === 'duenow' && (
-        <div className="panel p-10 text-center text-sm text-ink-muted">Coming soon — Due Now review movies &amp; logs.</div>
-      )}
+      {view === 'duenow' && <DueNowLogs />}
     </div>
   )
 }
