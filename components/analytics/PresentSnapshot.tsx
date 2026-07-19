@@ -16,6 +16,8 @@ import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { buildEnabledTracksMap, trackEnabled } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import { routes } from '@/lib/routes'
@@ -82,11 +84,14 @@ export function PresentSnapshot() {
         const todayWeekday = new Date(today + 'T12:00:00Z').getUTCDay()
         const now = Date.now()
 
-        const [decks, pairs] = await Promise.all([
+        const [decks, pairs, paramRows] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
           new SupabaseLanguagePairRepository().list(uid),
+          new SupabaseUserSchedulerParamsRepository().listForUser(uid),
         ])
         const deckById = new Map(decks.map(d => [d.id, d]))
+        const enabledMap = buildEnabledTracksMap(paramRows)   // for track-aware Due Now (matches the dashboard)
+        const isDue = (dateStr: string | null | undefined) => !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= today
 
         // Per-deck cards + states + climb → status buckets.
         const cardRepo = new SupabaseCardRepository()
@@ -99,6 +104,13 @@ export function PresentSnapshot() {
           const climb = await climbRepo.listForCards(uid, cards.map(c => c.id)).catch(() => new Map())
           const fwd = states.filter(s => s.reviewDirection !== 'reverse')
           const stateMap = new Map(fwd.map(s => [s.cardId, s]))
+          const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
+          // Track-aware Due Now — a card due only on a DISABLED track doesn't count (mirrors the dashboard).
+          const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
+          const prodDue   = (s: typeof states[number]) => !s.dormant && prodEnabled && (s.smartDueAt ? isDue(s.smartDueAt) : s.typedDueAt ? isDue(s.typedDueAt) : isDue(s.dueAt))
+          const recallDue = (s: typeof states[number]) => !s.dormant && trackEnabled(en, 'recall', false) && isDue(s.recallDueAt)
+          const reverseDue = (r: typeof states[number]) => trackEnabled(en, 'recall', true) && stateMap.get(r.cardId)?.graduated === true
+            && !stateMap.get(r.cardId)?.dormant && !r.dormant && isDue(r.recallDueAt ?? r.dueAt)
           const entry = (card: Card): CardEntry => ({ card, deckId: deck.id, deckName: deck.name, source: deck.sourceLanguage, target: deck.targetLanguage })
           for (const card of cards) {
             const s = stateMap.get(card.id)
@@ -106,9 +118,8 @@ export function PresentSnapshot() {
             if (s?.dormant) { lists.dormant.push(entry(card)); continue }
             if (s?.graduated) {
               lists.graduated.push(entry(card))
-              // Due if any of its rows (forward or reverse) is due today.
-              const due = states.some(r => r.cardId === card.id && r.graduated && !r.dormant && r.dueAt && new Date(r.dueAt).getTime() <= now
-                && (r.reviewDirection !== 'reverse' || s.graduated))
+              const due = prodDue(s) || recallDue(s)
+                || states.some(r => r.cardId === card.id && r.reviewDirection === 'reverse' && reverseDue(r))
               if (due) lists.due.push(entry(card))
               continue
             }

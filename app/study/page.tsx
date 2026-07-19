@@ -14,13 +14,14 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { forwardStateMap } from '@/lib/cardStateMap'
+import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { fsrsScheduleMix, seedStability, seedDifficulty, measureRatingMix, DEFAULT_RATING_MIX, type RatingMix, type WeightedStep } from '@/lib/forecastFsrs'
 
-type FilterKey = 'new' | 'learning' | 'graduated' | 'due'
+type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
 
 interface DeckWithStats {
   deck:          Deck
@@ -40,6 +41,7 @@ interface GlobalCounts {
   unlearned: number
   learning:  number
   graduated: number
+  dormant:   number
   dueNow:    number
   dueNowTyping:     number
   dueNowSelfGraded: number
@@ -262,7 +264,7 @@ function buildForecastDays(
 
 export default function StudyPage() {
   const [deckStats,    setDeckStats]    = useState<DeckWithStats[]>([])
-  const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
+  const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dormant: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
   const [forecast,     setForecast]     = useState<ForecastDay[]>([])
   const [enabledTracks, setEnabledTracks] = useState<Map<string, EnabledTracks>>(new Map())
   const [smartThresholds, setSmartThresholds] = useState<Map<string, number>>(new Map())
@@ -327,15 +329,28 @@ export default function StudyPage() {
     }
     setSmartThresholds(thresholdMap)
 
+    const climbRepo = new SupabaseLadderClimbRepository()
     const stats = await Promise.all(decks.map(async deck => {
       const [cards, states] = await Promise.all([
         cardRepo.listByDeck(deck.id),
         stateRepo.listByDeck(session.user.id, deck.id),
       ])
+      const climb = await climbRepo.listForCards(session.user.id, cards.map(c => c.id)).catch(() => new Map())
       // Forward states are the authoritative source for card-level counts.
       // Reverse states are only valid when their forward counterpart is also graduated.
       const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
       const stateMap = forwardStateMap(forwardStates)
+      // Card status — the SAME rule the Library / deck / Analytics pages use, so the counts agree
+      // everywhere: dormant is its own bucket (not folded into graduated); a card is "learning" only
+      // once it has real progress (a rung ≥ 1, or reps/step > 0) — a pristine state stays Unlearned.
+      const statusOf = (cardId: string): 'graduated' | 'dormant' | 'learning' | 'new' => {
+        const s = stateMap.get(cardId)
+        if (s?.dormant) return 'dormant'
+        if (s?.graduated) return 'graduated'
+        const cl = climb.get(cardId) as { rungIndex: number; graduated: boolean } | undefined
+        if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated && (s.reps > 0 || s.currentStepOrder > 0))) return 'learning'
+        return 'new'
+      }
       const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
       const isDueByDate = (dateStr: string | null | undefined) =>
         !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
@@ -371,9 +386,10 @@ export default function StudyPage() {
       const dueNowForward = forwardStates.filter(s => s.graduated && (prodDueOn(s) || recallDueOn(s))).length
       return {
         deck, cards, states,
-        unlearned: cards.filter(c => !stateMap.has(c.id)).length,
-        learning:  forwardStates.filter(s => !s.graduated).length,
-        graduated: forwardStates.filter(s => s.graduated).length,
+        unlearned: cards.filter(c => statusOf(c.id) === 'new').length,
+        learning:  cards.filter(c => statusOf(c.id) === 'learning').length,
+        graduated: cards.filter(c => statusOf(c.id) === 'graduated').length,
+        dormant:   cards.filter(c => statusOf(c.id) === 'dormant').length,
         dueNow:        states.filter(s => {
           if (!s.graduated) return false
           if (s.reviewDirection === 'reverse') return reverseDueOn(s)
@@ -391,10 +407,11 @@ export default function StudyPage() {
       unlearned: acc.unlearned + s.unlearned,
       learning:  acc.learning  + s.learning,
       graduated: acc.graduated + s.graduated,
+      dormant:   acc.dormant   + s.dormant,
       dueNow:    acc.dueNow    + s.dueNow,
       dueNowTyping:     acc.dueNowTyping     + s.dueNowTyping,
       dueNowSelfGraded: acc.dueNowSelfGraded + s.dueNowSelfGraded,
-    }), { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
+    }), { unlearned: 0, learning: 0, graduated: 0, dormant: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
     setDeckStats(stats)
     setGlobal(globalCounts)
 
@@ -740,6 +757,7 @@ export default function StudyPage() {
     { key: 'learning'  as FilterKey, label: 'Learning',  value: global.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'     },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: global.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: global.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review' },
+    { key: 'dormant'   as FilterKey, label: 'Dormant',   value: global.dormant,   color: 'text-ink',         border: 'border-line/70',   desc: 'Paused — manual' },
   ]
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -759,7 +777,7 @@ export default function StudyPage() {
       ) : (
         <>
           {/* ── Global counters (display-only; browse due cards via "Coming up") ─ */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => (
               <div
                 key={key}
