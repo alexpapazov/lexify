@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { cardLevelAt, type SessionSummary } from '@/lib/ladderLog'
 
 const LANE_H = 44
-const CHIP_W = 84   // column step + max chip width; chips size to their word up to this
+const CHIP_W = 62   // max chip width; chips size to their word up to this
+const CHIP_GAP = 4  // horizontal space between columns
 const CHIP_H = 22   // chip height — kept skinny so the word isn't swimming in empty space
 const GUTTER = 76   // left label gutter
 
@@ -66,7 +67,7 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
   }, [playing])
 
   const laneLabel = (level: number) => level === rungCount ? '✓ Grad' : `Rung ${level + 1}`
-  const containerW = GUTTER + cards.length * (CHIP_W + 8) + 16
+  const containerW = GUTTER + cards.length * (CHIP_W + CHIP_GAP) + 16
 
   return (
     <div className="space-y-3">
@@ -138,7 +139,7 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
                 }`}
                 style={{
                   // Skinnier chip (CHIP_H) than the lane, kept at the same vertical center as before.
-                  top: laneTop(level) + (LANE_H - 12 - CHIP_H) / 2, left: GUTTER + col * (CHIP_W + 8),
+                  top: laneTop(level) + (LANE_H - 12 - CHIP_H) / 2, left: GUTTER + col * (CHIP_W + CHIP_GAP),
                   width: 'max-content', maxWidth: CHIP_W, height: CHIP_H,
                   ...(flash ? { backgroundColor: flash + '40', borderColor: flash } : {}),
                 }}>

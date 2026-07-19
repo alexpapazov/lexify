@@ -9,9 +9,11 @@
  * DORMANT escapes the system entirely (shoots off-screen). Playback speed is adjustable.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import type { DueSession, DueCard } from '@/lib/dueNowLog'
 import { displayText } from '@/lib/cardText'
 import { langName, langFlag } from '@/lib/languages'
+import { routes } from '@/lib/routes'
 
 const RATING_COLOR: Record<string, string> = { again: '#F05068', hard: '#F0883E', good: '#4ADE80', easy: '#4C8DFF' }
 const LEGEND = [

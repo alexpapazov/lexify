@@ -7,7 +7,9 @@
 export interface DueReview { rating: string; at: number; direction: 'forward' | 'reverse' }
 export interface DueCard {
   cardId:       string
-  label:        string
+  label:        string   // front (target word)
+  back:         string   // native translation (filled by the loader)
+  deckId:       string | null  // for the "open card" link (filled by the loader)
   source:       string | null
   target:       string | null
   reviews:      DueReview[]
@@ -53,7 +55,7 @@ export function groupDueDays(events: RawDueEvent[]): DueSession[] {
       activeMs += Math.max(0, e.ms)
       if ((e.rating ?? '') === 'again') again++
       let c = byCard.get(e.cardId)
-      if (!c) { c = { cardId: e.cardId, label: '', source: e.source, target: e.target, reviews: [], intervalDays: 0, lapsed: false, dormant: false }; byCard.set(e.cardId, c) }
+      if (!c) { c = { cardId: e.cardId, label: '', back: '', deckId: null, source: e.source, target: e.target, reviews: [], intervalDays: 0, lapsed: false, dormant: false }; byCard.set(e.cardId, c) }
       c.reviews.push({ rating: e.rating ?? 'good', at: e.at, direction: e.direction })
     }
     for (const c of byCard.values()) c.lapsed = c.reviews[c.reviews.length - 1]?.rating === 'again'

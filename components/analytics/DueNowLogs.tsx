@@ -63,22 +63,28 @@ export function DueNowLogs() {
 
         // Enrich each card with its front (label), current interval (orbit radius), and dormancy (escapes).
         const cardIds = [...new Set(raw.map(r => r.cardId))]
-        const frontById = new Map<string, string>()
+        const cardById = new Map<string, { front: string; back: string }>()
         const intervalById = new Map<string, number>()
         const dormantById = new Set<string>()
+        const deckById = new Map<string, string>()
         if (cardIds.length > 0) {
-          const [cardsRes, statesRes] = await Promise.all([
-            supabase.from('cards').select('id, front').in('id', cardIds),
+          const [cardsRes, statesRes, dcRes] = await Promise.all([
+            supabase.from('cards').select('id, front, back').in('id', cardIds),
             supabase.from('card_states').select('card_id, interval_days, scheduled_interval_days, dormant').eq('user_id', uid).eq('review_direction', 'forward').in('card_id', cardIds),
+            supabase.from('deck_cards').select('card_id, deck_id').in('card_id', cardIds),
           ])
-          for (const r of cardsRes.data ?? []) frontById.set(r.id as string, r.front as string)
+          for (const r of cardsRes.data ?? []) cardById.set(r.id as string, { front: r.front as string, back: r.back as string })
           for (const r of statesRes.data ?? []) {
             intervalById.set(r.card_id as string, (r.scheduled_interval_days as number | null) ?? (r.interval_days as number | null) ?? 1)
             if (r.dormant) dormantById.add(r.card_id as string)
           }
+          for (const r of dcRes.data ?? []) if (!deckById.has(r.card_id as string)) deckById.set(r.card_id as string, r.deck_id as string)
         }
         for (const s of grouped) for (const c of s.cards) {
-          c.label = frontById.get(c.cardId) ?? '—'
+          const cc = cardById.get(c.cardId)
+          c.label = cc?.front ?? '—'
+          c.back = cc?.back ?? ''
+          c.deckId = deckById.get(c.cardId) ?? null
           c.intervalDays = intervalById.get(c.cardId) ?? 1
           c.dormant = dormantById.has(c.cardId)
         }
