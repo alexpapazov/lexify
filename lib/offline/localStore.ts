@@ -138,6 +138,10 @@ export class LocalStore {
   async putOverride(row: StoredOverride): Promise<void> { await this.db.overrides.put(row) }
   async deleteOverride(key: string): Promise<void> { await this.db.overrides.delete(key) }
 
+  // ── Decks / folders (offline-created content) ──
+  async putDeck(deck: Deck): Promise<void> { await this.db.decks.put(deck) }
+  async putFolder(folder: Folder): Promise<void> { await this.db.folders.put(folder) }
+
   // ── Config reads ──
   getLadder(key: string): Promise<StoredLadder | undefined> { return this.db.ladders.get(key) }
   allSchedulerParams(): Promise<StoredParam[]> { return this.db.schedulerParams.toArray() }

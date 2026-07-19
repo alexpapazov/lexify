@@ -106,6 +106,35 @@ async function pushNonState(userId: string, op: CoalescedOp): Promise<void> {
       await new SupabaseCardRepository().update(id, patch)
       return
     }
+    case 'folderCreate': {
+      // A folder created offline (keeping the client-generated id so decks that reference it match).
+      const f = p.folder as { id: string; ownerId: string; name: string; parentId: string | null; position: number; sourceLanguage: string | null; targetLanguage: string | null }
+      const { error } = await supa().from('folders').upsert({
+        id: f.id, owner_id: f.ownerId, name: f.name, parent_id: f.parentId ?? null, position: f.position ?? 0,
+        source_language: f.sourceLanguage ?? null, target_language: f.targetLanguage ?? null,
+      }, { onConflict: 'id', ignoreDuplicates: true })
+      if (error) throw new Error(error.message)
+      return
+    }
+    case 'deckCreate': {
+      // A deck created offline (keeping the client-generated id so its cards/links match on the server).
+      const d = p.deck as { id: string; ownerId: string; name: string; sourceLanguage: string; targetLanguage: string; pipelineId: string; folderId: string | null; position: number }
+      const { error } = await supa().from('decks').upsert({
+        id: d.id, owner_id: d.ownerId, name: d.name, source_language: d.sourceLanguage, target_language: d.targetLanguage,
+        pipeline_id: d.pipelineId, folder_id: d.folderId ?? null, position: d.position ?? 0,
+      }, { onConflict: 'id', ignoreDuplicates: true })
+      if (error) throw new Error(error.message)
+      return
+    }
+    case 'deckCardLink': {
+      // Link an existing card into an offline-created deck (the merge / "use existing" path).
+      const { error } = await supa().from('deck_cards').upsert(
+        { deck_id: p.deckId as string, card_id: p.cardId as string, position: (p.position as number) ?? 0 },
+        { onConflict: 'deck_id,card_id', ignoreDuplicates: true },
+      )
+      if (error) throw new Error(error.message)
+      return
+    }
     case 'cardCreate': {
       // A card created offline: insert it (keeping the client-generated id so local state/links match)
       // and link it into its deck. No card_state — it's unlearned until studied.

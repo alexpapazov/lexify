@@ -15,7 +15,7 @@ const NAV_LINKS = [
   { href: '/study',     label: 'Study'    },
   { href: '/library',   label: 'Library'  },
   { href: '/browse',    label: 'Browse'   },
-  { href: '/upload',    label: 'Upload'   },
+  { href: '/create',    label: 'Create'   },
   { href: '/agents',    label: 'Agents'   },
   { href: '/progress',  label: 'Analytics' },
   { href: '/settings',  label: 'Settings' },

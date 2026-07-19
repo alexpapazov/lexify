@@ -37,7 +37,9 @@ export interface StoredOverride { key: string; cardId: string; answerSide: strin
 export interface StoredDeckCard { key: string; deckId: string; cardId: string }
 
 // ── Outbox: local changes queued for the next online sync ────────────────────
-export type OutboxEntity = 'cardState' | 'ladderClimb' | 'ladderEvent' | 'reviewEvent' | 'override' | 'card' | 'cardCreate'
+export type OutboxEntity =
+  | 'cardState' | 'ladderClimb' | 'ladderEvent' | 'reviewEvent' | 'override' | 'card' | 'cardCreate'
+  | 'deckCreate' | 'folderCreate' | 'deckCardLink'
 export interface OutboxEntry {
   id?:            number       // Dexie auto-increment
   entity:         OutboxEntity

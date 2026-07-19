@@ -6,7 +6,7 @@
  * Reads come straight from the local store. Writes update the local store AND append to the outbox,
  * which the sync engine (Stage 5) pushes to Supabase when you go back online.
  */
-import type { Card, CardState, Ladder, TypedAnswerOverride, LanguagePair } from '@/domain'
+import type { Card, CardState, Deck, Folder, Ladder, TypedAnswerOverride, LanguagePair } from '@/domain'
 import type { ClimbState } from '@/engine/ladderEngine'
 import type { LadderEventInput } from '@/lib/data/ladderEvents'
 import type { SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
@@ -28,6 +28,12 @@ export const localGetDeck     = async (id: string) => (await getLocalStore().all
 export const localFolders     = () => getLocalStore().allFolders()
 export const localCardsByDeck = (deckId: string) => getLocalStore().cardsForDeck(deckId)
 export const localGetCard     = (id: string) => getLocalStore().getCard(id)
+
+/** Every downloaded card in a language pair — the offline "library" for duplicate checking. */
+export async function localOwnedCards(sourceLanguage: string, targetLanguage: string): Promise<Card[]> {
+  return (await getLocalStore().allCards()).filter(c =>
+    c.sourceLanguage === sourceLanguage && c.targetLanguage === targetLanguage && !c.deletedAt)
+}
 
 export async function localCardStatesByDeck(deckId: string): Promise<CardState[]> {
   return getLocalStore().cardStatesForDeck(deckId)
@@ -124,6 +130,23 @@ export async function localCreateCard(card: Card, deckId: string): Promise<Card>
   await getLocalStore().putDeckCard(deckId, card.id)
   await enqueue('cardCreate', card.id, 'insert', { card, deckId })
   return card
+}
+/** Create a brand-new deck offline: store it locally + queue it for creation on the server on sync. */
+export async function localCreateDeck(deck: Deck): Promise<Deck> {
+  await getLocalStore().putDeck(deck)
+  await enqueue('deckCreate', deck.id, 'insert', { deck })
+  return deck
+}
+/** Create a brand-new folder offline: store it locally + queue it for creation on the server on sync. */
+export async function localCreateFolder(folder: Folder): Promise<Folder> {
+  await getLocalStore().putFolder(folder)
+  await enqueue('folderCreate', folder.id, 'insert', { folder })
+  return folder
+}
+/** Link an EXISTING card into a deck offline (the "use existing card" / merge path). */
+export async function localLinkDeckCard(deckId: string, cardId: string, position: number): Promise<void> {
+  await getLocalStore().putDeckCard(deckId, cardId)
+  await enqueue('deckCardLink', `${deckId}:${cardId}`, 'insert', { deckId, cardId, position })
 }
 export async function localUpdateCard(id: string, patch: Partial<Card>): Promise<Card> {
   const existing = await getLocalStore().getCard(id)

@@ -755,23 +755,18 @@ export default function StudyPage() {
         </div>
       ) : (
         <>
-          {/* ── Global counters ─────────────────────────────────────────── */}
+          {/* ── Global counters (display-only; browse due cards via "Coming up") ─ */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
-              const isActive = activeFilter === key
-              return (
-                <button
-                  key={key}
-                  onClick={() => { setActiveFilter(isActive ? null : key); setSelectedForecastDate(null) }}
-                  className={`panel border-t-2 ${border} space-y-1 text-center transition-colors w-full
-                    ${isActive ? 'bg-surface-raised ring-1 ring-ink/10' : 'hover:bg-surface-raised/50'}`}
-                >
-                  <div className={`text-2xl font-semibold ${color}`}>{value}</div>
-                  <div className="text-xs font-medium text-ink">{label}</div>
-                  <div className="text-xs text-ink-faint">{desc}</div>
-                </button>
-              )
-            })}
+            {COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => (
+              <div
+                key={key}
+                className={`panel border-t-2 ${border} space-y-1 text-center w-full`}
+              >
+                <div className={`text-2xl font-semibold ${color}`}>{value}</div>
+                <div className="text-xs font-medium text-ink">{label}</div>
+                <div className="text-xs text-ink-faint">{desc}</div>
+              </div>
+            ))}
           </div>
 
           {/* ── Today's goals ───────────────────────────────────────────── */}

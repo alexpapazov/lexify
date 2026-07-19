@@ -111,16 +111,29 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   const cardIds = [...selected]
 
   // Pre-generate distractors for cards missing them (best-effort; MCQ falls back to deck siblings).
+  // Generated choices are also persisted back to the server card so a card that had no distractors
+  // gains them for everyone — a direct Supabase write (not the offline-guarded repo) so it lands on
+  // the server even if the offline flag is set (e.g. during "Update download").
   const missing = cards.filter(c => needsChoices(c, 'front') || needsChoices(c, 'back'))
+  const persistBack: { id: string; choices: unknown }[] = []
   for (let i = 0; i < missing.length; i++) {
     const c = missing[i]!
     const siblings = cards.filter(s => s.sourceLanguage === c.sourceLanguage && s.targetLanguage === c.targetLanguage)
     const side = needsChoices(c, 'front') ? 'front' : 'back'
     try {
       const choices = await ensureChoicesGenerated(c, side, siblings, c.sourceLanguage, c.targetLanguage)
-      if (choices) cardsById.set(c.id, { ...cardsById.get(c.id)!, choices })
+      if (choices) {
+        cardsById.set(c.id, { ...cardsById.get(c.id)!, choices })
+        if (c.choices == null) persistBack.push({ id: c.id, choices })  // card that previously had none
+      }
     } catch { /* keep fallback */ }
     progress('Generating distractors', i + 1, missing.length)
+  }
+  // Upload the newly generated distractors to the library (guaranteed server write).
+  for (let i = 0; i < persistBack.length; i++) {
+    const { id, choices } = persistBack[i]!
+    try { await supabase.from('cards').update({ choices }).eq('id', id) } catch { /* best-effort */ }
+    progress('Saving distractors', i + 1, persistBack.length)
   }
   const finalCards = cardIds.map(id => cardsById.get(id)!).map(c => opts.includeAudio ? c : stripAudio(c))
 

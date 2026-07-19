@@ -10,7 +10,6 @@ const KEY = 'lexify-tour'
 // gate is a live-DOM predicate polled while its step is active.
 const GATE_CHECKS: Record<NonNullable<import('@/lib/tour').TourStep['gate']>, () => boolean> = {
   'library-open': () => !!document.querySelector('[data-tour="library-counter"]'),
-  'upload-ai':    () => !!document.querySelector('[data-tour="upload-ai-prompt"]'),
 }
 
 /** Signals the tour to start (used by onboarding finish + a "Replay tutorial" button). */

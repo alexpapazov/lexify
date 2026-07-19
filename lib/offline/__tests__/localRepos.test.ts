@@ -5,7 +5,8 @@ import {
   localCardStatesByDeck, localClimbForCards, localLadderForPair, localSchedulerParams,
   localOverridesForUser, localUpsertCardState, localDeleteCardState, localSaveClimb,
   localRemoveClimb, localLogLadderEvent, localDeleteLadderEvent, localAddOverride,
-  localRemoveOverride, localUpdateCard,
+  localRemoveOverride, localUpdateCard, localOwnedCards,
+  localCreateDeck, localCreateFolder, localCreateCard, localLinkDeckCard,
 } from '@/lib/offline/localRepos'
 import { cardStateKey, ladderKey } from '@/lib/offline/keys'
 import { initialCardState } from '@/engine/pipeline'
@@ -105,5 +106,32 @@ describe('localRepos writes queue to the outbox', () => {
     expect(updated.front).toBe('adiós')
     expect((await localGetCard('a'))?.front).toBe('adiós')
     expect((await getLocalStore().outbox()).filter(o => o.entity === 'card').length).toBe(1)
+  })
+
+  it('creates a deck (+ folder, cards, link) offline and queues them in order', async () => {
+    const folder = await localCreateFolder({
+      id: 'f-new', ownerId: 'u1', name: 'New', parentId: null, position: 0,
+      createdAt: iso, updatedAt: iso, deletedAt: null, isSynced: false, sourceLanguage: null, targetLanguage: null,
+    })
+    const deck = await localCreateDeck({
+      id: 'd-new', ownerId: 'u1', name: 'Fresh', sourceLanguage: 'es', targetLanguage: 'en', pipelineId: PIPE,
+      gradingSettings: DEFAULT_GRADING_SETTINGS, isPublic: false, isPinned: false,
+      folderId: folder.id, position: 0, syncingComplete: true, createdAt: iso, updatedAt: iso, deletedAt: null,
+    })
+    await localCreateCard(card('n1', 'nuevo'), deck.id)
+    await localLinkDeckCard(deck.id, 'a', 1)   // link an existing downloaded card
+
+    // Both new deck + its new card are visible locally and studyable.
+    expect((await localDecks()).map(d => d.id).sort()).toEqual(['d-new', 'd1'])
+    expect((await localCardsByDeck('d-new')).map(c => c.id).sort()).toEqual(['a', 'n1'])
+
+    // Outbox preserves FK-safe order: folder → deck → card → link.
+    const box = await getLocalStore().outbox()
+    expect(box.map(o => o.entity)).toEqual(['folderCreate', 'deckCreate', 'cardCreate', 'deckCardLink'])
+  })
+
+  it('localOwnedCards returns downloaded cards for the pair (offline dup check)', async () => {
+    expect((await localOwnedCards('es', 'en')).map(c => c.id).sort()).toEqual(['a', 'b'])
+    expect(await localOwnedCards('fr', 'en')).toEqual([])
   })
 })

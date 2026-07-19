@@ -7,7 +7,7 @@ export interface TourStep {
   anchor?: string
   title:  string
   body:   string
-  gate?:  'library-open' | 'upload-ai'
+  gate?:  'library-open'
   hint?:  string
 }
 
@@ -27,11 +27,8 @@ export const TOUR_STEPS: TourStep[] = [
     body: 'Try dragging a folder or deck to reorder it. And once you open a deck, any card’s ⓘ menu lets you view and edit its details, audio, and schedule.' },
   { path: '/browse', title: 'Browse',
     body: 'This is where you can add sets created by other users to your own library.' },
-  { path: '/upload', anchor: 'upload-ai-toggle', title: 'Upload',
-    body: 'Create a new set of cards — paste your own, or let the AI agent format a raw word list into clean cards. Give it a try.',
-    gate: 'upload-ai', hint: 'Click “Format with AI agent” to continue.' },
-  { path: '/upload', anchor: 'upload-ai-prompt', title: 'Tell the agent what to do',
-    body: 'This prompt is where you describe how to build the cards — e.g. “Extract Spanish → English pairs”. Paste your text below and the agent generates the deck for you.' },
+  { path: '/create', title: 'Create',
+    body: 'Create a new set of cards — name the deck, pick the languages, and paste your word list. Lexify parses it into clean cards for you to preview before saving.' },
   { path: '/agents', title: 'Agents',
     body: 'The hub for agents that can automate making edits to the cards in your library.' },
   { path: '/progress', anchor: 'projected-due', title: 'Analytics',

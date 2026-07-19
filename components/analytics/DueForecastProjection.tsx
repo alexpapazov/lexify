@@ -23,6 +23,13 @@ const HORIZON = 730          // 2 years
 const STEP = 14              // chart sampling / smoothing window (days)
 const RUNS = 64              // Monte Carlo trajectories per card/track
 
+// A NEW card enters Due Now at the ladder's GRADUATION interval, not the average interval of your
+// existing (mostly mature / accelerated) cards. The ladder graduates the Good path at 1 day
+// (engine/ladderEngine.ts), and FSRS grows it from there — so new cards start well below the smart
+// threshold (typed), then spread out and cross into self-graded. Seeding at the mature average made
+// languages full of long-interval cards (e.g. accelerated imports) show ~0 typed load, which is wrong.
+const GRADUATION_I0 = 1
+
 interface PairCfg {
   typedP: number; selfgP: number; smartP: number; reverseP: number
   typedOn: boolean; selfgOn: boolean; smartOn: boolean; reverseOn: boolean
