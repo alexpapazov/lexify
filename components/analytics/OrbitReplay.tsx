@@ -105,11 +105,20 @@ export function OrbitReplay({ session }: { session: DueSession }) {
   const langs = useMemo(() => [...new Set(cards.map(c => c.source).filter((x): x is string => !!x))], [cards])
   const filtered = useMemo(() => langFilter ? cards.filter(c => c.source === langFilter) : cards, [cards, langFilter])
   // Compress the day to its active timeline (idle gaps capped) → dense, ~2-min-scale movie.
-  const { cards: shown, wall: wallMs } = useMemo(() => compressTimeline(filtered), [filtered])
+  const { cards: shown, wall: baseWall } = useMemo(() => compressTimeline(filtered), [filtered])
   const start = 0
-
+  const flingMs = Math.max(300, baseWall * 0.03)
+  // Length scales with how many reviews there are (a busy day ≈ 2 min at 1×), then the speed control.
+  const reviewTotal = useMemo(() => shown.reduce((n, c) => n + c.reviews.length, 0), [shown])
+  const basePlayMs = Math.min(PLAY_MAX, Math.max(PLAY_MIN, reviewTotal * MS_PER_REVIEW))
+  // Append a settle tail (~5 real seconds) after the last review so the final flung cards reach and
+  // orbit their rings before the movie stops — and long enough for the last fling to complete.
+  const rate = basePlayMs / Math.max(1, baseWall)          // real ms per virtual ms
+  const tailVirtual = Math.max(5000 / Math.max(1e-6, rate), flingMs + 1)
+  const wallMs = baseWall + tailVirtual
   const t = frac * Math.max(1, wallMs)
-  const flingMs = Math.max(300, wallMs * 0.03)
+  const playMs = (basePlayMs + tailVirtual * rate) / speed
+
   const stars = useMemo(() => makeStars(48), [])
   const angle0 = useMemo(() => { const m = new Map<string, number>(); shown.forEach((c, i) => m.set(c.cardId, i * GOLDEN)); return m }, [shown])
   // Per-card angular speed based on its FINAL orbit → smooth spiral-out (no angle jumps while flinging).
@@ -117,9 +126,6 @@ export function OrbitReplay({ session }: { session: DueSession }) {
   const big = shown.length > 120
   const TAIL = big ? 4 : 7
   const showLabels = shown.length <= 16
-  // Length scales with how many reviews there are (a busy day ≈ 2 min at 1×), then the speed control.
-  const reviewTotal = useMemo(() => shown.reduce((n, c) => n + c.reviews.length, 0), [shown])
-  const playMs = Math.min(PLAY_MAX, Math.max(PLAY_MIN, reviewTotal * MS_PER_REVIEW)) / speed
 
   useEffect(() => {
     if (!playing) { if (rafRef.current) cancelAnimationFrame(rafRef.current); return }
