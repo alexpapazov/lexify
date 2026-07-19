@@ -16,9 +16,9 @@ describe('validateLadder', () => {
     expect(validateLadder({ rungs: [] })[0]).toMatch(/at least one rung/i)
   })
 
-  it('dictation must produce the target', () => {
+  it('dictation may produce either direction (hear the target, type target OR its translation)', () => {
     const l: Ladder = { rungs: [rung({ type: 'dictation', direction: 'produce_native' })] }
-    expect(validateLadder(l).some(e => /dictation must produce the target/i.test(e))).toBe(true)
+    expect(validateLadder(l).some(e => /dictation/i.test(e))).toBe(false)
   })
 
   it('interval-init only allowed on typing/self_graded', () => {

@@ -403,7 +403,8 @@ function FolderSessionInner() {
         const reverseEnabled = trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)
         for (const reverseState of reverseStatesList) {
           if (!reverseEnabled) break
-          if (stateMap.get(reverseState.cardId)?.dormant) continue
+          if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant (production side)
+          if (reverseState.dormant) continue                          // recognition paused independently
           if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) {

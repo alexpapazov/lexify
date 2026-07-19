@@ -101,7 +101,7 @@ export async function computeDeckCounts(
       dormant:   cards.filter(c => statusOf(c.id) === 'dormant').length,
       dueNow:    states.filter(s =>
         activeCardIds.has(s.cardId) &&
-        s.graduated && !stateMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now &&
+        s.graduated && !stateMap.get(s.cardId)?.dormant && !s.dormant && s.dueAt && new Date(s.dueAt) <= now &&
         (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
       ).length,
     }

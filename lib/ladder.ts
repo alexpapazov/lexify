@@ -49,9 +49,8 @@ export function validateLadder(ladder: Ladder): string[] {
 
   rungs.forEach((r, i) => {
     const n = i + 1
-    if (r.type === 'dictation' && r.direction !== 'produce_target') {
-      errors.push(`Rung ${n}: dictation must produce the target language.`)
-    }
+    // Dictation can produce either side: you always HEAR the target word; producing the target = type
+    // what you hear, producing the native = type the translation of what you hear.
     if (r.intervalInit && !canInitInterval(r.type)) {
       errors.push(`Rung ${n}: only typing or self-graded rungs can set the interval.`)
     }

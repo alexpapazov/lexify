@@ -123,6 +123,21 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
       setDormancyBusy(false)
     }
   }
+  // Pause / resume the RECOGNITION (reverse) track independently of production. The card's overall
+  // dormant type stays governed by the production (forward) side; this only affects reverse reviews.
+  async function applyReverseDormancy(dormant: boolean) {
+    if (!userId || !reverseCardState) { setDormancyMsg({ ok: false, text: 'No recognition track to pause.' }); return }
+    setDormancyBusy(true); setDormancyMsg(null)
+    try {
+      const updated = await new SupabaseCardStateRepository().setDormancy(userId, card.id, { dormant }, 'reverse')
+      setReverseCardState(updated)
+      setDormancyMsg({ ok: true, text: dormant ? 'Recognition paused.' : 'Recognition resumed.' })
+    } catch (err) {
+      setDormancyMsg({ ok: false, text: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setDormancyBusy(false)
+    }
+  }
   const [resetDone,   setResetDone]   = useState<string | null>(null)
   const [graduating,          setGraduating]          = useState(false)
   const [graduateAccelerated, setGraduateAccelerated] = useState(false)
@@ -1312,6 +1327,22 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         </>
                       )}
                     </div>
+
+                    {/* Per-subtype: pause just the RECOGNITION (reverse) track. Only when a reverse row
+                        exists (the card is studied both ways). Production/whole-card dormancy is above. */}
+                    {reverseCardState && (
+                      <div className="pt-1.5 border-t border-line/5 flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-ink-muted">
+                          Recognition (reverse) reviews: <span className={reverseCardState.dormant ? 'text-ink' : 'text-success'}>{reverseCardState.dormant ? 'Paused' : 'Active'}</span>
+                        </span>
+                        <button
+                          disabled={dormancyBusy}
+                          className="text-xs text-accent hover:underline disabled:opacity-50 shrink-0"
+                          onClick={() => applyReverseDormancy(!reverseCardState.dormant).catch(() => {})}
+                        >{reverseCardState.dormant ? '↺ Resume recognition' : 'Pause recognition'}</button>
+                      </div>
+                    )}
+
                     {dormancyMsg && (
                       <p className={`text-xs ${dormancyMsg.ok ? 'text-success' : 'text-danger'}`}>
                         {dormancyMsg.ok ? '✓ ' : '⚠ '}{dormancyMsg.text}

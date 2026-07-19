@@ -340,7 +340,8 @@ function AllDueSessionInner() {
           if (category === 'due' && dirParam !== 'forward') {
             for (const reverseState of reverseStatesList) {
               if (!trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)) continue
-              if (stateMap.get(reverseState.cardId)?.dormant) continue
+              if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant (production)
+              if (reverseState.dormant) continue                          // recognition paused independently
               if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
               const revCard = cards.find(c => c.id === reverseState.cardId)
               if (revCard) categoryCards.push({ ...deckCommon, card: revCard, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
@@ -440,7 +441,8 @@ function AllDueSessionInner() {
         const reverseEnabled = trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)
         for (const reverseState of reverseStatesList) {
           if (!reverseEnabled) break
-          if (stateMap.get(reverseState.cardId)?.dormant) continue
+          if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant (production)
+          if (reverseState.dormant) continue                          // recognition paused independently
           if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) allCards.push({ ...deckCommon, card, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })

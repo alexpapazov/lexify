@@ -1990,8 +1990,10 @@ export default function DeckDetailPage() {
             const s = stateMap.get(card.id)
             const phase = statusOf(card.id)
             const cl = climb.get(card.id)
+            // Every learning card is on a rung — a card is never labeled a bare "Learning" (that caused
+            // inconsistent behavior between the two labels). No climb row yet ⇒ it's at the start (Rung 1).
             const status = phase === 'graduated' ? 'Graduated' : phase === 'dormant' ? 'Dormant'
-              : phase === 'learning' ? (cl && cl.rungIndex >= 1 && !cl.graduated ? `Rung ${cl.rungIndex + 1}` : 'Learning') : 'New'
+              : phase === 'learning' ? `Rung ${(cl && !cl.graduated ? cl.rungIndex : 0) + 1}` : 'New'
             const isSelected = selectedCardIds.has(card.id)
             return (
               <div

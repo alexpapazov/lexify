@@ -55,7 +55,7 @@ export function selectOfflineCardIds(cards: { id: string }[], states: CardState[
     if (!fwd || !fwd.graduated) { out.add(c.id); continue }   // unlearned / learning → include
     if (fwd.dormant) continue                                  // dormant graduated → never due
     const dues = [fwd.smartDueAt, fwd.typedDueAt, fwd.dueAt,
-      ...ss.filter(s => s.reviewDirection === 'reverse').flatMap(r => [r.recallDueAt, r.dueAt])]
+      ...ss.filter(s => s.reviewDirection === 'reverse' && !s.dormant).flatMap(r => [r.recallDueAt, r.dueAt])]
     if (dues.some(d => d != null && new Date(d).getTime() <= cutoff)) out.add(c.id)
   }
   return out

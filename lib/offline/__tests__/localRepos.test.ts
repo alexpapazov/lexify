@@ -7,7 +7,7 @@ import {
   localRemoveClimb, localLogLadderEvent, localDeleteLadderEvent, localAddOverride,
   localRemoveOverride, localUpdateCard, localOwnedCards,
   localCreateDeck, localCreateFolder, localCreateCard, localLinkDeckCard,
-  localSaveLadder, localResetLadder, localAllLadders, localLadderForPair,
+  localSaveLadder, localResetLadder, localAllLadders,
 } from '@/lib/offline/localRepos'
 import { cardStateKey, ladderKey } from '@/lib/offline/keys'
 import { initialCardState } from '@/engine/pipeline'

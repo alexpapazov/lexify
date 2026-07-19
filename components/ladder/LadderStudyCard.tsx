@@ -143,10 +143,11 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
     )
   }
 
-  // Dictation — custom (no existing screen): play target audio, type it.
+  // Dictation — custom (no existing screen): play the TARGET audio; type either the target (what you
+  // hear) or the native (its translation), per the rung's direction.
   return <Dictation card={card} rung={rung} deckName={deckName} onOutcome={onOutcome} onInfo={onInfo}
-    overrideAnswers={Array.from(overrides?.get(`${card.id}:front`) ?? [])}
-    onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, 'front', answerText, accept)} />
+    overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
+    onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)} />
 }
 
 function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
@@ -157,6 +158,11 @@ function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
 }
 
 function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void }) {
+  // You always HEAR the target word (card.front). Producing the target = type what you hear; producing
+  // the native = type its translation (card.back). Audio is unchanged; only the graded side differs.
+  const native = producesNative(rung)
+  const answerText = native ? card.back : card.front
+  const answerLang = native ? card.targetLanguage : card.sourceLanguage
   const [input, setInput] = useState('')
   const [rating, setRating] = useState(false)
   const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean; normalized: string } | null>(null)
@@ -179,9 +185,9 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
   useEffect(() => { setInput(''); setResult(null); setRating(false); play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function check() {
-    const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: false, slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: card.sourceLanguage }
-    // Grade against the word without its "(f)"/"(m)" annotation — you only type what you hear.
-    const res = gradeTyping(input, stripAnnotations(card.front), settings)
+    const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: false, slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: answerLang }
+    // Grade against the answer side without its "(f)"/"(m)" annotation.
+    const res = gradeTyping(input, stripAnnotations(answerText), settings)
     let status: 'pass' | 'almost' | 'miss' = res.status === 'correct' ? 'pass'
       : res.status === 'almost' ? (resolveTypedPenalty(res, rung.strictness ?? DEFAULT_TYPED_STRICTNESS).requiresRetype ? 'almost' : 'pass') : 'miss'
     // Honour a persisted override for this exact typed answer (marked OK before).
@@ -213,22 +219,22 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
             <path d="M13.5 4.06c0-1.336-1.616-2.005-2.56-1.06l-4.5 4.5H4.508c-1.141 0-2.318.664-2.66 1.905A9.76 9.76 0 0 0 1.5 12c0 .898.121 1.768.35 2.595.341 1.24 1.518 1.905 2.659 1.905h1.93l4.5 4.5c.945.945 2.561.276 2.561-1.06V4.06ZM18.584 5.106a.75.75 0 0 1 1.06 0c3.808 3.807 3.808 9.98 0 13.788a.75.75 0 0 1-1.06-1.06 8.25 8.25 0 0 0 0-11.668.75.75 0 0 1 0-1.06Z" />
           </svg>
         </button>
-        <p className="text-xs text-ink-faint uppercase tracking-wider">Dictation — type what you hear</p>
+        <p className="text-xs text-ink-faint uppercase tracking-wider">{native ? 'Dictation — type the translation' : 'Dictation — type what you hear'}</p>
       </div>
       {rating ? (
         <>
-          <div className="panel text-center font-mono text-lg text-success">{displayText(card.front)}</div>
-          <p className="text-center text-sm text-ink-muted">{card.back}</p>
+          <div className="panel text-center font-mono text-lg text-success">{displayText(answerText)}</div>
+          <p className="text-center text-sm text-ink-muted">{native ? displayText(card.front) : card.back}</p>
           <RatingButtons onRate={r => onOutcome(r)} suggestedRating="good" />
         </>
       ) : result ? (
         <>
           {/* Correct → show the answer (green). Wrong → show what the LEARNER typed (red), with the
               correct answer spelled out below. */}
-          <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>{isCorrect ? displayText(card.front) : (input || '—')}</div>
-          <p className="text-center text-sm text-ink-muted">{card.back}</p>
+          <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>{isCorrect ? displayText(answerText) : (input || '—')}</div>
+          <p className="text-center text-sm text-ink-muted">{native ? displayText(card.front) : card.back}</p>
           {!isCorrect && (
-            <p className="text-center text-sm text-ink-muted">Correct answer: <span className="font-mono text-ink">{displayText(card.front)}</span></p>
+            <p className="text-center text-sm text-ink-muted">Correct answer: <span className="font-mono text-ink">{displayText(answerText)}</span></p>
           )}
           <div className="flex flex-col items-center gap-2">
             <button ref={continueRef} className="btn-primary px-10" onClick={proceed}>Continue</button>
@@ -242,7 +248,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
         </>
       ) : (
         <>
-          <input ref={inputRef} className="input text-center text-lg font-mono" value={input} placeholder="Type what you hear…"
+          <input ref={inputRef} className="input text-center text-lg font-mono" value={input} placeholder={native ? 'Type the translation…' : 'Type what you hear…'}
             onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && input.trim()) check() }} />
           <div className="flex justify-center"><button className="btn-primary px-10" disabled={!input.trim()} onClick={check}>Check</button></div>
           <button

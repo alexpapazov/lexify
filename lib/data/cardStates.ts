@@ -155,19 +155,21 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     userId: UserId,
     cardId: CardId,
     patch: { dormant?: boolean; dormancyThreshold?: number | null },
+    direction: 'forward' | 'reverse' = 'forward',
   ): Promise<CardState> {
     const dbPatch: Record<string, unknown> = {}
     if ('dormant' in patch)           dbPatch.dormant = patch.dormant
     if ('dormancyThreshold' in patch) dbPatch.dormancy_threshold = patch.dormancyThreshold
-    // Update EVERY forward row for this card (some accounts have duplicate forward
-    // rows) so dormancy is card-level — no stale duplicate can keep the card due.
-    // `.select()` (not `.single()`) tolerates the multi-row case.
+    // Update EVERY row for this card + direction (some accounts have duplicate rows) so dormancy is
+    // card-level per direction — no stale duplicate can keep it due. `.select()` tolerates multi-row.
+    // Forward = the production (target-language) side, which determines the card's overall dormant type.
+    // Reverse = the recognition side, which can be paused independently.
     const { data, error } = await this.db.from('card_states')
       .update(dbPatch)
-      .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', 'forward')
+      .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', direction)
       .select()
     if (error) throw new Error(error.message)
-    if (!data || data.length === 0) throw new Error('setDormancy: no forward row found for card')
+    if (!data || data.length === 0) throw new Error(`setDormancy: no ${direction} row found for card`)
     return rowToCardState(data[0])
   }
 

@@ -629,7 +629,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const reverseEnabled = trackEnabled(enabledTracks, 'recall', true)
       for (const reverseState of reverseStatesList) {
         if (!reverseEnabled) break
-        if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant
+        if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant (production side)
+        if (reverseState.dormant) continue                          // recognition paused independently
         if (!reverseState.recallDueAt || new Date(reverseState.recallDueAt) > now) continue
         const card = cards.find(c => c.id === reverseState.cardId)
         if (card) dueCards.push({ card, state: reverseState, pipeline, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })

@@ -175,8 +175,9 @@ function projectStateReviewDays(s: CardState, ctx: ProjectCtx): string[] {
 
   const dir = s.reviewDirection === 'reverse' ? 'reverse' : 'forward'
   if (dir === 'reverse') {
-    // Reverse rows are recognition (Target → Native) — inherently self-graded.
-    if (!dirAllows('reverse') || !showSelfGraded || !trackEnabled(en, 'recall', true)) return []
+    // Reverse rows are recognition (Target → Native) — inherently self-graded. `s.dormant` on the
+    // reverse row = recognition paused independently (whole-card dormancy is filtered earlier).
+    if (!dirAllows('reverse') || !showSelfGraded || !trackEnabled(en, 'recall', true) || s.dormant) return []
     emit(s.recallDueAt ?? s.dueAt,
       seedStability(s.stability, s.recallIntervalDays ?? s.intervalDays, pc.reverseP),
       seedDifficulty(s.difficulty), pc.reverseP, pc.mix, () => true)
@@ -351,9 +352,11 @@ export default function StudyPage() {
       // Reverse rows are scheduled by recall_due_at; their due_at is often stale in the
       // past. Prefer recall_due_at (fall back to due_at only when recall is null) so a
       // reverse card whose real schedule is in the future isn't counted as due.
+      // `!s.dormant` = the reverse row's OWN dormancy (recognition paused independently); the forward
+      // stateMap.dormant check = whole-card dormancy (production side pauses everything).
       const reverseDueOn = (s: CardState) => trackEnabled(en, 'recall', true) &&
         stateMap.get(s.cardId)?.graduated === true && !stateMap.get(s.cardId)?.dormant &&
-        isDueByDate(s.recallDueAt ?? s.dueAt)
+        !s.dormant && isDueByDate(s.recallDueAt ?? s.dueAt)
       // How a due forward card is presented (mirrors the session: enabled production lane wins over
       // recall). Uses the active lane (not the date column) so a legacy/ladder card scheduled on
       // due_at/typed_due_at is classified the same way the session presents it.

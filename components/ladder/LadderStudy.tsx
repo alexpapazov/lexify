@@ -108,17 +108,24 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     try { localStorage.setItem(SESSION_KEY, JSON.stringify({ id: sessionIdRef.current, scope: scopeKeyStr, lastAt: Date.now() })) } catch { /* ignore */ }
   }, [scopeKeyStr])
 
-  // On mount, reuse the persisted session id if you're studying the same scope and were here recently
-  // (so a page refresh continues one movie); otherwise start a fresh session.
-  useEffect(() => {
-    let id = sessionIdRef.current
+  // The session an action at `now` belongs to: continue the persisted one when the SAME scope was last
+  // active less than SESSION_GAP_MS ago, else start a new session. The 45-minute gap is measured from
+  // the LAST activity (not the session's start), so a 20-min study + 30-min pause + more study stays one
+  // session (30 < 45), while a pause ≥ 45 min opens a new one. Re-checked on every review, so it holds
+  // even if the page was left open across the pause (no remount needed).
+  const resolveSessionId = useCallback((now: number): string => {
     try {
       const prev = JSON.parse(localStorage.getItem(SESSION_KEY) ?? 'null') as { id?: string; scope?: string; lastAt?: number } | null
-      if (prev?.id && prev.scope === scopeKeyStr && Date.now() - (prev.lastAt ?? 0) < SESSION_GAP_MS) id = prev.id
+      if (prev?.id && prev.scope === scopeKeyStr && now - (prev.lastAt ?? 0) < SESSION_GAP_MS) return prev.id
     } catch { /* ignore */ }
-    sessionIdRef.current = id
+    return newSessionId()
+  }, [scopeKeyStr])
+
+  // On mount, adopt the right session for "now" (continues one movie across a refresh / short pause).
+  useEffect(() => {
+    sessionIdRef.current = resolveSessionId(Date.now())
     touchSession()
-  }, [scopeKeyStr, touchSession])
+  }, [scopeKeyStr, resolveSessionId, touchSession])
 
   const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, answerText: string, accept: boolean) => {
     if (!userId) return
@@ -331,6 +338,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   async function onOutcome(outcome: RungAttemptOutcome, overridden = false, almost = false) {
     if (!userId || !ladder || !currentId || !currentClimb) return
     const now = Date.now()
+    // Attribute this review to the current session, opening a new one only if ≥ 45 min passed since the
+    // last activity (measured from when studying stopped, whether or not the page was reloaded).
+    sessionIdRef.current = resolveSessionId(now)
     const res = reviewRung(ladder, currentClimb, outcome, now)
     // The engine keeps the real outcome ('miss'); the LOG marks a near-miss as 'almost' for the replay
     // colour without changing drop-back behaviour.
@@ -456,7 +466,6 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   if (paused) {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-6">
-        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
         <h1 className="text-xl font-semibold text-ink">{pauseKind === 'lastcard' ? 'Answer saved' : 'Round complete'}</h1>
         <p className="text-ink-muted">
           {pauseKind === 'lastcard'
@@ -467,6 +476,18 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           <a href={back} className="btn-ghost">Back</a>
           <button onClick={() => setPaused(false)} className="btn-primary">Continue</button>
         </div>
+        {undoStack.length > 0 && (
+          <button
+            onClick={() => void handleUndo()}
+            title="Undo last answer (⌘Z)"
+            className="mx-auto flex items-center gap-2 rounded-full border border-line/10 bg-surface-raised/95 px-4 py-2 text-sm font-medium text-ink-muted transition active:scale-95 hover:text-ink"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+              <path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-1" />
+            </svg>
+            Undo last answer
+          </button>
+        )}
       </div>
     )
   }

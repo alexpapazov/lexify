@@ -114,7 +114,7 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
             {/* Direction */}
             <label className="flex flex-col gap-1">
               <span className="text-xs text-ink-faint">Direction</span>
-              <select className="input py-1.5" value={r.direction} disabled={r.type === 'dictation'}
+              <select className="input py-1.5" value={r.direction}
                 onChange={e => update(r.id, { direction: e.target.value as RungDirection })}>
                 <option value="produce_target">Produce the target word</option>
                 <option value="produce_native">Produce the native word</option>
