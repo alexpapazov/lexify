@@ -25,6 +25,7 @@ import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
 import { UndoFab } from '@/components/session/UndoFab'
 import { CardEditModal } from '@/components/CardEditModal'
 import { isOfflineActive } from '@/lib/offline/mode'
+import { useActiveTimer } from '@/lib/activeTimer'
 import type { Card, CardChoices, Deck, Ladder, RungType } from '@/domain'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -76,6 +77,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const turnoverRef    = useRef(0)
   const sessionIdRef   = useRef<string>(newSessionId())
   const shownAtRef     = useRef<number>(Date.now())
+  const reviewTimer    = useActiveTimer()
   // Pre-set dormancy (threshold/flag) per card, captured at load — preserved through graduation so a
   // dormancy set before studying isn't wiped when the card graduates.
   const dormancyByCardRef = useRef<Map<string, { threshold: number | null; dormant: boolean }>>(new Map())
@@ -302,7 +304,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const currentDeck = currentId ? deckFor(currentId) : undefined
 
   // Reset the per-card timer + pending override whenever a new card is shown.
-  useEffect(() => { shownAtRef.current = Date.now(); pendingOverrideAddRef.current = null }, [currentId])
+  useEffect(() => { shownAtRef.current = Date.now(); reviewTimer.current?.restart(); pendingOverrideAddRef.current = null }, [currentId])
 
   function onChoicesCached(cardId: string, choices: CardChoices) {
     setCardsById(prev => { const c = prev.get(cardId); if (!c) return prev; return new Map(prev).set(cardId, { ...c, choices }) })
@@ -345,7 +347,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       fromRung: currentClimb.rungIndex, toRung: res.state.graduated ? rungCount : res.state.rungIndex, rungCount,
       rungType: ladder.rungs[currentClimb.rungIndex]?.type ?? null,
       outcome: loggedOutcome, advanced: res.advanced, graduated: res.state.graduated, overridden,
-      durationMs: Math.min(5 * 60_000, Math.max(0, now - shownAtRef.current)),  // cap at 5 min (ignore idle)
+      durationMs: reviewTimer.current?.read() ?? 0,  // active time only — idle gaps > 40s excluded
     }).catch(() => null)
     touchSession()  // slide the freshness window so a refresh keeps continuing this session
 

@@ -17,7 +17,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
-import { langName, LANG_COLOR_PALETTE } from '@/lib/languages'
+import { langName, assignLanguageColors } from '@/lib/languages'
 import { localDateWithTurnover, getToday } from '@/lib/dates'
 import { DayDetailModal } from '@/components/analytics/DayDetailModal'
 import type { LanguagePair } from '@/domain'
@@ -39,6 +39,7 @@ export function ReviewCalendar() {
   const [loading, setLoading] = useState(true)
   const [tz, setTz] = useState('UTC')
   const [turnover, setTurnover] = useState(0)
+  const [colorOverrides, setColorOverrides] = useState<Record<string, string>>({})
   const [selected, setSelected] = useState<string | null>(null)
   // Displayed month (year, month 0-based)
   const [view, setView] = useState<{ y: number; m: number } | null>(null)
@@ -50,11 +51,12 @@ export function ReviewCalendar() {
       if (!session) { setLoading(false); return }
       const uid = session.user.id
 
-      const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', uid).single()
+      const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, language_colors').eq('user_id', uid).single()
       const tzv = (profile?.timezone as string | null) ?? 'UTC'
       const turnoverv = (profile?.day_turnover_hour as number | null) ?? 0
       const today = getToday(tzv, turnoverv)
       setTz(tzv); setTurnover(turnoverv)
+      setColorOverrides((profile?.language_colors as Record<string, string> | null) ?? {})
 
       const [{ data: grads }, pairList] = await Promise.all([
         supabase.from('card_states')
@@ -89,12 +91,13 @@ export function ReviewCalendar() {
     })()
   }, [])
 
-  // Stable color per language-pair key.
+  // Color per language-pair key — keyed by SOURCE language and matched to the per-language colors set
+  // in Settings (assignLanguageColors applies overrides + distinct defaults, same as the dashboard).
   const colorFor = useMemo(() => {
-    const keys = [...new Set(pairs.map(p => `${p.sourceLanguage}|${p.targetLanguage}`))].sort()
-    const m = new Map(keys.map((k, i) => [k, LANG_COLOR_PALETTE[i % LANG_COLOR_PALETTE.length]!]))
-    return (key: string) => m.get(key) ?? '#64748b'
-  }, [pairs])
+    const sources = [...new Set(pairs.map(p => p.sourceLanguage))]
+    const colorMap = assignLanguageColors(sources, colorOverrides)
+    return (key: string) => colorMap[key.split('|')[0]!] ?? '#64748b'
+  }, [pairs, colorOverrides])
 
   const goalsByWeekday = useMemo(() => {
     // weekday → Map<pairKey, goal>

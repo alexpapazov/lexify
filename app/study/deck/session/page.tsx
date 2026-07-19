@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { useActiveTimer } from '@/lib/activeTimer'
 import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
@@ -129,6 +130,8 @@ export default function SessionPage() {
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [allCards,        setAllCards]        = useState<Card[]>([])
   const [index,           setIndex]           = useState(0)
+  const reviewTimer = useActiveTimer()
+  useEffect(() => { reviewTimer.current?.restart() }, [index])
   const [loading,         setLoading]         = useState(true)
   const [userId,          setUserId]          = useState('')
   const [deckName,        setDeckName]        = useState('')
@@ -923,7 +926,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
         promptShown: reviewPromptSide === 'front' ? card.front : card.back,
         expected:    reviewAnswerSide === 'front' ? card.front : card.back,
-        userAnswer, wasCorrect, rating, responseMs: null,
+        userAnswer, wasCorrect, rating, responseMs: reviewTimer.current?.read() ?? null,
         reviewMode, wasTyped,
         wasAccelerated:     state.acceleratedMode === 'import_known',
         acceleratedPenalty: state.acceleratedPenalty,
@@ -1528,7 +1531,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           promptShown: step.promptSide === 'front' ? memberCard.front : memberCard.back,
           expected:    step.answerSide === 'front' ? memberCard.front : memberCard.back,
           userAnswer:  wasCorrect ? (step.answerSide === 'front' ? memberCard.front : memberCard.back) : '',
-          wasCorrect, rating, responseMs: null, reviewMode, wasTyped: true,
+          wasCorrect, rating, responseMs: reviewTimer.current?.read() ?? null, reviewMode, wasTyped: true,
         })
 
         const newState = progressAfterReview(

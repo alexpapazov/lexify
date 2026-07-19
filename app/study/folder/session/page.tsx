@@ -7,6 +7,7 @@
  */
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
+import { useActiveTimer } from '@/lib/activeTimer'
 import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
@@ -115,6 +116,8 @@ function FolderSessionInner() {
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [index,           setIndex]           = useState(0)
+  const reviewTimer = useActiveTimer()
+  useEffect(() => { reviewTimer.current?.restart() }, [index])
   const [loading,         setLoading]         = useState(true)
   const [userId,          setUserId]          = useState('')
   const [done,            setDone]            = useState(false)
@@ -622,7 +625,7 @@ function FolderSessionInner() {
         promptSide: reviewPromptSide, answerSide: reviewAnswerSide,
         promptShown: reviewPromptSide === 'front' ? card.front : card.back,
         expected:    reviewAnswerSide === 'front' ? card.front : card.back,
-        userAnswer, wasCorrect, rating, responseMs: null,
+        userAnswer, wasCorrect, rating, responseMs: reviewTimer.current?.read() ?? null,
         reviewMode, wasTyped,
         wasAccelerated:    state.acceleratedMode === 'import_known',
         acceleratedPenalty: state.acceleratedPenalty,
