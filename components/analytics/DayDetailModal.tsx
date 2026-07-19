@@ -6,6 +6,7 @@
  * they landed), and the cards learned that day (filterable by language, each linking to its deck).
  */
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { langName } from '@/lib/languages'
@@ -49,6 +50,9 @@ export function DayDetailModal({ date, tz, turnover, minDate, maxDate, colorFor,
   const [dueMs, setDueMs] = useState(0)
   const [openGroup, setOpenGroup] = useState<string | null>(null)
   const [langFilter, setLangFilter] = useState<string | null>(null)
+  // Render into document.body so the full-screen overlay is never trapped below the sticky nav.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
   const canPrev = !minDate || viewDate > minDate
   const canNext = viewDate < maxDate
@@ -166,8 +170,8 @@ export function DayDetailModal({ date, tz, turnover, minDate, maxDate, colorFor,
     return `conic-gradient(${stops.join(', ')})`
   }, [learnedByLang, learned.length, colorFor])
 
-  return (
-    <div className="fixed inset-0 z-[80] bg-surface-deep flex flex-col">
+  const overlay = (
+    <div className="fixed inset-0 z-[100] bg-surface-deep flex flex-col">
       <div className="px-4 sm:px-6 py-3 border-b border-line/10 flex items-center justify-between gap-3 pt-[calc(env(safe-area-inset-top)+0.75rem)]">
         <button onClick={onClose} className="text-sm text-ink-muted hover:text-ink shrink-0">← Analytics</button>
         <div className="flex items-center gap-2 sm:gap-3">
@@ -332,4 +336,5 @@ export function DayDetailModal({ date, tz, turnover, minDate, maxDate, colorFor,
       </div>
     </div>
   )
+  return mounted ? createPortal(overlay, document.body) : null
 }
