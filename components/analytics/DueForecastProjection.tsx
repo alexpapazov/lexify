@@ -7,7 +7,7 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
-import { monteCarloSteps, percentile, estimateInitialInterval, measureRatingMix, seedStability, seedDifficulty, DEFAULT_RATING_MIX, DEFAULT_I0, DEFAULT_DIFFICULTY, stabilityForInterval, type RatingMix } from '@/lib/forecastFsrs'
+import { monteCarloSteps, percentile, measureRatingMix, seedStability, seedDifficulty, DEFAULT_RATING_MIX, DEFAULT_DIFFICULTY, stabilityForInterval, type RatingMix } from '@/lib/forecastFsrs'
 
 // Forward projection of daily "Due Now" load, split into Typed / Self-graded / Reverse / Total,
 // simulated on the live FSRS stability model by MONTE CARLO. Each card is played forward many times;
@@ -174,10 +174,11 @@ export function DueForecastProjection() {
         }
 
         // ── Pass 1: measure each language's behaviour ─────────────────────────────
-        // Rating mix from every graduated forward card; initial interval + average difficulty from the
-        // NON-accelerated population only (new cards go through the normal pipeline — we don't assume
-        // the user will accelerate future cards). Accelerated cards keep their own real D/S below.
-        const initSamples  = new Map<string, { reps: number; intervalDays: number }[]>()
+        // Rating mix from every graduated forward card; average difficulty from the NON-accelerated
+        // population only (new cards go through the normal pipeline — we don't assume the user will
+        // accelerate future cards). New cards seed at the GRADUATION_I0 interval, not a measured one:
+        // existing cards are mature (long intervals) so their average would badly misrepresent a fresh
+        // card. Accelerated cards keep their own real D/S below.
         const diffSamples  = new Map<string, number[]>()
         const statesByPair = new Map<string, typeof deckStates[number]>()
         for (let di = 0; di < decks.length; di++) {
@@ -185,21 +186,17 @@ export function DueForecastProjection() {
           ;(statesByPair.get(key) ?? statesByPair.set(key, []).get(key)!).push(...deckStates[di]!)
           for (const s of deckStates[di]!) {
             if (s.reviewDirection === 'reverse' || !s.graduated) continue
-            if (s.acceleratedMode === 'none') {
-              if (s.difficulty != null && s.difficulty > 0) (diffSamples.get(key) ?? diffSamples.set(key, []).get(key)!).push(s.difficulty)
-              const initInt = s.scheduledIntervalDays ?? s.typedIntervalDays ?? s.smartIntervalDays ?? s.intervalDays
-              if (initInt && initInt > 0) (initSamples.get(key) ?? initSamples.set(key, []).get(key)!).push({ reps: s.reps, intervalDays: initInt })
+            if (s.acceleratedMode === 'none' && s.difficulty != null && s.difficulty > 0) {
+              (diffSamples.get(key) ?? diffSamples.set(key, []).get(key)!).push(s.difficulty)
             }
           }
         }
         const mixByPair  = new Map<string, RatingMix>()
         const diffByPair = new Map<string, number>()
-        const initI0Map  = new Map<string, number>()
         for (const [k] of cfg) {
           mixByPair.set(k, measureRatingMix(statesByPair.get(k) ?? []))
           const ds = diffSamples.get(k) ?? []
           diffByPair.set(k, ds.length ? ds.reduce((a, b) => a + b, 0) / ds.length : DEFAULT_DIFFICULTY)
-          initI0Map.set(k, estimateInitialInterval(initSamples.get(k) ?? [], DEFAULT_I0))
         }
 
         // ── Pass 2: simulate existing graduated cards (real per-card D/S + language mix) ──
@@ -283,7 +280,9 @@ export function DueForecastProjection() {
         for (const [k, c] of cfg) {
           if (c.dailyGoal <= 0) continue
           const sr = seriesFor(k)
-          const i0 = initI0Map.get(k) ?? DEFAULT_I0
+          // New cards seed at the graduation interval (they climb the ladder from scratch), NOT the
+          // measured mature-card interval — so their early load is typed and grows realistically.
+          const i0 = GRADUATION_I0
           const d0 = diffByPair.get(k) ?? DEFAULT_DIFFICULTY
           const mix = mixByPair.get(k) ?? DEFAULT_RATING_MIX
           const runs = runsFor(k)
@@ -304,9 +303,9 @@ export function DueForecastProjection() {
         const pairSeries: PairSeries[] = [...series.entries()]
           .map(([k, v]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), typed: downsample(v.typed), selfg: downsample(v.selfg), recog: downsample(v.recog) }))
           .filter(p => p.typed.some(x => x > 0) || p.selfg.some(x => x > 0) || p.recog.some(x => x > 0))
-        const models: PairModel[] = [...initI0Map.entries()]
+        const models: PairModel[] = [...diffByPair.entries()]
           .filter(([k]) => pairSeries.some(p => p.key === k))
-          .map(([k, days]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), days, difficulty: diffByPair.get(k) ?? DEFAULT_DIFFICULTY }))
+          .map(([k, difficulty]) => ({ key: k, label: langName(k.split('|')[0]!), flag: langFlag(k.split('|')[0]!), days: GRADUATION_I0, difficulty }))
 
         // Confidence band per selection: downsample each run, then take p10/p90 across runs per window.
         // Stored per pair key + '__all__' (runs summed across pairs by index) so every language filter
@@ -476,12 +475,13 @@ export function DueForecastProjection() {
         ))}
       </div>
 
-      {/* measured per-language model (initial interval + average difficulty), fed into the forecast */}
+      {/* per-language model fed into the forecast: new cards enter at the graduation interval, then grow
+          with each language's measured difficulty + rating mix */}
       {data.models.length > 0 && (
         <p className="text-xs text-ink-faint">
-          <span className="text-ink-muted">Per-language model</span> (measured from your cards — initial interval &amp; average difficulty, plus each language&apos;s rating mix):{' '}
+          <span className="text-ink-muted">Per-language model</span> — new cards enter at the {GRADUATION_I0}-day graduation interval and grow by each language&apos;s measured average difficulty + rating mix:{' '}
           {(filterKey ? data.models.filter(s => s.key === filterKey) : data.models)
-            .map(s => `${s.flag} ${s.label} ${s.days % 1 === 0 ? s.days : s.days.toFixed(1)}d · D ${s.difficulty.toFixed(1)}`).join('  ·  ')}
+            .map(s => `${s.flag} ${s.label} D ${s.difficulty.toFixed(1)}`).join('  ·  ')}
         </p>
       )}
 

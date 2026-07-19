@@ -42,7 +42,7 @@ export default function AnalyticsPage() {
         <div className="panel p-5 space-y-3">
           <div>
             <h2 className="text-sm font-semibold text-ink">Projected Due Now load</h2>
-            <p className="text-xs text-ink-faint">Your existing cards plus new cards from your daily goals, simulated on the FSRS model by Monte Carlo per language — each language&apos;s measured initial interval, average difficulty, and rating mix (again/hard/good/easy). Every card is played forward many times; the lines are the average and the shaded band is the p10–p90 range. Split into typed, self-graded (recall + smart-typing past its threshold), and reverse recognition.</p>
+            <p className="text-xs text-ink-faint">Your existing cards plus new cards introduced by your daily goals, simulated on the FSRS model by Monte Carlo per language. Existing cards start from their own real schedule; new cards enter at the ladder graduation interval (~1 day) and grow by each language&apos;s measured average difficulty and rating mix (again/hard/good/easy). Every card is played forward many times; the lines are the average and the shaded band is the p10–p90 range. Split into typed, self-graded (recall + smart-typing past its threshold), and reverse recognition.</p>
           </div>
           <DueForecastProjection />
         </div>
