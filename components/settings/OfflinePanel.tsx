@@ -105,6 +105,29 @@ export function OfflinePanel() {
     setManifest(null); setResult(null); setPendingCount(0)
   }
 
+  /** Reconcile the downloaded bundle with the cloud: push any pending offline changes (resolving
+   *  conflicts first), then re-download the same scopes so local == cloud before going offline again. */
+  async function updateDownload() {
+    if (!manifest?.scopes || !userId || offline) return
+    setBusy(true); setError(null); setResult(null); setSyncMsg(null); setProgress(null)
+    try {
+      if (pendingCount > 0) {
+        const { conflicts: found } = await pushOutbox(userId, p => setSyncProgress(p))
+        setPendingCount(await getLocalStore().outboxCount())
+        if (found.length > 0) { setConflicts(found); setBusy(false); setSyncProgress(null); return }
+      }
+      const { manifest: m } = await downloadForOffline({
+        scopes: manifest.scopes, dueWindowDays: manifest.dueWindowDays, includeAudio: manifest.includeAudio,
+        onProgress: (phase, done, total) => setProgress({ phase, done, total }),
+      })
+      setManifest(m); setSyncMsg('Download updated — matches the cloud.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false); setProgress(null); setSyncProgress(null)
+    }
+  }
+
   /** Toggling the switch: ON → go offline; OFF → go online and sync the outbox back. */
   async function handleToggle(on: boolean) {
     setSyncMsg(null)
@@ -155,12 +178,22 @@ export function OfflinePanel() {
       </div>
 
       {manifest && (
-        <div className="rounded-lg border border-line/10 px-3 py-2 flex items-center justify-between gap-3 text-sm">
-          <div>
-            <div className="text-ink">Downloaded — {manifest.cardCount} cards</div>
-            <div className="text-xs text-ink-faint">{fmtWhen(manifest.downloadedAt)} · {manifest.includeAudio ? 'with audio' : 'no audio'} · {manifest.dueWindowDays}-day window</div>
+        <div className="rounded-lg border border-line/10 px-3 py-2 space-y-2 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-ink">Downloaded — {manifest.cardCount} cards</div>
+              <div className="text-xs text-ink-faint">
+                {fmtWhen(manifest.downloadedAt)} · {manifest.includeAudio ? 'with audio' : 'no audio'} · {manifest.dueWindowDays}-day window
+                {manifest.bytes ? ` · ${fmtBytes(manifest.bytes)}` : ''}
+              </div>
+            </div>
+            <button onClick={clear} disabled={offline || busy} className="text-xs text-danger hover:underline shrink-0 disabled:opacity-40 disabled:no-underline">Clear</button>
           </div>
-          <button onClick={clear} disabled={offline} className="text-xs text-danger hover:underline shrink-0 disabled:opacity-40 disabled:no-underline">Clear</button>
+          {!offline && manifest.scopes && (
+            <button onClick={() => void updateDownload()} disabled={busy || syncing} className="text-xs text-accent hover:underline disabled:opacity-50">
+              {busy ? 'Updating…' : '↻ Update download (sync with cloud)'}
+            </button>
+          )}
         </div>
       )}
 

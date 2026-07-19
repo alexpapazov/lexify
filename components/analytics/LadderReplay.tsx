@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { cardLevelAt, type SessionSummary } from '@/lib/ladderLog'
 
 const LANE_H = 44
-const CHIP_W = 104
+const CHIP_W = 84   // column step + max chip width; chips size to their word up to this
 const GUTTER = 76   // left label gutter
 
 // Flash colour when a card just moved, by the rating/outcome of that attempt.
@@ -130,7 +130,7 @@ export function LadderReplay({ session }: { session: SessionSummary }) {
                   flash ? 'text-ink' : grad ? 'bg-accent/25 border-accent/50 text-ink' : 'bg-surface-raised border-line/15 text-ink-muted'
                 }`}
                 style={{
-                  top: laneTop(level), left: GUTTER + col * (CHIP_W + 8), width: CHIP_W, height: LANE_H - 12,
+                  top: laneTop(level), left: GUTTER + col * (CHIP_W + 8), width: 'max-content', maxWidth: CHIP_W, height: LANE_H - 12,
                   ...(flash ? { backgroundColor: flash + '40', borderColor: flash } : {}),
                 }}>
                 {c.label}

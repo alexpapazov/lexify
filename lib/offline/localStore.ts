@@ -93,6 +93,10 @@ export class LocalStore {
   allCards(): Promise<Card[]> { return this.db.cards.toArray() }
   async putCard(card: Card): Promise<void> { await this.db.cards.put(card) }
   async deleteCard(id: string): Promise<void> { await this.db.cards.delete(id) }
+  /** Link a card into a deck locally (for offline-created cards). */
+  async putDeckCard(deckId: string, cardId: string): Promise<void> {
+    await this.db.deckCards.put({ key: `${deckId}:${cardId}`, deckId, cardId })
+  }
   /** Card ids belonging to a deck (deck ↔ card join). */
   async cardIdsForDeck(deckId: string): Promise<string[]> {
     return (await this.db.deckCards.where('deckId').equals(deckId).toArray()).map(r => r.cardId)

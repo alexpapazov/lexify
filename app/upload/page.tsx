@@ -26,6 +26,8 @@ import {
   tier1Match, tier2Match,
 } from '@/lib/duplicates'
 import type { Card, Folder, Deck, LanguagePair } from '@/domain'
+import { useOfflineMode } from '@/lib/offline/useOfflineMode'
+import { OfflineUploadForm } from '@/components/upload/OfflineUploadForm'
 
 const NEW_FOLDER_VALUE = '__new__'
 const ROOT_FOLDER_VALUE = '__root__'
@@ -217,6 +219,11 @@ function ModeSwitch({ value, onChange }: { value: AiMode; onChange: (v: AiMode) 
 }
 
 export default function UploadPage() {
+  const offline = useOfflineMode()
+  return offline ? <OfflineUploadForm /> : <OnlineUploadPage />
+}
+
+function OnlineUploadPage() {
   const [rawText,       setRawText]       = useState('')
   const [deckName,      setDeckName]      = useState('')
   const [pairSepOpt,    setPairSepOpt]    = useState<SeparatorOption>('tab')

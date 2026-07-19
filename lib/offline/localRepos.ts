@@ -117,6 +117,14 @@ export async function localRemoveOverride(cardId: string, answerSide: string, an
   await getLocalStore().deleteOverride(overrideKey(cardId, answerSide, answerText))
   await enqueue('override', overrideKey(cardId, answerSide, answerText), 'delete', { cardId, answerSide, answerText })
 }
+/** Create a brand-new card offline: store it + its deck link locally, and queue it for creation on
+ *  the server (cards + deck_cards) when we sync. No card_state — a new card is "unlearned" until studied. */
+export async function localCreateCard(card: Card, deckId: string): Promise<Card> {
+  await getLocalStore().putCard(card)
+  await getLocalStore().putDeckCard(deckId, card.id)
+  await enqueue('cardCreate', card.id, 'insert', { card, deckId })
+  return card
+}
 export async function localUpdateCard(id: string, patch: Partial<Card>): Promise<Card> {
   const existing = await getLocalStore().getCard(id)
   const updated = { ...(existing as Card), ...patch, id }

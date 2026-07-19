@@ -63,9 +63,9 @@ export function Navbar() {
   }
 
   const offline = useOfflineMode()
-  // Offline: hide destinations that need a connection (AI card-making/upload, community browse,
-  // full analytics). Study/Library/Settings remain.
-  const OFFLINE_HIDDEN = new Set(['/agents', '/upload', '/browse', '/progress'])
+  // Offline: hide destinations that need a connection (AI agent, community browse, full analytics).
+  // Upload stays — it offers a manual, no-AI entry mode offline. Study/Library/Settings remain.
+  const OFFLINE_HIDDEN = new Set(['/agents', '/browse', '/progress'])
   const navLinks = offline ? NAV_LINKS.filter(l => !OFFLINE_HIDDEN.has(l.href)) : NAV_LINKS
 
   return (

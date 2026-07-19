@@ -106,6 +106,24 @@ async function pushNonState(userId: string, op: CoalescedOp): Promise<void> {
       await new SupabaseCardRepository().update(id, patch)
       return
     }
+    case 'cardCreate': {
+      // A card created offline: insert it (keeping the client-generated id so local state/links match)
+      // and link it into its deck. No card_state — it's unlearned until studied.
+      const card = p.card as { id: string; ownerId: string; sourceLanguage: string; targetLanguage: string; front: string; back: string; hints: string[]; position: number }
+      const deckId = p.deckId as string
+      const db = supa()
+      const { error: cardErr } = await db.from('cards').upsert({
+        id: card.id, owner_id: card.ownerId, source_language: card.sourceLanguage, target_language: card.targetLanguage,
+        front: card.front, back: card.back, hints: card.hints ?? [], position: card.position ?? 0,
+      }, { onConflict: 'id', ignoreDuplicates: true })
+      if (cardErr) throw new Error(cardErr.message)
+      const { error: linkErr } = await db.from('deck_cards').upsert(
+        { deck_id: deckId, card_id: card.id, position: card.position ?? 0 },
+        { onConflict: 'deck_id,card_id', ignoreDuplicates: true },
+      )
+      if (linkErr) throw new Error(linkErr.message)
+      return
+    }
     default:
       return
   }

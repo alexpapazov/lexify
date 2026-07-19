@@ -16,11 +16,13 @@ export interface OfflineScope {
 
 export interface Manifest {
   userId:        string
-  scope:         OfflineScope
+  scope:         OfflineScope     // first scope (back-compat)
+  scopes?:       OfflineScope[]   // all selected scopes — used to re-download / "update"
   dueWindowDays: number     // how far ahead Due-Now cards were included
   includeAudio:  boolean    // whether cached audio clips were bundled
   downloadedAt:  string     // ISO
   cardCount:     number
+  bytes?:        number     // approximate bundle size on device
 }
 
 // ── Stored rows (domain object + local sync metadata) ────────────────────────
@@ -35,7 +37,7 @@ export interface StoredOverride { key: string; cardId: string; answerSide: strin
 export interface StoredDeckCard { key: string; deckId: string; cardId: string }
 
 // ── Outbox: local changes queued for the next online sync ────────────────────
-export type OutboxEntity = 'cardState' | 'ladderClimb' | 'ladderEvent' | 'reviewEvent' | 'override' | 'card'
+export type OutboxEntity = 'cardState' | 'ladderClimb' | 'ladderEvent' | 'reviewEvent' | 'override' | 'card' | 'cardCreate'
 export interface OutboxEntry {
   id?:            number       // Dexie auto-increment
   entity:         OutboxEntity

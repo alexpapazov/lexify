@@ -154,7 +154,8 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   const defaultLadder = await new SupabaseLadderRepository().getDefault(uid)
 
   const manifest: Manifest = {
-    userId: uid, scope: opts.scopes[0] ?? { kind: 'library' }, dueWindowDays: opts.dueWindowDays, includeAudio: opts.includeAudio,
+    userId: uid, scope: opts.scopes[0] ?? { kind: 'library' }, scopes: opts.scopes,
+    dueWindowDays: opts.dueWindowDays, includeAudio: opts.includeAudio,
     downloadedAt: new Date().toISOString(), cardCount: finalCards.length,
   }
   // Only bundle folders that (transitively) contain a downloaded deck — plus their ancestors so the
@@ -185,6 +186,7 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   }
 
   const bytes = estimateBundleBytes(bundle)
+  manifest.bytes = bytes
   await getLocalStore().hydrate(bundle)
   progress('Done', 1, 1)
   return { manifest, bytes }
