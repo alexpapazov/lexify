@@ -39,10 +39,12 @@ export function DueNowLogs() {
 
         const [{ data: profile }, { data: evs }] = await Promise.all([
           supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', uid).single(),
+          // Newest-first + limit so the most RECENT days are always included (asc + limit would return
+          // the oldest events and truncate recent days). groupDueDays re-sorts internally.
           supabase.from('review_events')
             .select('card_id, rating, reviewed_at, response_ms, review_direction, source_language, target_language')
             .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since)
-            .order('reviewed_at', { ascending: true }).limit(20000),
+            .order('reviewed_at', { ascending: false }).limit(20000),
         ])
         const tz = (profile?.timezone as string | null) ?? 'UTC'
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0

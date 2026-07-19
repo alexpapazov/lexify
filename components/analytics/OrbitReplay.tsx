@@ -26,7 +26,23 @@ const W = 400, H = 360, CX = W / 2, CY = H / 2
 const R_INNER = 26, R_MAX = 156, R_RELEARN = R_INNER + 14, ESCAPE = 360   // dormant cards fly past the edge
 const MIN_I = 1 / 144, MAX_I = 730          // 10 minutes … 2 years
 const GOLDEN = 2.399963236
-const BASE_PLAY_MS = 13000
+const MAX_GAP_MS = 2500        // cap dead time between consecutive reviews → an "active-only" timeline
+const MS_PER_REVIEW = 1700     // target real playback time per review (paces a big day to ~2 min at 1×)
+const PLAY_MIN = 30_000, PLAY_MAX = 150_000
+
+/** Remap reviews onto a compressed timeline that starts at 0 and caps the idle gaps between reviews, so
+ *  the movie is all action and lasts a sensible length instead of spanning the whole (mostly-empty) day. */
+function compressTimeline(cards: DueCard[]): { cards: DueCard[]; wall: number } {
+  const times = [...new Set(cards.flatMap(c => c.reviews.map(r => r.at)))].sort((a, b) => a - b)
+  if (times.length === 0) return { cards, wall: 1 }
+  const vOf = new Map<number, number>()
+  let v = 0
+  for (let i = 0; i < times.length; i++) { if (i > 0) v += Math.min(MAX_GAP_MS, times[i]! - times[i - 1]!); vOf.set(times[i]!, v) }
+  return {
+    cards: cards.map(c => ({ ...c, reviews: c.reviews.map(r => ({ ...r, at: vOf.get(r.at)! })) })),
+    wall: Math.max(1, v),
+  }
+}
 
 function orbitRadius(intervalDays: number): number {
   const iv = Math.min(MAX_I, Math.max(MIN_I, intervalDays || MIN_I))
@@ -75,7 +91,7 @@ function radiusAt(card: DueCard, t: number, flingMs: number): number {
 }
 
 export function OrbitReplay({ session }: { session: DueSession }) {
-  const { cards, start, wallMs } = session
+  const { cards } = session
   const [frac, setFrac] = useState(1)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
@@ -84,9 +100,12 @@ export function OrbitReplay({ session }: { session: DueSession }) {
   const startRef = useRef(0)
 
   const langs = useMemo(() => [...new Set(cards.map(c => c.source).filter((x): x is string => !!x))], [cards])
-  const shown = useMemo(() => langFilter ? cards.filter(c => c.source === langFilter) : cards, [cards, langFilter])
+  const filtered = useMemo(() => langFilter ? cards.filter(c => c.source === langFilter) : cards, [cards, langFilter])
+  // Compress the day to its active timeline (idle gaps capped) → dense, ~2-min-scale movie.
+  const { cards: shown, wall: wallMs } = useMemo(() => compressTimeline(filtered), [filtered])
+  const start = 0
 
-  const t = start + frac * Math.max(1, wallMs)
+  const t = frac * Math.max(1, wallMs)
   const flingMs = Math.max(300, wallMs * 0.03)
   const stars = useMemo(() => makeStars(48), [])
   const angle0 = useMemo(() => { const m = new Map<string, number>(); shown.forEach((c, i) => m.set(c.cardId, i * GOLDEN)); return m }, [shown])
@@ -95,7 +114,9 @@ export function OrbitReplay({ session }: { session: DueSession }) {
   const big = shown.length > 120
   const TAIL = big ? 4 : 7
   const showLabels = shown.length <= 16
-  const playMs = BASE_PLAY_MS / speed
+  // Length scales with how many reviews there are (a busy day ≈ 2 min at 1×), then the speed control.
+  const reviewTotal = useMemo(() => shown.reduce((n, c) => n + c.reviews.length, 0), [shown])
+  const playMs = Math.min(PLAY_MAX, Math.max(PLAY_MIN, reviewTotal * MS_PER_REVIEW)) / speed
 
   useEffect(() => {
     if (!playing) { if (rafRef.current) cancelAnimationFrame(rafRef.current); return }
