@@ -1330,8 +1330,17 @@ underestimates their memory. Now the calibrate route measures this per track and
 - **Calibrate route** (`app/api/calibrate/route.ts`): `calibrateBucket` now also stores
   `retention_calibration = clamp(ln(target)/ln(measured), 0.5, 2.5)` (`retentionCalibrationFactor`), where
   `target` = the pair's forward_typed `requestRetention` (passed down from `calibratePair`). measured > target
-  → >1 (stretch); < target → <1 (shrink). Only set once a bucket has ≥ its window of reviews (same gate as
+  → >1 (stretch); < target → <1 (shrink). Only set once a bucket has ≥ its minSample of reviews (same gate as
   `recent_retention_rate`); `measured` clamped to [0.5, 0.995] to avoid ln(1)=0 blow-ups.
+- **Recency weighting (2026-07-20)**: `measured` retention is a **recency-weighted** mean, NOT a flat average
+  — a review's weight halves every 7 days (`RETENTION_HALF_LIFE_DAYS`), so the past week dominates an earlier
+  rough patch (80%→95% over a week measures ≈95%, and intervals stretch to match). The pure math lives in
+  `lib/retentionCalibration.ts` (`recencyWeightedMean`, `recencyWeight`, `retentionCalibrationFactor`, moved
+  out of the route; tested in `lib/__tests__/retentionCalibration.test.ts`). The route now pulls a BROADER
+  pool (`poolSize = min(600, max(minSample·4, 200))`) than the calibrate gate (`minSample`, the old dynamic
+  20–150) so the weighting has old-vs-recent reviews to discriminate; the half-life makes the stale tail
+  contribute negligibly, so the larger pool never lets old data dominate. This also changes the displayed
+  "Measured retention" (library SRS modal reads `recent_retention_rate`) to the recency-weighted value.
 - **Engine** (`engine/fsrs.ts` + `engine/dueNow.ts`): `FsrsConfig.retentionCalibration?` (default 1). New
   `scheduledIntervalDays(stability, cfg)` = `max(1, cal · intervalForRetention(S, requestRetention))`, used by
   `scheduled()` and `scheduleGraduatedFsrs`. It multiplies the *scheduled interval only* — stored stability/

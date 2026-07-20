@@ -314,6 +314,7 @@ export function TypingMode({
     if (matchedSibling) {
       setSiblingId(matchedSibling.id)
       setSiblingText(input)
+      setSynonymPhase(false)   // sibling and synonym canonical phases are mutually exclusive
       onSiblingAnswered?.(matchedSibling.id)
       return
     }
@@ -325,7 +326,7 @@ export function TypingMode({
       const matchedSynonym = effectiveSynonyms.find(
         s => gradeTyping(input, s, effectiveGradingSettings).status === 'correct'
       )
-      if (matchedSynonym) {
+      if (matchedSynonym && !siblingId) {
         setSynonymPhase(true)
         setSynonymPhaseText(input)
         return
@@ -651,8 +652,11 @@ export function TypingMode({
           />
         )}
 
-        {/* Synonym phase: accepted note + canonical input */}
-        {synonymPhase && !result && (
+        {/* Synonym phase: accepted note + canonical input.
+            `!siblingId` makes the sibling and synonym canonical phases mutually exclusive — both
+            drive the same `canonInput`, so rendering both at once duplicated the "type the main
+            term" box (and echoed your typing into both). Sibling takes precedence. */}
+        {synonymPhase && !siblingId && !result && (
           <div className="space-y-3">
             <div className="panel border-warning/30 bg-warning/5 text-center py-3 space-y-1">
               <p className="text-warning font-medium">
@@ -683,7 +687,7 @@ export function TypingMode({
         )}
 
         {/* Canonical input result display (synonym phase, after canonical graded) */}
-        {synonymPhase && result && (
+        {synonymPhase && !siblingId && result && (
           <input
             className={`input text-center text-lg font-mono ${
               finalCorrect ? 'border-success/60 bg-success/5' :

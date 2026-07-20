@@ -2,6 +2,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import type { TypedStrictnessLevel } from '@/domain'
 import type { SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
+import { recencyWeightedMean, retentionCalibrationFactor } from '@/lib/retentionCalibration'
 
 export const runtime = 'nodejs'
 
@@ -143,20 +144,6 @@ async function saveHistory(snapshot: SchedulerParamsRow): Promise<void> {
   })
 }
 
-// Clamp on the interval-calibration multiplier: never shrink below 0.5× or stretch beyond 2.5×, so a
-// noisy retention estimate can't blow up a card's schedule in one calibration pass.
-const CAL_MIN = 0.5
-const CAL_MAX = 2.5
-
-/** Interval multiplier that corrects the stock FSRS weights toward the learner's true memory:
- *  ln(target)/ln(measured). measured > target → >1 (stretch); measured < target → <1 (shorten). */
-function retentionCalibrationFactor(measured: number, target: number): number {
-  const m = Math.min(0.995, Math.max(0.5, measured))   // guard: ln(1)=0 blows up; very low is noise
-  const t = Math.min(0.995, Math.max(0.5, target))
-  const raw = Math.log(t) / Math.log(m)
-  return Math.min(CAL_MAX, Math.max(CAL_MIN, raw))
-}
-
 async function calibrateBucket(
   userId: string,
   sourceLang: string,
@@ -167,15 +154,20 @@ async function calibrateBucket(
   const params = await getOrCreate(userId, sourceLang, targetLang, answerField)
   const target = params.requestRetention   // this track's own target retention
 
-  const n              = params.totalDueReviews
-  const windowSize     = Math.max(20, Math.min(150, Math.round(n * 0.15)))
+  const n = params.totalDueReviews
+  // Minimum recent reviews before we trust a calibration at all (unchanged gate).
+  const minSample = Math.max(20, Math.min(150, Math.round(n * 0.15)))
+  // Pull a BROADER pool than the gate so recency weighting has old-vs-recent reviews to weigh
+  // against each other; the exponential half-life (7d) makes the stale tail contribute negligibly,
+  // so a generous cap can't let old data dominate — it only gives the weighting more signal.
+  const poolSize = Math.min(600, Math.max(minSample * 4, 200))
 
   const wasTyped  = answerField === 'forward_typed' || answerField === 'forward_smart'
   const reviewDir = answerField === 'reverse_recall' ? 'reverse' : 'forward'
 
   const { data: events, error } = await db
     .from('review_events')
-    .select('was_correct, near_miss, near_miss_weight')
+    .select('was_correct, near_miss, near_miss_weight, reviewed_at')
     .eq('user_id', userId)
     .eq('source_language', sourceLang)
     .eq('target_language', targetLang)
@@ -184,7 +176,7 @@ async function calibrateBucket(
     .eq('was_typed', wasTyped)
     .eq('was_accelerated', false)
     .order('reviewed_at', { ascending: false })
-    .limit(windowSize)
+    .limit(poolSize)
 
   if (error || !events) return
 
@@ -201,7 +193,7 @@ async function calibrateBucket(
 
   const newTotal = totalCount ?? n
 
-  if (events.length < windowSize) {
+  if (events.length < minSample) {
     await updateParams(userId, sourceLang, targetLang, answerField, { total_due_reviews: newTotal })
     return
   }
@@ -213,8 +205,16 @@ async function calibrateBucket(
   const successWeight = (e: { was_correct: boolean; near_miss: boolean; near_miss_weight?: number | null }) =>
     e.was_correct ? 1 : (nmWeight(e) > 0 ? 1 - nmWeight(e) : 0)
   // FSRS owns interval scheduling now; the only thing this loop still calibrates is the MEASURED
-  // recent retention rate, which the workload forecast (analytics + "Coming up") reads per track.
-  const retentionRate = events.reduce((sum, e) => sum + successWeight(e), 0) / events.length
+  // recent retention rate, which the workload forecast (analytics + "Coming up") reads per track
+  // AND the interval multiplier below. Recency-weighted (7d half-life) so a recent stretch of
+  // strong reviews outweighs an earlier rough patch — see lib/retentionCalibration.ts.
+  const nowMs = Date.now()
+  const retentionRate = recencyWeightedMean(
+    events.map(e => ({
+      value:   successWeight(e),
+      ageDays: (nowMs - new Date(e.reviewed_at as string).getTime()) / 86_400_000,
+    })),
+  )
 
   // Feed measured-vs-target back into scheduling: stretch (or shrink) this track's intervals so the
   // learner actually lands near their target retention despite the stock weights' miscalibration.
