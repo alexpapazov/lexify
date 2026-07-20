@@ -17,7 +17,7 @@ export default function ConnectionsPage() {
   if (offline) return <OfflineUnavailable feature="Analytics" />
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-10 space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6">
       <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
       <div className="space-y-3">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Card connections</h2>
