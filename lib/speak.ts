@@ -29,11 +29,62 @@ export function setAudioVolume(vol: number): void {
   audioVolume = Number.isFinite(vol) ? Math.min(2, Math.max(0, vol)) : 1
 }
 
+// ─── Device-voice selection (the non-AI path) ────────────────────────────────
+// The OS ships a cheap "compact" voice per language and lets you download a much better
+// Enhanced/Premium one. Both are exposed to the Web Speech API, and the browser default is usually the
+// compact one — so the good voice only gets used if we ASK for it by name. That's what this does.
+
+/** Quality hints that appear in voice names across platforms, best first. */
+const VOICE_TIERS: { match: RegExp; score: number }[] = [
+  { match: /premium/i,            score: 100 },  // Apple, downloadable — the best on-device option
+  { match: /enhanced/i,           score: 90 },   // Apple, downloadable
+  { match: /neural|natural/i,     score: 80 },   // Edge/Windows
+  { match: /siri/i,               score: 70 },
+  { match: /google/i,             score: 40 },   // Chrome's bundled voices — decent, usually remote
+]
+
+let voiceCache: SpeechSynthesisVoice[] = []
+function allVoices(): SpeechSynthesisVoice[] {
+  if (typeof window === 'undefined' || !window.speechSynthesis) return []
+  // getVoices() is empty until the list loads, and fires `voiceschanged` when it's ready — so refresh
+  // the cache whenever it's currently empty rather than caching an empty list forever.
+  if (voiceCache.length === 0) voiceCache = window.speechSynthesis.getVoices()
+  return voiceCache
+}
+if (typeof window !== 'undefined' && window.speechSynthesis) {
+  window.speechSynthesis.addEventListener?.('voiceschanged', () => { voiceCache = window.speechSynthesis.getVoices() })
+}
+
+/**
+ * The best installed voice for a BCP-47 tag: highest quality tier wins, then an exact region match
+ * (es-MX over es-ES when asked for es-MX), then on-device voices — which on Apple platforms are
+ * exactly the downloaded Enhanced/Premium ones, and also work offline. Null → let the browser decide.
+ */
+export function bestVoiceFor(lang: string): SpeechSynthesisVoice | null {
+  const base = lang.split('-')[0]!.toLowerCase()
+  const candidates = allVoices().filter(v => v.lang?.toLowerCase().replace('_', '-').startsWith(base))
+  if (candidates.length === 0) return null
+  const score = (v: SpeechSynthesisVoice) => {
+    let s = 0
+    for (const t of VOICE_TIERS) if (t.match.test(v.name)) { s += t.score; break }
+    if (v.lang?.toLowerCase().replace('_', '-') === lang.toLowerCase()) s += 15
+    if (v.localService) s += 10
+    return s
+  }
+  return candidates.reduce((best, v) => (score(v) > score(best) ? v : best), candidates[0]!)
+}
+
+/** Human-readable name of the voice actually in use for a language (for the Settings readout). */
+export function voiceNameFor(langCode: string): string | null {
+  const lang = SPEECH_LANG[langCode] ?? langCode
+  return bestVoiceFor(lang)?.name ?? null
+}
+
 // Audio source config (profile-level). Global default + per-language overrides. 'browser' (robotic,
 // the default) generates no audio — playback uses the on-device speech synth. 'elevenlabs'/'forvo'
 // pre-generate & play real clips (forvo auto-falls back to ElevenLabs). Per-card choices still win.
-export type AudioSourceDefault = 'browser' | 'elevenlabs' | 'forvo'
-const isSource = (s: unknown): s is AudioSourceDefault => s === 'browser' || s === 'elevenlabs' || s === 'forvo'
+export type AudioSourceDefault = 'browser' | 'elevenlabs' | 'forvo' | 'standard'
+const isSource = (s: unknown): s is AudioSourceDefault => s === 'browser' || s === 'elevenlabs' || s === 'forvo' || s === 'standard'
 let audioSourceDefault: AudioSourceDefault = 'browser'
 let audioSourceByLanguage: Record<string, AudioSourceDefault> = {}
 export function setAudioSourceDefault(src: string | null | undefined): void {
@@ -98,7 +149,13 @@ export function speak(text: string, langCode: string, audioData?: string | null)
   window.speechSynthesis.cancel()
   // Don't speak "(f)"/"(m)"/notes — they garble the robotic voice.
   const utt = new SpeechSynthesisUtterance(stripAnnotations(text))
-  utt.lang = SPEECH_LANG[langCode] ?? langCode
+  const lang = SPEECH_LANG[langCode] ?? langCode
+  utt.lang = lang
+  // Pick the best installed voice explicitly. Setting only `lang` makes the browser use its DEFAULT
+  // voice for that language, which on Apple platforms is the low-quality "compact" one — so a
+  // downloaded Enhanced/Premium voice would sit there unused and everything would still sound robotic.
+  const voice = bestVoiceFor(lang)
+  if (voice) utt.voice = voice
   utt.rate = audioPlaybackRate
   utt.volume = Math.min(1, audioVolume)   // Web Speech volume can't exceed 1 (no >100% for robotic)
   window.speechSynthesis.speak(utt)
@@ -115,9 +172,9 @@ export function speak(text: string, langCode: string, audioData?: string | null)
  * a reason) when unavailable (e.g. Forvo has no recording for the word).
  */
 export async function fetchAudioSource(
-  text: string, language: string, source: 'elevenlabs' | 'forvo',
+  text: string, language: string, source: 'elevenlabs' | 'forvo' | 'standard',
   fallback = false,
-): Promise<{ audioData: string | null; source?: 'elevenlabs' | 'forvo'; fellBackFrom?: string; reason?: string }> {
+): Promise<{ audioData: string | null; source?: 'elevenlabs' | 'forvo' | 'standard'; fellBackFrom?: string; reason?: string }> {
   try {
     const res = await fetch(apiUrl('/api/tts'), {
       method: 'POST', headers: { 'content-type': 'application/json' },

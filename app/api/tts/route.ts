@@ -26,9 +26,56 @@ interface RequestBody {
   text:     string
   language: string
   /** Which provider to fetch from. Defaults to 'elevenlabs' (falls back to OpenAI). */
-  source?:  'elevenlabs' | 'forvo'
+  source?:  'elevenlabs' | 'forvo' | 'standard'
   /** When source is 'forvo', fall through to ElevenLabs on any Forvo miss instead of failing. */
   fallback?: boolean
+}
+
+// ─── Google Cloud TTS, "Standard" tier ───────────────────────────────────────
+// Classic concatenative TTS — explicitly NOT Google's Neural2/Studio (generative) voices. Clearly
+// synthetic, but far cleaner than a device compact voice, and crucially it is ONE fixed voice per
+// language: every user hears the identical clip, unlike Forvo's crowd-sourced recordings. The result
+// is stored on the card like any other source, so it's generated once and then served offline.
+const GOOGLE_TTS_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize'
+
+/** Locale + fixed Standard voice per language. Pinned by name so the voice never drifts between cards. */
+const GOOGLE_STANDARD_VOICE: Record<string, { code: string; name: string }> = {
+  es: { code: 'es-ES', name: 'es-ES-Standard-A' },
+  en: { code: 'en-US', name: 'en-US-Standard-C' },
+  fr: { code: 'fr-FR', name: 'fr-FR-Standard-A' },
+  it: { code: 'it-IT', name: 'it-IT-Standard-A' },
+  ko: { code: 'ko-KR', name: 'ko-KR-Standard-A' },
+  bg: { code: 'bg-BG', name: 'bg-bg-Standard-A' },
+  el: { code: 'el-GR', name: 'el-GR-Standard-A' },
+  de: { code: 'de-DE', name: 'de-DE-Standard-A' },
+  pt: { code: 'pt-PT', name: 'pt-PT-Standard-A' },
+  ru: { code: 'ru-RU', name: 'ru-RU-Standard-A' },
+  ja: { code: 'ja-JP', name: 'ja-JP-Standard-A' },
+  zh: { code: 'cmn-CN', name: 'cmn-CN-Standard-A' },
+  nl: { code: 'nl-NL', name: 'nl-NL-Standard-A' },
+  pl: { code: 'pl-PL', name: 'pl-PL-Standard-A' },
+  tr: { code: 'tr-TR', name: 'tr-TR-Standard-A' },
+  uk: { code: 'uk-UA', name: 'uk-UA-Standard-A' },
+}
+
+/** Synthesises `text` with the pinned Standard voice for `language`; returns base64 mp3. */
+async function ttsGoogleStandard(text: string, language: string, apiKey: string): Promise<string> {
+  const v = GOOGLE_STANDARD_VOICE[language.slice(0, 2).toLowerCase()]
+  if (!v) throw new Error('standard-unsupported-language')
+  const res = await fetch(`${GOOGLE_TTS_URL}?key=${encodeURIComponent(apiKey)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      input: { text },
+      voice: { languageCode: v.code, name: v.name },
+      audioConfig: { audioEncoding: 'MP3' },
+    }),
+  })
+  if (!res.ok) throw new Error(`Google TTS ${res.status}: ${await res.text().catch(() => '')}`)
+  const data = await res.json().catch(() => null)
+  const b64 = data?.audioContent as string | undefined
+  if (!b64) throw new Error('standard-no-audio')
+  return b64
 }
 
 // Forvo (real native-speaker recordings). Free/legacy host is apifree.forvo.com;
@@ -198,6 +245,22 @@ export async function POST(req: NextRequest) {
   }
 
   const speakText = cleanForSpeech(text)
+
+  // ── Standard TTS: one pinned synthetic voice per language, identical for everyone ──
+  // No fallback chain: if this is what you picked, a failure should say so rather than quietly
+  // returning a different-sounding voice and reintroducing the inconsistency we're avoiding.
+  if (source === 'standard') {
+    const googleKey = process.env.GOOGLE_TTS_API_KEY
+    if (!googleKey) return NextResponse.json({ ok: false, reason: 'no-google-tts-key' })
+    try {
+      const audioData = await ttsGoogleStandard(speakText, language, googleKey)
+      return NextResponse.json({ ok: true, audioData, source: 'standard' })
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'standard-failed'
+      console.error('[tts] standard failed:', reason)
+      return NextResponse.json({ ok: false, reason })
+    }
+  }
 
   // ── Forvo: real native-speaker recordings (coverage varies by language/word) ──
   // `fallback` (opt-in): on any Forvo miss, fall through to ElevenLabs instead of

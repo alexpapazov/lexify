@@ -17,6 +17,7 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 import { OfflinePanel } from '@/components/settings/OfflinePanel'
 import { startTour } from '@/components/Tour'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
+import { voiceNameFor } from '@/lib/speak'
 
 // ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
 function hslToHex(h: number, s: number, l: number): string {
@@ -383,7 +384,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
   const [spilloverDue,        setSpilloverDue]        = useState(false)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
-  const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo'>('browser')
+  const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
   const [langColors,          setLangColors]          = useState<Record<string, string>>({})
   const [timezone,            setTimezone]            = useState('')
@@ -470,7 +471,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
-        setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo')
+        setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo' | 'standard')
         setAudioSourceByLangState((profile.audio_source_by_language as Record<string, string> | null) ?? {})
         setLangColors((profile.language_colors as Record<string, string> | null) ?? {})
       } else {
@@ -816,9 +817,10 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         <div className="space-y-1">
           <div className="flex items-center justify-between gap-3">
             <span className="text-sm text-ink">Default audio source</span>
-            <select value={audioSourceDefault} onChange={e => setAudioSourceDefaultState(e.target.value as 'browser' | 'elevenlabs' | 'forvo')}
+            <select value={audioSourceDefault} onChange={e => setAudioSourceDefaultState(e.target.value as 'browser' | 'elevenlabs' | 'forvo' | 'standard')}
               className="input text-sm w-44">
               <option value="browser">Robotic (device voice)</option>
+              <option value="standard">Standard voice (same for everyone)</option>
               <option value="elevenlabs">AI voice (ElevenLabs)</option>
               <option value="forvo">Forvo (real recordings)</option>
             </select>
@@ -829,6 +831,11 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
             has no recording). You can still override the source per card from its ℹ panel. Existing cards keep their
             current audio until you clear/refetch it.
           </p>
+
+          {/* Which device voice is actually being used. Apple ships a low-quality "compact" voice per
+              language and offers a much better Enhanced/Premium download — this readout is how you tell
+              whether the good one is installed and picked up. */}
+          <DeviceVoiceReadout codes={[...new Set(langPairs.map(p => p.sourceLanguage))]} />
 
           {langPairs.length > 0 && (() => {
             const codes = [...new Set(langPairs.map(p => p.sourceLanguage))]
@@ -848,6 +855,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
                       className="input text-sm w-44">
                       <option value="">Use default</option>
                       <option value="browser">Robotic (device voice)</option>
+              <option value="standard">Standard voice (same for everyone)</option>
                       <option value="elevenlabs">AI voice (ElevenLabs)</option>
                       <option value="forvo">Forvo (real recordings)</option>
                     </select>
@@ -1108,4 +1116,48 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
 
 export default function SettingsPage() {
   return <SettingsScreen variant="general" />
+}
+
+/**
+ * Shows the device voice actually selected for each learning language, and flags when it's the
+ * low-quality compact one. Voices load asynchronously, so this re-reads on `voiceschanged`.
+ */
+function DeviceVoiceReadout({ codes }: { codes: string[] }) {
+  const [, bump] = useState(0)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return
+    const onChange = () => bump(n => n + 1)
+    window.speechSynthesis.addEventListener?.('voiceschanged', onChange)
+    // Voices are often not ready on first paint; nudge once shortly after mount.
+    const t = setTimeout(onChange, 300)
+    return () => { window.speechSynthesis.removeEventListener?.('voiceschanged', onChange); clearTimeout(t) }
+  }, [])
+  if (codes.length === 0) return null
+  const rows = codes.map(code => ({ code, name: voiceNameFor(code) }))
+  const anyBasic = rows.some(r => r.name && !/premium|enhanced|neural|natural|siri/i.test(r.name))
+  return (
+    <div className="pt-2 space-y-1">
+      <div className="text-xs text-ink-muted">Device voice in use</div>
+      {rows.map(r => {
+        const good = r.name ? /premium|enhanced|neural|natural|siri/i.test(r.name) : false
+        return (
+          <div key={r.code} className="flex items-center justify-between gap-3 text-xs">
+            <span className="text-ink-muted">{langFlag(r.code)} {langName(r.code)}</span>
+            <span className={good ? 'text-success' : 'text-ink-faint'}>
+              {r.name ?? 'no voice installed'}{good ? ' ✓' : ''}
+            </span>
+          </div>
+        )
+      })}
+      {anyBasic && (
+        <p className="text-[11px] text-ink-faint pt-1">
+          Voices without <em>Enhanced</em> or <em>Premium</em> in the name are the basic compact ones — that&apos;s the
+          robotic sound. Download a better one free: <strong>iPhone → Settings → Accessibility → Spoken Content →
+          Voices</strong> (or macOS → System Settings → Accessibility → Spoken Content → System Voice → Manage Voices),
+          pick the language, and grab the Enhanced/Premium variant. Reload Lexify afterwards and it&apos;ll be used
+          automatically — no AI, works offline.
+        </p>
+      )}
+    </div>
+  )
 }
