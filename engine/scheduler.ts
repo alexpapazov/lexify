@@ -68,3 +68,20 @@ export function classifyReviewMode(state: CardState, now: Date = new Date()): 'e
   const progress = elapsed / scheduledInterval
   return progress < 1 ? 'elective' : 'due'
 }
+
+/**
+ * Whether a graduated card counts as "due today" by CALENDAR DATE, matching how the session
+ * queue admits cards (`isDueByDate`) — a due date whose local day is today or earlier.
+ *
+ * This is deliberately looser than `classifyReviewMode`, which compares the exact due TIMESTAMP
+ * to now: a card due earlier today whose stored due timestamp lands later today (an unsnapped
+ * relearn/legacy schedule) is surfaced-as-due by the queue but would read 'elective' by timestamp.
+ * `hintable` uses THIS so the Hint button appears on every card a due session actually serves,
+ * instead of silently vanishing on those edge-of-day cards.
+ */
+export function isGraduatedDueByDate(state: CardState, tz: string, today: string): boolean {
+  if (!state.graduated) return false
+  const dueByDate = (d: string | null | undefined) =>
+    !!d && new Date(d).toLocaleDateString('en-CA', { timeZone: tz }) <= today
+  return [state.typedDueAt, state.recallDueAt, state.smartDueAt, state.dueAt].some(dueByDate)
+}

@@ -31,7 +31,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { progressAfterReview, initialCardState, appendHistory } from '@/engine/pipeline'
 import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
-import { classifyReviewMode, graduationIntervalRange } from '@/engine/scheduler'
+import { classifyReviewMode, isGraduatedDueByDate, graduationIntervalRange } from '@/engine/scheduler'
 import { scheduleGraduatedFsrs, RELEARN_MINUTES } from '@/engine/dueNow'
 import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
@@ -1433,7 +1433,7 @@ function FolderSessionInner() {
     : undefined
   const softWrongEnabled = state.graduated && !currentIsReverse &&
     current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled
-  const hintable = state.graduated && classifyReviewMode(state, new Date()) === 'due'
+  const hintable = isGraduatedDueByDate(state, tzRef.current, getToday(tzRef.current, turnoverRef.current))
 
   return (
     <div className="space-y-8 max-w-2xl mx-auto">

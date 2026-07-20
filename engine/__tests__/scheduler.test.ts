@@ -1,4 +1,4 @@
-import { classifyReviewMode, graduationIntervalRange } from '../scheduler'
+import { classifyReviewMode, isGraduatedDueByDate, graduationIntervalRange } from '../scheduler'
 import { initialCardState } from '../pipeline'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import type { CardState } from '@/domain'
@@ -71,5 +71,32 @@ describe('graduationIntervalRange', () => {
     const ideal = (e: number) => { const [a, b] = graduationIntervalRange(e); return Math.floor((a + b) / 2) }
     expect(ideal(0)).toBeGreaterThanOrEqual(ideal(2))
     expect(ideal(2)).toBeGreaterThanOrEqual(ideal(4))
+  })
+})
+
+describe('isGraduatedDueByDate', () => {
+  const TODAY = '2026-06-14'
+
+  it('is false for a non-graduated card', () => {
+    const s = baseState({ graduated: false, dueAt: `${TODAY}T00:00:00.000Z` })
+    expect(isGraduatedDueByDate(s, 'UTC', TODAY)).toBe(false)
+  })
+
+  it('is true when a due date lands later TODAY even though its timestamp is after now', () => {
+    // The exact regression: due earlier today by calendar, but the stored timestamp is 11pm.
+    // classifyReviewMode would call this "elective" mid-afternoon; the queue serves it, so hints must show.
+    const s = baseState({ typedDueAt: null, smartDueAt: `${TODAY}T23:00:00.000Z`, recallDueAt: null, dueAt: `${TODAY}T23:00:00.000Z` })
+    expect(isGraduatedDueByDate(s, 'UTC', TODAY)).toBe(true)
+  })
+
+  it('is true when any track is due on an earlier day', () => {
+    const s = baseState({ smartDueAt: null, typedDueAt: '2026-06-10T00:00:00.000Z', recallDueAt: null, dueAt: null })
+    expect(isGraduatedDueByDate(s, 'UTC', TODAY)).toBe(true)
+  })
+
+  it('is false when every due date is a future day', () => {
+    const future = '2026-06-20T00:00:00.000Z'
+    const s = baseState({ typedDueAt: future, smartDueAt: future, recallDueAt: future, dueAt: future })
+    expect(isGraduatedDueByDate(s, 'UTC', TODAY)).toBe(false)
   })
 })
