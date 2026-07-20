@@ -170,7 +170,6 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
   const answerText = native ? card.back : card.front
   const answerLang = native ? card.targetLanguage : card.sourceLanguage
   const [input, setInput] = useState('')
-  const [rating, setRating] = useState(false)
   const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean; normalized: string } | null>(null)
   // Set when a "type the translation" prompt was answered with the word you just HEARD. That's not a
   // wrong answer — you understood the audio, you just produced the wrong side — so instead of marking
@@ -193,7 +192,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
     speak(card.front, card.sourceLanguage, null)
   }
   // Reset per card, replay audio, focus the input.
-  useEffect(() => { setInput(''); setResult(null); setRating(false); setEchoed(false); play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setInput(''); setResult(null); setEchoed(false); play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function check() {
     const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: false, slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: answerLang }
@@ -221,15 +220,18 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
     setTimeout(() => continueRef.current?.focus(), 100)
   }
 
-  // Advance with the confirmed outcome (Continue). Self-rated rungs still self-rate on a pass.
+  // Advance with the confirmed outcome (Continue). On a self-rated rung a correct answer skips this
+  // entirely — the rating buttons are shown straight away and picking one IS the advance.
   function proceed() {
     if (!result) return
     const finalStatus: 'pass' | 'almost' | 'miss' = result.overridden ? 'pass' : result.status
-    if (rung.selfRated && finalStatus === 'pass') { setRating(true); setResult(null); return }
     onOutcome(typedOutcome(finalStatus, rung.selfRated), result.overridden)
   }
 
   const isCorrect = result != null && (result.overridden || result.status === 'pass')
+  // Rate-to-advance: no Continue step, since choosing Again/Hard/Good/Easy already says "move on".
+  // A wrong answer still gets Continue — there's a correct answer to read, and nothing to self-rate.
+  const rateToAdvance = rung.selfRated && isCorrect
 
   return (
     <div className="space-y-6 w-full max-w-xl mx-auto">
@@ -243,13 +245,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
         </button>
         <p className="text-xs text-ink-faint uppercase tracking-wider">{native ? 'Dictation — type the translation' : 'Dictation — type what you hear'}</p>
       </div>
-      {rating ? (
-        <>
-          <div className="panel text-center font-mono text-lg text-success">{displayText(answerText)}</div>
-          <p className="text-center text-sm text-ink-muted">{native ? displayText(card.front) : card.back}</p>
-          <RatingButtons onRate={r => onOutcome(r)} suggestedRating="good" />
-        </>
-      ) : result ? (
+      {result ? (
         <>
           {/* Correct → show the answer (green). Wrong → show what the LEARNER typed (red), with the
               correct answer spelled out below. */}
@@ -259,7 +255,11 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
             <p className="text-center text-sm text-ink-muted">Correct answer: <span className="font-mono text-ink">{displayText(answerText)}</span></p>
           )}
           <div className="flex flex-col items-center gap-2">
-            <button ref={continueRef} className="btn-primary px-10" onClick={proceed}>Continue</button>
+            {rateToAdvance ? (
+              <RatingButtons onRate={r => onOutcome(r, result.overridden)} suggestedRating="good" />
+            ) : (
+              <button ref={continueRef} className="btn-primary px-10" onClick={proceed}>Continue</button>
+            )}
             {!isCorrect && (
               <button
                 onClick={() => { setResult(r => r ? { ...r, overridden: true } : r); if (result?.normalized) onOverrideAnswer?.(result.normalized, true) }}
