@@ -64,6 +64,7 @@ export function AccuracyTrend() {
   const [dir, setDir] = useState<Dir>('all')
   const [ctype, setCtype] = useState<CType>('all')
   const [langFilter, setLangFilter] = useState<string | null>(null)
+  const [showFilters, setShowFilters] = useState(false)
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -217,53 +218,97 @@ export function AccuracyTrend() {
   const pill = (on: boolean) =>
     `px-2 py-0.5 rounded-full border text-xs ${on ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`
 
+  // Summary shown under the title while the gear panel is closed, plus whether anything is off-default
+  // (which keeps the gear highlighted so an active filter is never invisible).
+  const filtersAreDefault = scope === 'due' && dir === 'all' && ctype === 'all' && langFilter === null && rangeDays === 30
+  const filterSummary = [
+    scope === 'due' ? 'Due Now' : scope === 'learning' ? 'Learning' : 'Due Now + Learning',
+    dir === 'all' ? 'both directions' : dir === 'forward' ? 'forward only' : 'reverse only',
+    ctype === 'all' ? 'all card types' : ctype === 'typed' ? 'typed only' : 'self-graded only',
+    langFilter === null ? 'all languages' : `${langFlag(langFilter)} ${langName(langFilter)}`,
+    `last ${rangeDays} days`,
+  ]
+
   return (
     <div className="panel space-y-3">
-      <div>
-        <h3 className="text-sm font-semibold text-ink">Accuracy over time</h3>
-        <p className="text-xs text-ink-faint">
-          Percent correct per language, {SMOOTH_DAYS}-day rolling average. Near-misses (accepted accent/spelling
-          slips) count as partial credit, so this matches the &quot;Measured retention&quot; figure in your SRS settings.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-ink">Accuracy over time</h3>
+          <p className="text-xs text-ink-faint">
+            Percent correct per language, {SMOOTH_DAYS}-day rolling average. Near-misses (accepted accent/spelling
+            slips) count as partial credit, so this matches the &quot;Measured retention&quot; figure in your SRS settings.
+          </p>
+        </div>
+        {/* Filters live behind the gear so five rows of pills don't crowd out the chart. */}
+        <button
+          onClick={() => setShowFilters(s => !s)}
+          aria-label={showFilters ? 'Hide filters' : 'Show filters'}
+          aria-expanded={showFilters}
+          className={`shrink-0 p-1.5 rounded-md border transition-colors ${
+            showFilters || !filtersAreDefault
+              ? 'bg-accent/20 border-accent text-ink'
+              : 'border-surface-border text-ink-muted hover:text-ink hover:bg-surface/50'
+          }`}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-col gap-1.5">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Reviews</span>
-          {([['due', 'Due Now'], ['learning', 'Learning'], ['both', 'Both']] as const).map(([v, l]) => (
-            <button key={v} onClick={() => setScope(v)} className={pill(scope === v)}>{l}</button>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Direction</span>
-          {([['all', 'All'], ['forward', 'Forward'], ['reverse', 'Reverse']] as const).map(([v, l]) => (
-            <button key={v} onClick={() => setDir(v)} className={pill(dir === v)}>{l}</button>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Card type</span>
-          {([['all', 'All'], ['typed', 'Typed'], ['selfgraded', 'Self-graded']] as const).map(([v, l]) => (
-            <button key={v} onClick={() => setCtype(v)} className={pill(ctype === v)}>{l}</button>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Language</span>
-          <button onClick={() => setLangFilter(null)} className={pill(langFilter === null)}>All</button>
-          {langs.map(l => (
-            <button key={l} onClick={() => setLangFilter(l)} className={`${pill(langFilter === l)} inline-flex items-center gap-1.5`}>
-              <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: colorMap[l] }} />
-              {langFlag(l)} {langName(l)}
+      {/* What's currently applied, so the chart is never ambiguous with the panel closed. */}
+      <p className="text-[11px] text-ink-faint">
+        {filterSummary.join('  ·  ')}
+        {filtersAreDefault ? '' : ' — filtered'}
+      </p>
+
+      {showFilters && (
+        <div className="flex flex-col gap-1.5 rounded-lg border border-surface-border bg-surface-deep/40 p-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Reviews</span>
+            {([['due', 'Due Now'], ['learning', 'Learning'], ['both', 'Both']] as const).map(([v, l]) => (
+              <button key={v} onClick={() => setScope(v)} className={pill(scope === v)}>{l}</button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Direction</span>
+            {([['all', 'All'], ['forward', 'Forward'], ['reverse', 'Reverse']] as const).map(([v, l]) => (
+              <button key={v} onClick={() => setDir(v)} className={pill(dir === v)}>{l}</button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Card type</span>
+            {([['all', 'All'], ['typed', 'Typed'], ['selfgraded', 'Self-graded']] as const).map(([v, l]) => (
+              <button key={v} onClick={() => setCtype(v)} className={pill(ctype === v)}>{l}</button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Language</span>
+            <button onClick={() => setLangFilter(null)} className={pill(langFilter === null)}>All</button>
+            {langs.map(l => (
+              <button key={l} onClick={() => setLangFilter(l)} className={`${pill(langFilter === l)} inline-flex items-center gap-1.5`}>
+                <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: colorMap[l] }} />
+                {langFlag(l)} {langName(l)}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Range</span>
+            {[14, 30, 90].map(r => (
+              <button key={r} onClick={() => setRangeDays(r)} className={pill(rangeDays === r)}>{r}d</button>
+            ))}
+          </div>
+          {!filtersAreDefault && (
+            <button
+              onClick={() => { setScope('due'); setDir('all'); setCtype('all'); setLangFilter(null); setRangeDays(30) }}
+              className="self-start mt-1 text-[11px] text-ink-muted hover:text-ink underline underline-offset-2"
+            >
+              Reset filters
             </button>
-          ))}
+          )}
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Range</span>
-          {[14, 30, 90].map(r => (
-            <button key={r} onClick={() => setRangeDays(r)} className={pill(rangeDays === r)}>{r}d</button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {dir !== 'all' && scope !== 'due' && (
         <p className="text-[11px] text-warning">Learning-ladder attempts aren&apos;t direction-tagged, so they&apos;re excluded while a direction filter is active.</p>
