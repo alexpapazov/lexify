@@ -7,6 +7,21 @@ import { getLocalStore } from '@/lib/offline/localStore'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { localCardsByDeck, localGetCard, localUpdateCard } from '@/lib/offline/localRepos'
 
+/**
+ * Columns for whole-library reads: everything EXCEPT `audio_data` / `audio_sources`, which hold
+ * base64 MP3s. `select('*')` across a few thousand cards drags tens of megabytes over the wire and is
+ * far slower than the per-deck fan-out it replaced, even though it's fewer requests. Callers that need
+ * a card's audio (the ℹ panel, playback) fetch that one card on demand.
+ *
+ * Cards from these bulk reads therefore have `audioData`/`audioSources` null — do NOT use them to
+ * decide whether a card has audio.
+ */
+const BULK_CARD_COLUMNS =
+  'id, owner_id, source_language, target_language, front, back, hints, choices, position, ' +
+  'created_at, updated_at, deleted_at, synonym_group_id, register, region, ' +
+  'accepted_front_alternatives, accepted_back_alternatives, synced_from_languages, synced_from_language, ' +
+  'origin_words, origin_word, audio_generated, audio_source, ipa'
+
 function rowToCard(row: Record<string, unknown>): Card {
   return {
     id:             row.id as string,
@@ -54,8 +69,10 @@ export class SupabaseCardRepository implements CardRepository {
    */
   async listAllForUser(ownerId: UserId): Promise<Card[]> {
     if (isOfflineActive()) return getLocalStore().allCards()
+    // Cast: Supabase can't infer a row shape from a runtime column string.
     const rows = await fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('cards')
-      .select('*').eq('owner_id', ownerId).is('deleted_at', null).order('id').range(f, t))
+      .select(BULK_CARD_COLUMNS).eq('owner_id', ownerId).is('deleted_at', null).order('id').range(f, t) as unknown as
+      PromiseLike<{ data: Record<string, unknown>[] | null; error: unknown }>)
     return rows.map(rowToCard)
   }
 
