@@ -148,8 +148,11 @@ function AllDueSessionInner() {
   const indexRef       = useRef(0)                    // current queue index (for async drill insertion)
   const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
-  type UndoEntry = { queueIndex: number; prevState: CardState; newState: CardState; eventId: string | null; overrideAdd: { cardId: string; answerSide: CardSide; answerText: string } | null }
+  type UndoEntry = { queueIndex: number; prevState: CardState; newState: CardState; eventId: string | null; overrideAdd: { cardId: string; answerSide: CardSide; answerText: string } | null; userAnswer: string; wasCorrect: boolean; selfGraded: boolean }
   const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
+  // First Undo press lands here: re-show the just-rated card answered (FlashcardMode revealed) so the
+  // learner can re-pick a rating. A second Undo press clears this → the real card remounts blank.
+  const [reRate, setReRate] = useState<{ queueIndex: number; userAnswer: string; wasCorrect: boolean; selfGraded: boolean } | null>(null)
   const [redoStack, setRedoStack] = useState<UndoEntry[]>([])
   // An override the current card newly added this attempt (so undo removes exactly it).
   const pendingOverrideAddRef = useRef<{ cardId: string; answerSide: CardSide; answerText: string } | null>(null)
@@ -627,6 +630,7 @@ function AllDueSessionInner() {
 
     setSubmitting(true)
     setAnswerError(null)
+    setReRate(null)   // a fresh rating supersedes any re-rate view
     reviewCountRef.current += 1
 
     try {
@@ -795,7 +799,7 @@ function AllDueSessionInner() {
           ...(isReverse ? { dueAt: newRecallDueAt } : {}),
         }
         await stateRepo.upsert(recallNewState)
-        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
+        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: recallNewState, eventId: reviewEvent.id, overrideAdd: undoOverride, userAnswer, wasCorrect, selfGraded: productionMode === 'self-graded' }])
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: recallNewState } : item))
         if (recallNewState.relearningStep > 0) {
@@ -904,7 +908,7 @@ function AllDueSessionInner() {
         // Re-derive presentation from the new state: a lapse (relearning / interval back below
         // threshold) reverts the smart card to typed until it climbs past the threshold again.
         const smartMode = forwardProductionMode(smartNewState, 'smart', cardParams.smartTypingThresholdDays)
-        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: smartNewState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
+        setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState: smartNewState, eventId: reviewEvent.id, overrideAdd: undoOverride, userAnswer, wasCorrect, selfGraded: productionMode === 'self-graded' }])
         setRedoStack([])
         setQueue(prev => prev.map((item, i) => i === index ? { ...item, state: smartNewState, productionMode: smartMode } : item))
         if (smartNewState.relearningStep > 0) {
@@ -1135,7 +1139,7 @@ function AllDueSessionInner() {
         })
       }
 
-      setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState, eventId: reviewEvent.id, overrideAdd: undoOverride }])
+      setUndoStack(prev => [...prev.slice(-9), { queueIndex: index, prevState: { ...state }, newState, eventId: reviewEvent.id, overrideAdd: undoOverride, userAnswer, wasCorrect, selfGraded: productionMode === 'self-graded' }])
       setRedoStack([])
 
       // 10-minute "Again" relearn loop: hold the card in the relearn pool until
@@ -1164,6 +1168,11 @@ function AllDueSessionInner() {
   }, [queue, index, userId, submitting, relearnPool])
 
   const handleUndo = useCallback(async () => {
+    // Two-stage undo. First press (below) reverts the rating in the DB and re-shows the card ANSWERED
+    // (reRate set) so a different rating can be picked. A second press, while that answered view is up,
+    // just clears it → the real card component remounts blank for a full re-do. The schedule is already
+    // reverted from the first press, so this stage touches no data.
+    if (reRate) { setReRate(null); return }
     const entry = undoStack[undoStack.length - 1]
     if (!entry || submitting) return
     setUndoStack(prev => prev.slice(0, -1))
@@ -1178,8 +1187,9 @@ function AllDueSessionInner() {
       setRelearnPool(prev => prev.filter(item => item.card.id !== entry.prevState.cardId))
       setDone(false)
       setIndex(entry.queueIndex)
+      setReRate({ queueIndex: entry.queueIndex, userAnswer: entry.userAnswer, wasCorrect: entry.wasCorrect, selfGraded: entry.selfGraded })
     } catch (err) { console.error('Undo failed:', err) }
-  }, [undoStack, submitting, handleOverrideAnswer])
+  }, [reRate, undoStack, submitting, handleOverrideAnswer])
 
   const handleRedo = useCallback(async () => {
     const entry = redoStack[redoStack.length - 1]
@@ -1509,7 +1519,7 @@ function AllDueSessionInner() {
           <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>
           <div className="text-xs text-warning">Confusion drill</div>
         </div>
-        <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
+        <UndoFab show={undoStack.length > 0 || reRate !== null} onUndo={() => void handleUndo()} />
         <ConfusionDrill card={current.card} otherFront={current.drill.otherFront} deckName={current.deckName}
           onDone={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(current.card.id, 'back', t)}
@@ -1572,7 +1582,18 @@ function AllDueSessionInner() {
           </button>
         </div>
       )}
-      {!state.graduated && step.stepType === 'recognition' ? (
+      {reRate && reRate.queueIndex === index ? (
+        // First-Undo re-rate view: the card shown answered so a different rating can be picked.
+        // Rendered via FlashcardMode's revealed state regardless of the original mode (typed or
+        // self-graded). Re-rating runs handleAnswer from the reverted state with the stored answer.
+        <FlashcardMode key={`rerate-${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
+          resumeAnswered autoPlayAudio={false}
+          onRate={rating => handleAnswer(rating, reRate.selfGraded ? rating !== 'again' : reRate.wasCorrect, reRate.userAnswer)}
+          onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
+          onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
+          onInfo={() => setInfoOpen(true)}
+          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />
+      ) : !state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
           autoPlayAudio={studyModeAutoplay && (gradingSettings.autoPlayAudio ?? true)}
@@ -1640,7 +1661,7 @@ function AllDueSessionInner() {
           ipaText={currentIpaText} />
       )}
 
-      <UndoFab show={undoStack.length > 0} onUndo={() => void handleUndo()} />
+      <UndoFab show={undoStack.length > 0 || reRate !== null} onUndo={() => void handleUndo()} />
 
       {infoOpen && (
         <CardEditModal

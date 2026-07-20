@@ -20,6 +20,7 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
+import { carriedGoal } from '@/lib/goalCarryover'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
@@ -134,11 +135,16 @@ export function PresentSnapshot() {
         if (!session) { setError('Not signed in'); return }
         const uid = session.user.id
 
-        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', uid).single()
+        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', uid).single()
         const tz = (profile?.timezone as string | null) ?? 'UTC'
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
+        const carryShortfall = (profile?.goal_carry_shortfall as boolean | null) ?? false
+        const carrySurplus = (profile?.goal_carry_surplus as boolean | null) ?? false
         const today = getToday(tz, turnover)
         const todayWeekday = new Date(today + 'T12:00:00Z').getUTCDay()
+        const yDate = new Date(today + 'T12:00:00Z'); yDate.setUTCDate(yDate.getUTCDate() - 1)
+        const yesterday = yDate.toISOString().slice(0, 10)
+        const yesterdayWeekday = (todayWeekday + 6) % 7
         const now = Date.now()
 
         const [decks, pairs, paramRows] = await Promise.all([
@@ -233,6 +239,7 @@ export function PresentSnapshot() {
         ])
 
         const gradToday = new Map<string, number>()
+        const gradYesterday = new Map<string, number>()   // for goal carryover
         // Recency-weighted graduation counts — the denominator of "time per new word".
         const gradWByPair = new Map<string, number>()
         let gradWAll = 0
@@ -244,14 +251,24 @@ export function PresentSnapshot() {
           const w = recencyWeight((now - new Date(r.graduated_at).getTime()) / DAY_MS)
           gradWAll += w
           gradWByPair.set(key, (gradWByPair.get(key) ?? 0) + w)
-          if (localDateWithTurnover(r.graduated_at, tz, turnover) !== today) continue
-          gradToday.set(key, (gradToday.get(key) ?? 0) + 1)   // goal progress stays an exact count
+          const day = localDateWithTurnover(r.graduated_at, tz, turnover)
+          if (day === today) gradToday.set(key, (gradToday.get(key) ?? 0) + 1)          // exact count
+          else if (day === yesterday) gradYesterday.set(key, (gradYesterday.get(key) ?? 0) + 1)
         }
 
         const goals = pairs
           .map((p: LanguagePair) => {
             const key = `${p.sourceLanguage}|${p.targetLanguage}`
-            const goal = (p.goals?.[String(todayWeekday)] as number | undefined) ?? 0
+            const baseGoal = (p.goals?.[String(todayWeekday)] as number | undefined) ?? 0
+            // Apply goal carryover so "words needed today" matches the Study page: a missed-yesterday
+            // shortfall raises the goal, a surplus lowers it (each opt-in). No-op when both flags are off.
+            const yGoal = p.goals?.[String(yesterdayWeekday)] as number | undefined
+            const { goal } = carriedGoal({
+              baseGoal,
+              yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
+              yesterdayCount: gradYesterday.get(key) ?? 0,
+              carryShortfall, carrySurplus,
+            })
             return { key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, goal, done: gradToday.get(key) ?? 0 }
           })
           .filter(g => g.goal > 0)

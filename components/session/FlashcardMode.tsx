@@ -15,8 +15,11 @@ import { CardInfoButton } from './CardInfoButton'
  * (rare — only if a custom pipeline ends on a recognition step).
  * Shows Again/Hard/Good/Easy once the answer is revealed.
  */
-export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRate, onPromptEdit, onAnswerEdit, onInfo, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA }: {
+export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRate, onPromptEdit, onAnswerEdit, onInfo, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, resumeAnswered = false }: {
   card: Card; promptSide: 'front' | 'back'; deckName?: string; onRate: (r: Rating) => void
+  /** Mount already-revealed, showing the rating buttons — used by the first Undo press so the
+   *  learner lands back on the answered card and can re-pick a rating without redoing it. */
+  resumeAnswered?: boolean
   /** Language of the prompt side; when set, a "Listen" button (and autoplay) is offered. */
   promptLanguage?: string
   onPromptEdit?: (newText: string) => void
@@ -33,7 +36,7 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
   /** Toggles IPA on/off; when provided a faint "IPA" button appears in the prompt card corner. */
   onToggleIPA?: () => void
 }) {
-  const [revealed, setRevealed] = useState(false)
+  const [revealed, setRevealed] = useState(resumeAnswered)
   // Set when the learner revealed via "Don't know" (a self-declared miss):
   // show the answer + Continue instead of the self-rating buttons.
   const [dontKnow, setDontKnow] = useState(false)
@@ -42,7 +45,7 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
   // native side. When the target is the prompt we autoplay it; when it's the answer we speak it on reveal.
   const answerIsTarget = promptSide === 'back'   // prompt is native → the answer is the target word
   useEffect(() => {
-    setRevealed(false); setDontKnow(false); setHintLevel(0)
+    setRevealed(resumeAnswered); setDontKnow(false); setHintLevel(0)
     if (autoPlayAudio && promptSide === 'front' && promptLanguage) speakCard(card, promptLanguage)
   }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
   const prompt = displayText(promptSide === 'front' ? card.front : card.back)

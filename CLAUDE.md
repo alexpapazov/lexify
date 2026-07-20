@@ -1457,8 +1457,33 @@ Two opt-in toggles let yesterday's shortfall or surplus adjust today's per-langu
   "N carried over" note, and `pct` guards `goal <= 0`.
 - **Settings**: two checkboxes at the foot of the Daily Goals panel (`app/settings/page.tsx`),
   wired through the same profile read/update as `spilloverDue`.
-- Only the Study page's "Today's goals" applies carryover. `ReviewCalendar` intentionally keeps raw
-  per-day goals — a past day's target is a historical record and shouldn't be rewritten.
+- Applied in two places: the Study page's "Today's goals", and `components/analytics/PresentSnapshot.tsx`
+  (the "~N min to learn M new words toward today's goals" tile — both the word count `remainingNew` and
+  the time `projNewMs` derive from the carried goal). Both read the two profile flags + yesterday's
+  per-pair graduations. `ReviewCalendar` intentionally keeps raw per-day goals — a past day's target is a
+  historical record and shouldn't be rewritten.
+
+## Two-stage Undo in Due Now sessions (2026-07-20)
+
+Pressing Undo after rating a graduated card now has two stages, in all 3 session pages
+(`study/all`, `study/deck`, `study/folder`):
+
+1. **First press** — reverts the rating in the DB (restores `prevState`, deletes the review event,
+   same as before) AND re-shows the just-rated card **answered** so a different rating can be picked
+   without redoing the card. Implemented via a `reRate` state `{queueIndex, userAnswer, wasCorrect,
+   selfGraded}`; the render, when `reRate.queueIndex === index`, swaps in `FlashcardMode` with a new
+   `resumeAnswered` prop (mounts `revealed=true` → shows the answer + Again/Hard/Good/Easy),
+   `autoPlayAudio={false}`. Re-rating calls `handleAnswer(rating, selfGraded ? rating!=='again' :
+   wasCorrect, userAnswer)` from the reverted state — so a typed card re-logs a typed event with the
+   original typed answer, a self-graded card recomputes correctness from the new rating.
+2. **Second press** (while the answered view is up) — `handleUndo` early-returns `setReRate(null)`,
+   which remounts the real card component **blank** for a full redo. No DB write (already reverted).
+
+Wiring notes: the 3 `setUndoStack` record sites now also store `userAnswer, wasCorrect, selfGraded:
+productionMode === 'self-graded'` on the `UndoEntry`. `handleAnswer` clears `reRate` at the top (a
+fresh rating supersedes the view). `UndoFab show` is `undoStack.length > 0 || reRate !== null` so the
+second press stays reachable when the first press emptied the stack. Not applied to the ladder
+(`LadderStudy`) — its rung-outcome undo is a separate model; extend there only if asked.
 
 ## Known backlog / open issues
 
