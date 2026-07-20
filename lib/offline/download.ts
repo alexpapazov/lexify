@@ -14,6 +14,11 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import { ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
+import { fetchAllRows } from '@/lib/supabasePaged'
+
+import { cardStateKey, ladderKey, paramKey, overrideKey } from './keys'
+import { getLocalStore } from './localStore'
+import type { DownloadBundle, Manifest, OfflineScope, StoredCardState } from './types'
 
 // Distractor generation is one AI round-trip per card. Run a few in flight instead of strictly one at
 // a time — the wall-clock is dominated by network latency, not local work, so this is close to a
@@ -21,6 +26,25 @@ import { ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
 // siblings for that card, which is a silent quality loss, so speed isn't worth pushing much higher.
 const AI_CONCURRENCY = 5
 const DB_CONCURRENCY = 10   // plain row updates — cheap, no rate limit to respect
+
+/** Ids per `.in(...)` request. Keeps the generated query string well short of URL-length limits. */
+const IN_CHUNK = 400
+
+/**
+ * Fetch rows matching a large id list: chunks the ids so the `.in()` filter stays a sane URL length,
+ * and pages each chunk so the 1000-row server cap can't silently truncate the result.
+ */
+async function fetchByIds<T>(
+  ids: string[],
+  run: (chunk: string[], from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+): Promise<T[]> {
+  const out: T[] = []
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const chunk = ids.slice(i, i + IN_CHUNK)
+    out.push(...await fetchAllRows<T>((f, t) => run(chunk, f, t)))
+  }
+  return out
+}
 
 /**
  * Runs `fn` over `items` with at most `limit` in flight, reporting completions to `onDone` as they
@@ -40,9 +64,6 @@ async function mapLimit<T>(
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
 }
-import { cardStateKey, ladderKey, paramKey, overrideKey } from './keys'
-import { getLocalStore } from './localStore'
-import type { DownloadBundle, Manifest, OfflineScope, StoredCardState } from './types'
 
 const DAY_MS = 86_400_000
 
@@ -190,14 +211,26 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   const climbRows: { card_id: string; deck_id: string; state: unknown; updated_at: string }[] = []
   const deckCardRows: { deck_id: string; card_id: string }[] = []
   if (cardIds.length > 0) {
+    // These three routinely exceed Supabase's 1000-row cap on a real library, and `.limit()` does NOT
+    // lift it — it silently truncates. Truncated `deck_cards` was leaving most cards unlinked from
+    // their deck (decks read as empty offline); truncated `card_states` was worse, since its
+    // `updated_at` is the baseline conflict detection compares against, so missing rows would let an
+    // offline edit quietly overwrite a newer server change. Page every one, and chunk the id lists so
+    // a 2000-element `.in()` doesn't build a query string long enough to be rejected.
+    type SuRow = { card_id: string; review_direction: string; updated_at: string }
+    type ClRow = { card_id: string; deck_id: string; state: unknown; updated_at: string }
+    type DcRow = { deck_id: string; card_id: string }
     const [su, cl, dc] = await Promise.all([
-      supabase.from('card_states').select('card_id, review_direction, updated_at').in('card_id', cardIds),
-      supabase.from('ladder_climb').select('card_id, deck_id, state, updated_at').in('card_id', cardIds),
-      supabase.from('deck_cards').select('deck_id, card_id').in('deck_id', [...deckIds]),
+      fetchByIds<SuRow>(cardIds, (ids, f, t) => supabase.from('card_states')
+        .select('card_id, review_direction, updated_at').in('card_id', ids).order('card_id').range(f, t)),
+      fetchByIds<ClRow>(cardIds, (ids, f, t) => supabase.from('ladder_climb')
+        .select('card_id, deck_id, state, updated_at').in('card_id', ids).order('card_id').range(f, t)),
+      fetchAllRows<DcRow>((f, t) => supabase.from('deck_cards')
+        .select('deck_id, card_id').in('deck_id', [...deckIds]).order('card_id').range(f, t)),
     ])
-    for (const r of su.data ?? []) stateMeta.set(cardStateKey(r.card_id as string, r.review_direction as string), r.updated_at as string)
-    for (const r of cl.data ?? []) climbRows.push(r as { card_id: string; deck_id: string; state: unknown; updated_at: string })
-    for (const r of dc.data ?? []) if (selected.has(r.card_id as string)) deckCardRows.push(r as { deck_id: string; card_id: string })
+    for (const r of su) stateMeta.set(cardStateKey(r.card_id, r.review_direction), r.updated_at)
+    for (const r of cl) climbRows.push(r)
+    for (const r of dc) if (selected.has(r.card_id)) deckCardRows.push(r)
   }
 
   const cardStates: StoredCardState[] = states.filter(s => selected.has(s.cardId)).map(s => ({
