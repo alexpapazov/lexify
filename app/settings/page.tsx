@@ -384,6 +384,8 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
   const [spilloverDue,        setSpilloverDue]        = useState(false)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
+  const [goalCarryShortfall,  setGoalCarryShortfall]  = useState(false)
+  const [goalCarrySurplus,    setGoalCarrySurplus]    = useState(false)
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
   const [langColors,          setLangColors]          = useState<Record<string, string>>({})
@@ -457,7 +459,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors, goal_carry_shortfall, goal_carry_surplus')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -471,6 +473,8 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
+        setGoalCarryShortfall((profile.goal_carry_shortfall as boolean | null) ?? false)
+        setGoalCarrySurplus((profile.goal_carry_surplus as boolean | null) ?? false)
         setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo' | 'standard')
         setAudioSourceByLangState((profile.audio_source_by_language as Record<string, string> | null) ?? {})
         setLangColors((profile.language_colors as Record<string, string> | null) ?? {})
@@ -509,6 +513,8 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       timezone:                  timezone || null,
       day_turnover_hour:         turnoverHour,
       study_mode_autoplay:       studyModeAutoplay,
+      goal_carry_shortfall:      goalCarryShortfall,
+      goal_carry_surplus:        goalCarrySurplus,
       audio_source_default:      audioSourceDefault,
       audio_source_by_language:  audioSourceByLang,
       language_colors:           langColors,
@@ -989,6 +995,33 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
                   </div>
                 )
               })}
+            </div>
+
+            {/* Carryover — adjusts the goal number only; it does not raise how many new cards
+                you're served. Scoped to yesterday, so time off can't build an unpayable debt. */}
+            <div className="space-y-3 pt-2 border-t border-line/10">
+              <div className="space-y-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={goalCarryShortfall} onChange={e => setGoalCarryShortfall(e.target.checked)} className="accent-accent w-4 h-4" />
+                  <span className="text-sm text-ink">Make up missed cards the next day</span>
+                </label>
+                <p className="text-xs text-ink-faint pl-6">
+                  {goalCarryShortfall
+                    ? 'If you fall short of a goal, the difference is added to the next day\'s goal for that language. Only the previous day carries over.'
+                    : 'Missed cards are forgiven — each day\'s goal stands on its own.'}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={goalCarrySurplus} onChange={e => setGoalCarrySurplus(e.target.checked)} className="accent-accent w-4 h-4" />
+                  <span className="text-sm text-ink">Extra cards count toward the next day</span>
+                </label>
+                <p className="text-xs text-ink-faint pl-6">
+                  {goalCarrySurplus
+                    ? 'Cards beyond a goal are credited against the next day\'s goal for that language, down to zero. Only the previous day carries over.'
+                    : 'Extra cards don\'t reduce the next day\'s goal.'}
+                </p>
+              </div>
             </div>
           </div>
         )

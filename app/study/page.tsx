@@ -16,6 +16,7 @@ import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProd
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
+import { carriedGoal } from '@/lib/goalCarryover'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
@@ -288,6 +289,10 @@ export default function StudyPage() {
   const [redistributeMsg, setRedistributeMsg] = useState<string | null>(null)
   const [langPairs,         setLangPairs]         = useState<LanguagePair[]>([])
   const [todayGradCounts,   setTodayGradCounts]   = useState<Map<string, number>>(new Map())
+  // Yesterday's graduations + the two opt-in flags feed goal carryover (see lib/goalCarryover.ts).
+  const [yesterdayGradCounts, setYesterdayGradCounts] = useState<Map<string, number>>(new Map())
+  const [carryShortfall,    setCarryShortfall]    = useState(false)
+  const [carrySurplus,      setCarrySurplus]      = useState(false)
   const [showDuePicker, setShowDuePicker] = useState(false)
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
@@ -308,11 +313,13 @@ export default function StudyPage() {
 
     const [decks, profileRes] = await Promise.all([
       deckRepo.list(session.user.id),
-      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single()),
+      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', session.user.id).single()),
     ])
 
     const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'
     const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
+    setCarryShortfall((profileRes.data?.goal_carry_shortfall as boolean | null) ?? false)
+    setCarrySurplus((profileRes.data?.goal_carry_surplus as boolean | null) ?? false)
     const todayStr     = getToday(tz, turnoverHour)
     setTodayStr(todayStr)
     setTz(tz)
@@ -450,20 +457,26 @@ export default function StudyPage() {
         .eq('graduated', true)
         .neq('review_direction', 'reverse')
         .not('graduated_at', 'is', null)
-        .gte('graduated_at', new Date(Date.now() - 48 * 3600 * 1000).toISOString()),
+        // 72h, not 48: with a 4am turnover, the *logical* yesterday can begin nearly 48h before
+        // "now" late in the day, leaving no margin. The extra day is cheap and removes the edge.
+        .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString()),
     ])
     setLangPairs(pairs)
 
+    const yesterdayStr = addDays(todayStr, -1)
     const gradCounts = new Map<string, number>()
+    const yGradCounts = new Map<string, number>()
     for (const row of (recentGradsRes.data ?? [])) {
       const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
       if (!r.graduated_at || !r.cards) continue
-      if (localDateWithTurnover(r.graduated_at, tz, turnoverHour) !== todayStr) continue
       if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+      const day = localDateWithTurnover(r.graduated_at, tz, turnoverHour)
       const key = `${r.cards.source_language}|${r.cards.target_language}`
-      gradCounts.set(key, (gradCounts.get(key) ?? 0) + 1)
+      if (day === todayStr) gradCounts.set(key, (gradCounts.get(key) ?? 0) + 1)
+      else if (day === yesterdayStr) yGradCounts.set(key, (yGradCounts.get(key) ?? 0) + 1)
     }
     setTodayGradCounts(gradCounts)
+    setYesterdayGradCounts(yGradCounts)
 
     // ── Upcoming review forecast ────────────────────────────────────────
     // Per-pair FSRS config (retention/maxInt from scheduler params + measured rating mix) so the
@@ -769,13 +782,25 @@ export default function StudyPage() {
   }) : []
 
   const todayWeekday = todayStr ? new Date(todayStr + 'T12:00:00Z').getUTCDay() : -1
+  const yesterdayWeekday = todayWeekday < 0 ? -1 : (todayWeekday + 6) % 7
+
+  /** Pairs with a goal today, each already adjusted by yesterday's carryover. */
   const pairsWithGoalsToday = useMemo(() => {
     if (todayWeekday < 0) return []
-    return langPairs.filter(p => {
-      const goal = p.goals?.[String(todayWeekday)]
-      return typeof goal === 'number' && goal > 0
+    return langPairs.flatMap(p => {
+      const baseGoal = p.goals?.[String(todayWeekday)]
+      if (typeof baseGoal !== 'number' || baseGoal <= 0) return []
+      const key = `${p.sourceLanguage}|${p.targetLanguage}`
+      const yGoal = p.goals?.[String(yesterdayWeekday)]
+      const { goal, delta } = carriedGoal({
+        baseGoal,
+        yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
+        yesterdayCount: yesterdayGradCounts.get(key) ?? 0,
+        carryShortfall, carrySurplus,
+      })
+      return [{ pair: p, key, goal, delta }]
     })
-  }, [langPairs, todayWeekday])
+  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus])
 
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },
@@ -819,16 +844,22 @@ export default function StudyPage() {
           {pairsWithGoalsToday.length > 0 && (
             <div className="panel space-y-3" data-tour="todays-goals">
               <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Today&apos;s goals</h2>
-              {pairsWithGoalsToday.map(pair => {
-                const key   = `${pair.sourceLanguage}|${pair.targetLanguage}`
-                const goal  = pair.goals![String(todayWeekday)] as number
+              {pairsWithGoalsToday.map(({ pair, key, goal, delta }) => {
                 const count = todayGradCounts.get(key) ?? 0
-                const pct   = Math.min(100, Math.round((count / goal) * 100))
+                // A surplus can zero the goal outright — that's "done", not a divide-by-zero.
                 const done  = count >= goal
+                const pct   = goal <= 0 ? 100 : Math.min(100, Math.round((count / goal) * 100))
                 return (
                   <div key={key} className="space-y-1.5">
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
+                      <span className="text-ink">
+                        {langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}
+                        {delta !== 0 && (
+                          <span className="text-xs text-ink-faint ml-2">
+                            {delta > 0 ? `+${delta} missed yesterday` : `${-delta} carried over`}
+                          </span>
+                        )}
+                      </span>
                       <span className={done ? 'text-success font-medium' : 'text-ink-muted'}>
                         {count}/{goal}{done ? ' ✓' : ''}
                       </span>

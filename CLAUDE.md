@@ -1426,6 +1426,31 @@ whole-pair scope, and the review calendar undercounting every day. Use `fetchAll
 Also chunk large `.in()` lists (~400 ids) — a 1000+ element `.in()` builds a query string big enough to
 be rejected outright.
 
+## Goal carryover (2026-07-20)
+
+Two opt-in toggles let yesterday's shortfall or surplus adjust today's per-language goal.
+
+- **Migration `097_goal_carryover.sql`** (must apply): `profiles.goal_carry_shortfall` +
+  `goal_carry_surplus`, both `BOOLEAN NOT NULL DEFAULT FALSE`.
+- **`lib/goalCarryover.ts: carriedGoal({baseGoal, yesterdayGoal, yesterdayCount, carryShortfall,
+  carrySurplus})`** → `{goal, delta}`. Pure, tested in `lib/__tests__/goalCarryover.test.ts`.
+  Rules: a **rest day** (yesterdayGoal null or ≤0) yields neither credit nor debt; the goal **floors
+  at 0** and the returned `delta` reports only the adjustment that actually landed (so a 50-card
+  surplus against a goal of 20 reports −20, not −50).
+- **Scope: yesterday only, deliberately.** Time off leaves you owing one day, never a spiral. This was
+  an explicit user decision, as was **the goal NUMBER only** — the serving cap (`daily_new_cards`,
+  per-deck) is untouched, so a raised goal is a target, not permission to be served more new cards.
+  Do not "helpfully" wire this into the ladder's new-card budget without asking.
+- **`app/study/page.tsx`**: the graduation query widened 48h→**72h** (with a 4am turnover the logical
+  "yesterday" can start nearly 48h back, leaving no margin) and now buckets into both
+  `todayGradCounts` and `yesterdayGradCounts`. `pairsWithGoalsToday` returns
+  `{pair, key, goal, delta}` with carryover applied; the row shows a "+N missed yesterday" /
+  "N carried over" note, and `pct` guards `goal <= 0`.
+- **Settings**: two checkboxes at the foot of the Daily Goals panel (`app/settings/page.tsx`),
+  wired through the same profile read/update as `spilloverDue`.
+- Only the Study page's "Today's goals" applies carryover. `ReviewCalendar` intentionally keeps raw
+  per-day goals — a past day's target is a historical record and shouldn't be rewritten.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
