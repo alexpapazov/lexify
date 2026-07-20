@@ -21,6 +21,7 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { AccuracyTrend } from './AccuracyTrend'
+import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
 import { routes } from '@/lib/routes'
 import type { Card, Deck, LanguagePair } from '@/domain'
@@ -465,8 +466,11 @@ export function PresentSnapshot() {
         <p className="text-[11px] text-ink-faint">These re-tune themselves every day. Pace is measured separately per language and direction — median review time for each language × direction × typed-or-self-graded bucket, and each language&apos;s own time per new word — over the last {WINDOW_DAYS} days, with recent days counting more (a review from {HALF_LIFE_DAYS} days ago counts half as much as today&apos;s). So as you speed up or slow down, the estimates follow within about a week.</p>
       </div>
 
-      {/* 4. Accuracy trend — % correct per language, filterable by scope / direction / card type */}
+      {/* 4. Accuracy trend — % correct per language, filterable by direction / card type */}
       <AccuracyTrend />
+
+      {/* 5. Time + efficiency — minutes per language per day, and how many minutes a learned word costs */}
+      <LearningEfficiency />
     </div>
   )
 }

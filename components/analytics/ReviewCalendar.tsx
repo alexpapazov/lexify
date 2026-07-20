@@ -19,6 +19,7 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langName, assignLanguageColors } from '@/lib/languages'
 import { localDateWithTurnover, getToday } from '@/lib/dates'
+import { fetchAllRows } from '@/lib/supabasePaged'
 import { DayDetailModal } from '@/components/analytics/DayDetailModal'
 import type { LanguagePair } from '@/domain'
 
@@ -58,18 +59,24 @@ export function ReviewCalendar() {
       setTz(tzv); setTurnover(turnoverv)
       setColorOverrides((profile?.language_colors as Record<string, string> | null) ?? {})
 
-      const [{ data: grads }, pairList] = await Promise.all([
-        supabase.from('card_states')
+      // PAGED: this pulls the user's ENTIRE graduation history, which is well past Supabase's 1000-row
+      // cap. Unpaged (and unordered) it returned an arbitrary 1000 rows, so every day in the calendar
+      // silently undercounted — a day the detail modal correctly showed as 71 read as 67 here.
+      const [grads, pairList] = await Promise.all([
+        fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('card_states')
           .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
           .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse')
-          .eq('accelerated_mode', 'none')   // exclude auto-graduated cards from the daily goal counts
-          .not('graduated_at', 'is', null),
+          // NULL-safe: `.eq('accelerated_mode','none')` would also drop rows where the column is null,
+          // quietly losing genuinely-learned cards from the counts.
+          .or('accelerated_mode.is.null,accelerated_mode.eq.none')
+          .not('graduated_at', 'is', null)
+          .order('graduated_at', { ascending: false }).range(f, t)),
         new SupabaseLanguagePairRepository().list(uid),
       ])
 
       const map = new Map<string, DayInfo>()
       let earliest: string | null = null
-      for (const s of grads ?? []) {
+      for (const s of grads) {
         const card = s.cards as unknown as { source_language: string | null; target_language: string | null } | null
         if (!card?.source_language || !card?.target_language) continue
         const d = localDateWithTurnover(s.graduated_at as string, tzv, turnoverv)
