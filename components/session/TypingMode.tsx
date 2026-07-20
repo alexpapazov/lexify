@@ -473,7 +473,7 @@ export function TypingMode({
       : 'border-danger/30 bg-danger/5'
 
   return (
-    <div className="space-y-6 w-full max-w-[850px] mx-auto">
+    <div className="space-y-6 w-full max-w-[730px] mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
 
       {/* Prompt */}
