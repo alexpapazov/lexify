@@ -598,10 +598,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const curDeckCards = [...cardsById.values()].filter(c => deckByCard.get(c.id) === currentDeck.id)
 
   return (
-    // Breaks out of the layout's `max-w-5xl` main so the study surface can be wider than the navbar:
-    // `left-1/2 -translate-x-1/2` re-centres it on the VIEWPORT. Capped at 92vw so it never introduces
-    // a horizontal scrollbar, and at 1400px so it doesn't sprawl on an ultra-wide monitor.
-    <div className="space-y-8 relative left-1/2 -translate-x-1/2 w-[min(92vw,1400px)]">
+    // Full width of the layout's `main`, which shares the navbar's `max-w-5xl mx-auto px-4` — so the
+    // progress bar lines up exactly with the logo on the left and the avatar on the right.
+    <div className="space-y-8 w-full">
       <div className="relative flex items-center justify-between">
         <a href={back} className="text-base text-ink-muted hover:text-ink">✕ End session</a>
         <div className="absolute left-1/2 -translate-x-1/2 text-sm text-ink-muted">{pct}% · {graduated}/{total} graduated</div>

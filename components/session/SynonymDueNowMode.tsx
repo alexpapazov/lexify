@@ -96,7 +96,7 @@ export function SynonymDueNowMode({
     result?.correct ? 'good' : result?.almost ? 'hard' : 'again'
 
   return (
-    <div className="space-y-4 w-full max-w-[min(80vw,1200px)] mx-auto">
+    <div className="space-y-4 w-full max-w-[850px] mx-auto">
       {/* Prompt */}
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
         {onInfo && <CardInfoButton onClick={onInfo} />}

@@ -127,7 +127,7 @@ export function SynonymTypingMode({
   if (dueFields.length === 0) return null
 
   return (
-    <div className="space-y-4 w-full max-w-[min(80vw,1200px)] mx-auto">
+    <div className="space-y-4 w-full max-w-[850px] mx-auto">
       {/* Gloss */}
       <div className="panel min-h-[100px] flex items-center justify-center text-center">
         <p className="text-2xl font-medium text-ink">{synonymPrompt.gloss}</p>
