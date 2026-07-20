@@ -202,11 +202,12 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       // ── Merge cards across decks (tracking each card's deck) ──
       const cardRepo = new SupabaseCardRepository()
       const stateRepo = new SupabaseCardStateRepository()
-      const perDeck = await Promise.all(decks.map(async d => ({
-        deck: d,
-        cards: await cardRepo.listByDeck(d.id),
-        states: await stateRepo.listByDeck(uid, d.id),
-      })))
+      const perDeck = await Promise.all(decks.map(async d => {
+        // Cards and states are independent reads — awaiting them in sequence doubled the wait per
+        // deck, which is what made the loading state linger on a multi-deck scope.
+        const [cards, states] = await Promise.all([cardRepo.listByDeck(d.id), stateRepo.listByDeck(uid, d.id)])
+        return { deck: d, cards, states }
+      }))
       const allCards: Card[] = []
       const cardDeck = new Map<string, string>()
       const gradSet = new Set<string>()
@@ -506,7 +507,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
   const back = backHref(scope)
 
-  if (loading) return <p className="p-6 text-sm text-ink-faint">Loading…</p>
+  if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
   if (decksById.size === 0 || !ladder) return <p className="p-6 text-sm text-danger">Nothing to study here.</p>
 
   if (!currentCard || !currentRung || !currentClimb || !currentDeck) {

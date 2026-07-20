@@ -12,5 +12,5 @@ function Inner() {
 }
 
 export default function LadderAllPage() {
-  return <Suspense fallback={<p className="p-6 text-sm text-ink-faint">Loading…</p>}><Inner /></Suspense>
+  return <Suspense fallback={<div className="text-ink-muted pt-16 text-center">Loading session…</div>}><Inner /></Suspense>
 }
