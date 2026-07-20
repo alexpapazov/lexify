@@ -25,9 +25,16 @@ const DAY_MS = 86_400_000
 const SMOOTH_DAYS = 7          // daily rolling window (pools counts, not percentages)
 const MIN_WINDOW_N = 3         // don't plot a point backed by fewer reviews than this
 
-type Dir = 'all' | 'forward' | 'reverse'
-type CType = 'all' | 'typed' | 'selfgraded'
+type Dir = 'forward' | 'reverse'
+type CType = 'typed' | 'selfgraded'
 type Gran = 'day' | 'week'
+
+/** Toggle a value in a Set, returning a new Set (so useMemo/useState see the change). */
+function toggle<T>(set: Set<T>, v: T): Set<T> {
+  const next = new Set(set)
+  if (next.has(v)) next.delete(v); else next.add(v)
+  return next
+}
 
 interface Sample {
   day: string                          // local YYYY-MM-DD (turnover-aware)
@@ -47,10 +54,12 @@ export function AccuracyTrend() {
   const [error, setError] = useState<string | null>(null)
   const [langColors, setLangColors] = useState<Record<string, string>>({})
   const [rangeDays, setRangeDays] = useState(30)
-  const [dir, setDir] = useState<Dir>('all')
-  const [ctype, setCtype] = useState<CType>('all')
+  // Direction and card type are multi-selects with no "All" pill — both selected IS all. Languages
+  // use an empty set to mean "all", so the All pill stays a one-click reset as the list grows.
+  const [dirs, setDirs] = useState<Set<Dir>>(() => new Set<Dir>(['forward', 'reverse']))
+  const [ctypes, setCtypes] = useState<Set<CType>>(() => new Set<CType>(['typed', 'selfgraded']))
+  const [langSel, setLangSel] = useState<Set<string>>(() => new Set<string>())
   const [gran, setGran] = useState<Gran>('day')
-  const [langFilter, setLangFilter] = useState<string | null>(null)
   const [showFilters, setShowFilters] = useState(false)
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
@@ -108,9 +117,9 @@ export function AccuracyTrend() {
     const dayIndex = new Map(days.map((d, i) => [d, i]))
 
     const keep = samples.filter(s => {
-      if (dir !== 'all' && s.dir !== dir) return false
-      if (ctype !== 'all' && s.typed !== (ctype === 'typed')) return false
-      if (langFilter && s.lang !== langFilter) return false
+      if (!dirs.has(s.dir)) return false
+      if (!ctypes.has(s.typed ? 'typed' : 'selfgraded')) return false
+      if (langSel.size > 0 && !langSel.has(s.lang)) return false
       return true
     })
 
@@ -155,7 +164,7 @@ export function AccuracyTrend() {
       labels: windows.map(w => w.label), series, grandN, grandPct,
       lo: all.length ? Math.min(...all) : 0, hi: all.length ? Math.max(...all) : 100,
     }
-  }, [samples, rangeDays, dir, ctype, langFilter, gran])
+  }, [samples, rangeDays, dirs, ctypes, langSel, gran])
 
   const colorMap = useMemo(() => assignLanguageColors(langs, langColors), [langs, langColors])
 
@@ -164,11 +173,13 @@ export function AccuracyTrend() {
 
   // Summary shown under the title while the gear panel is closed, plus whether anything is off-default
   // (which keeps the gear highlighted so an active filter is never invisible).
-  const filtersAreDefault = dir === 'all' && ctype === 'all' && langFilter === null && rangeDays === 30 && gran === 'day'
+  const filtersAreDefault = dirs.size === 2 && ctypes.size === 2 && langSel.size === 0 && rangeDays === 30 && gran === 'day'
+  const listOr = (n: number, all: string, none: string, one: string[]) =>
+    n === 0 ? none : n === one.length ? all : one.join(' + ')
   const filterSummary = [
-    dir === 'all' ? 'both directions' : dir === 'forward' ? 'forward only' : 'reverse only',
-    ctype === 'all' ? 'all card types' : ctype === 'typed' ? 'typed only' : 'self-graded only',
-    langFilter === null ? 'all languages' : `${langFlag(langFilter)} ${langName(langFilter)}`,
+    listOr(dirs.size, 'both directions', 'no direction selected', [...dirs].map(d => d === 'forward' ? 'forward' : 'reverse')),
+    listOr(ctypes.size, 'all card types', 'no card type selected', [...ctypes].map(c => c === 'typed' ? 'typed' : 'self-graded')),
+    langSel.size === 0 ? 'all languages' : [...langSel].map(l => `${langFlag(l)} ${langName(l)}`).join(' + '),
     `last ${rangeDays} days`,
     gran === 'day' ? `${SMOOTH_DAYS}-day rolling` : 'weekly',
   ]
@@ -177,10 +188,12 @@ export function AccuracyTrend() {
   if (!samples || !model) return <p className="text-sm text-ink-faint">Loading accuracy…</p>
 
   const W = 720, H = 240, mL = 38, mR = 12, mT = 10, mB = 22
-  // Zoom the y-axis to the data (with padding) — accuracy usually lives in a narrow high band.
-  const yLo = Math.max(0, Math.floor((model.lo - 6) / 5) * 5)
-  const yHi = Math.min(100, Math.ceil((model.hi + 4) / 5) * 5)
-  const span = Math.max(5, yHi - yLo)
+  // Zoom to the data but snap the bounds to whole 10% steps, so gridlines read 70 / 80 / 90 / 100
+  // rather than the arbitrary values an evenly-divided custom range produces.
+  const yLo = Math.max(0, Math.floor((model.lo - 5) / 10) * 10)
+  const yHi = Math.min(100, Math.ceil((model.hi + 3) / 10) * 10)
+  const span = Math.max(10, yHi - yLo)
+  const tickCount = Math.round(span / 10)
   const n = model.labels.length
   const x = (i: number) => mL + (n <= 1 ? 0 : (i / (n - 1)) * (W - mL - mR))
   const y = (v: number) => H - mB - ((v - yLo) / span) * (H - mT - mB)
@@ -244,21 +257,22 @@ export function AccuracyTrend() {
         <div className="flex flex-col gap-1.5 rounded-lg border border-surface-border bg-surface-deep/40 p-3">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] uppercase tracking-wider text-ink-faint w-20">Direction</span>
-            {([['all', 'All'], ['forward', 'Forward'], ['reverse', 'Reverse']] as const).map(([v, l]) => (
-              <button key={v} onClick={() => setDir(v)} className={pill(dir === v)}>{l}</button>
+            {([['forward', 'Forward'], ['reverse', 'Reverse']] as const).map(([v, l]) => (
+              <button key={v} onClick={() => setDirs(s => toggle(s, v))} className={pill(dirs.has(v))}>{l}</button>
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] uppercase tracking-wider text-ink-faint w-20">Card type</span>
-            {([['all', 'All'], ['typed', 'Typed'], ['selfgraded', 'Self-graded']] as const).map(([v, l]) => (
-              <button key={v} onClick={() => setCtype(v)} className={pill(ctype === v)}>{l}</button>
+            {([['typed', 'Typed'], ['selfgraded', 'Self-graded']] as const).map(([v, l]) => (
+              <button key={v} onClick={() => setCtypes(s => toggle(s, v))} className={pill(ctypes.has(v))}>{l}</button>
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] uppercase tracking-wider text-ink-faint w-20">Language</span>
-            <button onClick={() => setLangFilter(null)} className={pill(langFilter === null)}>All</button>
+            <button onClick={() => setLangSel(new Set())} className={pill(langSel.size === 0)}>All</button>
             {langs.map(l => (
-              <button key={l} onClick={() => setLangFilter(l)} className={`${pill(langFilter === l)} inline-flex items-center gap-1.5`}>
+              <button key={l} onClick={() => setLangSel(s => toggle(s, l))}
+                className={`${pill(langSel.has(l))} inline-flex items-center gap-1.5`}>
                 <span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: colorMap[l] }} />
                 {langFlag(l)} {langName(l)}
               </button>
@@ -281,7 +295,10 @@ export function AccuracyTrend() {
           </div>
           {!filtersAreDefault && (
             <button
-              onClick={() => { setDir('all'); setCtype('all'); setLangFilter(null); setRangeDays(30); setGran('day') }}
+              onClick={() => {
+                setDirs(new Set<Dir>(['forward', 'reverse'])); setCtypes(new Set<CType>(['typed', 'selfgraded']))
+                setLangSel(new Set()); setRangeDays(30); setGran('day')
+              }}
               className="self-start mt-1 text-[11px] text-ink-muted hover:text-ink underline underline-offset-2"
             >
               Reset filters
@@ -297,8 +314,8 @@ export function AccuracyTrend() {
           <div className="relative">
             <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 260 }}
               onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
-              {Array.from({ length: 5 }, (_, i) => {
-                const v = yLo + (span / 4) * i
+              {Array.from({ length: tickCount + 1 }, (_, i) => {
+                const v = yLo + 10 * i
                 return (
                   <g key={i}>
                     <line x1={mL} y1={y(v)} x2={W - mR} y2={y(v)} stroke="currentColor" className="text-surface-border" strokeWidth={1} opacity={0.4} />
