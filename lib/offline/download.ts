@@ -67,10 +67,18 @@ export function scopeDeckIds(scope: OfflineScope, decks: DeckLite[], folders: Fo
 }
 
 /**
- * Which cards to bundle: every learnable card (no graduated forward state → feeds the ladder), plus
- * graduated cards with a due date within `windowDays` (the Due-Now week). Dormant cards are skipped.
+ * Which cards to bundle. By default only what you can actually study: every learnable card (no
+ * graduated forward state → feeds the ladder), plus graduated cards due within `windowDays`. Dormant
+ * cards are skipped since they're never due. That's why a deck whose cards are all graduated and not
+ * due soon legitimately bundles nothing.
+ *
+ * `opts.includeGraduated` / `opts.includeDormant` override that — taking the whole library offline for
+ * browsing/editing, at the cost of a much bigger bundle.
  */
-export function selectOfflineCardIds(cards: { id: string }[], states: CardState[], nowMs: number, windowDays: number): Set<string> {
+export function selectOfflineCardIds(
+  cards: { id: string }[], states: CardState[], nowMs: number, windowDays: number,
+  opts: { includeGraduated?: boolean; includeDormant?: boolean } = {},
+): Set<string> {
   const cutoff = nowMs + windowDays * DAY_MS
   const byCard = new Map<string, CardState[]>()
   for (const s of states) { const a = byCard.get(s.cardId) ?? []; a.push(s); byCard.set(s.cardId, a) }
@@ -79,7 +87,8 @@ export function selectOfflineCardIds(cards: { id: string }[], states: CardState[
     const ss = byCard.get(c.id) ?? []
     const fwd = ss.find(s => s.reviewDirection !== 'reverse')
     if (!fwd || !fwd.graduated) { out.add(c.id); continue }   // unlearned / learning → include
-    if (fwd.dormant) continue                                  // dormant graduated → never due
+    if (fwd.dormant) { if (opts.includeDormant) out.add(c.id); continue }
+    if (opts.includeGraduated) { out.add(c.id); continue }     // all graduated, regardless of due date
     const dues = [fwd.smartDueAt, fwd.typedDueAt, fwd.dueAt,
       ...ss.filter(s => s.reviewDirection === 'reverse' && !s.dormant).flatMap(r => [r.recallDueAt, r.dueAt])]
     if (dues.some(d => d != null && new Date(d).getTime() <= cutoff)) out.add(c.id)
@@ -99,6 +108,9 @@ export interface DownloadOptions {
   scopes:        OfflineScope[]
   dueWindowDays: number
   includeAudio:  boolean
+  /** Opt in to cards that aren't studiable right now — see selectOfflineCardIds. */
+  includeGraduated?: boolean
+  includeDormant?:   boolean
   onProgress?:   (phase: string, done: number, total: number) => void
 }
 
@@ -132,7 +144,8 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
     states.push(...await stateRepo.listByDeck(uid, id))
   }
   const allCards = [...cardsById.values()]
-  const selected = selectOfflineCardIds(allCards, states, Date.now(), opts.dueWindowDays)
+  const selected = selectOfflineCardIds(allCards, states, Date.now(), opts.dueWindowDays,
+    { includeGraduated: opts.includeGraduated, includeDormant: opts.includeDormant })
   const cards = allCards.filter(c => selected.has(c.id))
   const cardIds = [...selected]
 
@@ -200,9 +213,15 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   ])
   const defaultLadder = await new SupabaseLadderRepository().getDefault(uid)
 
+  // Per-deck study settings. Without these the offline deck page reads "0 new/day" and the ladder
+  // silently uses defaults instead of the batch size / spillover / audio settings you configured.
+  const { data: prefRows } = await supabase
+    .from('user_deck_preferences').select('*').eq('user_id', uid).in('deck_id', [...deckIds])
+
   const manifest: Manifest = {
     userId: uid, scope: opts.scopes[0] ?? { kind: 'library' }, scopes: opts.scopes,
     dueWindowDays: opts.dueWindowDays, includeAudio: opts.includeAudio,
+    includeGraduated: opts.includeGraduated ?? false, includeDormant: opts.includeDormant ?? false,
     downloadedAt: new Date().toISOString(), cardCount: finalCards.length,
   }
   // Only bundle folders that (transitively) contain a downloaded deck — plus their ancestors so the
@@ -230,6 +249,8 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
     confusionLinks: links.map((l, i) => ({ ...l, id: (l as { id?: string }).id ?? `link-${i}` })),
     overrides: overrides.map(o => ({ key: overrideKey(o.cardId, o.answerSide, o.answerText), cardId: o.cardId, answerSide: o.answerSide, answerText: o.answerText })),
     deckCards: deckCardRows.map(r => ({ key: `${r.deck_id}:${r.card_id}`, deckId: r.deck_id, cardId: r.card_id })),
+    // Keyed by deckId so the local store can look prefs up directly by deck.
+    deckPreferences: (prefRows ?? []).map(r => ({ key: r.deck_id as string, deckId: r.deck_id as string, prefs: r })),
   }
 
   const bytes = estimateBundleBytes(bundle)

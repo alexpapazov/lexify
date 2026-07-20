@@ -3,6 +3,7 @@ import type { DeckPreferences, UserId, DeckId } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import type { DeckPreferencesRepository } from './interfaces'
 import { isOfflineActive } from '@/lib/offline/mode'
+import { getLocalStore } from '@/lib/offline/localStore'
 
 function rowToPrefs(row: Record<string, unknown>): DeckPreferences {
   return {
@@ -24,7 +25,12 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
   private get db() { return createClient() }
 
   async get(userId: UserId, deckId: DeckId): Promise<DeckPreferences | null> {
-    if (isOfflineActive()) return null   // offline → callers fall back to defaults
+    if (isOfflineActive()) {
+      // Served from the downloaded bundle. Returning null here (as this used to) made every deck read
+      // "0 new/day" offline and quietly dropped batch size / spillover / audio settings.
+      const row = await getLocalStore().getDeckPreferences(deckId).catch(() => undefined)
+      return row ? rowToPrefs(row as Record<string, unknown>) : null
+    }
     const { data, error } = await this.db
       .from('user_deck_preferences')
       .select('*')

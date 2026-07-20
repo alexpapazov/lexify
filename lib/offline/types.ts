@@ -20,6 +20,12 @@ export interface Manifest {
   scopes?:       OfflineScope[]   // all selected scopes — used to re-download / "update"
   dueWindowDays: number     // how far ahead Due-Now cards were included
   includeAudio:  boolean    // whether cached audio clips were bundled
+  // Opt-ins that widen the default selection. By default a download carries only what you can actually
+  // study — learnable cards plus graduated ones due inside the window — so a deck that's entirely
+  // graduated-and-not-due-soon bundles nothing. These let you take the rest anyway (e.g. before a trip,
+  // or to browse/edit the full library offline) at the cost of a much larger bundle.
+  includeGraduated?: boolean  // ALL graduated cards, regardless of due date
+  includeDormant?:   boolean  // dormant cards, which are never due by definition
   downloadedAt:  string     // ISO
   cardCount:     number
   bytes?:        number     // approximate bundle size on device
@@ -35,6 +41,9 @@ export interface StoredParam  { key: string; source: string; target: string; ans
 export interface StoredLink   { id: string; [k: string]: unknown }
 export interface StoredOverride { key: string; cardId: string; answerSide: string; answerText: string }
 export interface StoredDeckCard { key: string; deckId: string; cardId: string }
+/** Per-deck study settings (new/day, batch size, spillover, audio speed/volume, elective cap). Without
+ *  these offline the deck page reads "0 new/day" and the ladder silently falls back to defaults. */
+export interface StoredDeckPreference { key: string; deckId: string; prefs: unknown }
 
 // ── Outbox: local changes queued for the next online sync ────────────────────
 export type OutboxEntity =
@@ -62,4 +71,6 @@ export interface DownloadBundle {
   confusionLinks:  StoredLink[]
   overrides:       StoredOverride[]
   deckCards:       StoredDeckCard[]   // deck ↔ card membership (for per-deck reads offline)
+  /** Optional: bundles downloaded before deck settings were included simply won't have it. */
+  deckPreferences?: StoredDeckPreference[]
 }

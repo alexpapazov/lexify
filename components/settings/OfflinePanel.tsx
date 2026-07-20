@@ -33,6 +33,8 @@ export function OfflinePanel() {
   const [selDecks,   setSelDecks]   = useState<Set<string>>(new Set())
   const [windowDays, setWindowDays] = useState(7)
   const [includeAudio, setIncludeAudio] = useState(false)
+  const [includeGraduated, setIncludeGraduated] = useState(false)
+  const [includeDormant, setIncludeDormant] = useState(false)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<{ phase: string; done: number; total: number } | null>(null)
   const [result, setResult] = useState<{ cardCount: number; bytes: number } | null>(null)
@@ -116,7 +118,7 @@ export function OfflinePanel() {
         if (found.length > 0) { setConflicts(found); setBusy(false); setSyncProgress(null); return }
       }
       const { manifest: m, bytes } = await downloadForOffline({
-        scopes, dueWindowDays: windowDays, includeAudio,
+        scopes, dueWindowDays: windowDays, includeAudio, includeGraduated, includeDormant,
         onProgress: (phase, done, total) => setProgress({ phase, done, total }),
       })
       setResult({ cardCount: m.cardCount, bytes })
@@ -147,6 +149,7 @@ export function OfflinePanel() {
       }
       const { manifest: m } = await downloadForOffline({
         scopes: manifest.scopes, dueWindowDays: manifest.dueWindowDays, includeAudio: manifest.includeAudio,
+        includeGraduated: manifest.includeGraduated, includeDormant: manifest.includeDormant,
         onProgress: (phase, done, total) => setProgress({ phase, done, total }),
       })
       setManifest(m); setUpToDate(true); setSyncMsg('Download updated — matches the cloud.')
@@ -349,6 +352,30 @@ export function OfflinePanel() {
         <label className="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" className="accent-accent" checked={includeAudio} onChange={e => setIncludeAudio(e.target.checked)} />
           <span className="text-xs text-ink-muted">Include cached audio clips (larger)</span>
+        </label>
+      </div>
+
+      {/* Beyond what's studiable. By default a download carries only cards you could actually review —
+          learnable ones plus graduated cards due inside the window — so a fully-graduated deck bundles
+          nothing and reads as empty offline. These take the rest anyway. */}
+      <div className="rounded-lg border border-surface-border bg-surface-deep/40 p-3 space-y-2">
+        <p className="text-xs text-ink-muted">
+          By default only cards you can study now are downloaded — anything learnable, plus graduated cards
+          due within the window above. That&apos;s why a deck of all-graduated cards can look empty offline.
+        </p>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input type="checkbox" className="accent-accent mt-0.5" checked={includeGraduated} onChange={e => setIncludeGraduated(e.target.checked)} />
+          <span className="text-xs text-ink-muted">
+            <span className="text-ink">Download graduated cards</span> — every graduated card regardless of
+            due date, so full decks are browsable and editable offline. Much larger.
+          </span>
+        </label>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input type="checkbox" className="accent-accent mt-0.5" checked={includeDormant} onChange={e => setIncludeDormant(e.target.checked)} />
+          <span className="text-xs text-ink-muted">
+            <span className="text-ink">Download dormant cards</span> — paused cards, which are never due.
+            Only useful for browsing or waking them offline.
+          </span>
         </label>
       </div>
 

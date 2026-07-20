@@ -1235,6 +1235,13 @@ Toggling offline OFF now **syncs the outbox back to Supabase**.
   ALWAYS bundles all pair ladders + the default (whole-user config, any scope) so downloaded cards run
   the pipeline accurately offline.
 - **Download distractors** persist to the server for cards that had none (direct `cards.update`).
+- **Download speed (2026-07-20)**: distractor pre-generation was strictly sequential — one AI round-trip
+  per card, awaited one at a time — which made a few-hundred-card download take 10+ minutes (network
+  latency, not local work). Now runs `AI_CONCURRENCY = 5` in flight via a `mapLimit` helper in
+  `lib/offline/download.ts` (persist-back writes at `DB_CONCURRENCY = 10`). Deliberately not higher: a
+  provider 429 silently falls back to deck-sibling distractors, so extra speed costs distractor quality.
+  Also fixed an O(n²) — `siblings` was re-filtering the whole card list per card; now grouped by pair
+  once up front, which mattered most on phone CPUs. Confirmed much faster on device.
 - **Toggle gating**: the Online/Offline switch is disabled unless the download is up to date (no pending
   outbox + no server card/state edits since download); "Update" (renamed from Re-download) syncs then
   re-downloads. Nav "Analytics" links to Overview; hover dropdown = Connections/Logs only (no arrow).
@@ -1260,9 +1267,13 @@ Lexify is now an installable PWA that boots offline from the home-screen icon.
   `mobile-web-app-capable`; iOS wants the `apple-` one too). New `viewport` export: theme-color
   `#12121a`, `viewportFit:'cover'` (notch-safe).
 - **To install**: iOS Safari → Share → Add to Home Screen; Android Chrome → install prompt / menu.
-  Verified served correctly (`/sw.js`, `/manifest.webmanifest`, icons, head tags) via a prod-build smoke
-  test. **Real install + offline-launch behaviour must be tested on an actual device** (SW registers in
-  production only, so test against the Vercel deploy, not `npm run dev`).
+  (SW registers in production only, so test against the Vercel deploy, not `npm run dev`.)
+- **VERIFIED ON DEVICE 2026-07-20** (iPhone, PWA from the home screen): install, offline download,
+  toggle to Offline, **force-quit + relaunch → still offline and fully usable**. That proves the SW
+  really is serving the shell from cache (not just an in-memory page), IndexedDB survives app kill, and
+  the offline flag persists across launches. **Still unverified on device: the sync-back leg** — study
+  offline, reconnect, confirm the outbox drains and counts reconcile. That's the leg where data loss
+  would actually show up, so treat it as untested until someone does it.
 - Bumping the SW cache: change `CACHE = 'lexify-shell-v1'` in `public/sw.js` to force old shells out.
 
 ### Native app: query-param routes + static export + Capacitor (Stage 8 in progress, 2026-07-18)

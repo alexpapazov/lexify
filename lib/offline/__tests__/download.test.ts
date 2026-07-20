@@ -59,3 +59,36 @@ describe('selectOfflineCardIds', () => {
     expect(selectOfflineCardIds(cards, states, now, 7).has('rev')).toBe(true)
   })
 })
+
+describe('selectOfflineCardIds — opt-in widening', () => {
+  const now = new Date('2026-07-18T00:00:00Z').getTime()
+  const fwd = (cardId: string, over: Partial<CardState>): CardState => ({ ...initialCardState('u', cardId, 'p'), ...over })
+  const days = (n: number) => new Date(now + n * 86_400_000).toISOString()
+
+  const cards = [{ id: 'soon' }, { id: 'far' }, { id: 'sleepy' }]
+  const states = [
+    fwd('soon',   { graduated: true, dueAt: days(2) }),      // inside the window
+    fwd('far',    { graduated: true, dueAt: days(400) }),    // graduated, nowhere near due
+    fwd('sleepy', { graduated: true, dormant: true, dueAt: days(1) }),
+  ]
+
+  it('by default takes only the due-soon card — this is why all-graduated decks look empty offline', () => {
+    const sel = selectOfflineCardIds(cards, states, now, 7)
+    expect([...sel].sort()).toEqual(['soon'])
+  })
+
+  it('includeGraduated pulls in graduated cards regardless of due date, still skipping dormant', () => {
+    const sel = selectOfflineCardIds(cards, states, now, 7, { includeGraduated: true })
+    expect([...sel].sort()).toEqual(['far', 'soon'])
+  })
+
+  it('includeDormant pulls in dormant cards, which are never due', () => {
+    const sel = selectOfflineCardIds(cards, states, now, 7, { includeDormant: true })
+    expect([...sel].sort()).toEqual(['sleepy', 'soon'])
+  })
+
+  it('both flags together take everything', () => {
+    const sel = selectOfflineCardIds(cards, states, now, 7, { includeGraduated: true, includeDormant: true })
+    expect([...sel].sort()).toEqual(['far', 'sleepy', 'soon'])
+  })
+})

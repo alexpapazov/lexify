@@ -10,7 +10,7 @@ import Dexie, { type Table } from 'dexie'
 import type { Card, CardState, Deck, Folder } from '@/domain'
 import { cardStateKey } from './keys'
 import type {
-  DownloadBundle, Manifest, OutboxEntry, StoredCardState, StoredClimb, StoredDeckCard, StoredLadder,
+  DownloadBundle, Manifest, OutboxEntry, StoredCardState, StoredClimb, StoredDeckCard, StoredDeckPreference, StoredLadder,
   StoredLink, StoredOverride, StoredParam,
 } from './types'
 
@@ -27,6 +27,7 @@ class LexifyOfflineDB extends Dexie {
   confusionLinks!:  Table<StoredLink, string>
   overrides!:       Table<StoredOverride, string>
   deckCards!:       Table<StoredDeckCard, string>
+  deckPreferences!: Table<StoredDeckPreference, string>
   meta!:            Table<{ key: string; value: unknown }, string>
   outbox!:          Table<OutboxEntry, number>
 
@@ -46,13 +47,16 @@ class LexifyOfflineDB extends Dexie {
       meta:            'key',
       outbox:          '++id, entity',
     })
+    // v2 adds deckPreferences. Dexie upgrades in place, so an existing install keeps its bundle; the
+    // new table is simply empty until the next download fills it.
+    this.version(2).stores({ deckPreferences: 'key, deckId' })
   }
 }
 
 /** All synced content tables (everything a download replaces). The outbox + meta are NOT cleared here. */
 const CONTENT_TABLES = [
   'cards', 'cardStates', 'ladderClimb', 'decks', 'folders', 'ladders', 'schedulerParams',
-  'confusionLinks', 'overrides', 'deckCards',
+  'confusionLinks', 'overrides', 'deckCards', 'deckPreferences',
 ] as const
 
 export class LocalStore {
@@ -74,6 +78,7 @@ export class LocalStore {
         this.db.confusionLinks.bulkPut(bundle.confusionLinks),
         this.db.overrides.bulkPut(bundle.overrides),
         this.db.deckCards.bulkPut(bundle.deckCards),
+        this.db.deckPreferences.bulkPut(bundle.deckPreferences ?? []),
       ])
       await this.db.meta.put({ key: META_MANIFEST, value: bundle.manifest })
     })
@@ -100,6 +105,10 @@ export class LocalStore {
   /** Card ids belonging to a deck (deck ↔ card join). */
   async cardIdsForDeck(deckId: string): Promise<string[]> {
     return (await this.db.deckCards.where('deckId').equals(deckId).toArray()).map(r => r.cardId)
+  }
+  /** A deck's saved study settings, or undefined if the bundle predates them / the deck has none. */
+  async getDeckPreferences(deckId: string): Promise<unknown | undefined> {
+    return (await this.db.deckPreferences.get(deckId))?.prefs
   }
   async cardsForDeck(deckId: string): Promise<Card[]> {
     const ids = await this.cardIdsForDeck(deckId)
