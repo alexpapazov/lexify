@@ -18,6 +18,12 @@ const SERIF = "Georgia, 'Times New Roman', 'Hiragino Mincho ProN', 'Songti SC', 
 // reading high. 10 lines them up to the eye.
 const BODY_OFFSET = 10 / 52
 
+// Dropping the mark by BODY_OFFSET moves the bubble but not the wordmark, which stays at the flex
+// centre — leaving the text riding above the bubble's body. This brings the text back down onto it:
+// after the shift the body centre sits at markSize·(BODY_OFFSET + 20/52 − 1/2) below centre, i.e.
+// markSize·4/52. Expressed against markSize so the lockup holds together at any size.
+const TEXT_OFFSET = 4 / 52
+
 /** Just the bubble mark, no wordmark. `size` is the full SVG box (the bubble body is ~73% of it). */
 export function LexifyMark({ size = 26, className = '', align = false }: { size?: number; className?: string; align?: boolean }) {
   return (
@@ -37,7 +43,10 @@ export function LexifyLogo({ markSize = 26, className = '' }: { markSize?: numbe
   return (
     <span className={`inline-flex items-center gap-2 ${className}`}>
       <LexifyMark size={markSize} align />
-      <span className="font-semibold tracking-tight text-ink text-[17px] leading-none">
+      <span
+        className="font-semibold tracking-tight text-ink text-[17px] leading-none"
+        style={{ transform: `translateY(${(markSize * TEXT_OFFSET).toFixed(2)}px)` }}
+      >
         Lexi<span style={{ color: FY }}>fy</span>
       </span>
     </span>
