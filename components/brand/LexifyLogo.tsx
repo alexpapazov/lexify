@@ -13,7 +13,10 @@ const SERIF = "Georgia, 'Times New Roman', 'Hiragino Mincho ProN', 'Songti SC', 
 // So the box centre (26) sits 6 units below the body's centre — flex `items-center` would leave the
 // bubble visibly riding high above the wordmark. Nudging the mark down by those 6 units lines the body
 // up with the text and lets the tail hang below the baseline, which is how the original artwork reads.
-const BODY_OFFSET = 6 / 52
+// Nudged past pure body-centring (6) to 10: the wordmark's own optical centre sits a little above its
+// line box (cap-height weight, descender in "y"), so matching geometry alone still left the bubble
+// reading high. 10 lines them up to the eye.
+const BODY_OFFSET = 10 / 52
 
 /** Just the bubble mark, no wordmark. `size` is the full SVG box (the bubble body is ~73% of it). */
 export function LexifyMark({ size = 26, className = '', align = false }: { size?: number; className?: string; align?: boolean }) {

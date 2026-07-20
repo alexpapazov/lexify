@@ -7,14 +7,13 @@
  * accepted accent/spelling slip) = 1 − its weight (0.2/0.3 → 0.7–0.8), a miss = 0. So the numbers
  * here line up with the "Measured retention" figure in a pair's SRS settings.
  *
- * Filters: scope (Due Now / Learning ladder / both), direction (forward / reverse), card type
- * (typed / self-graded), and language. Points are daily with a 7-day rolling average — once you
- * narrow to one language × direction × type a single day is too thin to read on its own, so the
- * rolling window pools the raw correct/total counts (not an average of percentages).
+ * Covers Due Now reviews only (`review_mode = 'due'`) — the same population the retention/calibration
+ * numbers are computed from. Learning-ladder attempts are deliberately excluded: early-climb accuracy
+ * is much lower and mixing it in would drag the curve without saying anything about retention.
  *
- * Data note: review_events records direction + typed-ness but NOT which track (typed vs smart both
- * store was_typed=true), so "card type" is typed-vs-self-graded. ladder_events has no direction at
- * all, so learning attempts drop out when a specific direction is selected (flagged in the UI).
+ * Filters (behind the gear): direction, card type, language, range, and points-per-day-or-week.
+ * Data note: review_events records direction + typed-ness but NOT which track (typed and smart both
+ * store was_typed = true), so "card type" is typed-vs-self-graded.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -23,31 +22,19 @@ import { localDateWithTurnover } from '@/lib/dates'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 
 const DAY_MS = 86_400_000
-const SMOOTH_DAYS = 7          // rolling window (pools counts, not percentages)
+const SMOOTH_DAYS = 7          // daily rolling window (pools counts, not percentages)
 const MIN_WINDOW_N = 3         // don't plot a point backed by fewer reviews than this
 
-type Scope = 'due' | 'learning' | 'both'
 type Dir = 'all' | 'forward' | 'reverse'
 type CType = 'all' | 'typed' | 'selfgraded'
+type Gran = 'day' | 'week'
 
 interface Sample {
-  day: string                  // local YYYY-MM-DD (turnover-aware)
-  lang: string                 // source language
-  dir: 'forward' | 'reverse' | null   // null = not recorded (ladder attempts)
+  day: string                          // local YYYY-MM-DD (turnover-aware)
+  lang: string                         // source language
+  dir: 'forward' | 'reverse'
   typed: boolean
-  weight: number               // 0..1 credit for this attempt
-  from: 'due' | 'learning'
-}
-
-/** Ladder outcome → credit, mirroring the near-miss weighting on the review side. */
-function ladderCredit(outcome: string | null, overridden: boolean): number | null {
-  if (overridden) return 1
-  switch (outcome) {
-    case 'pass': case 'good': case 'easy': case 'hard': return 1
-    case 'almost': return 0.75
-    case 'miss': case 'again': return 0
-    default: return null
-  }
+  weight: number                       // 0..1 credit for this review
 }
 
 function addDays(iso: string, n: number): string {
@@ -60,9 +47,9 @@ export function AccuracyTrend() {
   const [error, setError] = useState<string | null>(null)
   const [langColors, setLangColors] = useState<Record<string, string>>({})
   const [rangeDays, setRangeDays] = useState(30)
-  const [scope, setScope] = useState<Scope>('due')
   const [dir, setDir] = useState<Dir>('all')
   const [ctype, setCtype] = useState<CType>('all')
+  const [gran, setGran] = useState<Gran>('day')
   const [langFilter, setLangFilter] = useState<string | null>(null)
   const [showFilters, setShowFilters] = useState(false)
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null)
@@ -84,19 +71,13 @@ export function AccuracyTrend() {
 
         const since = new Date(Date.now() - rangeDays * DAY_MS).toISOString()
         // Paged: a month of reviews is far past Supabase's 1000-row cap, which `.limit()` won't lift.
-        const [revRows, ladRows] = await Promise.all([
-          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('review_events')
-            .select('reviewed_at, was_correct, near_miss, near_miss_weight, source_language, review_direction, was_typed')
-            .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since)
-            .order('reviewed_at', { ascending: false }).range(f, t)),
-          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('ladder_events')
-            .select('created_at, outcome, overridden, rung_type, source_language')
-            .eq('user_id', uid).gte('created_at', since)
-            .order('created_at', { ascending: false }).range(f, t)),
-        ])
+        const rows = await fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('review_events')
+          .select('reviewed_at, was_correct, near_miss, near_miss_weight, source_language, review_direction, was_typed')
+          .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since)
+          .order('reviewed_at', { ascending: false }).range(f, t))
 
         const out: Sample[] = []
-        for (const e of revRows) {
+        for (const e of rows) {
           const lang = e.source_language as string | null
           if (!lang) continue
           const nm = (e.near_miss_weight as number | null) ?? ((e.near_miss as boolean | null) ? 0.2 : 0)
@@ -106,21 +87,7 @@ export function AccuracyTrend() {
             lang,
             dir: (e.review_direction as string | null) === 'reverse' ? 'reverse' : 'forward',
             typed: !!(e.was_typed as boolean | null),
-            weight, from: 'due',
-          })
-        }
-        for (const e of ladRows) {
-          const lang = e.source_language as string | null
-          if (!lang) continue
-          const credit = ladderCredit(e.outcome as string | null, !!(e.overridden as boolean | null))
-          if (credit === null) continue
-          const rt = e.rung_type as string | null
-          out.push({
-            day: localDateWithTurnover(e.created_at as string, tz, turnover),
-            lang,
-            dir: null,                                  // ladder attempts aren't direction-tagged
-            typed: rt === 'typing' || rt === 'dictation',
-            weight: credit, from: 'learning',
+            weight,
           })
         }
         if (!cancelled) setSamples(out)
@@ -131,11 +98,7 @@ export function AccuracyTrend() {
     return () => { cancelled = true }
   }, [rangeDays])
 
-  // Languages present in the data (for the filter pills + one line each).
-  const langs = useMemo(() => {
-    if (!samples) return []
-    return [...new Set(samples.map(s => s.lang))].sort()
-  }, [samples])
+  const langs = useMemo(() => samples ? [...new Set(samples.map(s => s.lang))].sort() : [], [samples])
 
   const model = useMemo(() => {
     if (!samples) return null
@@ -145,14 +108,13 @@ export function AccuracyTrend() {
     const dayIndex = new Map(days.map((d, i) => [d, i]))
 
     const keep = samples.filter(s => {
-      if (scope !== 'both' && s.from !== scope) return false
-      if (dir !== 'all') { if (s.dir === null) return false; if (s.dir !== dir) return false }
+      if (dir !== 'all' && s.dir !== dir) return false
       if (ctype !== 'all' && s.typed !== (ctype === 'typed')) return false
       if (langFilter && s.lang !== langFilter) return false
       return true
     })
 
-    // Per language: raw daily sums, then a rolling window that pools counts (not percentages).
+    // Raw per-language daily sums.
     const perLang = new Map<string, { sum: Float64Array; n: Float64Array }>()
     for (const s of keep) {
       const i = dayIndex.get(s.day)
@@ -162,10 +124,23 @@ export function AccuracyTrend() {
       a.sum[i]! += s.weight; a.n[i]! += 1
     }
 
+    // Point layout. Daily = one point per day over a rolling 7-day window; weekly = one point per
+    // 7-day block, aligned so the newest block ends today (a partial block can lead). Either way the
+    // percentage pools raw counts across the window rather than averaging daily percentages.
+    const windows: { label: string; from: number; to: number }[] = []
+    if (gran === 'week') {
+      for (let end = days.length; end > 0; end -= 7) {
+        const from = Math.max(0, end - 7)
+        windows.unshift({ label: days[from]!, from, to: end })
+      }
+    } else {
+      days.forEach((d, i) => windows.push({ label: d, from: Math.max(0, i - (SMOOTH_DAYS - 1)), to: i + 1 }))
+    }
+
     const series = [...perLang.entries()].map(([lang, a]) => {
-      const pts: (number | null)[] = days.map((_, i) => {
+      const pts = windows.map(w => {
         let sum = 0, n = 0
-        for (let j = Math.max(0, i - (SMOOTH_DAYS - 1)); j <= i; j++) { sum += a.sum[j]!; n += a.n[j]! }
+        for (let j = w.from; j < w.to; j++) { sum += a.sum[j]!; n += a.n[j]! }
         return n >= MIN_WINDOW_N ? (sum / n) * 100 : null
       })
       const total = a.n.reduce((x, y) => x + y, 0)
@@ -175,13 +150,28 @@ export function AccuracyTrend() {
 
     const all = series.flatMap(s => s.pts.filter((p): p is number => p !== null))
     const grandN = series.reduce((s, x) => s + x.total, 0)
-    const grandPct = grandN > 0
-      ? series.reduce((s, x) => s + (x.overall ?? 0) * x.total, 0) / grandN
-      : null
-    return { days, series, lo: all.length ? Math.min(...all) : 0, hi: all.length ? Math.max(...all) : 100, grandN, grandPct }
-  }, [samples, rangeDays, scope, dir, ctype, langFilter])
+    const grandPct = grandN > 0 ? series.reduce((s, x) => s + (x.overall ?? 0) * x.total, 0) / grandN : null
+    return {
+      labels: windows.map(w => w.label), series, grandN, grandPct,
+      lo: all.length ? Math.min(...all) : 0, hi: all.length ? Math.max(...all) : 100,
+    }
+  }, [samples, rangeDays, dir, ctype, langFilter, gran])
 
   const colorMap = useMemo(() => assignLanguageColors(langs, langColors), [langs, langColors])
+
+  const pill = (on: boolean) =>
+    `px-2 py-0.5 rounded-full border text-xs ${on ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`
+
+  // Summary shown under the title while the gear panel is closed, plus whether anything is off-default
+  // (which keeps the gear highlighted so an active filter is never invisible).
+  const filtersAreDefault = dir === 'all' && ctype === 'all' && langFilter === null && rangeDays === 30 && gran === 'day'
+  const filterSummary = [
+    dir === 'all' ? 'both directions' : dir === 'forward' ? 'forward only' : 'reverse only',
+    ctype === 'all' ? 'all card types' : ctype === 'typed' ? 'typed only' : 'self-graded only',
+    langFilter === null ? 'all languages' : `${langFlag(langFilter)} ${langName(langFilter)}`,
+    `last ${rangeDays} days`,
+    gran === 'day' ? `${SMOOTH_DAYS}-day rolling` : 'weekly',
+  ]
 
   if (error) return <p className="text-sm text-danger">Couldn&apos;t load accuracy: {error}</p>
   if (!samples || !model) return <p className="text-sm text-ink-faint">Loading accuracy…</p>
@@ -191,10 +181,11 @@ export function AccuracyTrend() {
   const yLo = Math.max(0, Math.floor((model.lo - 6) / 5) * 5)
   const yHi = Math.min(100, Math.ceil((model.hi + 4) / 5) * 5)
   const span = Math.max(5, yHi - yLo)
-  const x = (i: number) => mL + (model.days.length <= 1 ? 0 : (i / (model.days.length - 1)) * (W - mL - mR))
+  const n = model.labels.length
+  const x = (i: number) => mL + (n <= 1 ? 0 : (i / (n - 1)) * (W - mL - mR))
   const y = (v: number) => H - mB - ((v - yLo) / span) * (H - mT - mB)
 
-  // Break the line across gaps (days with too few reviews to be meaningful).
+  // Break the line across gaps (windows with too few reviews to be meaningful).
   const pathFor = (pts: (number | null)[]) => {
     let d = '', pen = false
     pts.forEach((p, i) => {
@@ -210,24 +201,10 @@ export function AccuracyTrend() {
     if (!el) return
     const rect = el.getBoundingClientRect()
     const relX = ((e.clientX - rect.left) / rect.width) * W
-    const i = Math.round(((relX - mL) / (W - mL - mR)) * (model.days.length - 1))
-    if (i < 0 || i >= model.days.length) { setHover(null); return }
+    const i = Math.round(((relX - mL) / (W - mL - mR)) * (n - 1))
+    if (i < 0 || i >= n) { setHover(null); return }
     setHover({ i, x: e.clientX - rect.left, y: e.clientY - rect.top })
   }
-
-  const pill = (on: boolean) =>
-    `px-2 py-0.5 rounded-full border text-xs ${on ? 'bg-accent/20 border-accent text-ink' : 'border-surface-border text-ink-muted hover:text-ink'}`
-
-  // Summary shown under the title while the gear panel is closed, plus whether anything is off-default
-  // (which keeps the gear highlighted so an active filter is never invisible).
-  const filtersAreDefault = scope === 'due' && dir === 'all' && ctype === 'all' && langFilter === null && rangeDays === 30
-  const filterSummary = [
-    scope === 'due' ? 'Due Now' : scope === 'learning' ? 'Learning' : 'Due Now + Learning',
-    dir === 'all' ? 'both directions' : dir === 'forward' ? 'forward only' : 'reverse only',
-    ctype === 'all' ? 'all card types' : ctype === 'typed' ? 'typed only' : 'self-graded only',
-    langFilter === null ? 'all languages' : `${langFlag(langFilter)} ${langName(langFilter)}`,
-    `last ${rangeDays} days`,
-  ]
 
   return (
     <div className="panel space-y-3">
@@ -235,11 +212,11 @@ export function AccuracyTrend() {
         <div>
           <h3 className="text-sm font-semibold text-ink">Accuracy over time</h3>
           <p className="text-xs text-ink-faint">
-            Percent correct per language, {SMOOTH_DAYS}-day rolling average. Near-misses (accepted accent/spelling
-            slips) count as partial credit, so this matches the &quot;Measured retention&quot; figure in your SRS settings.
+            Percent correct per language on Due Now reviews. Near-misses (accepted accent/spelling slips)
+            count as partial credit, so this matches the &quot;Measured retention&quot; figure in your SRS settings.
           </p>
         </div>
-        {/* Filters live behind the gear so five rows of pills don't crowd out the chart. */}
+        {/* Filters live behind the gear so the pill rows don't crowd out the chart. */}
         <button
           onClick={() => setShowFilters(s => !s)}
           aria-label={showFilters ? 'Hide filters' : 'Show filters'}
@@ -266,25 +243,19 @@ export function AccuracyTrend() {
       {showFilters && (
         <div className="flex flex-col gap-1.5 rounded-lg border border-surface-border bg-surface-deep/40 p-3">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Reviews</span>
-            {([['due', 'Due Now'], ['learning', 'Learning'], ['both', 'Both']] as const).map(([v, l]) => (
-              <button key={v} onClick={() => setScope(v)} className={pill(scope === v)}>{l}</button>
-            ))}
-          </div>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Direction</span>
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-20">Direction</span>
             {([['all', 'All'], ['forward', 'Forward'], ['reverse', 'Reverse']] as const).map(([v, l]) => (
               <button key={v} onClick={() => setDir(v)} className={pill(dir === v)}>{l}</button>
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Card type</span>
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-20">Card type</span>
             {([['all', 'All'], ['typed', 'Typed'], ['selfgraded', 'Self-graded']] as const).map(([v, l]) => (
               <button key={v} onClick={() => setCtype(v)} className={pill(ctype === v)}>{l}</button>
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Language</span>
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-20">Language</span>
             <button onClick={() => setLangFilter(null)} className={pill(langFilter === null)}>All</button>
             {langs.map(l => (
               <button key={l} onClick={() => setLangFilter(l)} className={`${pill(langFilter === l)} inline-flex items-center gap-1.5`}>
@@ -294,24 +265,29 @@ export function AccuracyTrend() {
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-16">Range</span>
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-20">Range</span>
             {[14, 30, 90].map(r => (
               <button key={r} onClick={() => setRangeDays(r)} className={pill(rangeDays === r)}>{r}d</button>
             ))}
           </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wider text-ink-faint w-20">Per point</span>
+            {([['day', 'Day'], ['week', 'Week']] as const).map(([v, l]) => (
+              <button key={v} onClick={() => setGran(v)} className={pill(gran === v)}>{l}</button>
+            ))}
+            <span className="text-[11px] text-ink-faint">
+              {gran === 'day' ? `each point averages the previous ${SMOOTH_DAYS} days` : 'each point is one calendar week'}
+            </span>
+          </div>
           {!filtersAreDefault && (
             <button
-              onClick={() => { setScope('due'); setDir('all'); setCtype('all'); setLangFilter(null); setRangeDays(30) }}
+              onClick={() => { setDir('all'); setCtype('all'); setLangFilter(null); setRangeDays(30); setGran('day') }}
               className="self-start mt-1 text-[11px] text-ink-muted hover:text-ink underline underline-offset-2"
             >
               Reset filters
             </button>
           )}
         </div>
-      )}
-
-      {dir !== 'all' && scope !== 'due' && (
-        <p className="text-[11px] text-warning">Learning-ladder attempts aren&apos;t direction-tagged, so they&apos;re excluded while a direction filter is active.</p>
       )}
 
       {model.series.length === 0 ? (
@@ -330,9 +306,9 @@ export function AccuracyTrend() {
                   </g>
                 )
               })}
-              {[0, Math.floor((model.days.length - 1) / 2), model.days.length - 1].map(i => (
+              {[0, Math.floor((n - 1) / 2), n - 1].map(i => (
                 <text key={i} x={x(i)} y={H - mB + 14} textAnchor="middle" className="fill-ink-faint" fontSize={10}>
-                  {model.days[i]!.slice(5)}
+                  {model.labels[i]!.slice(5)}
                 </text>
               ))}
               {hover && (
@@ -347,7 +323,9 @@ export function AccuracyTrend() {
             {hover && (
               <div className="absolute pointer-events-none z-10 rounded-lg border border-surface-border bg-surface-raised/95 backdrop-blur px-3 py-2 shadow-lg text-[11px]"
                 style={{ left: Math.min(hover.x + 12, 520), top: Math.max(4, hover.y - 40) }}>
-                <div className="text-ink-muted mb-1 pb-1 border-b border-surface-border">{model.days[hover.i]}</div>
+                <div className="text-ink-muted mb-1 pb-1 border-b border-surface-border">
+                  {gran === 'week' ? `Week of ${model.labels[hover.i]}` : model.labels[hover.i]}
+                </div>
                 {model.series.map(s => (
                   <div key={s.lang} className="flex items-center gap-1.5 text-ink-muted whitespace-nowrap">
                     <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: colorMap[s.lang] }} />
