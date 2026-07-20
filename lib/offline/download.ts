@@ -14,6 +14,32 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import { ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
+
+// Distractor generation is one AI round-trip per card. Run a few in flight instead of strictly one at
+// a time — the wall-clock is dominated by network latency, not local work, so this is close to a
+// linear speed-up. Kept modest so we don't trip provider rate limits; a 429 falls back to deck
+// siblings for that card, which is a silent quality loss, so speed isn't worth pushing much higher.
+const AI_CONCURRENCY = 5
+const DB_CONCURRENCY = 10   // plain row updates — cheap, no rate limit to respect
+
+/**
+ * Runs `fn` over `items` with at most `limit` in flight, reporting completions to `onDone` as they
+ * land (so progress still counts up smoothly even though work finishes out of order).
+ */
+async function mapLimit<T>(
+  items: T[], limit: number, fn: (item: T) => Promise<void>, onDone: (completed: number) => void,
+): Promise<void> {
+  let next = 0, done = 0
+  const worker = async () => {
+    for (;;) {
+      const i = next++
+      if (i >= items.length) return
+      try { await fn(items[i]!) } catch { /* per-item errors are handled by the caller's own try */ }
+      onDone(++done)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+}
 import { cardStateKey, ladderKey, paramKey, overrideKey } from './keys'
 import { getLocalStore } from './localStore'
 import type { DownloadBundle, Manifest, OfflineScope, StoredCardState } from './types'
@@ -115,10 +141,18 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   // gains them for everyone — a direct Supabase write (not the offline-guarded repo) so it lands on
   // the server even if the offline flag is set (e.g. during "Update download").
   const missing = cards.filter(c => needsChoices(c, 'front') || needsChoices(c, 'back'))
+  // Group siblings by pair ONCE. Re-filtering the whole card list per card made this O(n²) — with a
+  // couple thousand cards that's millions of comparisons, which is very noticeable on a phone.
+  const siblingsByPair = new Map<string, typeof cards>()
+  for (const c of cards) {
+    const k = `${c.sourceLanguage}|${c.targetLanguage}`
+    const a = siblingsByPair.get(k)
+    if (a) a.push(c); else siblingsByPair.set(k, [c])
+  }
+
   const persistBack: { id: string; choices: unknown }[] = []
-  for (let i = 0; i < missing.length; i++) {
-    const c = missing[i]!
-    const siblings = cards.filter(s => s.sourceLanguage === c.sourceLanguage && s.targetLanguage === c.targetLanguage)
+  await mapLimit(missing, AI_CONCURRENCY, async c => {
+    const siblings = siblingsByPair.get(`${c.sourceLanguage}|${c.targetLanguage}`) ?? []
     const side = needsChoices(c, 'front') ? 'front' : 'back'
     try {
       const choices = await ensureChoicesGenerated(c, side, siblings, c.sourceLanguage, c.targetLanguage)
@@ -129,14 +163,12 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
         persistBack.push({ id: c.id, choices })
       }
     } catch { /* keep fallback */ }
-    progress('Generating distractors', i + 1, missing.length)
-  }
+  }, n => progress('Generating distractors', n, missing.length))
+
   // Upload the newly generated distractors to the library (guaranteed server write).
-  for (let i = 0; i < persistBack.length; i++) {
-    const { id, choices } = persistBack[i]!
+  await mapLimit(persistBack, DB_CONCURRENCY, async ({ id, choices }) => {
     try { await supabase.from('cards').update({ choices }).eq('id', id) } catch { /* best-effort */ }
-    progress('Saving distractors', i + 1, persistBack.length)
-  }
+  }, n => progress('Saving distractors', n, persistBack.length))
   const finalCards = cardIds.map(id => cardsById.get(id)!).map(c => opts.includeAudio ? c : stripAudio(c))
 
   // Sync baselines (server updated_at) for the conflicting tables + the deck↔card join.
