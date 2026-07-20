@@ -1,4 +1,4 @@
-import type { Folder, Deck, UserId } from '@/domain'
+import type { Folder, Deck, UserId, Card, CardState } from '@/domain'
 import type { CardRepository, CardStateRepository } from '@/lib/data/interfaces'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 
@@ -59,6 +59,43 @@ export function folderMatchesPair(
   )
 }
 
+/** The whole library preloaded once, so per-folder count computation needs no queries at all. */
+export interface LibraryBulk {
+  cardsByDeck:  Map<string, Card[]>
+  statesByCard: Map<string, CardState[]>
+  climb:        Map<string, { rungIndex: number; graduated: boolean }>
+}
+
+/**
+ * Loads every card / state / climb row for the user in FOUR queries and groups them by deck. Call this
+ * ONCE per page and hand the result to every `computeDeckCounts` call, instead of letting each folder
+ * fan out its own per-deck fetches.
+ */
+export async function loadLibraryBulk(
+  userId: UserId, deckIds: string[], cardRepo: CardRepository, stateRepo: CardStateRepository,
+): Promise<LibraryBulk> {
+  const climbRepo = new SupabaseLadderClimbRepository()
+  const [cards, states, climb, deckIdByCard] = await Promise.all([
+    cardRepo.listAllForUser(userId),
+    stateRepo.listAllForUser(userId),
+    climbRepo.listAllForUser(userId).catch(() => new Map()),
+    cardRepo.deckIdsByCard(deckIds),
+  ])
+  const cardsByDeck = new Map<string, Card[]>()
+  for (const c of cards) {
+    const dId = deckIdByCard.get(c.id)
+    if (!dId) continue
+    const arr = cardsByDeck.get(dId)
+    if (arr) arr.push(c); else cardsByDeck.set(dId, [c])
+  }
+  const statesByCard = new Map<string, CardState[]>()
+  for (const s of states) {
+    const arr = statesByCard.get(s.cardId)
+    if (arr) arr.push(s); else statesByCard.set(s.cardId, [s])
+  }
+  return { cardsByDeck, statesByCard, climb: climb as LibraryBulk['climb'] }
+}
+
 /**
  * Aggregate unlearned/learning/graduated/due-now counts across the given
  * decks, mirroring the per-deck computation on the Study page.
@@ -68,17 +105,21 @@ export async function computeDeckCounts(
   userId: UserId,
   cardRepo: CardRepository,
   stateRepo: CardStateRepository,
+  bulk?: LibraryBulk,
 ): Promise<FolderCounts> {
   if (deckIds.length === 0) return { ...EMPTY_COUNTS }
 
   const now = new Date()
   const climbRepo = new SupabaseLadderClimbRepository()
   const perDeck = await Promise.all(deckIds.map(async deckId => {
-    const [cards, states] = await Promise.all([
-      cardRepo.listByDeck(deckId),
-      stateRepo.listByDeck(userId, deckId),
-    ])
-    const climb = await climbRepo.listForCards(userId, cards.map(c => c.id)).catch(() => new Map())
+    // With `bulk` the whole library is already in memory → zero queries here. Without it we fall back
+    // to the per-deck fetch, which is 3 round-trips PER DECK and is why the Library used to render
+    // 0 0 0 0 0 until every folder's fan-out resolved. Callers rendering more than one folder should
+    // always pass bulk (see loadLibraryBulk).
+    const [cards, states] = bulk
+      ? [bulk.cardsByDeck.get(deckId) ?? [], (bulk.cardsByDeck.get(deckId) ?? []).flatMap(c => bulk.statesByCard.get(c.id) ?? [])]
+      : await Promise.all([cardRepo.listByDeck(deckId), stateRepo.listByDeck(userId, deckId)])
+    const climb = bulk ? bulk.climb : await climbRepo.listForCards(userId, cards.map(c => c.id)).catch(() => new Map())
     const fwd = states.filter(s => s.reviewDirection !== 'reverse')
     const stateMap = new Map(fwd.map(s => [s.cardId, s]))
     const activeCardIds = new Set(cards.map(c => c.id))

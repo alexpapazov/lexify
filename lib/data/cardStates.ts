@@ -2,6 +2,8 @@ import { createClient } from '@/lib/supabase/client'
 import type { CardState, UserId, DeckId, CardId, Rating } from '@/domain'
 import type { CardStateRepository } from './interfaces'
 import { isOfflineActive } from '@/lib/offline/mode'
+import { getLocalStore } from '@/lib/offline/localStore'
+import { fetchAllRows } from '@/lib/supabasePaged'
 import { localCardStatesByDeck, localUpsertCardState, localDeleteCardState } from '@/lib/offline/localRepos'
 
 export function rowToCardState(row: Record<string, unknown>): CardState {
@@ -121,6 +123,14 @@ export class SupabaseCardStateRepository implements CardStateRepository {
       .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', reviewDirection).maybeSingle()
     if (error) return null
     return data ? rowToCardState(data) : null
+  }
+
+  /** Every card_state for the user in ONE paged query (see cards.listAllForUser for why). */
+  async listAllForUser(userId: UserId): Promise<CardState[]> {
+    if (isOfflineActive()) return getLocalStore().allCardStates()
+    const rows = await fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('card_states')
+      .select('*').eq('user_id', userId).order('card_id').range(f, t))
+    return rows.map(rowToCardState)
   }
 
   async listByDeck(userId: UserId, deckId: DeckId): Promise<CardState[]> {

@@ -27,6 +27,10 @@ export interface CreateCardInput {
 
 export interface CardRepository {
   listByDeck(deckId: DeckId): Promise<Card[]>
+  /** Every card the user owns, in one paged query (avoids a listByDeck fan-out). */
+  listAllForUser(ownerId: UserId): Promise<Card[]>
+  /** card_id → deck_id for the given decks, in one paged query. */
+  deckIdsByCard(deckIds: DeckId[]): Promise<Map<string, string>>
   get(cardId: CardId): Promise<Card | null>
   /**
    * Creates cards owned by `ownerId` in the given language direction and
@@ -61,6 +65,8 @@ export interface CardRepository {
 export interface CardStateRepository {
   get(userId: UserId, cardId: CardId): Promise<CardState | null>
   listByDeck(userId: UserId, deckId: DeckId): Promise<CardState[]>
+  /** Every card_state for the user, in one paged query. */
+  listAllForUser(userId: UserId): Promise<CardState[]>
   upsert(state: CardState): Promise<CardState>
   /** Bulk-upserts multiple states in one round-trip (used for fast-track import). */
   upsertBatch(states: CardState[]): Promise<void>

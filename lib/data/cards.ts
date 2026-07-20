@@ -3,6 +3,8 @@ import type { Card, DeckId, CardId, UserId } from '@/domain'
 import type { CardRepository, CreateCardInput } from './interfaces'
 import { tier1Match } from '@/lib/duplicates'
 import { isOfflineActive } from '@/lib/offline/mode'
+import { getLocalStore } from '@/lib/offline/localStore'
+import { fetchAllRows } from '@/lib/supabasePaged'
 import { localCardsByDeck, localGetCard, localUpdateCard } from '@/lib/offline/localRepos'
 
 function rowToCard(row: Record<string, unknown>): Card {
@@ -44,6 +46,34 @@ function rowToCard(row: Record<string, unknown>): Card {
 
 export class SupabaseCardRepository implements CardRepository {
   private get db() { return createClient() }
+
+  /**
+   * Every card the user owns, in ONE paged query. The per-deck `listByDeck` is fine for a single deck
+   * but callers that need the whole library (Study dashboard, Library counts, card search) were firing
+   * it once per deck — dozens of round-trips before anything could render.
+   */
+  async listAllForUser(ownerId: UserId): Promise<Card[]> {
+    if (isOfflineActive()) return getLocalStore().allCards()
+    const rows = await fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('cards')
+      .select('*').eq('owner_id', ownerId).is('deleted_at', null).order('id').range(f, t))
+    return rows.map(rowToCard)
+  }
+
+  /** card_id → deck_id for the given decks, in one paged query (a card may be in several decks; the
+   *  first link wins). Lets callers group a bulk card list by deck without a query per deck. */
+  async deckIdsByCard(deckIds: DeckId[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>()
+    if (deckIds.length === 0) return out
+    if (isOfflineActive()) {
+      const store = getLocalStore()
+      for (const id of deckIds) for (const cardId of await store.cardIdsForDeck(id)) if (!out.has(cardId)) out.set(cardId, id)
+      return out
+    }
+    const rows = await fetchAllRows<{ deck_id: string; card_id: string }>((f, t) => this.db
+      .from('deck_cards').select('deck_id, card_id').in('deck_id', deckIds).order('card_id').range(f, t))
+    for (const r of rows) if (!out.has(r.card_id)) out.set(r.card_id, r.deck_id)
+    return out
+  }
 
   async listByDeck(deckId: DeckId): Promise<Card[]> {
     if (isOfflineActive()) return localCardsByDeck(deckId)

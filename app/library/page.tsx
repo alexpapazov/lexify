@@ -10,7 +10,7 @@ import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
-import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
 
 const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }
 import { LanguageCombobox } from '@/components/LanguageCombobox'
@@ -244,6 +244,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     const stateRepo = new SupabaseCardStateRepository()
     const rootFolders = folders.filter(f => f.parentId === null)
     const deckById = new Map(decks.map(d => [d.id, d]))
+    // Load the library ONCE (4 queries) and share it across every folder's count computation.
+    // Previously each folder fanned out 3 queries per deck, so the counts sat at 0 0 0 0 0 until
+    // dozens of round-trips finished.
+    const bulk = await loadLibraryBulk(session.user.id, decks.map(d => d.id), cardRepo, stateRepo)
     const entries = await Promise.all(rootFolders.map(async folder => {
       let deckIds = descendantDeckIds(folder.id, folders, decks)
       if (pairSource && pairTarget) {
@@ -252,7 +256,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           return d && d.sourceLanguage === pairSource && d.targetLanguage === pairTarget
         })
       }
-      const counts = await computeDeckCounts(deckIds, session.user.id, cardRepo, stateRepo)
+      const counts = await computeDeckCounts(deckIds, session.user.id, cardRepo, stateRepo, bulk)
       return [folder.id, counts] as const
     }))
     setFolderCounts(Object.fromEntries(entries))
@@ -261,13 +265,12 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     // of which folder it lives in).
     if (pairSource && pairTarget) {
       const pairDecks = decks.filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget)
-      const stats = await Promise.all(pairDecks.map(async deck => {
-        const [cards, states] = await Promise.all([
-          cardRepo.listByDeck(deck.id),
-          stateRepo.listByDeck(session.user.id, deck.id),
-        ])
-        return { deck, cards, states }
-      }))
+      // Served from the bulk load above — no extra queries. This block is what runs when you click a
+      // language, and it used to add 2 more round-trips per deck on top of the folder counts.
+      const stats = pairDecks.map(deck => {
+        const cards = bulk.cardsByDeck.get(deck.id) ?? []
+        return { deck, cards, states: cards.flatMap(c => bulk.statesByCard.get(c.id) ?? []) }
+      })
       setPairDeckStats(stats)
 
       // A shared card can belong to more than one deck — dedupe by card id
@@ -319,17 +322,28 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       .finally(() => setSrsParamsLoading(false))
   }, [pairSettingsFor, userId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Lazily load all cards for root-page card search (only when a query is typed and not yet loaded)
+  // Lazily load all cards for root-page card search (only when a query is typed and not yet loaded).
+  // ONE query for the whole library — this used to fan out to `listByDeck` per deck, so the first
+  // keystroke waited on dozens of round-trips before any result could appear.
   useEffect(() => {
     if (!searchQuery.trim() || cardsLoaded || allDecks.length === 0 || !userId) return
-    const cardRepo = new SupabaseCardRepository()
-    Promise.all(allDecks.map(async deck => {
-      const cards = await cardRepo.listByDeck(deck.id)
-      return cards.map(card => ({ card, deck }))
-    })).then(results => {
-      setAllCardsFlat(results.flat())
+    let cancelled = false
+    ;(async () => {
+      const cardRepo = new SupabaseCardRepository()
+      const [cards, links] = await Promise.all([
+        cardRepo.listAllForUser(userId),
+        cardRepo.deckIdsByCard(allDecks.map(d => d.id)),
+      ])
+      if (cancelled) return
+      const deckById = new Map(allDecks.map(d => [d.id, d]))
+      // A card can live in several decks; show it under the first one we know about.
+      setAllCardsFlat(cards.flatMap(card => {
+        const deck = deckById.get(links.get(card.id) ?? '')
+        return deck ? [{ card, deck }] : []
+      }))
       setCardsLoaded(true)
-    }).catch(console.error)
+    })().catch(console.error)
+    return () => { cancelled = true }
   }, [searchQuery, cardsLoaded, allDecks.length, userId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Visible root items (filtered to the active pairing, if any) ───────────

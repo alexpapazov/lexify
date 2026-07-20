@@ -137,6 +137,9 @@ export class LocalStore {
 
   // ── Ladder climb ──
   getClimb(cardId: string): Promise<StoredClimb | undefined> { return this.db.ladderClimb.get(cardId) }
+  /** Every climb row in the bundle (for bulk reads that would otherwise fan out per deck). */
+  allClimb(): Promise<StoredClimb[]> { return this.db.ladderClimb.toArray() }
+
   async climbForCards(cardIds: string[]): Promise<StoredClimb[]> {
     return (await this.db.ladderClimb.bulkGet(cardIds)).filter((c): c is StoredClimb => !!c)
   }

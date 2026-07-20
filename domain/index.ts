@@ -456,7 +456,7 @@ export interface CardChoices {
 export type Register = 'neutral' | 'informal' | 'formal' | 'regional' | 'vulgar'
 
 /** Where a card's audio comes from. 'browser' = on-device Web Speech (robotic). */
-export type AudioSource = 'elevenlabs' | 'forvo' | 'browser'
+export type AudioSource = 'elevenlabs' | 'forvo' | 'browser' | 'standard'
 
 export interface Card {
   id:             CardId

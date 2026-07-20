@@ -9,7 +9,7 @@ import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import { descendantDeckIds, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
 import { langName } from '@/lib/languages'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
@@ -242,8 +242,12 @@ function FolderPageInner() {
       [deck.id, countDeck(cards, states)] as const
     )))
 
-    // Per-subfolder counts for the subfolder row summaries.
+    // Per-subfolder counts for the subfolder row summaries. One bulk load shared across every
+    // subfolder — otherwise each one fans out 3 queries per deck it contains.
     const subs = folders.filter(f => f.parentId === folderId)
+    const bulk = subs.length > 0
+      ? await loadLibraryBulk(session.user.id, decksData.map(d => d.id), cardRepo, stateRepo)
+      : undefined
     const subEntries = await Promise.all(subs.map(async sf => {
       let dIds = descendantDeckIds(sf.id, folders, decksData)
       if (pairSource && pairTarget) {
@@ -252,7 +256,7 @@ function FolderPageInner() {
           return !!dk && dk.sourceLanguage === pairSource && dk.targetLanguage === pairTarget
         })
       }
-      const c = await computeDeckCounts(dIds, session.user.id, cardRepo, stateRepo)
+      const c = await computeDeckCounts(dIds, session.user.id, cardRepo, stateRepo, bulk)
       return [sf.id, c] as const
     }))
     setSubfolderCounts(Object.fromEntries(subEntries))

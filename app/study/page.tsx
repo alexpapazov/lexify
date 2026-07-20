@@ -332,12 +332,33 @@ export default function StudyPage() {
     setSmartThresholds(thresholdMap)
 
     const climbRepo = new SupabaseLadderClimbRepository()
+    // Load the whole library in FOUR queries instead of three per deck. The old shape fetched
+    // cards + states per deck and then chained a climb lookup on the returned card ids, so with N
+    // decks it was 3N round-trips with a serial dependency — which is why the dashboard sat empty
+    // (and the Library showed 0 0 0 0 0) until every one of them came back.
+    const [allCards, allStates, allClimb, deckIdByCard] = await Promise.all([
+      cardRepo.listAllForUser(session.user.id),
+      stateRepo.listAllForUser(session.user.id),
+      climbRepo.listAllForUser(session.user.id).catch(() => new Map()),
+      cardRepo.deckIdsByCard(decks.map(d => d.id)),
+    ])
+    const cardsByDeck = new Map<string, typeof allCards>()
+    for (const c of allCards) {
+      const dId = deckIdByCard.get(c.id)
+      if (!dId) continue
+      const arr = cardsByDeck.get(dId)
+      if (arr) arr.push(c); else cardsByDeck.set(dId, [c])
+    }
+    const statesByCard = new Map<string, typeof allStates>()
+    for (const s of allStates) {
+      const arr = statesByCard.get(s.cardId)
+      if (arr) arr.push(s); else statesByCard.set(s.cardId, [s])
+    }
+
     const stats = await Promise.all(decks.map(async deck => {
-      const [cards, states] = await Promise.all([
-        cardRepo.listByDeck(deck.id),
-        stateRepo.listByDeck(session.user.id, deck.id),
-      ])
-      const climb = await climbRepo.listForCards(session.user.id, cards.map(c => c.id)).catch(() => new Map())
+      const cards = cardsByDeck.get(deck.id) ?? []
+      const states = cards.flatMap(c => statesByCard.get(c.id) ?? [])
+      const climb = allClimb
       // Forward states are the authoritative source for card-level counts.
       // Reverse states are only valid when their forward counterpart is also graduated.
       const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')

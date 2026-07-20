@@ -308,12 +308,14 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   function audioReason(reason?: string): string {
     if (reason === 'forvo-no-pronunciation') return 'Forvo has no recording for this word.'
     if (reason === 'no-forvo-key')           return 'Forvo isn’t configured (missing API key).'
+    if (reason === 'no-google-tts-key')      return 'Standard voice isn’t configured (missing API key).'
+    if (reason === 'standard-unsupported-language') return 'The standard voice doesn’t cover this language yet.'
     if (reason === 'unsupported-language')   return 'This language isn’t supported.'
     return 'Couldn’t fetch this audio. Try again.'
   }
 
   /** Fetches a provider's clip (caching it on the card) unless already cached. */
-  async function fetchAndCache(source: 'elevenlabs' | 'forvo'): Promise<string | null> {
+  async function fetchAndCache(source: 'elevenlabs' | 'forvo' | 'standard'): Promise<string | null> {
     const existing = cachedClip(source)
     if (existing) return existing
     if (isOfflineActive()) { setAudioError('Audio generation needs a connection. Use Robotic (device) audio offline.'); return null }
@@ -936,50 +938,51 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
           {trackMsg && <p className={`text-xs ${trackMsg.ok ? 'text-success' : 'text-danger'}`}>{trackMsg.text}</p>}
         </div>
 
-        {/* Audio sources — pick which recording plays for this card */}
-        {TTS_SUPPORTED_LANGUAGES.has(sourceLanguage) && (
-          <div className="space-y-1.5">
-            <p className="text-xs text-ink-faint">Audio for &ldquo;{card.front}&rdquo; — pick the one that sounds best:</p>
-            {([
-              { key: 'elevenlabs' as const, label: 'ElevenLabs', hint: 'AI voice' },
-              { key: 'forvo' as const,      label: 'Forvo',      hint: 'native speaker' },
-              { key: 'browser' as const,    label: 'Robotic',    hint: 'on-device' },
-            ]).map(s => {
-              const isActive = activeSource === s.key
-              const hasClip  = s.key === 'browser' ? true : cachedClip(s.key) != null
-              const busy     = busySource === s.key
-              return (
-                <div key={s.key} className={`flex items-center gap-1 rounded-lg border pr-3 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-line/10'}`}>
-                  <button
-                    onClick={() => playSource(s.key)}
-                    disabled={busy}
-                    className="flex items-center gap-2 flex-1 min-w-0 text-left px-3 py-2 hover:bg-line/5 rounded-l-lg disabled:opacity-40 transition-colors"
-                    title={hasClip ? 'Play' : 'Fetch & play'}
-                  >
-                    <span className="shrink-0 text-ink-muted">{busy ? '…' : '🔊'}</span>
-                    <span className="text-sm text-ink">{s.label}</span>
-                    <span className="text-xs text-ink-faint truncate">{s.hint}{s.key !== 'browser' && !hasClip ? ' · tap to fetch' : ''}</span>
-                  </button>
-                  {isActive ? (
-                    <span className="text-xs text-accent font-medium shrink-0">Active</span>
-                  ) : (
-                    <button
-                      onClick={() => selectSource(s.key)}
-                      disabled={busy}
-                      className="text-xs text-ink-muted hover:text-accent disabled:opacity-40 shrink-0"
-                    >
-                      Use this
-                    </button>
-                  )}
-                </div>
-              )
-            })}
-            {audioError && <p className="text-danger text-xs">{audioError}</p>}
-          </div>
-        )}
-
         {showStats && (
           <div className="rounded-card border border-line/5 bg-surface-raised/50 p-4 space-y-4 text-sm">
+          {/* Audio sources — pick which recording plays for this card */}
+          {TTS_SUPPORTED_LANGUAGES.has(sourceLanguage) && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-ink-faint">Audio for &ldquo;{card.front}&rdquo; — pick the one that sounds best:</p>
+              {([
+                { key: 'standard' as const,   label: 'Standard',   hint: 'same voice for everyone' },
+                { key: 'elevenlabs' as const, label: 'ElevenLabs', hint: 'AI voice' },
+                { key: 'forvo' as const,      label: 'Forvo',      hint: 'native speaker' },
+                { key: 'browser' as const,    label: 'Robotic',    hint: 'on-device' },
+              ]).map(s => {
+                const isActive = activeSource === s.key
+                const hasClip  = s.key === 'browser' ? true : cachedClip(s.key) != null
+                const busy     = busySource === s.key
+                return (
+                  <div key={s.key} className={`flex items-center gap-1 rounded-lg border pr-3 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-line/10'}`}>
+                    <button
+                      onClick={() => playSource(s.key)}
+                      disabled={busy}
+                      className="flex items-center gap-2 flex-1 min-w-0 text-left px-3 py-2 hover:bg-line/5 rounded-l-lg disabled:opacity-40 transition-colors"
+                      title={hasClip ? 'Play' : 'Fetch & play'}
+                    >
+                      <span className="shrink-0 text-ink-muted">{busy ? '…' : '🔊'}</span>
+                      <span className="text-sm text-ink">{s.label}</span>
+                      <span className="text-xs text-ink-faint truncate">{s.hint}{s.key !== 'browser' && !hasClip ? ' · tap to fetch' : ''}</span>
+                    </button>
+                    {isActive ? (
+                      <span className="text-xs text-accent font-medium shrink-0">Active</span>
+                    ) : (
+                      <button
+                        onClick={() => selectSource(s.key)}
+                        disabled={busy}
+                        className="text-xs text-ink-muted hover:text-accent disabled:opacity-40 shrink-0"
+                      >
+                        Use this
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+              {audioError && <p className="text-danger text-xs">{audioError}</p>}
+            </div>
+          )}
+
             {!state?.graduated && (
               <div className="border-b border-line/5 pb-3 space-y-2">
                 <button

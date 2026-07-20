@@ -1376,6 +1376,56 @@ so production, self-graded, and reverse recall can each aim for their own retent
   scheduler (the old measured+calibration basis double-corrected and under-counted the stretch). So the
   per-track sliders visibly move the chart. `PairCfg.{typed,selfg,smart,reverse}P` now hold target retention.
 
+## Performance findings — NOT yet fixed (diagnosed 2026-07-20)
+
+The app feels slow and shows "Loading…" often. Measured causes, worst first. Nothing here is
+implemented; this is a work plan.
+
+**The Analytics → Present tab is the worst offender.** Three components mount and fetch independently:
+`PresentSnapshot` (2 queries PER DECK + 3 paged), `AccuracyTrend` (1 paged over 30d `review_events`),
+`LearningEfficiency` (3 paged, incl. the SAME 30d `review_events` again). `fetchAllRows` pages
+**sequentially**, so ~13,700 reviews = ~14 serial round-trips — done twice, because the two charts each
+fetch the same window separately. Net: **~28 serial requests, ~27,000 rows shipped to the browser, to
+draw lines with ~30 points.**
+
+Ranked by impact per unit of effort:
+
+1. **Aggregate in Postgres (biggest win).** Add RPCs that `GROUP BY day, language` for the accuracy,
+   efficiency, and calendar charts. Returns ~180 rows in ONE request instead of ~13,700 in ~14, and
+   deletes the client-side bucketing loops. This also removes the paging latency that the 1000-row-cap
+   fixes introduced (those fixed real correctness bugs — see below — but cost round-trips).
+2. **Lazy-load off-screen charts.** Only `PresentSnapshot` is above the fold; gate the other two behind
+   an IntersectionObserver so they don't fetch until scrolled to. ~20 lines, no migration, biggest
+   *perceived* win.
+3. ~~**Kill the per-deck N+1.**~~ **DONE 2026-07-20 for Study + Library + card search.** Added
+   `cardRepo.listAllForUser` / `cardRepo.deckIdsByCard` / `stateRepo.listAllForUser` /
+   `climbRepo.listAllForUser` (all paged, all offline-guarded) plus `loadLibraryBulk()` in
+   `lib/folderStats.ts`, which loads the whole library in FOUR queries and groups it by deck.
+   `computeDeckCounts` takes an optional `bulk` and then does zero queries.
+   - `app/study/page.tsx` was **3 requests per deck with a serial dependency** (climb waited on the
+     cards response) → now 4 total.
+   - `app/library/page.tsx` called `computeDeckCounts` once per root folder (each fanning out per
+     deck) AND repeated a 2-per-deck fetch for the pairing totals → both now read from one bulk.
+   - Library card search fired `listByDeck` per deck on the first keystroke → now one query.
+   - STILL per-deck (not yet done): `LadderStudy`, `DueForecastProjection`, `VocabGrowthProjection`,
+     `PresentSnapshot`, and the 3 session pages. Same fix applies — pass `loadLibraryBulk` output in.
+4. **No cache across navigations.** Every page mount refetches from scratch, so Study → Analytics →
+   Study pays full cost three times. A module-level cache with a short TTL would make tab-switching
+   feel instant.
+
+Counts (Unlearned/Learning/Graduated/Due/Dormant) are a special case of #1 — they pull every card and
+state to display five integers. `count: 'exact', head: true` queries would do it without shipping rows.
+
+### The 1000-row cap (fixed, but read this before adding queries)
+
+PostgREST enforces `db-max-rows` (1000 on Supabase) and a client `.limit(n)` does **not** lift it — it
+silently truncates. This caused four separate bugs before being caught: analytics charts starved to ~2
+days of data, the offline download losing deck links AND conflict baselines, the ladder hanging on a
+whole-pair scope, and the review calendar undercounting every day. Use `fetchAllRows`
+(`lib/supabasePaged.ts`) for anything that can exceed 1000 rows, always with a deterministic `.order()`.
+Also chunk large `.in()` lists (~400 ids) — a 1000+ element `.in()` builds a query string big enough to
+be rejected outright.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
