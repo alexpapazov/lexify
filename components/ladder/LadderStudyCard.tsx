@@ -11,7 +11,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { speak, speakViaTts, stripAnnotations } from '@/lib/speak'
-import { TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
+import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { RatingButtons } from '@/components/session/RatingButtons'
 import { displayText } from '@/lib/cardText'
@@ -172,6 +172,11 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
   const [input, setInput] = useState('')
   const [rating, setRating] = useState(false)
   const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean; normalized: string } | null>(null)
+  // Set when a "type the translation" prompt was answered with the word you just HEARD. That's not a
+  // wrong answer — you understood the audio, you just produced the wrong side — so instead of marking
+  // it a miss we accept it and re-ask for the translation. Only fires once per card, so answering with
+  // the target word a second time is graded normally rather than looping forever.
+  const [echoed, setEchoed] = useState(false)
   const [audio, setAudio] = useState<string | null>(card.audioData ?? null)
   const inputRef = useRef<HTMLInputElement>(null)
   const continueRef = useRef<HTMLButtonElement>(null)
@@ -188,12 +193,23 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
     speak(card.front, card.sourceLanguage, null)
   }
   // Reset per card, replay audio, focus the input.
-  useEffect(() => { setInput(''); setResult(null); setRating(false); play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setInput(''); setResult(null); setRating(false); setEchoed(false); play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function check() {
     const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: false, slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: answerLang }
     // Grade against the answer side without its "(f)"/"(m)" annotation.
     const res = gradeTyping(input, stripAnnotations(answerText), settings)
+
+    // "Type the translation" answered with the word you just heard → transcription, not translation.
+    // Accept it and re-ask for the native side rather than scoring a miss.
+    if (native && !echoed && res.status !== 'correct' && res.status !== 'almost') {
+      const heard = gradeTyping(input, stripAnnotations(card.front), { ...settings, answerLanguage: card.sourceLanguage })
+      if (heard.status === 'correct' || heard.status === 'almost') {
+        setEchoed(true); setInput('')
+        setTimeout(() => inputRef.current?.focus(), 60)
+        return
+      }
+    }
     let status: 'pass' | 'almost' | 'miss' = res.status === 'correct' ? 'pass'
       : res.status === 'almost' ? (resolveTypedPenalty(res, rung.strictness ?? DEFAULT_TYPED_STRICTNESS).requiresRetype ? 'almost' : 'pass') : 'miss'
     // Honour a persisted override for this exact typed answer (marked OK before).
@@ -254,7 +270,18 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
         </>
       ) : (
         <>
-          <input ref={inputRef} className="input text-center text-lg font-mono" value={input} placeholder={native ? 'Type the translation…' : 'Type what you hear…'}
+          {echoed && (
+            <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-center space-y-0.5">
+              <p className="text-sm text-ink">
+                That&apos;s the word you heard — <span className="font-mono">{displayText(card.front)}</span> ✓
+              </p>
+              <p className="text-xs text-ink-muted">
+                Now type its {langName(card.targetLanguage)} translation.
+              </p>
+            </div>
+          )}
+          <input ref={inputRef} className="input text-center text-lg font-mono" value={input}
+            placeholder={echoed ? `Type the ${langName(card.targetLanguage)} translation…` : native ? 'Type the translation…' : 'Type what you hear…'}
             onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && input.trim()) check() }} />
           <div className="flex justify-center"><button className="btn-primary px-10" disabled={!input.trim()} onClick={check}>Check</button></div>
           <button
