@@ -70,8 +70,14 @@ function LaddersInner() {
   return (
     <div className="max-w-2xl mx-auto p-6 space-y-5">
       <div>
-        {/* Ladders live under Language configuration, not general Settings — go back where you came from. */}
-        <a href="/settings/language" className="text-xs text-ink-faint hover:text-ink">← Language configuration</a>
+        {/* Back goes one level up the path you actually took: a per-language ladder returns to the
+            ladder list (where you picked it), and the list returns to Language configuration. */}
+        <a
+          href={isPair ? '/settings/ladders' : '/settings/language'}
+          className="text-xs text-ink-faint hover:text-ink"
+        >
+          ← {isPair ? 'Learning ladders' : 'Language configuration'}
+        </a>
         <h1 className="text-2xl font-semibold text-ink mt-1">
           {isPair ? `Learning ladder — ${langName(source!)} → ${langName(target!)}` : 'Default learning ladder'}
         </h1>
