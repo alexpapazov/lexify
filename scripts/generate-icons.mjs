@@ -99,8 +99,11 @@ await writeFile(join(root, 'brand', 'app-icon.svg'), appIconSvg())
 await writeFile(join(root, 'brand', 'mark-bubble.svg'), bubbleMarkSvg())
 await writeFile(join(root, 'brand', 'logo.svg'), logoSvg())
 
-// Favicon — the rounded tile, same identity as the installed app.
-await writeFile(join(root, 'app', 'icon.svg'), appIconSvg())
+// Favicon — the BUBBLE mark, not the card-stack tile. A favicon renders at 16–32px, where the tile's
+// two dots (r=5 on a 200 canvas) disappear entirely and the 語 turns to mush; the bubble's silhouette
+// still reads at that size. Plus a 32px PNG for clients that don't take SVG favicons.
+await writeFile(join(root, 'app', 'icon.svg'), bubbleMarkSvg())
+await writeFile(join(root, 'public/icons/favicon-32.png'), await png(bubbleMarkSvg(), 32))
 
 // PWA "any" icons keep the designed rounded tile.
 await writeFile(join(root, 'public/icons/icon-192.png'), await png(appIconSvg(), 192))

@@ -11,7 +11,17 @@ export const metadata: Metadata = {
   applicationName: 'Lexify',
   manifest: '/manifest.webmanifest',
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Lexify' },
-  icons: { apple: '/icons/apple-touch-icon.png' },
+  // NOTE: declaring `icons` at all disables Next's automatic file-based icon detection, so the
+  // favicon must be listed explicitly here — otherwise app/icon.svg is built and served but never
+  // linked, and browsers fall back to the generic globe. PNG is a fallback for the few clients that
+  // still don't take SVG favicons.
+  icons: {
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+      { url: '/icons/favicon-32.png', sizes: '32x32', type: 'image/png' },
+    ],
+    apple: '/icons/apple-touch-icon.png',
+  },
   other: { 'apple-mobile-web-app-capable': 'yes' },
 }
 

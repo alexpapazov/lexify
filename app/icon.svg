@@ -1,21 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" fill="none">
-  <defs>
-    <linearGradient id="h-bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#191B2E"/><stop offset="100%" stop-color="#0D0E18"/>
-    </linearGradient>
-    <linearGradient id="h-front" x1="0.2" y1="0" x2="0.8" y2="1">
-      <stop offset="0%" stop-color="#6560EA"/><stop offset="100%" stop-color="#3A38C8"/>
-    </linearGradient>
-  </defs>
-  <rect width="200" height="200" rx="46" fill="url(#h-bg)"/>
-  <g transform="translate(100,100) scale(1) translate(-100,-100)">
-    <g transform="rotate(9 100 92)">
-      <rect x="40" y="50" width="120" height="84" rx="11" fill="#3230B0"/>
-      <text x="100" y="105" text-anchor="middle" font-size="38" fill="#ffffff" fill-opacity="0.4" font-family="Georgia, 'Times New Roman', 'Hiragino Mincho ProN', 'Songti SC', 'Yu Mincho', 'Noto Serif CJK JP', 'Noto Serif JP', serif">A</text>
-    </g>
-    <rect x="40" y="50" width="120" height="84" rx="11" fill="url(#h-front)"/>
-    <text x="100" y="109" text-anchor="middle" font-size="54" fill="#ffffff" fill-opacity="0.95" font-family="Georgia, 'Times New Roman', 'Hiragino Mincho ProN', 'Songti SC', 'Yu Mincho', 'Noto Serif CJK JP', 'Noto Serif JP', serif">語</text>
-    <circle cx="93" cy="154" r="5" fill="#4A48D8"/>
-    <circle cx="107" cy="154" r="5" fill="#ffffff" fill-opacity="0.18"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 52 52" fill="none">
+  <rect x="2" y="2" width="46" height="36" rx="10" fill="#4A48D8"/>
+  <polygon points="9,38 2,50 22,38" fill="#4A48D8"/>
+  <text x="25" y="28" text-anchor="middle" font-size="20" fill="#ffffff" font-family="Georgia, 'Times New Roman', 'Hiragino Mincho ProN', 'Songti SC', 'Yu Mincho', 'Noto Serif CJK JP', 'Noto Serif JP', serif">語</text>
 </svg>
