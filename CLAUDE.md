@@ -1485,6 +1485,30 @@ fresh rating supersedes the view). `UndoFab show` is `undoStack.length > 0 || re
 second press stays reachable when the first press emptied the stack. Not applied to the ladder
 (`LadderStudy`) — its rung-outcome undo is a separate model; extend there only if asked.
 
+## Due Now counts unified across all surfaces (2026-07-20)
+
+The "Due Now" count differed by surface (deck detail showed 7, Library aggregate + dashboard showed 0)
+because each surface re-implemented the due check inline and they'd drifted. Now there is ONE shared
+helper and every surface routes through it.
+
+- **`lib/dueStatus.ts`** (new, tested in `lib/__tests__/dueStatus.test.ts`): `isCardStateDueNow(state,
+  {tracks, tz, today, forwardState})` + `isDueByLocalDate(dateStr, tz, today)`. The canonical
+  definition, matching the session queue + dashboard: **date-level** (turnover-aware, not `dueAt <= now`
+  wall-clock), reads the **real per-track columns** (`smart_due_at ?? typed_due_at ?? due_at` for
+  production, `recall_due_at` for recall/reverse), **track-filtered** (a ghosted/disabled track never
+  counts), dormancy- and reverse-aware (reverse rows need the forward counterpart graduated + not dormant).
+- **The three legacy surfaces were fixed** to use it: `app/study/deck/page.tsx` (was `due_at`-only,
+  date-level, NO track filter → over-counted 7), `lib/folderStats.ts: computeDeckCounts` and
+  `app/library/page.tsx` pair box (were `due_at <= now` timestamp, forward-only), and
+  `app/library/folder/page.tsx: countDeck` + card-list `'due'` filter. The dashboard (`app/study/page.tsx`)
+  was already correct and is the reference the helper was extracted from (left as-is to avoid touching the
+  forecast; its `prodDueOn`/`recallDueOn`/`reverseDueOn` are equivalent to the helper by construction).
+- **Plumbing**: `LibraryBulk` (folderStats) now also carries `enabledByPair`, `pairByDeck`, `tz`, `today`;
+  `loadLibraryBulk` loads scheduler-track flags + profile tz to build them. Its signature changed from
+  `(userId, deckIds, ...)` to `(userId, decks, ...)`. Deck detail + folder view load the track flags +
+  tz themselves (small extra fetches). The card-list `'due'` filters (library + folder) use a per-card
+  "any row due" check so the list matches the stat box (which counts due ROWS).
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

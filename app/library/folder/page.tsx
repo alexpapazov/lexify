@@ -10,6 +10,10 @@ import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
+import { isCardStateDueNow } from '@/lib/dueStatus'
+import { getToday } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
@@ -138,6 +142,9 @@ function FolderPageInner() {
   const [counts,       setCounts]       = useState<FolderCounts | null>(null)
   const [subfolderCounts, setSubfolderCounts] = useState<Record<string, FolderCounts>>({})
   const [deckCounts,      setDeckCounts]      = useState<Record<string, FolderCounts>>({})
+  // Due-now context (enabled tracks per pair + tz + turnover-adjusted today) so counts match the
+  // dashboard/session via the shared helper. Set in load(), read by both countDeck and the card filter.
+  const [dueCtx, setDueCtx] = useState<{ enabledByPair: Map<string, EnabledTracks>; tz: string; today: string } | null>(null)
   const [deckStats,    setDeckStats]    = useState<DeckWithCards[]>([])
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
   const [searchQuery,  setSearchQuery]  = useState('')
@@ -204,15 +211,27 @@ function FolderPageInner() {
     }))
     setDeckStats(stats)
 
-    const now = new Date()
+    // Due-now context: enabled tracks per pair + tz + turnover-adjusted today, so the count matches
+    // the dashboard/session via the shared helper (lib/dueStatus.ts). Small extra fetches; cheap.
+    const [profileRow, paramRows] = await Promise.all([
+      Promise.resolve(supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single())
+        .then(r => r.data).catch(() => null),
+      new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id).catch(() => []),
+    ])
+    const dTz = (profileRow?.timezone as string | null) ?? 'UTC'
+    const dToday = getToday(dTz, (profileRow?.day_turnover_hour as number | null) ?? 0)
+    const enabledByPair = buildEnabledTracksMap(paramRows)
+    setDueCtx({ enabledByPair, tz: dTz, today: dToday })
+
     // Counts a single deck's {cards, states}, anchored to the deck's current cards
     // so orphaned states (deleted/moved cards) don't inflate the totals — matches
-    // the deck-detail page's `activeForwardStates` filter.
-    const countDeck = (cards: typeof stats[number]['cards'], states: typeof stats[number]['states']): FolderCounts => {
+    // the deck-detail page's `activeForwardStates` filter. Due Now via the shared helper.
+    const countDeck = (deck: typeof stats[number]['deck'], cards: typeof stats[number]['cards'], states: typeof stats[number]['states']): FolderCounts => {
       const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
       const fwdMap = new Map(forwardStates.map(s => [s.cardId, s]))
       const activeCardIds = new Set(cards.map(cd => cd.id))
       const activeFwd = forwardStates.filter(s => activeCardIds.has(s.cardId))
+      const tracks = enabledByPair.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
       return {
         unlearned: cards.filter(cd => !fwdMap.has(cd.id)).length,
         learning:  activeFwd.filter(s => !s.graduated).length,
@@ -220,14 +239,13 @@ function FolderPageInner() {
         dormant:   activeFwd.filter(s => s.dormant).length,
         dueNow:    states.filter(s =>
           activeCardIds.has(s.cardId) &&
-          s.graduated && !fwdMap.get(s.cardId)?.dormant && s.dueAt && new Date(s.dueAt) <= now &&
-          (s.reviewDirection !== 'reverse' || fwdMap.get(s.cardId)?.graduated === true)
+          isCardStateDueNow(s, { tracks, tz: dTz, today: dToday, forwardState: fwdMap.get(s.cardId) })
         ).length,
       }
     }
 
-    setCounts(stats.reduce((acc, { cards, states }) => {
-      const c = countDeck(cards, states)
+    setCounts(stats.reduce((acc, { deck, cards, states }) => {
+      const c = countDeck(deck, cards, states)
       return {
         unlearned: acc.unlearned + c.unlearned,
         learning:  acc.learning  + c.learning,
@@ -239,14 +257,14 @@ function FolderPageInner() {
 
     // Per-deck counts for the deck row summaries (derived from the states we just loaded).
     setDeckCounts(Object.fromEntries(stats.map(({ deck, cards, states }) =>
-      [deck.id, countDeck(cards, states)] as const
+      [deck.id, countDeck(deck, cards, states)] as const
     )))
 
     // Per-subfolder counts for the subfolder row summaries. One bulk load shared across every
     // subfolder — otherwise each one fans out 3 queries per deck it contains.
     const subs = folders.filter(f => f.parentId === folderId)
     const bulk = subs.length > 0
-      ? await loadLibraryBulk(session.user.id, decksData.map(d => d.id), cardRepo, stateRepo)
+      ? await loadLibraryBulk(session.user.id, decksData, cardRepo, stateRepo)
       : undefined
     const subEntries = await Promise.all(subs.map(async sf => {
       let dIds = descendantDeckIds(sf.id, folders, decksData)
@@ -274,9 +292,13 @@ function FolderPageInner() {
   }
 
   // Build the filtered card list across all decks in this folder (incl. subfolders)
-  const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? deckStats.flatMap(({ deck, cards, states }) => {
     const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
+    const tracks = dueCtx?.enabledByPair.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
+    // A card shows under "Due Now" if ANY of its rows (forward production/recall or reverse) is due —
+    // via the shared helper, so this matches the stat-box count exactly.
+    const cardIsDue = (cardId: string) => !!dueCtx && states.some(s =>
+      s.cardId === cardId && isCardStateDueNow(s, { tracks, tz: dueCtx.tz, today: dueCtx.today, forwardState: stateMap.get(cardId) }))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)
@@ -284,7 +306,7 @@ function FolderPageInner() {
         if (activeFilter === 'learning')  return s && !s.graduated
         if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
         if (activeFilter === 'dormant')   return !!s?.dormant
-        if (activeFilter === 'due')       return s?.graduated && !s.dormant && s.dueAt && new Date(s.dueAt) <= now
+        if (activeFilter === 'due')       return cardIsDue(card.id)
         return false
       })
       .map(card => {

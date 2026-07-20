@@ -24,6 +24,9 @@ import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymL
 import type { Deck, Card, CardState, CardChoices, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { getToday } from '@/lib/dates'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
+import { isCardStateDueNow } from '@/lib/dueStatus'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import type { ClimbState } from '@/engine/ladderEngine'
@@ -1187,6 +1190,7 @@ export default function DeckDetailPage() {
   const [defaultSpillover, setDefaultSpillover] = useState(false)
   const [tz,               setTz]               = useState('UTC')
   const [turnoverHour,     setTurnoverHour]     = useState(0)
+  const [enabledTracks,    setEnabledTracks]    = useState<EnabledTracks | undefined>(undefined)
   const [loading,          setLoading]          = useState(true)
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
   const [bulkGraduating,      setBulkGraduating]      = useState(false)
@@ -1236,6 +1240,11 @@ export default function DeckDetailPage() {
 
     if (!d) { router.push('/study'); return }
     setDeck(d); setCards(c); setStates(s); setPrefs(p)
+    // Enabled review tracks for this pair — so the Due Now count matches the dashboard/session
+    // (a ghosted/disabled track doesn't count). Best-effort; undefined falls back to defaults.
+    new SupabaseUserSchedulerParamsRepository().listForUser(uid)
+      .then(rows => setEnabledTracks(buildEnabledTracksMap(rows).get(`${d.sourceLanguage}|${d.targetLanguage}`)))
+      .catch(() => {})
     // Ladder climb progress (drives the Learning status for cards on the ladder).
     new SupabaseLadderClimbRepository().listForCards(uid, c.map(x => x.id)).then(setClimb).catch(() => {})
     if (!d.syncingComplete) triggerSyncFill()
@@ -1579,12 +1588,9 @@ export default function DeckDetailPage() {
   // Reverse states only count toward dueNow when their forward counterpart is also graduated.
   const forwardStates  = states.filter(s => s.reviewDirection !== 'reverse')
   const stateMap       = forwardStateMap(forwardStates)
-  const now            = new Date()
-  // Turnover-aware "today": a card due on today's calendar date (in the user's
-  // timezone, adjusted for the day-turnover hour) is due; nothing later counts.
+  // Turnover-aware "today": a card due on today's calendar date (in the user's timezone, adjusted for
+  // the day-turnover hour) is due; nothing later counts. Fed to the shared due-now helper below.
   const todayStr = getToday(tz, turnoverHour)
-  const isDueByDate = (dateStr: string | null | undefined) =>
-    !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
 
   const synonymCandidates: SynonymCandidate[] = cards
     .filter(c => !c.synonymGroupId)
@@ -1607,13 +1613,12 @@ export default function DeckDetailPage() {
   const learning  = cards.filter(c => statusOf(c.id) === 'learning').length
   const graduated = cards.filter(c => statusOf(c.id) === 'graduated').length
   const dormant   = cards.filter(c => statusOf(c.id) === 'dormant').length
-  // A state (forward production OR reverse recall) is due when it's graduated, its date has arrived
-  // (turnover-aware), it isn't dormant, and — for reverse rows — its forward counterpart graduated.
+  // Due Now via the shared helper (same definition as the dashboard/session): date-level, real
+  // per-track columns (smart→typed→due_at, recall_due_at), track-filtered, dormancy + reverse aware.
+  // Previously this read only `s.dueAt` with no track filter, so it over-counted vs everywhere else.
   const dueStates = states.filter(s =>
     activeCardIds.has(s.cardId) &&
-    s.graduated && isDueByDate(s.dueAt) &&
-    !stateMap.get(s.cardId)?.dormant &&
-    (s.reviewDirection !== 'reverse' || stateMap.get(s.cardId)?.graduated === true)
+    isCardStateDueNow(s, { tracks: enabledTracks, tz, today: todayStr, forwardState: stateMap.get(s.cardId) })
   )
   const dueNow      = dueStates.length
   const dueCardIds  = new Set(dueStates.map(s => s.cardId))   // cards with ANY due review (incl. reverse)

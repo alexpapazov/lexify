@@ -11,6 +11,8 @@ import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { isCardStateDueNow } from '@/lib/dueStatus'
+import type { EnabledTracks } from '@/lib/sessionLimits'
 
 const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }
 import { LanguageCombobox } from '@/components/LanguageCombobox'
@@ -169,6 +171,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   const [folderCounts, setFolderCounts] = useState<Record<string, FolderCounts>>({})
   const [pairCounts,   setPairCounts]   = useState<FolderCounts>(EMPTY_COUNTS)
   const [pairDeckStats, setPairDeckStats] = useState<DeckStats[]>([])
+  // Due-now context (from the bulk load) so the card-list "Due" filter matches the counts.
+  const [dueCtx, setDueCtx] = useState<{ enabledByPair: Map<string, EnabledTracks>; tz: string; today: string } | null>(null)
   const [activeFilter,  setActiveFilter]  = useState<FilterKey | null>(null)
   const [searchQuery,   setSearchQuery]   = useState('')
   // Flat card list for root-page card search (loaded lazily on first query)
@@ -247,7 +251,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     // Load the library ONCE (4 queries) and share it across every folder's count computation.
     // Previously each folder fanned out 3 queries per deck, so the counts sat at 0 0 0 0 0 until
     // dozens of round-trips finished.
-    const bulk = await loadLibraryBulk(session.user.id, decks.map(d => d.id), cardRepo, stateRepo)
+    const bulk = await loadLibraryBulk(session.user.id, decks, cardRepo, stateRepo)
+    setDueCtx({ enabledByPair: bulk.enabledByPair, tz: bulk.tz, today: bulk.today })
     const entries = await Promise.all(rootFolders.map(async folder => {
       let deckIds = descendantDeckIds(folder.id, folders, decks)
       if (pairSource && pairTarget) {
@@ -276,27 +281,33 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       // A shared card can belong to more than one deck — dedupe by card id
       // so each unique card is only counted once across the whole pairing.
       const uniqueCards = new Map<string, { card: Card; state: CardState | undefined }>()
+      const fwdByCard = new Map<string, CardState>()
+      const dueSeen = new Set<string>()   // dedupe due rows across shared decks (cardId:direction)
       for (const { cards, states } of stats) {
-        const fwdMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
+        for (const s of states.filter(s => s.reviewDirection !== 'reverse')) fwdByCard.set(s.cardId, s)
         for (const card of cards) {
-          if (!uniqueCards.has(card.id)) {
-            uniqueCards.set(card.id, { card, state: fwdMap.get(card.id) })
-          }
+          if (!uniqueCards.has(card.id)) uniqueCards.set(card.id, { card, state: fwdByCard.get(card.id) })
         }
       }
 
-      const now = new Date()
       const counts = { ...EMPTY_COUNTS }
       for (const { state } of uniqueCards.values()) {
-        if (!state) {
-          counts.unlearned++
-        } else if (state.dormant) {
-          counts.dormant++
-        } else if (state.graduated) {
-          counts.graduated++
-          if (state.dueAt && new Date(state.dueAt) <= now) counts.dueNow++
-        } else {
-          counts.learning++
+        if (!state) counts.unlearned++
+        else if (state.dormant) counts.dormant++
+        else if (state.graduated) counts.graduated++
+        else counts.learning++
+      }
+      // Due Now via the shared helper (same definition as the dashboard/session): date-level, real
+      // per-track columns, track-filtered, and it includes reverse-recall rows — which the old
+      // forward-only `dueAt <= now` count missed. Dedupe by cardId:direction across shared decks.
+      const tracks = bulk.enabledByPair.get(`${pairSource}|${pairTarget}`)
+      for (const { states } of stats) {
+        for (const s of states) {
+          const k = `${s.cardId}:${s.reviewDirection ?? 'forward'}`
+          if (dueSeen.has(k)) continue
+          if (isCardStateDueNow(s, { tracks, tz: bulk.tz, today: bulk.today, forwardState: fwdByCard.get(s.cardId) })) {
+            dueSeen.add(k); counts.dueNow++
+          }
         }
       }
       setPairCounts(counts)
@@ -1280,9 +1291,13 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     : []
 
   // Build the filtered card list across the whole pairing
-  const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? pairDeckStats.flatMap(({ deck, cards, states }) => {
     const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
+    const tracks = dueCtx?.enabledByPair.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
+    // "Due" via the shared helper so the list matches the stat-box count (a card is due if ANY of its
+    // rows is due — forward production/recall or reverse).
+    const cardIsDue = (cardId: string) => !!dueCtx && states.some(s =>
+      s.cardId === cardId && isCardStateDueNow(s, { tracks, tz: dueCtx.tz, today: dueCtx.today, forwardState: stateMap.get(cardId) }))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)
@@ -1290,7 +1305,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         if (activeFilter === 'learning')  return s && !s.graduated
         if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
         if (activeFilter === 'dormant')   return !!s?.dormant
-        if (activeFilter === 'due')       return s?.graduated && !s.dormant && s.dueAt && new Date(s.dueAt) <= now
+        if (activeFilter === 'due')       return cardIsDue(card.id)
         return false
       })
       .map(card => {
