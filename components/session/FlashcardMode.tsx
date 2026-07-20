@@ -65,7 +65,7 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
     onHint?.(next, hintGrowthFactor(next, plan.isShortWord))
   }
   return (
-    <div className="space-y-6 w-full max-w-xl mx-auto">
+    <div className="space-y-6 w-full max-w-[min(80vw,1200px)] mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
       <div className="panel relative min-h-[160px] flex items-center justify-center text-center">
         {onInfo && <CardInfoButton onClick={onInfo} />}

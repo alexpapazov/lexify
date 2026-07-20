@@ -28,7 +28,7 @@ export function ConfusionDrill({ card, otherFront, deckName, onDone, onPromptEdi
   const options = useMemo(() => (Math.random() < 0.5 ? [correct, other] : [other, correct]), [card.id, otherFront]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="space-y-6 w-full max-w-xl mx-auto">
+    <div className="space-y-6 w-full max-w-[min(80vw,1200px)] mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
       <p className="text-xs text-center text-warning uppercase tracking-wider">Discrimination check · which word is this?</p>
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">

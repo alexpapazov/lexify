@@ -234,7 +234,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
   const rateToAdvance = rung.selfRated && isCorrect
 
   return (
-    <div className="space-y-6 w-full max-w-xl mx-auto">
+    <div className="space-y-6 w-full max-w-[min(80vw,1200px)] mx-auto">
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
       <div className="panel relative min-h-[120px] flex flex-col items-center justify-center text-center gap-3">
         <DictationInfoButton onInfo={onInfo} />

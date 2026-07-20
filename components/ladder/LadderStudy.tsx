@@ -20,6 +20,7 @@ import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungA
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay } from '@/lib/dates'
+import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
 import { apiUrl } from '@/lib/apiBase'
@@ -94,6 +95,10 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
+  // The card_states row for whichever card the ℹ modal is showing. The ladder doesn't otherwise
+  // keep states in memory, but the modal needs one to render the Learning-track badge and to
+  // reflect a track switch — without it the badge is computed from `undefined` and sticks on "Normal".
+  const [infoState, setInfoState] = useState<CardState | undefined>(undefined)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
   const [undoStack, setUndoStack] = useState<Array<{
     cardId: string; prevClimb: ClimbState | undefined; prevQueueItem: QueueItem | undefined
@@ -380,6 +385,19 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     setCardsById(prev => { const c = prev.get(cardId); if (!c) return prev; return new Map(prev).set(cardId, { ...c, choices }) })
   }
 
+  /** Fetch the forward card_states row backing the ℹ modal. Undefined is a valid result — a card
+   *  still climbing the ladder has no row yet, and the modal renders the un-started case fine. */
+  async function loadInfoState(cardId: string) {
+    setInfoState(undefined)
+    if (!userId) return
+    try {
+      const s = await new SupabaseCardStateRepository().get(userId, cardId, 'forward')
+      setInfoState(s ?? undefined)
+    } catch {
+      setInfoState(undefined)  // modal still opens; the badge just falls back to "not started"
+    }
+  }
+
   async function graduate(cardId: string, target: IntervalRange | null, native: IntervalRange | null) {
     if (!userId) return
     const deck = deckFor(cardId)
@@ -580,13 +598,16 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const curDeckCards = [...cardsById.values()].filter(c => deckByCard.get(c.id) === currentDeck.id)
 
   return (
-    <div className="space-y-8 max-w-2xl mx-auto">
+    // Breaks out of the layout's `max-w-5xl` main so the study surface can be wider than the navbar:
+    // `left-1/2 -translate-x-1/2` re-centres it on the VIEWPORT. Capped at 92vw so it never introduces
+    // a horizontal scrollbar, and at 1400px so it doesn't sprawl on an ultra-wide monitor.
+    <div className="space-y-8 relative left-1/2 -translate-x-1/2 w-[min(92vw,1400px)]">
       <div className="relative flex items-center justify-between">
-        <a href={back} className="text-sm text-ink-muted hover:text-ink">✕ End session</a>
-        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{pct}% · {graduated}/{total} graduated</div>
-        <div className="text-xs text-ink-muted">Rung {currentClimb.rungIndex + 1} · {RUNG_LABEL[currentRung.type]}</div>
+        <a href={back} className="text-base text-ink-muted hover:text-ink">✕ End session</a>
+        <div className="absolute left-1/2 -translate-x-1/2 text-sm text-ink-muted">{pct}% · {graduated}/{total} graduated</div>
+        <div className="text-sm text-ink-muted">Rung {currentClimb.rungIndex + 1} · {RUNG_LABEL[currentRung.type]}</div>
       </div>
-      <div className="h-1 bg-surface-raised rounded-full overflow-hidden">
+      <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden">
         <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
       </div>
       {category && (
@@ -619,7 +640,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           setCardsById(prev => new Map(prev).set(id, updated))
         }}
         onRepeat={handleRepeat}
-        onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => setInfoOpen(true)}
+        onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => { setInfoOpen(true); void loadInfoState(currentCard.id) }}
         ipaOn={ipaOn} onToggleIpa={() => setIpaOn(v => !v)}
         onIpaFetched={(id, ipa) => setCardsById(prev => { const c = prev.get(id); return c ? new Map(prev).set(id, { ...c, ipa }) : prev })}
       />
@@ -628,14 +649,14 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
       {infoOpen && userId && (
         <CardEditModal
-          card={currentCard} state={undefined} userId={userId} deckId={currentDeck.id}
+          card={currentCard} state={infoState} userId={userId} deckId={currentDeck.id}
           deckCards={curDeckCards} sourceLanguage={currentDeck.sourceLanguage} targetLanguage={currentDeck.targetLanguage}
           onSave={async (id, front, back) => {
             await new SupabaseCardRepository().update(id, { front, back })
             setCardsById(prev => { const c = prev.get(id); return c ? new Map(prev).set(id, { ...c, front, back }) : prev })
           }}
           onCardChange={c => setCardsById(prev => new Map(prev).set(c.id, c))}
-          onStateChange={() => {}}
+          onStateChange={s => setInfoState(s)}
           onDelete={cid => { setCardsById(prev => { const m = new Map(prev); m.delete(cid); return m }); setQueue(q => q.filter(x => x.cardId !== cid)); if (currentId === cid) setCurrentId(pickNextCard(queue.filter(x => x.cardId !== cid), Date.now())?.cardId ?? null); setInfoOpen(false) }}
           onClose={() => setInfoOpen(false)}
           initialShowStats
