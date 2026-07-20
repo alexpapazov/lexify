@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="236" height="56" viewBox="0 0 236 56" fill="none">
+  <g transform="translate(0,3)">
+    <rect x="2" y="2" width="46" height="36" rx="10" fill="#4A48D8"/>
+    <polygon points="9,38 2,50 22,38" fill="#4A48D8"/>
+    <text x="25" y="28" text-anchor="middle" font-size="20" fill="#ffffff" font-family="Georgia, 'Times New Roman', 'Hiragino Mincho ProN', 'Songti SC', 'Yu Mincho', 'Noto Serif CJK JP', 'Noto Serif JP', serif">語</text>
+  </g>
+  <text x="62" y="37" font-size="32" font-weight="700" letter-spacing="-0.8"
+        font-family="Inter, system-ui, -apple-system, sans-serif" fill="#E6E8F5">Lexi<tspan fill="#8684F0">fy</tspan></text>
+</svg>
