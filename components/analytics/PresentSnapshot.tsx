@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { fetchAllRows } from '@/lib/supabasePaged'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
@@ -210,18 +211,31 @@ export function PresentSnapshot() {
 
         // ── Today's goals + how many new words graduated today (per pair) ──
         const sinceWindow = new Date(now - WINDOW_DAYS * DAY_MS).toISOString()
-        const [gradsRes, ladderRes, dueRes] = await Promise.all([
-          supabase.from('card_states').select('graduated_at, accelerated_mode, cards(source_language, target_language)')
-            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null).gte('graduated_at', sinceWindow),
-          supabase.from('ladder_events').select('created_at, duration_ms, source_language, target_language').eq('user_id', uid).gte('created_at', sinceWindow).limit(20000),
-          supabase.from('review_events').select('reviewed_at, response_ms, source_language, target_language, review_direction, was_typed').eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', sinceWindow).order('reviewed_at', { ascending: false }).limit(20000),
+        // All three are paged: over a 30-day window each can exceed Supabase's 1000-row cap, which a
+        // client-side `.limit()` does NOT lift — it just truncates. The graduations query is the worst
+        // offender: at a 50-word daily goal it's ~1500 rows, and without an explicit order the cap
+        // would drop an arbitrary subset, so today's graduations could vanish from goal progress.
+        const [gradRows, ladderRows, dueRows] = await Promise.all([
+          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('card_states')
+            .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
+            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse')
+            .not('graduated_at', 'is', null).gte('graduated_at', sinceWindow)
+            .order('graduated_at', { ascending: false }).range(f, t)),
+          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('ladder_events')
+            .select('created_at, duration_ms, source_language, target_language')
+            .eq('user_id', uid).gte('created_at', sinceWindow)
+            .order('created_at', { ascending: false }).range(f, t)),
+          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('review_events')
+            .select('reviewed_at, response_ms, source_language, target_language, review_direction, was_typed')
+            .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', sinceWindow)
+            .order('reviewed_at', { ascending: false }).range(f, t)),
         ])
 
         const gradToday = new Map<string, number>()
         // Recency-weighted graduation counts — the denominator of "time per new word".
         const gradWByPair = new Map<string, number>()
         let gradWAll = 0
-        for (const row of (gradsRes.data ?? [])) {
+        for (const row of gradRows) {
           const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
           if (!r.graduated_at || !r.cards) continue
           if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
@@ -247,7 +261,7 @@ export function PresentSnapshot() {
         // takes far longer to climb the ladder than a Spanish one.
         let ladderTodayMs = 0, ladderWAll = 0
         const ladderWByPair = new Map<string, number>()   // Σ (recency weight × ms)
-        for (const e of (ladderRes.data ?? [])) {
+        for (const e of ladderRows) {
           const ms = (e.duration_ms as number | null) ?? 0
           const at = e.created_at as string
           if (localDateWithTurnover(at, tz, turnover) === today) ladderTodayMs += ms
@@ -262,7 +276,7 @@ export function PresentSnapshot() {
         let dueTodayMs = 0
         const paceSamples = new Map<string, WSample[]>()
         const push = (k: string, s: WSample) => { const a = paceSamples.get(k); if (a) a.push(s); else paceSamples.set(k, [s]) }
-        for (const e of (dueRes.data ?? [])) {
+        for (const e of dueRows) {
           const ms = (e.response_ms as number | null) ?? 0
           const at = e.reviewed_at as string
           if (localDateWithTurnover(at, tz, turnover) === today) dueTodayMs += ms

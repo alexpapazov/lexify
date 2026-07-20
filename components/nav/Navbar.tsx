@@ -8,6 +8,7 @@ import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 import { AvatarMenu } from './AvatarMenu'
 import { ProfilePanel } from './ProfilePanel'
+import { LexifyLogo } from '@/components/brand/LexifyLogo'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { setOfflineMode } from '@/lib/offline/mode'
 
@@ -76,8 +77,8 @@ export function Navbar() {
 
           {/* ── Desktop: brand · nav links · account, spread edge to edge ── */}
           <div className="hidden md:flex items-center justify-between w-full gap-2">
-            <Link href="/study" className="text-ink font-semibold tracking-wide whitespace-nowrap">
-              Lexify
+            <Link href="/study" className="whitespace-nowrap">
+              <LexifyLogo />
             </Link>
 
             {navLinks.map(({ href, label }) => {
@@ -113,7 +114,7 @@ export function Navbar() {
 
           {/* ── Mobile: brand + hamburger ── */}
           <div className="flex md:hidden items-center justify-between w-full">
-            <Link href="/study" className="text-ink font-semibold tracking-wide">Lexify</Link>
+            <Link href="/study"><LexifyLogo markSize={24} /></Link>
             <button
               onClick={() => setMenuOpen(o => !o)}
               className="text-ink-muted hover:text-ink transition-colors p-1"

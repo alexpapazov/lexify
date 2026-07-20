@@ -18,6 +18,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { fetchAllRows } from '@/lib/supabasePaged'
 import { localDateWithTurnover } from '@/lib/dates'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 
@@ -81,18 +82,20 @@ export function AccuracyTrend() {
         if (!cancelled) setLangColors((profile?.language_colors as Record<string, string> | null) ?? {})
 
         const since = new Date(Date.now() - rangeDays * DAY_MS).toISOString()
-        const [revRes, ladRes] = await Promise.all([
-          supabase.from('review_events')
+        // Paged: a month of reviews is far past Supabase's 1000-row cap, which `.limit()` won't lift.
+        const [revRows, ladRows] = await Promise.all([
+          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('review_events')
             .select('reviewed_at, was_correct, near_miss, near_miss_weight, source_language, review_direction, was_typed')
             .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since)
-            .order('reviewed_at', { ascending: false }).limit(20000),
-          supabase.from('ladder_events')
+            .order('reviewed_at', { ascending: false }).range(f, t)),
+          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('ladder_events')
             .select('created_at, outcome, overridden, rung_type, source_language')
-            .eq('user_id', uid).gte('created_at', since).limit(20000),
+            .eq('user_id', uid).gte('created_at', since)
+            .order('created_at', { ascending: false }).range(f, t)),
         ])
 
         const out: Sample[] = []
-        for (const e of (revRes.data ?? [])) {
+        for (const e of revRows) {
           const lang = e.source_language as string | null
           if (!lang) continue
           const nm = (e.near_miss_weight as number | null) ?? ((e.near_miss as boolean | null) ? 0.2 : 0)
@@ -105,7 +108,7 @@ export function AccuracyTrend() {
             weight, from: 'due',
           })
         }
-        for (const e of (ladRes.data ?? [])) {
+        for (const e of ladRows) {
           const lang = e.source_language as string | null
           if (!lang) continue
           const credit = ladderCredit(e.outcome as string | null, !!(e.overridden as boolean | null))
