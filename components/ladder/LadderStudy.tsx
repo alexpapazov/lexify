@@ -92,6 +92,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   // An override the CURRENT card newly added this attempt (so undo can remove exactly it).
   const pendingOverrideAddRef = useRef<{ cardId: string; answerSide: CardSide; answerText: string } | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
   const [undoStack, setUndoStack] = useState<Array<{
@@ -171,6 +172,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
   useEffect(() => {
     ;(async () => {
+      // Everything below is guarded: any throw in here (a rejected query, a bad scope) used to leave
+      // `loading` stuck true forever, showing an endless "Loading session…" with no explanation.
+      try {
       const { data: { session } } = await createClient().auth.getSession()
       if (!session) return
       const uid = session.user.id; setUserId(uid)
@@ -329,6 +333,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           return c ? new Map(prev).set(cardId, { ...c, audioData, audioGenerated: true }) : prev
         }),
       )
+      } catch (e) {
+        console.error('Ladder session failed to load:', e)
+        setLoadError(e instanceof Error ? e.message : String(e))
+        setLoading(false)
+      }
     })()
   }, [scope, category])
 
@@ -507,6 +516,13 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
   const back = backHref(scope)
 
+  if (loadError) return (
+    <div className="pt-16 text-center space-y-3">
+      <p className="text-sm text-danger">Couldn&apos;t start this session.</p>
+      <p className="text-xs text-ink-faint max-w-md mx-auto">{loadError}</p>
+      <button className="btn-primary px-6" onClick={() => window.location.reload()}>Try again</button>
+    </div>
+  )
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
   if (decksById.size === 0 || !ladder) return <p className="p-6 text-sm text-danger">Nothing to study here.</p>
 

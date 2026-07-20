@@ -8,13 +8,29 @@ export class SupabaseLadderClimbRepository {
   private get db() { return createClient() }
 
   /** Every climb row for the given cards (keyed by cardId). */
+  /**
+   * Climb rows for a set of cards. Chunked + paged: a whole-language ladder scope passes ~1000+ ids,
+   * and a single `.in()` that size builds a query string tens of KB long that the server rejects
+   * outright (which used to surface as the ladder hanging on "Loading session…"). Even when it
+   * squeaked through, the 1000-row cap would silently drop climbs and restart cards at rung 1.
+   */
   async listForCards(userId: UserId, cardIds: CardId[]): Promise<Map<string, ClimbState>> {
     if (isOfflineActive()) return localClimbForCards(cardIds)
     if (cardIds.length === 0) return new Map()
-    const { data, error } = await this.db.from('ladder_climb')
-      .select('card_id, state').eq('user_id', userId).in('card_id', cardIds)
-    if (error) throw new Error(error.message)
-    return new Map((data ?? []).map(r => [r.card_id as string, r.state as ClimbState]))
+    const CHUNK = 400, PAGE = 1000
+    const out = new Map<string, ClimbState>()
+    for (let i = 0; i < cardIds.length; i += CHUNK) {
+      const chunk = cardIds.slice(i, i + CHUNK)
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await this.db.from('ladder_climb')
+          .select('card_id, state').eq('user_id', userId).in('card_id', chunk)
+          .order('card_id').range(from, from + PAGE - 1)
+        if (error) throw new Error(error.message)
+        for (const r of data ?? []) out.set(r.card_id as string, r.state as ClimbState)
+        if (!data || data.length < PAGE) break
+      }
+    }
+    return out
   }
 
   async save(userId: UserId, cardId: CardId, deckId: DeckId, state: ClimbState): Promise<void> {
