@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Card, Rating } from '@/domain'
 import { displayText } from '@/lib/cardText'
+import { langNativeName } from '@/lib/languages'
 import { hintPlan, hintGrowthFactor } from '@/lib/hints'
 import { speakCard } from '@/lib/speak'
 import { RatingButtons } from './RatingButtons'
@@ -69,7 +70,13 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
   }
   return (
     <div className="space-y-6 w-full max-w-[730px] mx-auto">
-      {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
+      {deckName && (
+        // When the answer is the TARGET (foreign) language, a self-graded card gives no other cue for
+        // which language to recall in — so prefix the deck label with that language (e.g. "한국어: Episode 1").
+        <p className="text-xs text-ink-faint text-center uppercase tracking-wider">
+          {answerIsTarget && answerLanguage ? `${langNativeName(answerLanguage)}: ${deckName}` : deckName}
+        </p>
+      )}
       <div className="panel relative min-h-[160px] flex items-center justify-center text-center">
         {onInfo && <CardInfoButton onClick={onInfo} />}
         {onPromptEdit
