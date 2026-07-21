@@ -60,6 +60,28 @@ describe('hintPlan — alphabetic', () => {
     // In a non-English answer, a leading "to" is a real word and stays.
     expect(hintPlan('to casa', 'es').levelText[0]).toBe('t')
   })
+
+  it('French reflexive "se laver" keeps "se " and reveals the verb → "se l", "se la"', () => {
+    const p = hintPlan('se laver', 'fr')
+    expect(p.maxLevel).toBe(2)
+    expect(p.levelText).toEqual(['se l', 'se la'])
+  })
+
+  it('French elided reflexive "s\'appeler" keeps "s\'" → "s\'a", "s\'ap"', () => {
+    const p = hintPlan("s'appeler", 'fr')
+    expect(p.levelText).toEqual(["s'a", "s'ap"])
+  })
+
+  it('a French word merely starting with "se" (no space) is NOT treated as reflexive', () => {
+    // "semaine" → normal reveal from the first letter, "se " prefix logic must not fire.
+    const p = hintPlan('semaine', 'fr')
+    expect(p.levelText).toEqual(['s', 'se'])
+  })
+
+  it('reflexive handling is French-only', () => {
+    // Same string in another language reveals normally (no reflexive marker).
+    expect(hintPlan('se laver', 'es').levelText[0]).toBe('s')
+  })
 })
 
 describe('hintPlan — Korean (full first syllable, one level only)', () => {

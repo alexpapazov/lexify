@@ -62,11 +62,22 @@ export function hintPlan(answer: string, answerLanguage?: string): HintPlan {
   }
   if (!trimmed) return empty
 
+  // French reflexive verbs ("se laver", "s'appeler"): keep the "se "/"s'" reflexive marker VISIBLE and
+  // reveal the VERB's own letters after it — so hint 1 = "se l", hint 2 = "se la". Handled like a kept
+  // prefix (same mechanism as an article). The `se\s+` form requires a following space so real words that
+  // merely start with "se" (semaine, septembre) aren't caught; "s'…" requires the elision apostrophe.
+  let reflexive = ''
+  if (langBase === 'fr') {
+    const m = trimmed.match(/^(se\s+|s['’])(?=\S)/i)
+    if (m) { reflexive = m[1]!; trimmed = trimmed.slice(m[1]!.length) }
+  }
+  if (!trimmed) return empty
+
   // Split off a leading article so the *revealed* letters are the content word,
-  // but keep the article in the autopopulated text so grading still matches.
+  // but keep the article (and any reflexive marker) in the autopopulated text so grading still matches.
   const content = stripLeadingArticle(trimmed, answerLanguage)
   if (!content) return empty
-  const article = trimmed.length > content.length ? trimmed.slice(0, trimmed.length - content.length) : ''
+  const article = reflexive + (trimmed.length > content.length ? trimmed.slice(0, trimmed.length - content.length) : '')
 
   const chars = [...content]
   const first = chars[0]!
