@@ -11,7 +11,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { speak, speakViaTts, stripAnnotations } from '@/lib/speak'
-import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
+import { langName, langNativeName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { RatingButtons } from '@/components/session/RatingButtons'
 import { displayText } from '@/lib/cardText'
@@ -281,7 +281,10 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
             </div>
           )}
           <input ref={inputRef} className="input text-center text-lg font-mono" value={input}
-            placeholder={echoed ? `Type the ${langName(card.targetLanguage)} translation…` : native ? 'Type the translation…' : 'Type what you hear…'}
+            // Placeholder is just the expected answer language (e.g. "English" / "Italiano"). answerLang
+            // = card.targetLanguage when typing the translation (incl. the echoed re-prompt, which is
+            // always native), card.sourceLanguage when transcribing what you heard.
+            placeholder={langNativeName(answerLang)}
             onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && input.trim()) check() }} />
           <div className="flex justify-center"><button className="btn-primary px-10" disabled={!input.trim()} onClick={check}>Check</button></div>
           <button
