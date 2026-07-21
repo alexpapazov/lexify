@@ -222,7 +222,12 @@ export function LearningEfficiency() {
     const el = svgRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
-    const relX = ((e.clientX - rect.left) / rect.width) * W
+    // Map cursor into viewBox user units via the SVG's CTM — a plain rect.width ratio is wrong when
+    // preserveAspectRatio letterboxes the drawing (w-full + maxHeight caps a wide chart and centres it).
+    const _ctm = el.getScreenCTM()
+    if (!_ctm) return
+    const _pt = el.createSVGPoint(); _pt.x = e.clientX; _pt.y = e.clientY
+    const relX = _pt.matrixTransform(_ctm.inverse()).x
     const i = Math.round(((relX - mL) / (W - mL - mR)) * (n - 1))
     if (i < 0 || i >= n) { setHover(null); return }
     setHover({ i, x: e.clientX - rect.left, y: e.clientY - rect.top })

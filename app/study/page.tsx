@@ -840,41 +840,33 @@ export default function StudyPage() {
             ))}
           </div>
 
-          {/* ── Today's goals ───────────────────────────────────────────── */}
-          {pairsWithGoalsToday.length > 0 && (
-            <div className="panel space-y-3" data-tour="todays-goals">
-              <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Today&apos;s goals</h2>
-              {pairsWithGoalsToday.map(({ pair, key, goal, delta }) => {
-                const count = todayGradCounts.get(key) ?? 0
-                // A surplus can zero the goal outright — that's "done", not a divide-by-zero.
-                const done  = count >= goal
-                const pct   = goal <= 0 ? 100 : Math.min(100, Math.round((count / goal) * 100))
-                return (
-                  <div key={key} className="space-y-1.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-ink">
-                        {langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}
-                        {delta !== 0 && (
-                          <span className="text-xs text-ink-faint ml-2">
-                            {delta > 0 ? `+${delta} missed yesterday` : `${-delta} carried over`}
-                          </span>
-                        )}
-                      </span>
-                      <span className={done ? 'text-success font-medium' : 'text-ink-muted'}>
-                        {count}/{goal}{done ? ' ✓' : ''}
-                      </span>
+          {/* ── Today's goals — only what STILL needs doing (carryover-adjusted number). Pairs already
+               met, or auto-fulfilled by a surplus carryover, drop off here; the full picture (incl. the
+               green auto-fulfilled bars + "missed/carried over" notes) lives on Analytics → Present. ── */}
+          {(() => {
+            const todo = pairsWithGoalsToday.filter(({ key, goal }) => (todayGradCounts.get(key) ?? 0) < goal)
+            if (todo.length === 0) return null
+            return (
+              <div className="panel space-y-3" data-tour="todays-goals">
+                <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Today&apos;s goals</h2>
+                {todo.map(({ pair, key, goal }) => {
+                  const count = todayGradCounts.get(key) ?? 0
+                  const pct   = goal <= 0 ? 0 : Math.min(100, Math.round((count / goal) * 100))
+                  return (
+                    <div key={key} className="space-y-1.5">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
+                        <span className="text-ink-muted">{count}/{goal}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">
+                        <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${pct}%` }} />
+                      </div>
                     </div>
-                    <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-500 ${done ? 'bg-success' : 'bg-accent'}`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
+                  )
+                })}
+              </div>
+            )
+          })()}
 
           {/* ── Filtered card list (cross-deck) ─────────────────────────── */}
           {activeFilter && (

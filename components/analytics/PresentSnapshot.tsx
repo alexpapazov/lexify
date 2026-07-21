@@ -106,7 +106,7 @@ function fmtDuration(ms: number): string {
 interface Data {
   lists: Record<Category, CardEntry[]>
   counts: Record<Category, number>
-  goals: { key: string; label: string; goal: number; done: number }[]
+  goals: { key: string; label: string; baseGoal: number; goal: number; delta: number; done: number }[]
   timeTodayMs: number
   projDueMs: number
   projNewMs: number
@@ -263,15 +263,17 @@ export function PresentSnapshot() {
             // Apply goal carryover so "words needed today" matches the Study page: a missed-yesterday
             // shortfall raises the goal, a surplus lowers it (each opt-in). No-op when both flags are off.
             const yGoal = p.goals?.[String(yesterdayWeekday)] as number | undefined
-            const { goal } = carriedGoal({
+            const { goal, delta } = carriedGoal({
               baseGoal,
               yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
               yesterdayCount: gradYesterday.get(key) ?? 0,
               carryShortfall, carrySurplus,
             })
-            return { key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, goal, done: gradToday.get(key) ?? 0 }
+            return { key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, baseGoal, goal, delta, done: gradToday.get(key) ?? 0 }
           })
-          .filter(g => g.goal > 0)
+          // Analytics shows the FULL carryover picture (incl. pairs a surplus auto-fulfilled to goal 0,
+          // rendered as a green ✓), so filter on the BASE goal — any pair that had a target today shows.
+          .filter(g => g.baseGoal > 0)
         const remainingNew = goals.reduce((sum, g) => sum + Math.max(0, g.goal - g.done), 0)
 
         // ── Time today + projections ──
@@ -446,12 +448,19 @@ export function PresentSnapshot() {
         <div className="panel space-y-3">
           <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Today&apos;s goals</h2>
           {data.goals.map(g => {
-            const pct = Math.min(100, Math.round((g.done / g.goal) * 100))
-            const done = g.done >= g.goal
+            const done = g.done >= g.goal   // a surplus can zero the goal → auto-fulfilled (green ✓)
+            const pct = g.goal <= 0 ? 100 : Math.min(100, Math.round((g.done / g.goal) * 100))
             return (
               <div key={g.key} className="space-y-1.5">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-ink">{g.label}</span>
+                  <span className="text-ink">
+                    {g.label}
+                    {g.delta !== 0 && (
+                      <span className="text-xs text-ink-faint ml-2">
+                        {g.delta > 0 ? `+${g.delta} missed yesterday` : `${-g.delta} carried over`}
+                      </span>
+                    )}
+                  </span>
                   <span className={done ? 'text-success font-medium' : 'text-ink-muted'}>{g.done}/{g.goal}{done ? ' ✓' : ''}</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">

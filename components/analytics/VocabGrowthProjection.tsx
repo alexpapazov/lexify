@@ -99,7 +99,12 @@ export function VocabGrowthProjection() {
   const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const el = svgRef.current; if (!el) return
     const rect = el.getBoundingClientRect()
-    const relX = ((e.clientX - rect.left) / rect.width) * W
+    // Map cursor into viewBox user units via the SVG's CTM — a plain rect.width ratio is wrong when
+    // preserveAspectRatio letterboxes the drawing (w-full + maxHeight caps a wide chart and centres it).
+    const _ctm = el.getScreenCTM()
+    if (!_ctm) return
+    const _pt = el.createSVGPoint(); _pt.x = e.clientX; _pt.y = e.clientY
+    const relX = _pt.matrixTransform(_ctm.inverse()).x
     const day = Math.max(0, Math.min(HORIZON, ((relX - mL) / (W - mL - mR)) * HORIZON))
     setHover({ day, x: e.clientX - rect.left, y: e.clientY - rect.top })
   }

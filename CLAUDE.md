@@ -1458,10 +1458,16 @@ Two opt-in toggles let yesterday's shortfall or surplus adjust today's per-langu
 - **Settings**: two checkboxes at the foot of the Daily Goals panel (`app/settings/page.tsx`),
   wired through the same profile read/update as `spilloverDue`.
 - Applied in two places: the Study page's "Today's goals", and `components/analytics/PresentSnapshot.tsx`
-  (the "~N min to learn M new words toward today's goals" tile — both the word count `remainingNew` and
-  the time `projNewMs` derive from the carried goal). Both read the two profile flags + yesterday's
-  per-pair graduations. `ReviewCalendar` intentionally keeps raw per-day goals — a past day's target is a
-  historical record and shouldn't be rewritten.
+  (both the "Today's goals" list AND the "~N min to learn M new words" tile, whose `remainingNew`/`projNewMs`
+  derive from the carried goal). Both read the two profile flags + yesterday's per-pair graduations.
+  `ReviewCalendar` intentionally keeps raw per-day goals — a past day's target is a historical record.
+- **The two "Today's goals" lists show DIFFERENT slices (2026-07-20, per user):**
+  - **Study page** — only pairs that STILL need work (`todayCount < carriedGoal`), just name + `count/goal`.
+    No delta note, no green. Met / surplus-auto-fulfilled pairs drop off. It's the "what do I still owe" list.
+  - **Analytics → Present** — the FULL picture: every pair with a base goal today (filter on `baseGoal > 0`,
+    NOT the carried goal), incl. surplus-auto-fulfilled pairs rendered `0/0 ✓` green, plus the
+    "+N missed yesterday" / "N carried over" delta note. `PresentSnapshot`'s `goals` now carries `baseGoal`
+    + `delta`. Don't "unify" these — the split is intentional.
 
 ## Two-stage Undo in Due Now sessions (2026-07-20)
 

@@ -213,8 +213,16 @@ export function AccuracyTrend() {
     const el = svgRef.current
     if (!el) return
     const rect = el.getBoundingClientRect()
-    const relX = ((e.clientX - rect.left) / rect.width) * W
-    const i = Math.round(((relX - mL) / (W - mL - mR)) * (n - 1))
+    // Map the cursor into viewBox user units via the SVG's own CTM. A plain
+    // `(clientX-rect.left)/rect.width * W` is wrong whenever preserveAspectRatio letterboxes the
+    // drawing — with `w-full` + `maxHeight`, a wide chart is capped in height and CENTRED, so the
+    // drawing occupies only the middle of rect.width and the dotted line lands left of the cursor.
+    const ctm = el.getScreenCTM()
+    if (!ctm) return
+    const pt = el.createSVGPoint()
+    pt.x = e.clientX; pt.y = e.clientY
+    const userX = pt.matrixTransform(ctm.inverse()).x
+    const i = Math.round(((userX - mL) / (W - mL - mR)) * (n - 1))
     if (i < 0 || i >= n) { setHover(null); return }
     setHover({ i, x: e.clientX - rect.left, y: e.clientY - rect.top })
   }
