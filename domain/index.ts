@@ -499,7 +499,11 @@ export interface LanguagePair {
   createdAt:      string
   /** Weekday goals: keys "0"–"6" (JS day-of-week, 0=Sun), value = target grad count or null = no goal. */
   goals:          Record<string, number | null> | null
+  /** Whether this pair learns via the linear ladder or a branched pathway. Default 'ladder'. */
+  learningMode:   LearningMode
 }
+
+export type LearningMode = 'ladder' | 'pathway'
 
 // ─── Deck ─────────────────────────────────────────────────────────────────────
 

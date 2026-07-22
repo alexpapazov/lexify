@@ -11,6 +11,12 @@ import { canInitInterval } from '@/lib/ladder'
 
 const GRAD_STATE_ID = 'graduated'
 
+/** The pathway governing a pair: its own if set, else the user's default. Null if neither exists (the
+ *  caller then falls back to converting the ladder — pathways don't have a built-in default graph). */
+export function resolveEffectivePathway(pairPathway: Pathway | null, defaultPathway: Pathway | null): Pathway | null {
+  return pairPathway ?? defaultPathway ?? null
+}
+
 /** Set of state ids reachable from `startId` by following transitions. */
 function reachableFrom(pathway: Pathway, startId: string): Set<string> {
   const seen = new Set<string>()
@@ -91,6 +97,23 @@ export function validatePathway(pathway: Pathway): string[] {
 const TERMINAL: PathwayState = {
   id: GRAD_STATE_ID, name: 'Graduated', type: 'self_graded', direction: 'produce_target',
   selfRated: false, intervalInit: false, isTerminal: true,
+}
+
+/** A blank pathway: one start state + the graduation terminal, and a single unconditional edge between
+ *  them (so it's valid out of the box). The user builds from here. */
+export function emptyPathway(): Pathway {
+  const start: PathwayState = {
+    id: 'start', name: 'Initial', type: 'typing', direction: 'produce_target',
+    strictness: { spelling: 'penalize', accents: 'penalize', articles: 'penalize' },
+    selfRated: false, intervalInit: false,
+  }
+  return {
+    id: 'pathway',
+    startStateId: start.id,
+    states: [start, { ...TERMINAL }],
+    transitions: [{ id: 'start-grad', from: start.id, to: GRAD_STATE_ID, when: [{ kind: 'correct', is: true }], priority: 100 }],
+    betweenStateWaitSeconds: 180,
+  }
 }
 
 /** Advance clause(s) → OR-ed transitions: any success-streak that met the rung's bar moves it on. */

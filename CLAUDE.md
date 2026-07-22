@@ -1049,8 +1049,24 @@ pathway. Shipped so far:
   direction, `canInitInterval` reuse; unreachable/no-interval are warnings) and `ladderToPathway`
   (mechanical scaffold, not a template — the app ships NO pre-built pathways). Tests:
   `engine/__tests__/pathwayEngine.test.ts`, `lib/__tests__/pathway.test.ts`.
-- Next: Phase 1 (`language_pairs.learning_mode` + `learning_pathways` table + repo; branch `LadderStudy`
-  on mode; list-based state/transition editor; reuse `LadderStudyCard`). No pathway migrations exist yet.
+**Phase 1a (config, 2026-07-21) — DONE.** You can now configure a pathway per pair, but **studying still
+uses the ladder** — the study session is NOT wired to pathways yet (that's Phase 1b).
+- **Migration `099_learning_pathways.sql`** (MUST APPLY): `language_pairs.learning_mode TEXT DEFAULT
+  'ladder'` (`'ladder'|'pathway'`) + `learning_pathways` table (per-pair + `''/''` default, `pathway` JSONB;
+  mirrors `learning_ladders`).
+- **`domain`**: `LanguagePair.learningMode` + `LearningMode` type.
+- **Repos**: `lib/data/pathways.ts` (`SupabasePathwayRepository`, online-only — pathways not in the offline
+  bundle yet); `SupabaseLanguagePairRepository.updateLearningMode`; `lib/pathway.ts` gained
+  `resolveEffectivePathway` + `emptyPathway`.
+- **UI**: `app/settings/ladders/page.tsx` has a per-pair **Ladder | Pathway** toggle (persists
+  `learning_mode`); in pathway mode it renders `components/settings/PathwayEditor.tsx` — a list-based
+  state + transition editor (add states, per-state outgoing transitions with the AND-ed predicate rows,
+  priority, per-branch wait override; validates on save). Switching a pair to pathway mode seeds the
+  editor from `ladderToPathway(<their ladder>)` if no pathway is saved.
+- **Phase 1b (NEXT, not started):** branch the study session (`components/ladder/LadderStudy.tsx`) on the
+  pair's `learning_mode` to actually RUN a pathway — drive `stepPathway` instead of `reviewRung`, store
+  `RouteState` in the `ladder_climb` JSON, render each `PathwayState` via the existing `LadderStudyCard`,
+  and graduate/reshow off the engine's output. Until then a pathway is inert config.
 
 ## Ladder: skip-ahead rules (2026-07-21)
 

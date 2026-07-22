@@ -14,6 +14,7 @@ function rowToPair(row: Record<string, unknown>): LanguagePair {
     instructions:   (row.instructions as string | null) ?? null,
     createdAt:      row.created_at as string,
     goals:          (row.goals as Record<string, number | null> | null) ?? null,
+    learningMode:   (row.learning_mode as 'ladder' | 'pathway' | null) ?? 'ladder',
   }
 }
 
@@ -60,6 +61,13 @@ export class SupabaseLanguagePairRepository {
   /** Update weekly goals for an existing pairing (null clears all goals). */
   async updateGoals(sourceLanguage: string, targetLanguage: string, goals: Record<string, number | null> | null): Promise<void> {
     const { error } = await this.db.from('language_pairs').update({ goals })
+      .match({ source_language: sourceLanguage, target_language: targetLanguage })
+    if (error) throw new Error(error.message)
+  }
+
+  /** Switch a pairing between the linear ladder and a branched pathway. */
+  async updateLearningMode(sourceLanguage: string, targetLanguage: string, mode: 'ladder' | 'pathway'): Promise<void> {
+    const { error } = await this.db.from('language_pairs').update({ learning_mode: mode })
       .match({ source_language: sourceLanguage, target_language: targetLanguage })
     if (error) throw new Error(error.message)
   }

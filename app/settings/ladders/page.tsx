@@ -4,10 +4,14 @@ import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseLadderRepository } from '@/lib/data/ladders'
+import { SupabasePathwayRepository } from '@/lib/data/pathways'
+import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { LadderEditor } from '@/components/settings/LadderEditor'
+import { PathwayEditor } from '@/components/settings/PathwayEditor'
+import { ladderToPathway, emptyPathway } from '@/lib/pathway'
 import { DEFAULT_LADDER } from '@/domain'
-import type { Ladder } from '@/domain'
+import type { Ladder, Pathway, LearningMode } from '@/domain'
 import { langName } from '@/lib/languages'
 
 function LaddersInner() {
@@ -22,6 +26,10 @@ function LaddersInner() {
   const [pairs, setPairs] = useState<{ source: string; target: string; custom: boolean }[]>([])
   const [saving, setSaving] = useState(false)
   const [version, setVersion] = useState(0)
+  // Pathway mode (per-pair only for now)
+  const [mode, setMode] = useState<LearningMode>('ladder')
+  const [pathway, setPathway] = useState<Pathway | null>(null)
+  const [pathwayCustom, setPathwayCustom] = useState(false)
 
   useEffect(() => {
     ;(async () => {
@@ -32,12 +40,22 @@ function LaddersInner() {
       const repo = new SupabaseLadderRepository()
       const def = await repo.getDefault(uid)
       if (isPair) {
-        const pair = await repo.getForPair(uid, source!, target!)
+        const [pair, pairs, savedPath, defPath] = await Promise.all([
+          repo.getForPair(uid, source!, target!),
+          new SupabaseLanguagePairRepository().list(uid),
+          new SupabasePathwayRepository().getForPair(uid, source!, target!),
+          new SupabasePathwayRepository().getDefault(uid),
+        ])
         setCustomized(!!pair)
-        setLadder(pair ?? def ?? DEFAULT_LADDER)
+        const eff = pair ?? def ?? DEFAULT_LADDER
+        setLadder(eff)
+        setMode(pairs.find(p => p.sourceLanguage === source && p.targetLanguage === target)?.learningMode ?? 'ladder')
+        setPathwayCustom(!!savedPath)
+        // Seed the pathway editor from a saved pathway, else the user's default pathway, else a mechanical
+        // conversion of the effective ladder (so switching modes starts from what they already built).
+        setPathway(savedPath ?? defPath ?? ladderToPathway(eff))
       } else {
         setLadder(def ?? DEFAULT_LADDER)
-        // List the user's language pairs so they can jump to each one's ladder.
         const decks = await new SupabaseDeckRepository().list(uid)
         const saved = await repo.list(uid)
         const customKeys = new Set(saved.filter(s => s.source && s.target).map(s => `${s.source}|${s.target}`))
@@ -65,30 +83,60 @@ function LaddersInner() {
     setLadder(def ?? DEFAULT_LADDER); setCustomized(false); setVersion(v => v + 1); setSaving(false)
   }
 
+  async function switchMode(next: LearningMode) {
+    if (!userId || !isPair || next === mode) return
+    setMode(next)
+    await new SupabaseLanguagePairRepository().updateLearningMode(source!, target!, next).catch(() => {})
+    if (next === 'pathway' && !pathway) setPathway(ladderToPathway(ladder ?? DEFAULT_LADDER))
+  }
+  async function savePathway(p: Pathway) {
+    if (!userId || !isPair) return
+    setSaving(true)
+    await new SupabasePathwayRepository().saveForPair(userId, source!, target!, p)
+    setPathwayCustom(true); setSaving(false)
+  }
+  async function resetPathway() {
+    if (!userId || !isPair) return
+    setSaving(true)
+    await new SupabasePathwayRepository().resetPair(userId, source!, target!)
+    setPathway(ladderToPathway(ladder ?? DEFAULT_LADDER)); setPathwayCustom(false); setVersion(v => v + 1); setSaving(false)
+  }
+
   if (!ladder) return <p className="p-6 text-sm text-ink-faint">Loading…</p>
 
   return (
     <div className="max-w-2xl mx-auto p-6 space-y-5">
       <div>
-        {/* Back goes one level up the path you actually took: a per-language ladder returns to the
-            ladder list (where you picked it), and the list returns to Language configuration. */}
-        <a
-          href={isPair ? '/settings/ladders' : '/settings/language'}
-          className="text-xs text-ink-faint hover:text-ink"
-        >
+        <a href={isPair ? '/settings/ladders' : '/settings/language'} className="text-xs text-ink-faint hover:text-ink">
           ← {isPair ? 'Learning ladders' : 'Language configuration'}
         </a>
         <h1 className="text-2xl font-semibold text-ink mt-1">
-          {isPair ? `Learning ladder — ${langName(source!)} → ${langName(target!)}` : 'Default learning ladder'}
+          {isPair ? `${langName(source!)} → ${langName(target!)}` : 'Default learning ladder'}
         </h1>
         <p className="text-sm text-ink-muted mt-1">
           {isPair
-            ? (customized ? 'This language has its own ladder.' : 'Currently using the default ladder — saving here gives this language its own.')
+            ? (mode === 'pathway'
+                ? 'This language learns via a branched pathway. Build the states and transitions below.'
+                : (customized ? 'This language has its own ladder.' : 'Currently using the default ladder — saving here gives this language its own.'))
             : 'Applies to any newly added language. Once you edit a language’s own ladder it detaches from this default.'}
         </p>
       </div>
 
-      <LadderEditor key={version} initial={ladder} onSave={save} onReset={isPair && customized ? reset : undefined} saving={saving} />
+      {/* Per-pair mode toggle */}
+      {isPair && (
+        <div className="inline-flex rounded-lg border border-line/10 p-0.5 text-sm">
+          {(['ladder', 'pathway'] as LearningMode[]).map(m => (
+            <button key={m} onClick={() => switchMode(m)}
+              className={`px-4 py-1.5 rounded-md capitalize transition-colors ${mode === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}>
+              {m}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isPair && mode === 'pathway'
+        ? <PathwayEditor key={version} initial={pathway ?? emptyPathway()} onSave={savePathway} onReset={pathwayCustom ? resetPathway : undefined} saving={saving} />
+        : <LadderEditor key={version} initial={ladder} onSave={save} onReset={isPair && customized ? reset : undefined} saving={saving} />}
 
       {!isPair && pairs.length > 0 && (
         <div className="space-y-2 pt-2">
