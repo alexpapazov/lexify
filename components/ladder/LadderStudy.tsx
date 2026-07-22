@@ -19,7 +19,7 @@ import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
-import { snapDueAtToStartOfDay } from '@/lib/dates'
+import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
 import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
@@ -288,6 +288,44 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         turnoverRef.current = (audioPref.data?.day_turnover_hour as number | null) ?? 0
       }
 
+      // "Stop at daily goal": cap TOTAL new-card intake so graduatedToday(pair) + inPipeline +
+      // newlyIntroduced never exceeds this language's daily goal. Only the default queue on a
+      // single-deck ladder (a per-deck pref). goalToday 0 (no goal today) → no cap. Capping the fresh
+      // POOL makes the batch/rolling/refill logic below respect it automatically (pending refill draws
+      // from this pool, so the session stops introducing once the budget is exhausted).
+      let eligibleFresh = fresh
+      const wantGoalCap = !!prefs?.capNewToGoal && scope.kind === 'deck'
+        && category !== 'new' && category !== 'learning' && !isOfflineActive()
+      if (wantGoalCap) {
+        const src = primary.sourceLanguage, tgt = primary.targetLanguage
+        const todayStr = getToday(tzRef.current, turnoverRef.current)
+        const weekday  = new Date(todayStr + 'T12:00:00Z').getUTCDay()
+        const db = createClient()
+        const [pairRes, gradRes] = await Promise.all([
+          db.from('language_pairs').select('goals')
+            .eq('owner_id', uid).eq('source_language', src).eq('target_language', tgt).maybeSingle(),
+          db.from('card_states').select('graduated_at, accelerated_mode, cards!inner(source_language, target_language)')
+            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null)
+            .eq('cards.source_language', src).eq('cards.target_language', tgt)
+            .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString()),
+        ])
+        const goals = pairRes.data?.goals as Record<string, number | null> | null
+        const goalToday = (goals?.[String(weekday)] as number | undefined) ?? 0
+        if (goalToday > 0) {
+          let gradTodayPair = 0
+          for (const row of gradRes.data ?? []) {
+            const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
+            if (!r.graduated_at) continue
+            if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+            if (localDateWithTurnover(r.graduated_at, tzRef.current, turnoverRef.current) === todayStr) gradTodayPair++
+          }
+          // learning.length = cards already in this deck's pipeline (they'll graduate today), so front-load
+          // only enough fresh cards to reach the goal — never past it.
+          const budget = Math.max(0, goalToday - gradTodayPair - learning.length)
+          eligibleFresh = shuffle([...fresh]).slice(0, budget)
+        }
+      }
+
       let q: string[]
       rollingRef.current = false
       pendingFreshRef.current = []
@@ -305,18 +343,18 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         if (cap != null && cap > 0) {
           if (prefs!.learningBatchMode) {
             // Batch: a fixed group of `cap`, wait for the whole batch to graduate before the next batch.
-            q = learning.length > 0 ? shuffle(learning) : shuffle(fresh).slice(0, cap)
+            q = learning.length > 0 ? shuffle(learning) : shuffle(eligibleFresh).slice(0, cap)
           } else {
             // Rolling: keep ≤cap in the pipeline, refill from the rest as cards graduate → work through
             // the whole set (progress is out of the full set, not a batch of `cap`).
-            const all = [...shuffle(learning), ...shuffle(fresh)]
+            const all = [...shuffle(learning), ...shuffle(eligibleFresh)]
             q = all.slice(0, cap)
             pendingFreshRef.current = all.slice(cap)
             rollingRef.current = pendingFreshRef.current.length > 0
           }
         } else {
           const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
-          q = [...shuffle(learning), ...shuffle(fresh).slice(0, Math.max(0, newLimit))]
+          q = [...shuffle(learning), ...shuffle(eligibleFresh).slice(0, Math.max(0, newLimit))]
         }
       }
       const items: QueueItem[] = q.map(cardId => ({ cardId, readyAt: 0, ratedAt: 0 }))
@@ -326,7 +364,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       setAnswered(0); setPaused(false)
       setQueue(items); setTotal(rollingRef.current ? items.length + pendingFreshRef.current.length : items.length)
       // Rolling mode already holds the whole set (queue + pending) → nothing more to load afterwards.
-      setHasMore(rollingRef.current ? false : (fresh.length + learning.length) > items.length)
+      setHasMore(rollingRef.current ? false : (eligibleFresh.length + learning.length) > items.length)
       setCurrentId(pickNextCard(items, Date.now())?.cardId ?? null)
       setLoading(false)
 

@@ -897,9 +897,17 @@ function OnlineCreatePage() {
             I already know some of these words (fast-track graduated review)
           </label>
           {fastTrackEnabled && (
-            <p className="text-xs text-ink-faint pl-6">
-              Checked cards ({fastTrackCardIds.size}) will be fast-tracked — uncheck any you still want to learn from scratch
-            </p>
+            <div className="pl-6 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <p className="text-ink-faint">
+                Checked cards ({fastTrackCardIds.size}) will be fast-tracked — the rest are learned from scratch
+              </p>
+              <div className="flex items-center gap-3">
+                <button type="button" onClick={() => setFastTrackCardIds(new Set(previewItems.map((_, i) => i)))}
+                  className="text-accent hover:text-accent-soft transition-colors">Select all</button>
+                <button type="button" onClick={() => setFastTrackCardIds(new Set())}
+                  className="text-accent hover:text-accent-soft transition-colors">Select none</button>
+              </div>
+            </div>
           )}
           {fastTrackEnabled && hasSyncRules && syncEnabled && (
             <div className="pl-6 space-y-1.5">

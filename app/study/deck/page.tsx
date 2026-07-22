@@ -789,6 +789,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   }
   const commitCards = () => { const c = clampCards(cardsDraft); setCardsPerSession(c); setCardsDraft(String(c)) }
   const [learningBatchMode,  setLearningBatchMode]  = useState(initialPrefs?.learningBatchMode ?? false)
+  const [capNewToGoal,       setCapNewToGoal]       = useState(initialPrefs?.capNewToGoal ?? false)
   const [audioSpeed,         setAudioSpeed]         = useState(initialPrefs?.audioSpeed ?? 1)
   const [audioVolume,        setAudioVolumeState]   = useState(initialPrefs?.audioVolume ?? 1)
   // Apply speed/volume immediately so the "Play audio" preview reflects the controls live.
@@ -832,6 +833,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
           cardsPerSession:      cardsPerSessionOn ? clampCards(cardsDraft) : null,
           electiveSessionLimit: cardsPerSessionOn ? clampCards(cardsDraft) : 0,
           learningBatchMode:    cardsPerSessionOn ? learningBatchMode : false,
+          capNewToGoal,
           audioSpeed,
           audioVolume,
         }),
@@ -1037,6 +1039,19 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                   </p>
                 </div>
               )}
+            </div>
+
+            {/* Stop intake at the daily goal — an extra ceiling on top of the limits above */}
+            <div className="space-y-1 border-t border-line/10 pt-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={capNewToGoal} onChange={e => setCapNewToGoal(e.target.checked)} className="accent-accent w-4 h-4" />
+                <span className="text-sm text-ink">Stop at daily goal</span>
+              </label>
+              <p className="text-xs text-ink-faint pl-6">
+                {capNewToGoal
+                  ? 'Keeps topping the pipeline up toward this language\'s daily goal, but never enough to graduate past it. E.g. goal 20 with 5 done + 5 in the pipeline adds 10 more; goal 10 with 10 in the pipeline adds none. Still respects the limits above.'
+                  : 'New cards keep entering up to the limits above, regardless of your daily goal.'}
+              </p>
             </div>
 
             {/* ── Grading mode ──────────────────────────────────────────────── */}

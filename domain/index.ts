@@ -915,6 +915,15 @@ export interface DeckPreferences {
    * graduates a new one enters immediately to keep the pipeline full.
    */
   learningBatchMode:    boolean
+  /**
+   * When true: new-card intake is additionally capped so that
+   * `graduatedToday(pair) + inPipeline + newlyIntroduced ≤ the pair's daily goal`
+   * (language_pairs.goals for today). I.e. keep topping the pipeline up toward the
+   * daily goal, but never enough to graduate past it. Composes with cardsPerSession /
+   * the daily limit — it's an extra ceiling, whichever binds first wins. Only meaningful
+   * on a single-deck ladder (per-deck setting). Default false.
+   */
+  capNewToGoal:         boolean
   /** Audio playback speed for this deck (applied at playback time; pitch preserved). 1 = normal. */
   audioSpeed:           number
   /** Audio playback volume for this deck (applied at playback time). 0–1, 1 = full. */

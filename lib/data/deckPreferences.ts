@@ -16,6 +16,7 @@ function rowToPrefs(row: Record<string, unknown>): DeckPreferences {
     cardsPerSession:      (row.cards_per_session      as number | null) ?? null,
     electiveSessionLimit: (row.elective_session_limit as number | null) ?? null,
     learningBatchMode:    (row.learning_batch_mode    as boolean | null) ?? false,
+    capNewToGoal:         (row.cap_new_to_goal        as boolean | null) ?? false,
     audioSpeed:           (row.audio_speed            as number | null) ?? 1,
     audioVolume:          (row.audio_volume           as number | null) ?? 1,
   }
@@ -54,6 +55,7 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
         cards_per_session:      prefs.cardsPerSession,
         elective_session_limit: prefs.electiveSessionLimit,
         learning_batch_mode:    prefs.learningBatchMode,
+        cap_new_to_goal:        prefs.capNewToGoal,
         audio_speed:            prefs.audioSpeed,
         audio_volume:           prefs.audioVolume,
       }, { onConflict: 'user_id,deck_id' })

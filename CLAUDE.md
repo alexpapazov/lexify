@@ -1515,6 +1515,29 @@ helper and every surface routes through it.
   tz themselves (small extra fetches). The card-list `'due'` filters (library + folder) use a per-card
   "any row due" check so the list matches the stat box (which counts due ROWS).
 
+## "Stop at daily goal" new-card cap (2026-07-21)
+
+A per-deck toggle that caps new-card intake so a deck never introduces enough to graduate PAST the
+language's daily goal (`language_pairs.goals` for today). Keeps topping the pipeline up toward the goal
+but no further: goal 20 with 5 graduated-today + 5 in-pipeline → adds 10; goal 10 with 10 in-pipeline →
+adds 0 (so you graduate exactly 10, not 11).
+
+- **Migration `098_cap_new_to_goal.sql`** (must apply): `user_deck_preferences.cap_new_to_goal BOOLEAN
+  DEFAULT FALSE`. `DeckPreferences.capNewToGoal` + repo mapping (`lib/data/deckPreferences.ts`).
+- **UI**: "Stop at daily goal" checkbox in `DeckSettingsPanel` (`app/study/deck/page.tsx`), below the
+  "Limit cards in learning" block. Independent of the pipeline cap.
+- **Enforcement — `components/ladder/LadderStudy.tsx`**: on the DEFAULT queue for a single-deck ladder
+  (`scope.kind === 'deck'`, category not new/learning, online only), it loads the pair's goal + counts
+  graduated-today for the pair (72h window, turnover-bucketed, excludes accelerated), then caps the
+  fresh POOL: `eligibleFresh = fresh.slice(0, max(0, goalToday − gradTodayPair − learning.length))`.
+  Capping the pool (not the queue) makes the existing batch/rolling/refill logic respect it for free —
+  the rolling `pendingFresh` refill draws from the same pool, so intake stops once the budget is spent.
+  `goalToday === 0` (no goal today) → no cap. Composes with `cardsPerSession`/daily limit (extra ceiling,
+  whichever binds first). `hasMore` uses `eligibleFresh.length`.
+- **Known limitation**: `gradTodayPair` is pair-wide but `learning.length` is this deck's pipeline. Exact
+  for one-deck-per-pair (the common case); a multi-deck pair could under-count other decks' in-flight
+  pipelines. Offline is excluded (goal data isn't bundled).
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
