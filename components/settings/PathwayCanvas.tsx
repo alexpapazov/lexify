@@ -28,7 +28,7 @@ export function conditionText(when: PathwayCondition): string {
 }
 
 // Grid geometry.
-const CELL_X = 210, CELL_Y = 190, R = 62, MARGIN = 110, WRAP = 6, BAND_GAP = 3
+const CELL_X = 130, CELL_Y = 140, R = 31, MARGIN = 70, WRAP = 8, BAND_GAP = 3
 
 type GridPos = { col: number; row: number }
 
@@ -160,8 +160,8 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
   const startId = pathway.startStateId
 
   return (
-    <div className="overflow-auto rounded-card border border-line/10 bg-surface-sunken/40" style={{ maxHeight: 560 }}>
-      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} width={width} height={height} style={{ display: 'block', touchAction: 'none' }}>
+    <div className="overflow-y-auto overflow-x-hidden rounded-card border border-line/10 bg-surface-sunken/40" style={{ maxHeight: 620 }}>
+      <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMin meet" style={{ display: 'block', width: '100%', height: 'auto', touchAction: 'none' }}>
         <defs>
           <marker id="pw-arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
             <path d="M0,0 L9,4.5 L0,9 z" className="fill-ink-faint" />
@@ -210,8 +210,8 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
           const sel = s.id === selectedStateId
           const stroke = sel ? 'stroke-accent' : s.isTerminal ? 'stroke-success' : s.intervalInit ? 'stroke-warning' : 'stroke-line/40'
           const fill = sel ? 'fill-accent/20' : s.isTerminal ? 'fill-success/10' : 'fill-surface-raised'
-          const sw = sel ? 3.5 : 2
-          const label = s.name.length > 16 ? s.name.slice(0, 15) + '…' : s.name
+          const sw = sel ? 3 : 1.75
+          const label = s.name.length > 9 ? s.name.slice(0, 8) + '…' : s.name
           const dragging = drag?.id === s.id
           return (
             <g key={s.id}
@@ -225,11 +225,11 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
               {s.intervalInit && !s.isTerminal
                 ? <rect x={p.x - R} y={p.y - R} width={R * 2} height={R * 2} rx={12} className={`${fill} ${stroke}`} strokeWidth={sw} />
                 : <circle cx={p.x} cy={p.y} r={R} className={`${fill} ${stroke}`} strokeWidth={sw} />}
-              {s.id === startId && <circle cx={p.x} cy={p.y - R - 12} r={5} className="fill-accent" />}
-              <text x={p.x} y={s.isTerminal ? p.y - 4 : p.y + 5} textAnchor="middle" className="fill-ink font-medium" fontSize={15} style={{ pointerEvents: 'none' }}>
+              {s.id === startId && <circle cx={p.x} cy={p.y - R - 7} r={3.5} className="fill-accent" />}
+              <text x={p.x} y={s.isTerminal ? p.y - 2 : p.y + 4} textAnchor="middle" className="fill-ink font-medium" fontSize={11} style={{ pointerEvents: 'none' }}>
                 {s.isTerminal ? '🎓' : label}
               </text>
-              {s.isTerminal && <text x={p.x} y={p.y + 18} textAnchor="middle" className="fill-ink-muted" fontSize={13} style={{ pointerEvents: 'none' }}>{label}</text>}
+              {s.isTerminal && <text x={p.x} y={p.y + 13} textAnchor="middle" className="fill-ink-muted" fontSize={9} style={{ pointerEvents: 'none' }}>{label}</text>}
             </g>
           )
         })}

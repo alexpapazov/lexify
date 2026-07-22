@@ -158,7 +158,7 @@ function skipCondition(rule: SkipAheadRule): PathwayCondition {
 export function ladderToPathway(ladder: Ladder): Pathway {
   const rungs = ladder.rungs
   const states: PathwayState[] = rungs.map((r, i) => ({
-    id: r.id, name: `Rung ${i + 1}`,
+    id: r.id, name: `State ${i + 1}`,
     type: r.type, direction: r.direction, distractorSource: r.distractorSource,
     strictness: r.strictness, selfRated: r.selfRated, intervalInit: r.intervalInit,
   }))
