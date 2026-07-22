@@ -6,8 +6,22 @@
 
 import type {
   Pathway, PathwayState, Transition, PathwayCondition, Ladder, Rung, DropBackRule, SkipAheadRule,
+  GradingIssueType, ErrorType,
 } from '@/domain'
 import { canInitInterval } from '@/lib/ladder'
+
+/** Map the grader's issue type to the pathway's error kinds (drives error-specific transitions). */
+export function issueToErrorTypes(it: GradingIssueType): ErrorType[] {
+  switch (it) {
+    case 'accent':      return ['accent']
+    case 'article':
+    case 'gender':      return ['article']
+    case 'typo':
+    case 'punctuation': return ['spelling']
+    case 'semantic':    return ['wrong_word']
+    default:            return []   // 'none'
+  }
+}
 
 const GRAD_STATE_ID = 'graduated'
 

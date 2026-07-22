@@ -40,14 +40,23 @@ export class SupabaseLanguagePairRepository {
    * instead of erroring.
    */
   async create(userId: UserId, sourceLanguage: string, targetLanguage: string, flag?: string): Promise<LanguagePair> {
-    const { data, error } = await this.db
-      .from('language_pairs')
-      .upsert(
-        { owner_id: userId, source_language: sourceLanguage, target_language: targetLanguage, ...(flag ? { flag } : {}) },
-        { onConflict: 'owner_id,source_language,target_language' },
-      )
+    // Return the existing pair unchanged if it's already there (never reset its learning mode on re-add).
+    const { data: existing } = await this.db.from('language_pairs').select('*')
+      .match({ owner_id: userId, source_language: sourceLanguage, target_language: targetLanguage }).maybeSingle()
+    if (existing) return rowToPair(existing)
+    // New pair: inherit the user's default learning mode (ladder vs pathway).
+    const { data: prof } = await this.db.from('profiles').select('default_learning_mode').eq('user_id', userId).maybeSingle()
+    const learning_mode = (prof?.default_learning_mode as string | null) ?? 'ladder'
+    const { data, error } = await this.db.from('language_pairs')
+      .insert({ owner_id: userId, source_language: sourceLanguage, target_language: targetLanguage, learning_mode, ...(flag ? { flag } : {}) })
       .select().single()
-    if (error) throw new Error(error.message)
+    if (error) {
+      // Lost a create race → the row now exists; return it.
+      const { data: raced } = await this.db.from('language_pairs').select('*')
+        .match({ owner_id: userId, source_language: sourceLanguage, target_language: targetLanguage }).maybeSingle()
+      if (raced) return rowToPair(raced)
+      throw new Error(error.message)
+    }
     return rowToPair(data)
   }
 

@@ -7,6 +7,7 @@ import type {
 } from '@/domain'
 import { validatePathway } from '@/lib/pathway'
 import { canInitInterval } from '@/lib/ladder'
+import { PathwayCanvas } from '@/components/settings/PathwayCanvas'
 
 const TYPE_LABEL: Record<RungType, string> = { mcq: 'Multiple choice', typing: 'Typing', self_graded: 'Self-graded', dictation: 'Dictation' }
 const COUNTER_LABEL: Record<PathwayCounter, string> = { consecutiveGood: 'correct in a row', consecutiveAgain: 'wrong in a row', totalGood: 'correct (total)', totalAgain: 'wrong (total)' }
@@ -16,9 +17,8 @@ const STRICT_CATS = ['spelling', 'accents', 'articles'] as const
 
 let seq = 0
 const uid = (p: string) => `${p}${Date.now().toString(36)}${seq++}`
-
-function toMin(sec: number) { return Math.round(sec / 60) }
-function fromMin(min: number) { return Math.max(0, Math.round(min)) * 60 }
+const toMin = (sec: number) => Math.round(sec / 60)
+const fromMin = (min: number) => Math.max(0, Math.round(min)) * 60
 
 export function PathwayEditor({ initial, onSave, onReset, saving }: {
   initial: Pathway
@@ -27,24 +27,31 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
   saving: boolean
 }) {
   const [p, setP] = useState<Pathway>(initial)
+  const [selected, setSelected] = useState<string>(initial.startStateId)
   const problems = useMemo(() => validatePathway(p), [p])
   const errors = problems.filter(e => !e.startsWith('Warning:'))
   const warnings = problems.filter(e => e.startsWith('Warning:'))
+  const sel = p.states.find(s => s.id === selected)
 
   const patchState = (id: string, patch: Partial<PathwayState>) =>
     setP(prev => ({ ...prev, states: prev.states.map(s => s.id === id ? { ...s, ...patch } : s) }))
   const addState = () => {
     const id = uid('st-')
+    const idx = p.states.filter(s => !s.isTerminal).length + 1
     setP(prev => ({ ...prev, states: [...prev.states.filter(s => !s.isTerminal),
-      { id, name: `State ${prev.states.filter(s => !s.isTerminal).length + 1}`, type: 'typing', direction: 'produce_target', strictness: { spelling: 'penalize', accents: 'penalize', articles: 'penalize' }, selfRated: false, intervalInit: false },
+      { id, name: `State ${idx}`, type: 'typing', direction: 'produce_target', strictness: { spelling: 'penalize', accents: 'penalize', articles: 'penalize' }, selfRated: false, intervalInit: false },
       ...prev.states.filter(s => s.isTerminal)] }))
+    setSelected(id)
   }
-  const removeState = (id: string) => setP(prev => ({
-    ...prev,
-    states: prev.states.filter(s => s.id !== id),
-    transitions: prev.transitions.filter(t => t.from !== id && t.to !== id),
-    startStateId: prev.startStateId === id ? (prev.states.find(s => s.id !== id && !s.isTerminal)?.id ?? prev.startStateId) : prev.startStateId,
-  }))
+  const removeState = (id: string) => {
+    setP(prev => ({
+      ...prev,
+      states: prev.states.filter(s => s.id !== id),
+      transitions: prev.transitions.filter(t => t.from !== id && t.to !== id),
+      startStateId: prev.startStateId === id ? (prev.states.find(s => s.id !== id && !s.isTerminal)?.id ?? prev.startStateId) : prev.startStateId,
+    }))
+    setSelected(p.startStateId)
+  }
 
   const patchTransition = (id: string, patch: Partial<Transition>) =>
     setP(prev => ({ ...prev, transitions: prev.transitions.map(t => t.id === id ? { ...t, ...patch } : t) }))
@@ -63,50 +70,53 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
   const nonTerminal = p.states.filter(s => !s.isTerminal)
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* Global settings */}
-      <div className="panel space-y-3">
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-ink-faint">Start state</span>
-            <select className="input py-1.5" value={p.startStateId} onChange={e => setP({ ...p, startStateId: e.target.value })}>
-              {nonTerminal.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-ink-faint">Minutes between states (default)</span>
-            <input type="number" min={0} className="input py-1.5" value={toMin(p.betweenStateWaitSeconds)}
-              onChange={e => setP({ ...p, betweenStateWaitSeconds: fromMin(Number(e.target.value)) })} />
-          </label>
-        </div>
+      <div className="panel grid grid-cols-2 gap-3 text-sm">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-ink-faint">Start state</span>
+          <select className="input py-1.5" value={p.startStateId} onChange={e => setP({ ...p, startStateId: e.target.value })}>
+            {nonTerminal.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-ink-faint">Minutes between states (default)</span>
+          <input type="number" min={0} className="input py-1.5" value={toMin(p.betweenStateWaitSeconds)}
+            onChange={e => setP({ ...p, betweenStateWaitSeconds: fromMin(Number(e.target.value)) })} />
+        </label>
       </div>
 
-      {/* States */}
-      {p.states.map(s => s.isTerminal ? (
-        <div key={s.id} className="panel border-success/30 text-sm text-ink-muted">🎓 <span className="text-ink">{s.name}</span> — reaching this graduates the card (hands off to spaced review).</div>
-      ) : (
-        <div key={s.id} className="panel space-y-3">
+      {/* The map */}
+      <PathwayCanvas pathway={p} selectedStateId={selected} onSelectState={setSelected} />
+      <button className="btn-ghost text-sm py-1.5 px-3" onClick={addState}>+ Add state</button>
+
+      {/* Focused editor for the selected state */}
+      {sel && sel.isTerminal && (
+        <div className="panel text-sm text-ink-muted">🎓 <span className="text-ink">{sel.name}</span> — reaching this graduates the card. Nothing to configure.</div>
+      )}
+      {sel && !sel.isTerminal && (
+        <div className="panel space-y-3">
           <div className="flex items-center gap-2">
-            <input className="input py-1 flex-1 font-medium" value={s.name} onChange={e => patchState(s.id, { name: e.target.value })} />
-            {p.startStateId === s.id && <span className="chip">start</span>}
-            <button className="text-ink-faint hover:text-danger px-1" onClick={() => removeState(s.id)} disabled={nonTerminal.length <= 1}>✕</button>
+            <input className="input py-1 flex-1 font-medium" value={sel.name} onChange={e => patchState(sel.id, { name: e.target.value })} />
+            {p.startStateId === sel.id && <span className="chip">start</span>}
+            <button className="text-ink-faint hover:text-danger px-1" onClick={() => removeState(sel.id)} disabled={nonTerminal.length <= 1} title="Delete state">✕</button>
           </div>
 
           <div className="grid grid-cols-2 gap-3 text-sm">
             <label className="flex flex-col gap-1">
               <span className="text-xs text-ink-faint">Exercise</span>
-              <select className="input py-1.5" value={s.type} onChange={e => {
+              <select className="input py-1.5" value={sel.type} onChange={e => {
                 const type = e.target.value as RungType
-                patchState(s.id, { intervalInit: s.intervalInit && canInitInterval(type, s.direction) ? s.intervalInit : false, type })
+                patchState(sel.id, { intervalInit: sel.intervalInit && canInitInterval(type, sel.direction) ? sel.intervalInit : false, type })
               }}>
                 {(Object.keys(TYPE_LABEL) as RungType[]).map(t => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
               </select>
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-xs text-ink-faint">Direction</span>
-              <select className="input py-1.5" value={s.direction} onChange={e => {
+              <select className="input py-1.5" value={sel.direction} onChange={e => {
                 const direction = e.target.value as RungDirection
-                patchState(s.id, { intervalInit: s.intervalInit && canInitInterval(s.type, direction) ? s.intervalInit : false, direction })
+                patchState(sel.id, { intervalInit: sel.intervalInit && canInitInterval(sel.type, direction) ? sel.intervalInit : false, direction })
               }}>
                 <option value="produce_target">Produce the target word</option>
                 <option value="produce_native">Produce the native word</option>
@@ -114,22 +124,22 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
             </label>
           </div>
 
-          {s.type === 'mcq' && (
+          {sel.type === 'mcq' && (
             <label className="flex flex-col gap-1 text-sm">
               <span className="text-xs text-ink-faint">Distractors</span>
-              <select className="input py-1.5" value={s.distractorSource ?? 'deck'} onChange={e => patchState(s.id, { distractorSource: e.target.value as DistractorSource })}>
+              <select className="input py-1.5" value={sel.distractorSource ?? 'deck'} onChange={e => patchState(sel.id, { distractorSource: e.target.value as DistractorSource })}>
                 <option value="deck">Other cards in the deck</option>
                 <option value="smart">AI-generated look-alikes</option>
               </select>
             </label>
           )}
-          {(s.type === 'typing' || s.type === 'dictation') && (
+          {(sel.type === 'typing' || sel.type === 'dictation') && (
             <div className="grid grid-cols-3 gap-2 text-sm">
               {STRICT_CATS.map(cat => (
                 <label key={cat} className="flex flex-col gap-0.5">
                   <span className="text-[10px] uppercase tracking-wider text-ink-faint">{cat}</span>
-                  <select className="input py-1 text-xs" value={s.strictness?.[cat] ?? 'penalize'}
-                    onChange={e => patchState(s.id, { strictness: { ...(s.strictness ?? { spelling: 'penalize', accents: 'penalize', articles: 'penalize' }), [cat]: e.target.value as TypedStrictnessLevel } })}>
+                  <select className="input py-1 text-xs" value={sel.strictness?.[cat] ?? 'penalize'}
+                    onChange={e => patchState(sel.id, { strictness: { ...(sel.strictness ?? { spelling: 'penalize', accents: 'penalize', articles: 'penalize' }), [cat]: e.target.value as TypedStrictnessLevel } })}>
                     <option value="penalize">Penalty + retype</option>
                     <option value="retype">Retype, no penalty</option>
                     <option value="accept">Accept, note only</option>
@@ -141,14 +151,14 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
 
           <div className="flex flex-wrap items-center gap-4 text-sm">
             <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" className="accent-accent" checked={s.selfRated || s.type === 'self_graded'} disabled={s.type === 'self_graded'}
-                onChange={e => patchState(s.id, { selfRated: e.target.checked })} />
+              <input type="checkbox" className="accent-accent" checked={sel.selfRated || sel.type === 'self_graded'} disabled={sel.type === 'self_graded'}
+                onChange={e => patchState(sel.id, { selfRated: e.target.checked })} />
               <span className="text-ink">Show rating buttons</span>
             </label>
-            {canInitInterval(s.type, s.direction) && (
+            {canInitInterval(sel.type, sel.direction) && (
               <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" className="accent-accent" checked={s.intervalInit}
-                  onChange={e => patchState(s.id, { intervalInit: e.target.checked, selfRated: e.target.checked ? true : s.selfRated })} />
+                <input type="checkbox" className="accent-accent" checked={sel.intervalInit}
+                  onChange={e => patchState(sel.id, { intervalInit: e.target.checked, selfRated: e.target.checked ? true : sel.selfRated })} />
                 <span className="text-ink">Sets this direction&apos;s graduation interval</span>
               </label>
             )}
@@ -157,7 +167,7 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
           {/* Transitions out of this state */}
           <div className="flex flex-col gap-2 border-t border-line/10 pt-3">
             <span className="text-xs text-ink-faint">When it goes… move to:</span>
-            {p.transitions.filter(t => t.from === s.id).map(t => (
+            {p.transitions.filter(t => t.from === sel.id).map(t => (
               <div key={t.id} className="rounded-md border border-line/10 p-2 space-y-2">
                 {t.when.length === 0 && <span className="text-xs text-ink-faint italic">Always (no condition)</span>}
                 {t.when.map((pred, i) => (
@@ -225,12 +235,10 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
                 </div>
               </div>
             ))}
-            <button className="self-start text-xs text-accent hover:underline" onClick={() => addTransition(s.id)}>+ Add transition</button>
+            <button className="self-start text-xs text-accent hover:underline" onClick={() => addTransition(sel.id)}>+ Add transition</button>
           </div>
         </div>
-      ))}
-
-      <button className="btn-ghost text-sm py-1.5 px-3" onClick={addState}>+ Add state</button>
+      )}
 
       {/* Validation + save */}
       {errors.length > 0 && (

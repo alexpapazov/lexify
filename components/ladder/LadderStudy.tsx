@@ -21,7 +21,7 @@ import { stepPathway, initialRouteState, type RouteState, type PathwayEvent } fr
 import { SupabasePathwayRepository } from '@/lib/data/pathways'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { resolveEffectivePathway, ladderToPathway } from '@/lib/pathway'
-import type { Pathway, PathwayState, Rung } from '@/domain'
+import type { Pathway, PathwayState, Rung, ErrorType } from '@/domain'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
@@ -501,11 +501,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
   // Pathway sibling of onOutcome: run the graph engine, then the same queue/graduate/reshow plumbing.
   // Error-type transitions aren't fed yet (errorTypes: []) — that plumbing is Phase 2.
-  async function onOutcomePathway(outcome: RungAttemptOutcome, overridden: boolean, almost: boolean) {
+  async function onOutcomePathway(outcome: RungAttemptOutcome, overridden: boolean, almost: boolean, errorTypes: ErrorType[]) {
     if (!userId || !pathway || !currentId || !currentRoute) return
     const now = Date.now()
     sessionIdRef.current = resolveSessionId(now)
-    const res = stepPathway(pathway, currentRoute, { outcome: outcome as PathwayEvent['outcome'], errorTypes: [] }, now)
+    const res = stepPathway(pathway, currentRoute, { outcome: outcome as PathwayEvent['outcome'], errorTypes }, now)
     const loggedOutcome: RungAttemptOutcome = almost && outcome === 'miss' ? 'almost' : outcome
     const logDeck = deckFor(currentId)
     const eventIdP = new SupabaseLadderEventRepository().log(userId, {
@@ -550,8 +550,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     else if (nextId && total > 0 && nextAnswered % total === 0) { setPauseKind('round'); setPaused(true) }
   }
 
-  async function onOutcome(outcome: RungAttemptOutcome, overridden = false, almost = false) {
-    if (isPathway) { await onOutcomePathway(outcome, overridden, almost); return }
+  async function onOutcome(outcome: RungAttemptOutcome, overridden = false, almost = false, errorTypes: ErrorType[] = []) {
+    if (isPathway) { await onOutcomePathway(outcome, overridden, almost, errorTypes); return }
     if (!userId || !ladder || !currentId || !currentClimb) return
     const now = Date.now()
     // Attribute this review to the current session, opening a new one only if ≥ 45 min passed since the

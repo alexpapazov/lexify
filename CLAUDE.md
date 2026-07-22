@@ -1078,11 +1078,30 @@ uses the ladder** — the study session is NOT wired to pathways yet (that's Pha
   undo plumbing (`reshowSeconds*1000` for the delay). `onOutcome` early-returns into it when `isPathway`.
 - Header shows the state name; progress bar falls back to the graduated fraction (a pathway has no fixed
   length). Undo works unchanged (opaque state).
-- **KNOWN GAPS / to verify live:** (1) **error-type transitions don't fire yet** — `onOutcomePathway`
-  passes `errorTypes: []`; wiring `issueType`/confusion through `onOutcome` is Phase 2. (2) No 12-hour
-  window in pathway mode (`applyWindow` is ladder-only). (3) Pathway mode requires the primary pair; a
-  multi-pair all/folder scope uses the primary pair's mode. (4) Not runtime-verified here — needs a real
-  study run: set a pair to pathway, study, confirm states advance/branch/graduate correctly.
+- **KNOWN GAPS / to verify live:** (1) No 12-hour window in pathway mode (`applyWindow` is ladder-only).
+  (2) Pathway mode uses the *primary* pair's mode for a multi-pair all/folder scope. (3) Not
+  runtime-verified here — needs a real study run.
+
+**Phase 2 (error types + default mode, 2026-07-21) — DONE.**
+- **Error-type transitions now fire.** `LadderStudyCard.onOutcome` gained an `errorTypes?: ErrorType[]`
+  arg; the typing + dictation rungs map the grader's `issueType` via `issueToErrorTypes` (`lib/pathway.ts`:
+  accent→accent, article/gender→article, typo/punctuation→spelling, semantic→wrong_word) and pass it;
+  `onOutcomePathway` feeds it into the `PathwayEvent`. So `errorType` predicates route real slips now.
+- **Per-user default learning mode.** Migration `100_default_learning_mode.sql` (`profiles.
+  default_learning_mode`). The **default** ladder page (no pair) now also has the Ladder|Pathway toggle
+  (persists the profile default + edits the default pathway); `SupabaseLanguagePairRepository.create`
+  inherits it on a genuinely-new pair (select-then-insert, never resets an existing pair's mode). The
+  toggle was moved to the TOP of both the default and per-language pages.
+- **Deferred:** session suspension safeguard (park a card after K failures) — the between-state spacing +
+  pause interstitials already prevent spam; low value, skipped for now.
+
+**Phase 3 (visual canvas, 2026-07-21) — DONE.** `components/settings/PathwayCanvas.tsx` renders the graph
+as SVG: **circles = states, squares = interval-setting states, 🎓 = graduation terminal, arrows =
+transitions** (labelled with a short condition summary, hover = full spec, a dot marks the start). Clicking
+a node selects that state; clicking an arrow selects its source. `PathwayEditor` was rewritten around it:
+global settings + the canvas + a **single focused panel for the selected state** (its config + only its
+outgoing transitions) instead of the old overwhelming all-states-at-once list. Still list-based editing
+underneath, just far less cluttered. (No drag-to-connect / manual node positioning — auto BFS-layered.)
 
 ## Ladder: skip-ahead rules (2026-07-21)
 

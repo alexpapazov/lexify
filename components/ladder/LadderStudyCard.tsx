@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { apiUrl } from '@/lib/apiBase'
-import type { Card, Rung, GradingSettings, CardChoices, CardSide } from '@/domain'
+import type { Card, Rung, GradingSettings, CardChoices, CardSide, ErrorType } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
 import type { RungAttemptOutcome } from '@/engine/ladderEngine'
 import { mcqOutcome, typedOutcome, producesNative } from '@/lib/ladderSession'
+import { issueToErrorTypes } from '@/lib/pathway'
 import { gradeTyping, resolveTypedPenalty } from '@/engine/grading'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { TypingMode } from '@/components/session/TypingMode'
@@ -36,7 +37,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   /** Inline edit of the card's prompt/answer text (empty string = delete the card). */
   onCardEdit?:     (cardId: string, side: CardSide, newText: string) => void
   onRepeat?:       () => void
-  onOutcome:      (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean) => void
+  /** `errorTypes` (typed/dictation only) drives pathway error-branch transitions; ladders ignore it. */
+  onOutcome:      (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onInfo?:        () => void
   /** Session-sticky "show IPA" flag: once on, every card shows IPA until turned off. */
@@ -144,7 +146,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         onRepeat={onRepeat}
         onNearMiss={isAlmost => { almostRef.current = isAlmost }}
         onIDontKnow={() => {}} onAdvance={() => onOutcome(missOutcome)} {...ipaProps}
-        onRate={(r, wasCorrect) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r), overrodeRef.current, almostRef.current)}
+        onRate={(r, wasCorrect, _ua, issueType) => onOutcome(typedOutcome(wasCorrect ? 'pass' : 'miss', rung.selfRated, r), overrodeRef.current, almostRef.current, issueToErrorTypes(issueType ?? 'none'))}
       />
     )
   }
@@ -163,14 +165,14 @@ function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
   )
 }
 
-function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void }) {
+function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void }) {
   // You always HEAR the target word (card.front). Producing the target = type what you hear; producing
   // the native = type its translation (card.back). Audio is unchanged; only the graded side differs.
   const native = producesNative(rung)
   const answerText = native ? card.back : card.front
   const answerLang = native ? card.targetLanguage : card.sourceLanguage
   const [input, setInput] = useState('')
-  const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean; normalized: string } | null>(null)
+  const [result, setResult] = useState<{ status: 'pass' | 'almost' | 'miss'; overridden: boolean; normalized: string; errorTypes: ErrorType[] } | null>(null)
   // Set when a "type the translation" prompt was answered with the word you just HEARD. That's not a
   // wrong answer — you understood the audio, you just produced the wrong side — so instead of marking
   // it a miss we accept it and re-ask for the translation. Only fires once per card, so answering with
@@ -214,7 +216,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
     // Honour a persisted override for this exact typed answer (marked OK before).
     const viaOverride = status !== 'pass' && !!res.normalizedUser && (overrideAnswers ?? []).includes(res.normalizedUser)
     if (viaOverride) status = 'pass'
-    setResult({ status, overridden: viaOverride, normalized: res.normalizedUser })
+    setResult({ status, overridden: viaOverride, normalized: res.normalizedUser, errorTypes: issueToErrorTypes(res.issueType) })
     // Focus Continue after the result renders (delayed so the Enter that triggered
     // this check doesn't immediately fire the newly-focused button).
     setTimeout(() => continueRef.current?.focus(), 100)
@@ -225,7 +227,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
   function proceed() {
     if (!result) return
     const finalStatus: 'pass' | 'almost' | 'miss' = result.overridden ? 'pass' : result.status
-    onOutcome(typedOutcome(finalStatus, rung.selfRated), result.overridden)
+    onOutcome(typedOutcome(finalStatus, rung.selfRated), result.overridden, result.status === 'almost', result.errorTypes)
   }
 
   const isCorrect = result != null && (result.overridden || result.status === 'pass')
@@ -256,7 +258,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
           )}
           <div className="flex flex-col items-center gap-2">
             {rateToAdvance ? (
-              <RatingButtons onRate={r => onOutcome(r, result.overridden)} suggestedRating="good" />
+              <RatingButtons onRate={r => onOutcome(r, result.overridden, false, result.errorTypes)} suggestedRating="good" />
             ) : (
               <button ref={continueRef} className="btn-primary px-10" onClick={proceed}>Continue</button>
             )}
@@ -288,7 +290,7 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
             onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && input.trim()) check() }} />
           <div className="flex justify-center"><button className="btn-primary px-10" disabled={!input.trim()} onClick={check}>Check</button></div>
           <button
-            onClick={() => { setResult({ status: 'miss', overridden: false, normalized: '' }); setTimeout(() => continueRef.current?.focus(), 100) }}
+            onClick={() => { setResult({ status: 'miss', overridden: false, normalized: '', errorTypes: [] }); setTimeout(() => continueRef.current?.focus(), 100) }}
             className="block mx-auto text-sm text-danger/70 hover:text-danger"
           >Don&apos;t know</button>
         </>
