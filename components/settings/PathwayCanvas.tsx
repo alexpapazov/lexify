@@ -28,7 +28,7 @@ export function conditionText(when: PathwayCondition): string {
 }
 
 // Grid geometry.
-const CELL_X = 130, CELL_Y = 140, R = 31, MARGIN = 70, WRAP = 8, BAND_GAP = 3
+const CELL_X = 110, CELL_Y = 100, R = 15, MARGIN = 55, WRAP = 8, BAND_GAP = 3
 
 type GridPos = { col: number; row: number }
 
@@ -116,7 +116,8 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
 
   const maxCol = Math.max(0, ...pathway.states.map(s => gridOf(s.id).col))
   const maxRow = Math.max(0, ...pathway.states.map(s => gridOf(s.id).row))
-  const width = MARGIN * 2 + maxCol * CELL_X
+  // Always at least a full band wide so a sparse map isn't upscaled to fill the container.
+  const width = MARGIN * 2 + Math.max(maxCol, WRAP - 1) * CELL_X
   const height = MARGIN * 2 + maxRow * CELL_Y
 
   // Drag handling — snap to grid on pointer move; commit (or select if it never moved) on release.
@@ -183,7 +184,7 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
             return (
               <g key={t.id} onClick={() => onSelectState(t.from)} className="cursor-pointer">
                 <title>{conditionText(t.when)}</title>
-                <path d={`M ${a.x + R} ${a.y - 12} a 26 26 0 1 1 -10 -${R - 10}`} fill="none" className="stroke-ink-faint" strokeWidth={2} markerEnd="url(#pw-arrow)" opacity={0.6} />
+                <path d={`M ${a.x + R} ${a.y - 6} a 13 13 0 1 1 -6 -${R - 5}`} fill="none" className="stroke-ink-faint" strokeWidth={1.5} markerEnd="url(#pw-arrow)" opacity={0.6} />
               </g>
             )
           }
@@ -195,10 +196,10 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
           return (
             <g key={t.id} onClick={() => onSelectState(t.from)} className="cursor-pointer">
               <title>{`${label} → ${pathway.states.find(s => s.id === t.to)?.name ?? '?'}`}</title>
-              <line x1={ax} y1={ay} x2={bx} y2={by} className="stroke-ink-faint" strokeWidth={2} markerEnd="url(#pw-arrow)" opacity={0.55} />
+              <line x1={ax} y1={ay} x2={bx} y2={by} className="stroke-ink-faint" strokeWidth={1.5} markerEnd="url(#pw-arrow)" opacity={0.55} />
               <g transform={`translate(${mx}, ${my})`}>
-                <rect x={-label.length * 3.4 - 5} y={-11} width={label.length * 6.8 + 10} height={16} rx={4} className="fill-surface-sunken" opacity={0.9} />
-                <text textAnchor="middle" y={1} className="fill-ink-muted" fontSize={11}>{label}</text>
+                <rect x={-label.length * 2.3 - 4} y={-8} width={label.length * 4.6 + 8} height={12} rx={3} className="fill-surface-sunken" opacity={0.9} />
+                <text textAnchor="middle" y={1} className="fill-ink-muted" fontSize={8}>{label}</text>
               </g>
             </g>
           )
@@ -225,11 +226,11 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
               {s.intervalInit && !s.isTerminal
                 ? <rect x={p.x - R} y={p.y - R} width={R * 2} height={R * 2} rx={12} className={`${fill} ${stroke}`} strokeWidth={sw} />
                 : <circle cx={p.x} cy={p.y} r={R} className={`${fill} ${stroke}`} strokeWidth={sw} />}
-              {s.id === startId && <circle cx={p.x} cy={p.y - R - 7} r={3.5} className="fill-accent" />}
-              <text x={p.x} y={s.isTerminal ? p.y - 2 : p.y + 4} textAnchor="middle" className="fill-ink font-medium" fontSize={11} style={{ pointerEvents: 'none' }}>
+              {s.id === startId && <circle cx={p.x} cy={p.y - R - 5} r={2.5} className="fill-accent" />}
+              <text x={p.x} y={s.isTerminal ? p.y - 1 : p.y + 3} textAnchor="middle" className="fill-ink font-medium" fontSize={7.5} style={{ pointerEvents: 'none' }}>
                 {s.isTerminal ? '🎓' : label}
               </text>
-              {s.isTerminal && <text x={p.x} y={p.y + 13} textAnchor="middle" className="fill-ink-muted" fontSize={9} style={{ pointerEvents: 'none' }}>{label}</text>}
+              {s.isTerminal && <text x={p.x} y={p.y + 8} textAnchor="middle" className="fill-ink-muted" fontSize={6} style={{ pointerEvents: 'none' }}>{label}</text>}
             </g>
           )
         })}

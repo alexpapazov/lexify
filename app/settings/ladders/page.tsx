@@ -110,12 +110,12 @@ function LaddersInner() {
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-5">
       <div>
-        <a href={isPair ? '/settings/ladders' : '/settings/language'} className="text-xs text-ink-faint hover:text-ink">
+        <a href={isPair ? '/settings/ladders' : '/settings/language'} className="inline-block text-xs text-ink-faint hover:text-ink">
           ← {isPair ? 'Learning ladders' : 'Language configuration'}
         </a>
 
         {/* Mode toggle — at the very top so it's the first thing you set */}
-        <div className="inline-flex rounded-lg border border-line/10 p-0.5 text-sm mt-3 mb-3">
+        <div className="flex w-fit rounded-lg border border-line/10 p-0.5 text-sm mt-3 mb-3">
           {(['ladder', 'pathway'] as LearningMode[]).map(m => (
             <button key={m} onClick={() => switchMode(m)}
               className={`px-4 py-1.5 rounded-md capitalize transition-colors ${mode === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}>
