@@ -309,6 +309,69 @@ export interface Ladder {
   betweenRungWaitSeconds?: number
 }
 
+// ─── Learning Pathways ───────────────────────────────────────────────────────
+// A directed state graph — the branched successor to the linear ladder. Opt-in per language pair
+// (`language_pairs.learning_mode`). A card occupies one STATE; each answer fires a TRANSITION to another
+// state based on rating / correctness / error type / streak counters. See features/Learning Pathways.
+// A State reuses a Rung's presentation fields verbatim so the same card UI renders it unchanged.
+
+/** Error kinds a typed/dictation answer can produce — drives error-specific branching. Maps to
+ *  `engine/grading.ts` issueType (spelling/accent/article) + confusion detection (wrong_word). */
+export type ErrorType = 'spelling' | 'accent' | 'article' | 'wrong_word'
+
+/** Per-state accumulating counters a transition condition can read (reset on entering a state). */
+export type PathwayCounter = 'consecutiveGood' | 'consecutiveAgain' | 'totalGood' | 'totalAgain'
+
+/** One test in a transition's condition. A Condition is a list of these AND-ed together. No timing. */
+export type PathwayPredicate =
+  | { kind: 'rating';          is: RungOutcome }                 // exact self-rated rating (again/hard/good/easy)
+  | { kind: 'correct';         is: boolean }                     // clean success (pass/good/easy) vs not
+  | { kind: 'errorType';       is: ErrorType }                   // this attempt's errors include `is`
+  | { kind: 'counter';         name: PathwayCounter; gte: number }
+  | { kind: 'attemptsInState'; gte: number }
+
+/** ALL predicates must hold (AND). An empty condition always matches (an unconditional edge). */
+export type PathwayCondition = PathwayPredicate[]
+
+/** A state node: what the learner sees + how it's graded. Superset of a Rung's presentation fields. */
+export interface PathwayState {
+  id:                string
+  name:              string
+  // presentation — identical to Rung, so the existing card UI renders it unchanged
+  type:              RungType
+  direction:         RungDirection
+  distractorSource?: DistractorSource
+  strictness?:       TypedStrictness
+  selfRated:         boolean
+  intervalInit:      boolean          // sets THIS direction's graduation interval (≤1 per direction)
+  /** Optional floor on how soon this state may re-appear for the card, in seconds. */
+  minReshowSeconds?: number
+  /** The graduation sink — reaching it hands the card to the FSRS Due-Now scheduler. No presentation. */
+  isTerminal?:       boolean
+}
+
+/** A directed edge: on a matching condition, move from `from` to `to`. First match by priority wins. */
+export interface Transition {
+  id:        string
+  from:      string           // source state id
+  to:        string           // destination state id
+  when:      PathwayCondition
+  priority:  number           // lower = evaluated first
+  /** Counters to zero on taking this edge (beyond the automatic per-state reset). */
+  resetCounters?: PathwayCounter[]
+  /** Per-branch spacing override (seconds) — replaces the pathway's global `betweenStateWaitSeconds`. */
+  waitSecondsOverride?: number
+}
+
+export interface Pathway {
+  id:           string
+  startStateId: string
+  states:       PathwayState[]
+  transitions:  Transition[]
+  /** Global gap before the next state appears (default 180 = 3 min); a transition can override it. */
+  betweenStateWaitSeconds: number
+}
+
 /** Built-in fallback ladder (used until a user defines a default or per-pair one). */
 export const DEFAULT_LADDER: Ladder = {
   rungs: [

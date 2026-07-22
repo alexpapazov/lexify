@@ -1030,6 +1030,28 @@ day (due tomorrow, not today). Propagates to all 3 session pages via `scheduleGr
 pinned at 10 still makes stability grow slowly (only Easy walks difficulty down) — a genuinely hard card reviews
 daily until it stabilizes; that's expected, not a bug.
 
+## Learning Pathways — Phase 0 engine only (2026-07-21)
+
+A branched, state-machine successor to the linear ladder — **design + full plan in
+`features/Learning Pathways (proposal).md` (read it before touching this).** Opt-in per pair; ladders stay
+untouched. **Only Phase 0 (pure engine) is built; NOT wired to any UI or DB yet** — you cannot study a
+pathway. Shipped so far:
+- **`domain/index.ts`**: `Pathway`, `PathwayState` (superset of a `Rung`'s presentation fields),
+  `Transition`, `PathwayPredicate`/`PathwayCondition` (AND-ed list; kinds: rating/correct/errorType/
+  counter/attemptsInState — **no timing predicates by design**), `PathwayCounter`, `ErrorType`.
+- **`engine/pathwayEngine.ts`**: `stepPathway(pathway, route, event, now) → {route, moved, graduated,
+  reshowSeconds}`, `initialRouteState`, `RouteState`, `PathwayEvent = {outcome, errorTypes}`. Deterministic:
+  bump per-state counters → (leaving an `intervalInit` state on a success) record that direction's interval
+  (Easy → `easyInterval`, else flat 1 day) → fire the first-matching transition by `priority` → graduate on
+  a terminal (`isTerminal`) state, filling any unset direction with 1 day. Reuses `easyInterval`/
+  `IntervalRange` from `ladderEngine.ts`; the ladder engine is otherwise untouched.
+- **`lib/pathway.ts`**: `validatePathway` (dead-ends, graduation-reachability, ≤1 interval-setter per
+  direction, `canInitInterval` reuse; unreachable/no-interval are warnings) and `ladderToPathway`
+  (mechanical scaffold, not a template — the app ships NO pre-built pathways). Tests:
+  `engine/__tests__/pathwayEngine.test.ts`, `lib/__tests__/pathway.test.ts`.
+- Next: Phase 1 (`language_pairs.learning_mode` + `learning_pathways` table + repo; branch `LadderStudy`
+  on mode; list-based state/transition editor; reuse `LadderStudyCard`). No pathway migrations exist yet.
+
 ## Ladder: skip-ahead rules (2026-07-21)
 
 The reverse of a drop-back: on a positive outcome N times (in a row or total this rung sitting), a card
