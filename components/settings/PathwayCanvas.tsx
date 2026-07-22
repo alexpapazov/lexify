@@ -120,6 +120,34 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
   const width = MARGIN * 2 + Math.max(maxCol, WRAP - 1) * CELL_X
   const height = MARGIN * 2 + maxRow * CELL_Y
 
+  // Pre-place each edge label, then push overlapping ones apart so pills don't stack.
+  const edgeLabels = new Map<string, { cx: number; cy: number; w: number; h: number; text: string }>()
+  {
+    const arr: { id: string; cx: number; cy: number; w: number; h: number; text: string }[] = []
+    for (const t of pathway.transitions) {
+      if (t.from === t.to) continue
+      const a = posOf(t.from), b = posOf(t.to)
+      const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1
+      const ax = a.x + (dx / len) * R, ay = a.y + (dy / len) * R
+      const bx = b.x - (dx / len) * (R + 6), by = b.y - (dy / len) * (R + 6)
+      const nx = -dy / len, ny = dx / len
+      const text = conditionText(t.when)
+      arr.push({ id: t.id, cx: ax + (bx - ax) * 0.42 + nx * 12, cy: ay + (by - ay) * 0.42 + ny * 12, w: text.length * 4.6 + 8, h: 13, text })
+    }
+    for (let it = 0; it < 60; it++) {
+      for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+        const A = arr[i]!, B = arr[j]!
+        const dcx = B.cx - A.cx, dcy = B.cy - A.cy
+        const ox = (A.w + B.w) / 2 - Math.abs(dcx), oy = (A.h + B.h) / 2 - Math.abs(dcy)
+        if (ox > 0 && oy > 0) {
+          if (oy <= ox) { const p = (oy / 2 + 0.5) * (dcy >= 0 ? 1 : -1); A.cy -= p; B.cy += p }
+          else { const p = (ox / 2 + 0.5) * (dcx >= 0 ? 1 : -1); A.cx -= p; B.cx += p }
+        }
+      }
+    }
+    for (const l of arr) edgeLabels.set(l.id, l)
+  }
+
   // Drag handling — snap to grid on pointer move; commit (or select if it never moved) on release.
   useEffect(() => {
     if (!drag) return
@@ -191,18 +219,15 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
           const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1
           const ax = a.x + (dx / len) * R, ay = a.y + (dy / len) * R
           const bx = b.x - (dx / len) * (R + 6), by = b.y - (dy / len) * (R + 6)
-          // Place the label off-midpoint (toward the source) and nudge it perpendicular. Reciprocal
-          // edges have opposite (dx,dy) so their perpendicular normal flips → their pills separate.
-          const nx = -dy / len, ny = dx / len
-          const mx = ax + (bx - ax) * 0.42 + nx * 12, my = ay + (by - ay) * 0.42 + ny * 12
-          const label = conditionText(t.when)
+          const lp = edgeLabels.get(t.id)!
+          const label = lp.text
           return (
             <g key={t.id} onClick={() => onSelectState(t.from)} className="cursor-pointer">
               <title>{`${label} → ${pathway.states.find(s => s.id === t.to)?.name ?? '?'}`}</title>
               <line x1={ax} y1={ay} x2={bx} y2={by} className="stroke-ink-faint" strokeWidth={1.5} markerEnd="url(#pw-arrow)" opacity={0.55} />
-              <g transform={`translate(${mx}, ${my})`}>
-                <rect x={-label.length * 2.3 - 4} y={-8} width={label.length * 4.6 + 8} height={12} rx={3} className="fill-surface-sunken" opacity={0.9} />
-                <text textAnchor="middle" y={1} className="fill-ink-muted" fontSize={8}>{label}</text>
+              <g transform={`translate(${lp.cx}, ${lp.cy})`}>
+                <rect x={-lp.w / 2} y={-7} width={lp.w} height={12} rx={3} className="fill-surface-sunken" opacity={0.92} />
+                <text textAnchor="middle" y={1.5} className="fill-ink-muted" fontSize={8}>{label}</text>
               </g>
             </g>
           )
