@@ -96,15 +96,19 @@ function autoLayout(pathway: Pathway): Map<string, GridPos> {
   return pos
 }
 
-export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveState }: {
+export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveState, onAddTransition }: {
   pathway: Pathway
   selectedStateId: string | null
   onSelectState: (id: string) => void
   onMoveState: (id: string, pos: GridPos) => void
+  onAddTransition: (from: string, to: string) => void
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null)
   const auto = useMemo(() => autoLayout(pathway), [pathway])
   const [drag, setDrag] = useState<{ id: string; col: number; row: number; startCol: number; startRow: number } | null>(null)
+  // Double-click-drag from a node draws a new transition; the arrow tracks the cursor until it's dropped.
+  const [link, setLink] = useState<{ fromId: string; x: number; y: number; overId: string | null } | null>(null)
+  const lastDown = useRef<{ id: string; t: number } | null>(null)
 
   const gridOf = (id: string): GridPos => {
     if (drag && drag.id === id) return { col: drag.col, row: drag.row }
@@ -113,6 +117,17 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
   }
   const px = (g: GridPos) => ({ x: MARGIN + g.col * CELL_X, y: MARGIN + g.row * CELL_Y })
   const posOf = (id: string) => px(gridOf(id))
+  const toSvg = (clientX: number, clientY: number) => {
+    const svg = svgRef.current
+    const ctm = svg?.getScreenCTM()
+    if (!svg || !ctm) return null
+    const pt = svg.createSVGPoint(); pt.x = clientX; pt.y = clientY
+    return pt.matrixTransform(ctm.inverse())
+  }
+  const nodeUnder = (x: number, y: number): string | null => {
+    for (const s of pathway.states) { const q = posOf(s.id); if (Math.hypot(q.x - x, q.y - y) <= R) return s.id }
+    return null
+  }
 
   const maxCol = Math.max(0, ...pathway.states.map(s => gridOf(s.id).col))
   const maxRow = Math.max(0, ...pathway.states.map(s => gridOf(s.id).row))
@@ -151,13 +166,6 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
   // Drag handling — snap to grid on pointer move; commit (or select if it never moved) on release.
   useEffect(() => {
     if (!drag) return
-    const toSvg = (clientX: number, clientY: number) => {
-      const svg = svgRef.current
-      const ctm = svg?.getScreenCTM()
-      if (!svg || !ctm) return null
-      const pt = svg.createSVGPoint(); pt.x = clientX; pt.y = clientY
-      return pt.matrixTransform(ctm.inverse())
-    }
     const move = (e: PointerEvent) => {
       const p = toSvg(e.clientX, e.clientY)
       if (!p) return
@@ -177,7 +185,27 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
-  }, [drag, onMoveState, onSelectState])
+  }, [drag, onMoveState, onSelectState]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Linking — the arrow follows the cursor; dropping on another state creates a transition to it.
+  useEffect(() => {
+    if (!link) return
+    const move = (e: PointerEvent) => {
+      const p = toSvg(e.clientX, e.clientY)
+      if (!p) return
+      const over = nodeUnder(p.x, p.y)
+      setLink(l => l ? { ...l, x: p.x, y: p.y, overId: over } : l)
+    }
+    const up = () => {
+      setLink(l => {
+        if (l && l.overId && l.overId !== l.fromId) onAddTransition(l.fromId, l.overId)
+        return null
+      })
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+  }, [link, onAddTransition]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const specOf = (s: PathwayState): string => s.isTerminal
     ? 'Graduation — hands the card to spaced review.'
@@ -194,6 +222,9 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
         <defs>
           <marker id="pw-arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
             <path d="M0,0 L9,4.5 L0,9 z" className="fill-ink-faint" />
+          </marker>
+          <marker id="pw-arrow-accent" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 z" className="fill-accent" />
           </marker>
         </defs>
 
@@ -237,9 +268,11 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
         {pathway.states.map(s => {
           const p = posOf(s.id)
           const sel = s.id === selectedStateId
-          const stroke = sel ? 'stroke-accent' : s.isTerminal ? 'stroke-success' : s.intervalInit ? 'stroke-warning' : 'stroke-line/40'
-          const fill = sel ? 'fill-accent/20' : s.isTerminal ? 'fill-success/10' : 'fill-surface-raised'
-          const sw = sel ? 3 : 1.75
+          const linkTarget = link != null && link.overId === s.id && link.fromId !== s.id
+          const linkSource = link?.fromId === s.id
+          const stroke = (sel || linkTarget || linkSource) ? 'stroke-accent' : s.isTerminal ? 'stroke-success' : s.intervalInit ? 'stroke-warning' : 'stroke-line/40'
+          const fill = linkTarget ? 'fill-accent/30' : sel ? 'fill-accent/20' : s.isTerminal ? 'fill-success/10' : 'fill-surface-raised'
+          const sw = (sel || linkTarget) ? 3 : 1.75
           const label = s.name.length > 9 ? s.name.slice(0, 8) + '…' : s.name
           const dragging = drag?.id === s.id
           return (
@@ -247,8 +280,15 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
               className={dragging ? 'cursor-grabbing' : 'cursor-grab'}
               onPointerDown={(e) => {
                 e.preventDefault()
-                const g = gridOf(s.id)
-                setDrag({ id: s.id, col: g.col, row: g.row, startCol: g.col, startRow: g.row })
+                const isDouble = lastDown.current?.id === s.id && (e.timeStamp - lastDown.current.t) < 400
+                lastDown.current = { id: s.id, t: e.timeStamp }
+                if (isDouble) {
+                  const c = posOf(s.id)
+                  setLink({ fromId: s.id, x: c.x, y: c.y, overId: null })
+                } else {
+                  const g = gridOf(s.id)
+                  setDrag({ id: s.id, col: g.col, row: g.row, startCol: g.col, startRow: g.row })
+                }
               }}>
               <title>{specOf(s)}</title>
               {s.intervalInit && !s.isTerminal
@@ -262,6 +302,13 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
             </g>
           )
         })}
+
+        {/* Live arrow while linking (double-click-drag) */}
+        {link && (() => {
+          const from = posOf(link.fromId)
+          return <line x1={from.x} y1={from.y} x2={link.x} y2={link.y}
+            className="stroke-accent" strokeWidth={2} strokeDasharray="5 3" markerEnd="url(#pw-arrow-accent)" style={{ pointerEvents: 'none' }} />
+        })()}
       </svg>
     </div>
   )

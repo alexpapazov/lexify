@@ -61,6 +61,10 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
     const to = p.states.find(s => s.isTerminal)?.id ?? p.states[0]!.id
     setP(prev => ({ ...prev, transitions: [...prev.transitions, { id: uid('tr-'), from, to, when: [{ kind: 'correct', is: true }], priority: 100 }] }))
   }
+  const addTransitionTo = (from: string, to: string) => {
+    setP(prev => ({ ...prev, transitions: [...prev.transitions, { id: uid('tr-'), from, to, when: [{ kind: 'correct', is: true }], priority: 100 }] }))
+    setSelected(from)
+  }
   const removeTransition = (id: string) => setP(prev => ({ ...prev, transitions: prev.transitions.filter(t => t.id !== id) }))
   const patchPredicate = (tid: string, i: number, pred: PathwayPredicate) =>
     setP(prev => ({ ...prev, transitions: prev.transitions.map(t => t.id === tid ? { ...t, when: t.when.map((w, k) => k === i ? pred : w) } : t) }))
@@ -94,9 +98,9 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
           <h3 className="text-sm font-medium text-ink">Map</h3>
           <button className="btn-ghost text-sm py-1.5 px-3" onClick={addState}>+ Add state</button>
         </div>
-        <PathwayCanvas pathway={p} selectedStateId={selected} onSelectState={setSelected} onMoveState={moveState} />
+        <PathwayCanvas pathway={p} selectedStateId={selected} onSelectState={setSelected} onMoveState={moveState} onAddTransition={addTransitionTo} />
         <p className="text-[11px] text-ink-faint">
-          Drag a node to reposition it (snaps to the grid) · click a node to edit it below, an arrow to edit its source ·
+          Drag a node to move it (snaps to the grid) · <span className="text-ink-muted">double-click-drag a node onto another to draw a transition</span> · click a node to edit it below, an arrow to edit its source ·
           <span className="ml-1">● state&nbsp;&nbsp;▢ sets interval&nbsp;&nbsp;🎓 graduation · the dot marks the start</span>
         </p>
       </section>
