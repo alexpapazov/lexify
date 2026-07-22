@@ -1063,10 +1063,26 @@ uses the ladder** — the study session is NOT wired to pathways yet (that's Pha
   state + transition editor (add states, per-state outgoing transitions with the AND-ed predicate rows,
   priority, per-branch wait override; validates on save). Switching a pair to pathway mode seeds the
   editor from `ladderToPathway(<their ladder>)` if no pathway is saved.
-- **Phase 1b (NEXT, not started):** branch the study session (`components/ladder/LadderStudy.tsx`) on the
-  pair's `learning_mode` to actually RUN a pathway — drive `stepPathway` instead of `reviewRung`, store
-  `RouteState` in the `ladder_climb` JSON, render each `PathwayState` via the existing `LadderStudyCard`,
-  and graduate/reshow off the engine's output. Until then a pathway is inert config.
+**Phase 1b (session, 2026-07-21) — DONE. Pathways are now studyable** (needs live testing — see caveats).
+`components/ladder/LadderStudy.tsx` branches on the primary pair's `learning_mode`:
+- **Additive, not a rewrite.** Every ladder code path is byte-identical; pathway logic lives in parallel
+  branches gated on `isPathway` (`pathway !== null`). `states` map widened to `Map<string, ClimbState |
+  RouteState>`; `SupabaseLadderClimbRepository.save` accepts either (opaque JSON).
+- Load: if the primary pair is `learning_mode='pathway'` (online only — offline is always ladder), loads
+  `resolveEffectivePathway(pair, default) ?? ladderToPathway(effLadder)`. Reconcile restarts a card whose
+  stored climb is the *other* shape (`rightShape` checks `stateId` vs `rungIndex`).
+- Derivations: `currentRoute`/`currentPathState` alongside the (now `!isPathway`-gated) `currentClimb`/
+  `currentRung`; `presentationRung = stateAsRung(currentPathState)` adapts a `PathwayState` to the `Rung`
+  shape `LadderStudyCard` reads.
+- `onOutcomePathway` (sibling of `onOutcome`): runs `stepPathway`, reuses the exact queue/graduate/reshow/
+  undo plumbing (`reshowSeconds*1000` for the delay). `onOutcome` early-returns into it when `isPathway`.
+- Header shows the state name; progress bar falls back to the graduated fraction (a pathway has no fixed
+  length). Undo works unchanged (opaque state).
+- **KNOWN GAPS / to verify live:** (1) **error-type transitions don't fire yet** — `onOutcomePathway`
+  passes `errorTypes: []`; wiring `issueType`/confusion through `onOutcome` is Phase 2. (2) No 12-hour
+  window in pathway mode (`applyWindow` is ladder-only). (3) Pathway mode requires the primary pair; a
+  multi-pair all/folder scope uses the primary pair's mode. (4) Not runtime-verified here — needs a real
+  study run: set a pair to pathway, study, confirm states advance/branch/graduate correctly.
 
 ## Ladder: skip-ahead rules (2026-07-21)
 

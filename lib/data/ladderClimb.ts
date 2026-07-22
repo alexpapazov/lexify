@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/client'
 import type { UserId, CardId, DeckId } from '@/domain'
 import type { ClimbState } from '@/engine/ladderEngine'
+import type { RouteState } from '@/engine/pathwayEngine'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { getLocalStore } from '@/lib/offline/localStore'
 import { localClimbForCards, localSaveClimb, localRemoveClimb } from '@/lib/offline/localRepos'
@@ -51,8 +52,9 @@ export class SupabaseLadderClimbRepository {
     return out
   }
 
-  async save(userId: UserId, cardId: CardId, deckId: DeckId, state: ClimbState): Promise<void> {
-    if (isOfflineActive()) return localSaveClimb(cardId, deckId, state)
+  // `state` is opaque JSON — a ClimbState (ladder) or a RouteState (pathway); the row stores either.
+  async save(userId: UserId, cardId: CardId, deckId: DeckId, state: ClimbState | RouteState): Promise<void> {
+    if (isOfflineActive()) return localSaveClimb(cardId, deckId, state as ClimbState)
     const { error } = await this.db.from('ladder_climb').upsert(
       { user_id: userId, card_id: cardId, deck_id: deckId, state, updated_at: new Date().toISOString() },
       { onConflict: 'user_id,card_id' },

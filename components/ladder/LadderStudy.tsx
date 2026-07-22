@@ -17,6 +17,11 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseLadderEventRepository } from '@/lib/data/ladderEvents'
 import { resolveEffectiveLadder } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
+import { stepPathway, initialRouteState, type RouteState, type PathwayEvent } from '@/engine/pathwayEngine'
+import { SupabasePathwayRepository } from '@/lib/data/pathways'
+import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
+import { resolveEffectivePathway, ladderToPathway } from '@/lib/pathway'
+import type { Pathway, PathwayState, Rung } from '@/domain'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
@@ -42,6 +47,16 @@ const newSessionId = () =>
 
 const RUNG_LABEL: Record<RungType, string> = {
   mcq: 'Recognize', typing: 'Type', self_graded: 'Recall', dictation: 'Dictation',
+}
+
+/** Adapt a pathway State to the Rung shape `LadderStudyCard` expects (it only reads presentation
+ *  fields). The ladder-only fields are filler — the card renderer never touches them. */
+function stateAsRung(s: PathwayState): Rung {
+  return {
+    id: s.id, type: s.type, direction: s.direction, distractorSource: s.distractorSource,
+    strictness: s.strictness, selfRated: s.selfRated, intervalInit: s.intervalInit,
+    advanceTimes: 1, advanceInARow: true, dropBacks: [],
+  }
 }
 
 /** What set of cards this ladder session covers. Decks in a folder / pair share a
@@ -70,7 +85,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   // off — no need to keep re-toggling. We also transcribe upcoming cards ahead of time (see below).
   const [ipaOn, setIpaOn] = useState(false)
   const [total, setTotal] = useState(0)
-  const [states, setStates] = useState<Map<string, ClimbState>>(new Map())
+  const [states, setStates] = useState<Map<string, ClimbState | RouteState>>(new Map())
+  // Pathway mode (per-pair): when set, this scope studies via the branched pathway engine instead of the
+  // linear ladder. All ladder code paths below stay untouched; pathway logic lives in parallel branches.
+  const [pathway, setPathway] = useState<Pathway | null>(null)
+  const isPathway = pathway !== null
   const [graduated, setGraduated] = useState(0)
   const [answered, setAnswered] = useState(0)
   const [paused, setPaused] = useState(false)
@@ -101,7 +120,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const [infoState, setInfoState] = useState<CardState | undefined>(undefined)
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
   const [undoStack, setUndoStack] = useState<Array<{
-    cardId: string; prevClimb: ClimbState | undefined; prevQueueItem: QueueItem | undefined
+    cardId: string; prevClimb: ClimbState | RouteState | undefined; prevQueueItem: QueueItem | undefined
     wasGraduated: boolean; prevAnswered: number; prevPaused: boolean
     eventIdP: Promise<string | null> | null   // the logged ladder_event (deleted on undo)
     overrideAdd: { cardId: string; answerSide: CardSide; answerText: string } | null  // override to roll back
@@ -253,18 +272,37 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       const effLadder = resolveEffectiveLadder(pair, def)
       setLadder(effLadder)
 
+      // Pathway mode? Per-pair flag on the primary pair (offline is always ladder — pathways aren't bundled).
+      setPathway(null)
+      let effPathway: Pathway | null = null
+      if (!isOfflineActive()) {
+        const pairsList = await new SupabaseLanguagePairRepository().list(uid).catch(() => [])
+        const mode = pairsList.find(pp => pp.sourceLanguage === primary.sourceLanguage && pp.targetLanguage === primary.targetLanguage)?.learningMode ?? 'ladder'
+        if (mode === 'pathway') {
+          const pathRepo = new SupabasePathwayRepository()
+          const [pp, dp] = await Promise.all([pathRepo.getForPair(uid, primary.sourceLanguage, primary.targetLanguage), pathRepo.getDefault(uid)])
+          effPathway = resolveEffectivePathway(pp, dp) ?? ladderToPathway(effLadder)
+          setPathway(effPathway)
+        }
+      }
+      const onPathway = effPathway !== null
+      const freshState = (): ClimbState | RouteState => onPathway ? initialRouteState(effPathway!) : initialClimbState()
+      // A stored climb from the *other* mode has the wrong shape (rungIndex vs stateId) — restart it fresh.
+      const rightShape = (cl: ClimbState | RouteState | undefined): boolean =>
+        cl != null && (onPathway ? 'stateId' in cl : 'rungIndex' in cl)
+
       const climb = await new SupabaseLadderClimbRepository().listForCards(uid, allCards.map(c => c.id))
 
       const shuffle = <T,>(a: T[]) => a.sort(() => Math.random() - 0.5)
       const learning: string[] = []
       const fresh: string[] = []
-      const reconciled = new Map(climb)
+      const reconciled = new Map<string, ClimbState | RouteState>(climb)
       for (const c of allCards) {
         if (gradSet.has(c.id)) continue
         const cl = climb.get(c.id)
-        if (cl && !cl.graduated) { learning.push(c.id); continue }
+        if (rightShape(cl) && !cl!.graduated) { learning.push(c.id); continue }
         const alreadyLearning = learningStateSet.has(c.id)
-        if (cl || alreadyLearning) reconciled.set(c.id, initialClimbState())
+        if (cl || alreadyLearning) reconciled.set(c.id, freshState())   // wrong-shape / graduated-orphan / restart
         ;(alreadyLearning ? learning : fresh).push(c.id)
       }
       setStates(reconciled)
@@ -359,7 +397,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       }
       const items: QueueItem[] = q.map(cardId => ({ cardId, readyAt: 0, ratedAt: 0 }))
       const ladderLen0 = Math.max(1, effLadder.rungs.length)
-      startStepsRef.current = items.reduce((s, it) => s + Math.min(reconciled.get(it.cardId)?.rungIndex ?? 0, ladderLen0), 0)
+      startStepsRef.current = items.reduce((s, it) => s + Math.min((reconciled.get(it.cardId) as ClimbState | undefined)?.rungIndex ?? 0, ladderLen0), 0)
       progressPctRef.current = 0
       setAnswered(0); setPaused(false)
       setQueue(items); setTotal(rollingRef.current ? items.length + pendingFreshRef.current.length : items.length)
@@ -385,8 +423,15 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   }, [scope, category])
 
   const currentCard = currentId ? cardsById.get(currentId) : undefined
-  const currentClimb = currentId ? applyWindow(states.get(currentId) ?? initialClimbState(), Date.now()) : null
-  const currentRung = ladder && currentClimb ? ladder.rungs[currentClimb.rungIndex] : undefined
+  const currentStored = currentId ? states.get(currentId) : undefined
+  // Ladder derivations (null in pathway mode; the ladder branches below are gated on !isPathway).
+  const currentClimb = (!isPathway && currentId) ? applyWindow((currentStored as ClimbState) ?? initialClimbState(), Date.now()) : null
+  const currentRung = (!isPathway && ladder && currentClimb) ? ladder.rungs[currentClimb.rungIndex] : undefined
+  // Pathway derivations (null in ladder mode).
+  const currentRoute = (isPathway && currentId) ? ((currentStored as RouteState) ?? initialRouteState(pathway!)) : null
+  const currentPathState = (isPathway && pathway && currentRoute) ? pathway.states.find(s => s.id === currentRoute.stateId) : undefined
+  // The presentation the card renderer shows, and whether there's a card to show at all.
+  const presentationRung: Rung | undefined = isPathway ? (currentPathState ? stateAsRung(currentPathState) : undefined) : currentRung
   const currentDeck = currentId ? deckFor(currentId) : undefined
 
   // Reset the per-card timer + pending override whenever a new card is shown.
@@ -454,7 +499,59 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       reviewDirection: 'reverse', intervalDays: nDays, scheduledIntervalDays: nDays, recallIntervalDays: nDays, dueAt: due(nDays), recallDueAt: due(nDays) })
   }
 
+  // Pathway sibling of onOutcome: run the graph engine, then the same queue/graduate/reshow plumbing.
+  // Error-type transitions aren't fed yet (errorTypes: []) — that plumbing is Phase 2.
+  async function onOutcomePathway(outcome: RungAttemptOutcome, overridden: boolean, almost: boolean) {
+    if (!userId || !pathway || !currentId || !currentRoute) return
+    const now = Date.now()
+    sessionIdRef.current = resolveSessionId(now)
+    const res = stepPathway(pathway, currentRoute, { outcome: outcome as PathwayEvent['outcome'], errorTypes: [] }, now)
+    const loggedOutcome: RungAttemptOutcome = almost && outcome === 'miss' ? 'almost' : outcome
+    const logDeck = deckFor(currentId)
+    const eventIdP = new SupabaseLadderEventRepository().log(userId, {
+      sessionId: sessionIdRef.current, cardId: currentId, deckId: deckByCard.get(currentId) ?? null,
+      label: cardsById.get(currentId)?.front ?? null,
+      sourceLanguage: logDeck?.sourceLanguage ?? null, targetLanguage: logDeck?.targetLanguage ?? null,
+      fromRung: 0, toRung: 0, rungCount: pathway.states.length, rungType: currentPathState?.type ?? null,
+      outcome: loggedOutcome, advanced: res.moved, graduated: res.graduated, overridden,
+      durationMs: reviewTimer.current?.read() ?? 0,
+    }).catch(() => null)
+    touchSession()
+    const overrideAdd = pendingOverrideAddRef.current?.cardId === currentId ? pendingOverrideAddRef.current : null
+    pendingOverrideAddRef.current = null
+    setUndoStack(prev => [...prev.slice(-19), {
+      cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
+      wasGraduated: res.graduated, prevAnswered: answered, prevPaused: paused, eventIdP, overrideAdd,
+    }])
+    await new SupabaseLadderClimbRepository().save(userId, currentId, deckByCard.get(currentId) ?? '', res.route).catch(console.error)
+    setStates(prev => new Map(prev).set(currentId, res.route))
+
+    let nextQueue: QueueItem[]
+    if (res.graduated) {
+      await graduate(currentId, res.route.targetInterval, res.route.nativeInterval)
+      setGraduated(g => g + 1)
+      nextQueue = queue.filter(e => e.cardId !== currentId)
+      if (rollingRef.current && pendingFreshRef.current.length > 0) {
+        const nextFresh = pendingFreshRef.current.shift()!
+        nextQueue = [...nextQueue, { cardId: nextFresh, readyAt: 0, ratedAt: 0 }]
+      }
+    } else {
+      const delay = res.reshowSeconds * 1000
+      nextQueue = queue.map(e => e.cardId === currentId
+        ? { cardId: currentId, readyAt: delay > 0 ? now + delay : 0, ratedAt: delay > 0 ? now : 0 }
+        : e)
+    }
+    setQueue(nextQueue)
+    const nextId = pickNextCard(nextQueue, now, currentId)?.cardId ?? null
+    setCurrentId(nextId)
+    const nextAnswered = answered + 1
+    setAnswered(nextAnswered)
+    if (nextId && !res.graduated && nextQueue.length === 1) { setPauseKind('lastcard'); setPaused(true) }
+    else if (nextId && total > 0 && nextAnswered % total === 0) { setPauseKind('round'); setPaused(true) }
+  }
+
   async function onOutcome(outcome: RungAttemptOutcome, overridden = false, almost = false) {
+    if (isPathway) { await onOutcomePathway(outcome, overridden, almost); return }
     if (!userId || !ladder || !currentId || !currentClimb) return
     const now = Date.now()
     // Attribute this review to the current session, opening a new one only if ≥ 45 min passed since the
@@ -582,7 +679,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
   if (decksById.size === 0 || !ladder) return <p className="p-6 text-sm text-danger">Nothing to study here.</p>
 
-  if (!currentCard || !currentRung || !currentClimb || !currentDeck) {
+  if (!currentCard || !presentationRung || !currentDeck || (isPathway ? !currentRoute : !currentClimb)) {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-6">
         <h1 className="text-xl font-semibold text-ink">Session complete</h1>
@@ -624,8 +721,10 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     )
   }
 
-  const ladderLen = Math.max(1, ladder.rungs.length)
-  const stepsDone = graduated * ladderLen + queue.reduce((sum, e) => sum + Math.min(states.get(e.cardId)?.rungIndex ?? 0, ladderLen), 0)
+  // Progress: the ladder counts rung-steps; a pathway has no fixed length, so it falls back to the
+  // graduated fraction (rungIndex is undefined on a RouteState → contributes 0).
+  const ladderLen = Math.max(1, isPathway ? 1 : ladder.rungs.length)
+  const stepsDone = graduated * ladderLen + queue.reduce((sum, e) => sum + Math.min((states.get(e.cardId) as ClimbState | undefined)?.rungIndex ?? 0, ladderLen), 0)
   const totalSteps = total * ladderLen
   const remaining = Math.max(1, totalSteps - startStepsRef.current)
   const rawPct = ((stepsDone - startStepsRef.current) / remaining) * 100
@@ -642,7 +741,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       <div className="relative flex items-center justify-between">
         <a href={back} className="text-base text-ink-muted hover:text-ink">✕ End session</a>
         <div className="absolute left-1/2 -translate-x-1/2 text-sm text-ink-muted">{pct}% · {graduated}/{total} graduated</div>
-        <div className="text-sm text-ink-muted">Rung {currentClimb.rungIndex + 1} · {RUNG_LABEL[currentRung.type]}</div>
+        <div className="text-sm text-ink-muted">
+          {isPathway ? `${currentPathState!.name} · ${RUNG_LABEL[presentationRung.type]}` : `Rung ${currentClimb!.rungIndex + 1} · ${RUNG_LABEL[presentationRung.type]}`}
+        </div>
       </div>
       <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden">
         <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
@@ -654,8 +755,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       )}
 
       <LadderStudyCard
-        key={`${currentId}:${currentClimb.rungIndex}`}
-        card={currentCard} rung={currentRung} deckCards={curDeckCards} deckName={currentDeck.name}
+        key={isPathway ? `${currentId}:${currentRoute!.stateId}` : `${currentId}:${currentClimb!.rungIndex}`}
+        card={currentCard} rung={presentationRung} deckCards={curDeckCards} deckName={currentDeck.name}
         sourceLanguage={currentDeck.sourceLanguage} targetLanguage={currentDeck.targetLanguage} gradingSettings={currentDeck.gradingSettings}
         overrides={overrides} onOverrideAnswer={handleOverrideAnswer} onChoiceEdit={handleChoiceEdit}
         onCardEdit={async (id, side, newText) => {

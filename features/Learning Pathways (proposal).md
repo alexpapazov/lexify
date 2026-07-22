@@ -337,9 +337,10 @@ state(s) sit — that's how you tune Spanish for max efficiency.
 
 - **Phase 0 — Model + engine. ✅ DONE.** `domain` types, `engine/pathwayEngine.ts`, `lib/pathway.ts`
   (`validatePathway` + `ladderToPathway`), 20 unit tests. No UI, no DB. Core de-risked.
-- **Phase 1 — Run it.** `language_pairs.learning_mode` + `learning_pathways` table + repo;
-  `LadderStudy` branches on mode; **list-based** state + transition editor; reuse `LadderStudyCard`.
-  End-to-end for a single hand-authored pathway (seeded from your ladder or empty).
+- **Phase 1 — Run it. ✅ DONE (needs live testing).** `language_pairs.learning_mode` + `learning_pathways`
+  table + repo (migration 099); the ladder settings page has a Ladder|Pathway toggle + list-based
+  `PathwayEditor`; `LadderStudy` branches on mode (additive) and runs `stepPathway`, reusing
+  `LadderStudyCard` + all the queue/graduate/undo plumbing. Seeded from your ladder or empty.
 - **Phase 2 — Guardrails.** Full `validatePathway` in the editor + session safeguards (max repeats,
   suspension). Error-type transitions wired to `issueType`/confusion.
 - **Phase 3 — Canvas.** Visual graph editor (circles/squares/arrows, hover specs).
