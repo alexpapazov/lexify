@@ -28,7 +28,7 @@ export function conditionText(when: PathwayCondition): string {
 }
 
 // Grid geometry.
-const CELL_X = 110, CELL_Y = 100, R = 15, MARGIN = 55, WRAP = 8, BAND_GAP = 3
+const CELL_X = 110, CELL_Y = 100, R = 18, MARGIN = 55, WRAP = 8, BAND_GAP = 3
 
 type GridPos = { col: number; row: number }
 
@@ -191,7 +191,10 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
           const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1
           const ax = a.x + (dx / len) * R, ay = a.y + (dy / len) * R
           const bx = b.x - (dx / len) * (R + 6), by = b.y - (dy / len) * (R + 6)
-          const mx = (ax + bx) / 2, my = (ay + by) / 2
+          // Place the label off-midpoint (toward the source) and nudge it perpendicular. Reciprocal
+          // edges have opposite (dx,dy) so their perpendicular normal flips → their pills separate.
+          const nx = -dy / len, ny = dx / len
+          const mx = ax + (bx - ax) * 0.42 + nx * 12, my = ay + (by - ay) * 0.42 + ny * 12
           const label = conditionText(t.when)
           return (
             <g key={t.id} onClick={() => onSelectState(t.from)} className="cursor-pointer">
@@ -226,11 +229,11 @@ export function PathwayCanvas({ pathway, selectedStateId, onSelectState, onMoveS
               {s.intervalInit && !s.isTerminal
                 ? <rect x={p.x - R} y={p.y - R} width={R * 2} height={R * 2} rx={12} className={`${fill} ${stroke}`} strokeWidth={sw} />
                 : <circle cx={p.x} cy={p.y} r={R} className={`${fill} ${stroke}`} strokeWidth={sw} />}
-              {s.id === startId && <circle cx={p.x} cy={p.y - R - 5} r={2.5} className="fill-accent" />}
-              <text x={p.x} y={s.isTerminal ? p.y - 1 : p.y + 3} textAnchor="middle" className="fill-ink font-medium" fontSize={7.5} style={{ pointerEvents: 'none' }}>
+              {s.id === startId && <circle cx={p.x} cy={p.y - R - 5} r={2.75} className="fill-accent" />}
+              <text x={p.x} y={s.isTerminal ? p.y - 1 : p.y + 3} textAnchor="middle" className="fill-ink font-medium" fontSize={9} style={{ pointerEvents: 'none' }}>
                 {s.isTerminal ? '🎓' : label}
               </text>
-              {s.isTerminal && <text x={p.x} y={p.y + 8} textAnchor="middle" className="fill-ink-muted" fontSize={6} style={{ pointerEvents: 'none' }}>{label}</text>}
+              {s.isTerminal && <text x={p.x} y={p.y + 9} textAnchor="middle" className="fill-ink-muted" fontSize={7} style={{ pointerEvents: 'none' }}>{label}</text>}
             </g>
           )
         })}
