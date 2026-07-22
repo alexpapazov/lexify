@@ -115,7 +115,14 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
             <label className="flex flex-col gap-1">
               <span className="text-xs text-ink-faint">Direction</span>
               <select className="input py-1.5" value={r.direction}
-                onChange={e => update(r.id, { direction: e.target.value as RungDirection })}>
+                onChange={e => {
+                  const direction = e.target.value as RungDirection
+                  // A dictation rung can only set the interval when producing the native word; switching
+                  // it to produce-target must drop that capability so the ladder stays valid.
+                  const patch: Partial<Rung> = { direction }
+                  if (r.intervalInit && !canInitInterval(r.type, direction)) patch.intervalInit = false
+                  update(r.id, patch)
+                }}>
                 <option value="produce_target">Produce the target word</option>
                 <option value="produce_native">Produce the native word</option>
               </select>
@@ -162,7 +169,7 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                 onChange={e => update(r.id, { selfRated: e.target.checked })} />
               <span className="text-ink">Show rating buttons (Again/Hard/Good/Easy)</span>
             </label>
-            {canInitInterval(r.type) && (
+            {canInitInterval(r.type, r.direction) && (
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" className="accent-accent" checked={r.intervalInit}
                   onChange={e => update(r.id, { intervalInit: e.target.checked, selfRated: e.target.checked ? true : r.selfRated })} />

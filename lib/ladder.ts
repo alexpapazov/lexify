@@ -31,15 +31,23 @@ export function newRung(type: RungType): Rung {
   return base
 }
 
-/** True when a rung type is allowed to be an interval-setting rung. */
-export function canInitInterval(type: RungType): boolean {
-  return type === 'typing' || type === 'self_graded'
+/**
+ * True when a rung is allowed to set (graduate) its direction's starting interval.
+ * Typing and self-graded always can. **Dictation can only when producing the NATIVE word**
+ * (hear the target → type its translation) — that demonstrates you can translate it. Producing the
+ * target on a dictation rung is just transcribing the audio you heard, so it can't set the interval.
+ * `direction` is optional for backward-compat; dictation without a direction is treated as not-allowed.
+ */
+export function canInitInterval(type: RungType, direction?: RungDirection): boolean {
+  if (type === 'typing' || type === 'self_graded') return true
+  if (type === 'dictation') return direction === 'produce_native'
+  return false
 }
 
 /**
  * Validates a ladder for saving. Returns a list of human-readable problems
- * (empty = OK). Mirrors the spec: at least one rung; dictation is target-only;
- * interval-init only on typing/self_graded; and interval-init is all-or-nothing —
+ * (empty = OK). Mirrors the spec: at least one rung; interval-init only on eligible rungs
+ * (typing/self_graded, or native-producing dictation); and interval-init is all-or-nothing —
  * either none, or exactly one per direction.
  */
 export function validateLadder(ladder: Ladder): string[] {
@@ -51,8 +59,10 @@ export function validateLadder(ladder: Ladder): string[] {
     const n = i + 1
     // Dictation can produce either side: you always HEAR the target word; producing the target = type
     // what you hear, producing the native = type the translation of what you hear.
-    if (r.intervalInit && !canInitInterval(r.type)) {
-      errors.push(`Rung ${n}: only typing or self-graded rungs can set the interval.`)
+    if (r.intervalInit && !canInitInterval(r.type, r.direction)) {
+      errors.push(r.type === 'dictation'
+        ? `Rung ${n}: a dictation rung can only set the interval when it produces the native word (translation).`
+        : `Rung ${n}: only typing, self-graded, or native-producing dictation rungs can set the interval.`)
     }
     if (r.advanceTimes < 1) errors.push(`Rung ${n}: "times" must be at least 1.`)
   })

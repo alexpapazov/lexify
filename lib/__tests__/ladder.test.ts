@@ -21,9 +21,22 @@ describe('validateLadder', () => {
     expect(validateLadder(l).some(e => /dictation/i.test(e))).toBe(false)
   })
 
-  it('interval-init only allowed on typing/self_graded', () => {
+  it('interval-init is not allowed on mcq', () => {
     const l: Ladder = { rungs: [rung({ type: 'mcq', intervalInit: true })] }
-    expect(validateLadder(l).some(e => /only typing or self-graded/i.test(e))).toBe(true)
+    expect(validateLadder(l).some(e => /can set the interval/i.test(e))).toBe(true)
+  })
+
+  it('dictation may set the interval when producing native, but not when producing target', () => {
+    // produce_native dictation + a target interval-setter → valid pair.
+    const ok: Ladder = { rungs: [
+      rung({ type: 'typing', direction: 'produce_target', intervalInit: true }),
+      rung({ type: 'dictation', direction: 'produce_native', selfRated: true, intervalInit: true }),
+    ] }
+    expect(validateLadder(ok)).toEqual([])
+
+    // produce_target dictation as interval-setter → rejected.
+    const bad: Ladder = { rungs: [rung({ type: 'dictation', direction: 'produce_target', intervalInit: true })] }
+    expect(validateLadder(bad).some(e => /dictation rung can only set the interval when it produces the native/i.test(e))).toBe(true)
   })
 
   it('interval-init must be exactly one per direction, or none', () => {
@@ -54,11 +67,15 @@ describe('newRung', () => {
 })
 
 describe('canInitInterval', () => {
-  it('typing and self_graded only', () => {
+  it('typing and self_graded always; mcq never', () => {
     expect(canInitInterval('typing')).toBe(true)
     expect(canInitInterval('self_graded')).toBe(true)
     expect(canInitInterval('mcq')).toBe(false)
-    expect(canInitInterval('dictation')).toBe(false)
+  })
+  it('dictation only when producing the native word', () => {
+    expect(canInitInterval('dictation', 'produce_native')).toBe(true)
+    expect(canInitInterval('dictation', 'produce_target')).toBe(false)
+    expect(canInitInterval('dictation')).toBe(false)  // no direction → not allowed
   })
 })
 
