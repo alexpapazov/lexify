@@ -238,6 +238,20 @@ export interface DropBackRule {
   toRungId: string
 }
 
+/** Positive outcomes that can trigger a skip-ahead: 'pass' (a clean auto-checked correct), or a
+ *  self-rated 'good'/'easy'. The reverse of a drop-back's negative triggers. */
+export type SkipTrigger = 'pass' | 'good' | 'easy'
+
+/** "On this positive outcome (after N occurrences), jump FORWARD to the rung with this id —
+ *  the mirror image of a drop-back. Only takes effect when the target is a later rung." */
+export interface SkipAheadRule {
+  on:       SkipTrigger
+  times:    number
+  /** Count N in a row vs. N total this rung sitting. */
+  inARow?:  boolean
+  toRungId: string
+}
+
 export interface Rung {
   id:                string
   type:              RungType
@@ -271,6 +285,9 @@ export interface Rung {
   wrongWaitSeconds?:   number
   correctWaitSeconds?: number
   dropBacks:         DropBackRule[]
+  /** Reverse of dropBacks: on a positive outcome N times, jump FORWARD to a later rung. Optional
+   *  so ladders saved before this feature (JSONB) load fine. */
+  skipAheads?:       SkipAheadRule[]
 }
 
 /** One OR-clause of a rung's advance condition (rungs advance when ANY clause is met). */

@@ -127,6 +127,44 @@ describe('drop-back rules', () => {
   })
 })
 
+describe('skip-ahead rules', () => {
+  it('a clean pass jumps forward to the chosen rung instead of advancing one', () => {
+    const r0 = rung(), r1 = rung(), r2 = rung()   // auto-checked (typing)
+    r0.skipAheads = [{ on: 'pass', times: 1, toRungId: r2.id }]
+    const l: Ladder = { rungs: [r0, r1, r2] }
+    // Skip is checked before the normal one-rung advance, so a pass lands on rung 2, bypassing rung 1.
+    expect(reviewRung(l, initialClimbState(), 'pass', NOW).state.rungIndex).toBe(2)
+  })
+
+  it('an Easy skips further ahead on a self-rated rung', () => {
+    const r0 = rung({ selfRated: true }), r1 = rung(), r2 = rung()
+    r0.skipAheads = [{ on: 'easy', times: 1, toRungId: r2.id }]
+    const l: Ladder = { rungs: [r0, r1, r2] }
+    expect(reviewRung(l, initialClimbState(), 'easy', NOW).state.rungIndex).toBe(2)
+  })
+
+  it('total-count skip: 2 Good on a rung that only advances on Easy jumps ahead', () => {
+    // Rung advances normally only on Easy, so Goods accumulate toward the skip threshold.
+    const r0 = rung({ selfRated: true, advanceRules: [{ times: 1, inARow: false, minRating: 'easy' }] })
+    const r1 = rung(), r2 = rung()
+    r0.skipAheads = [{ on: 'good', times: 2, toRungId: r2.id }]
+    const l: Ladder = { rungs: [r0, r1, r2] }
+    let s = reviewRung(l, initialClimbState(), 'good', NOW).state
+    expect(s.rungIndex).toBe(0)                        // one Good — not enough, doesn't advance
+    s = reviewRung(l, s, 'good', NOW).state
+    expect(s.rungIndex).toBe(2)                        // two Good total → skip to rung 2
+  })
+
+  it('a skip target that is not ahead is ignored (never jumps backward)', () => {
+    const r0 = rung(), r1 = rung()
+    r1.skipAheads = [{ on: 'pass', times: 1, toRungId: r0.id }]  // points backward
+    const l: Ladder = { rungs: [r0, r1] }
+    const start: ClimbState = { ...initialClimbState(), rungIndex: 1 }
+    const res = reviewRung(l, start, 'pass', NOW)
+    expect(res.state.rungIndex).not.toBe(0)   // does not drop back via a skip rule
+  })
+})
+
 describe('12-hour window', () => {
   it('resets to the first rung once 12h have passed since the first rung cleared', () => {
     const l: Ladder = { rungs: [rung(), rung({ selfRated: true, intervalInit: true }), rung({ direction: 'produce_native', type: 'self_graded', selfRated: true, intervalInit: true })] }

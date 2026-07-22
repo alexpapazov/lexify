@@ -1030,6 +1030,26 @@ day (due tomorrow, not today). Propagates to all 3 session pages via `scheduleGr
 pinned at 10 still makes stability grow slowly (only Easy walks difficulty down) — a genuinely hard card reviews
 daily until it stabilizes; that's expected, not a bug.
 
+## Ladder: skip-ahead rules (2026-07-21)
+
+The reverse of a drop-back: on a positive outcome N times (in a row or total this rung sitting), a card
+jumps FORWARD to a later rung, skipping the ones between. `Rung.skipAheads?: SkipAheadRule[]` (domain),
+`SkipAheadRule = { on: SkipTrigger; times; inARow?; toRungId }`, `SkipTrigger = 'pass' | 'good' | 'easy'`
+(`'pass'` = a clean auto-checked correct; `'good'`/`'easy'` = self-rated ratings — these are what land in
+`outcomeHistory` per rung type). Optional so ladders saved as JSONB before this load fine.
+
+- **Engine** (`engine/ladderEngine.ts: reviewRungCore`): checked right AFTER the drop-back block and
+  BEFORE the normal advance logic, so it's an alternative fast path. Matches against the per-rung
+  `outcomeHistory` (in-a-row = last N all equal; total = count in the bounded window). Only fires when the
+  target is a LATER rung (`idx > rungIndex`) — a same/earlier target is ignored (that's drop-backs).
+  Jumping past the interval-init rung means that direction graduates at the flat 1-day default.
+- **Editor** (`components/settings/LadderEditor.tsx`): an "If it goes well, skip ahead:" section mirroring
+  drop-backs, shown only when a later rung exists. Trigger options via `availableSkipTriggers` (self-rated
+  → Good/Easy, auto-checked → Correct=`pass`); target dropdown lists only later rungs.
+- Tested in `engine/__tests__/ladderEngine.test.ts` (`describe('skip-ahead rules')`). NOTE: a skip "N
+  times" only accumulates if the rung doesn't normally advance before N (e.g. it advances only on Easy but
+  you skip on 2 Good) — a `times:1` skip is the common case and fires immediately.
+
 ## Ladder: per-card rung progression history (2026-07-17)
 
 `ClimbState.rungHistory?: number[]` (0-indexed) records every rung a card occupied in order, drop-backs

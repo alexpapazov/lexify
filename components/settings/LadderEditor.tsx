@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { Ladder, Rung, RungType, RungOutcome, RungDirection, DistractorSource, TypedStrictnessLevel, AdvanceRule } from '@/domain'
+import type { Ladder, Rung, RungType, RungOutcome, RungDirection, DistractorSource, TypedStrictnessLevel, AdvanceRule, SkipTrigger } from '@/domain'
 import { newRung, validateLadder, canInitInterval } from '@/lib/ladder'
 
 const TYPE_LABEL: Record<RungType, string> = {
@@ -61,6 +61,13 @@ function availableOutcomes(r: Rung): RungOutcome[] {
   if (r.selfRated || r.type === 'self_graded') return ['again', 'hard', 'good', 'easy']
   if (r.type === 'mcq') return ['miss']
   return ['almost', 'miss'] // typing / dictation, auto-checked
+}
+
+const SKIP_LABEL: Record<SkipTrigger, string> = { pass: 'Correct', good: 'Good', easy: 'Easy' }
+/** Positive outcomes that can trigger a skip-ahead on this rung. Self-rated rungs record ratings
+ *  ('good'/'easy'); auto-checked rungs record a clean 'pass'. */
+function availableSkipTriggers(r: Rung): SkipTrigger[] {
+  return (r.selfRated || r.type === 'self_graded') ? ['good', 'easy'] : ['pass']
 }
 
 export function LadderEditor({ initial, onSave, onReset, saving }: {
@@ -282,6 +289,39 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
               + Add drop-back rule
             </button>
           </div>
+
+          {/* Skip-ahead rules (reverse of drop-back) — only offered when there's a later rung to jump to */}
+          {i < rungs.length - 1 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-ink-faint">If it goes well, skip ahead:</span>
+              {(r.skipAheads ?? []).map((rule, ri) => (
+                <div key={ri} className="flex items-center gap-2 text-sm">
+                  <span className="text-ink-faint text-xs">On</span>
+                  <select className="input py-1 w-auto" value={rule.on}
+                    onChange={e => update(r.id, { skipAheads: (r.skipAheads ?? []).map((x, k) => k === ri ? { ...x, on: e.target.value as SkipTrigger } : x) })}>
+                    {availableSkipTriggers(r).map(o => <option key={o} value={o}>{SKIP_LABEL[o]}</option>)}
+                  </select>
+                  <NumberStepper value={rule.times} title="after this many times"
+                    onChange={n => update(r.id, { skipAheads: (r.skipAheads ?? []).map((x, k) => k === ri ? { ...x, times: n } : x) })} />
+                  <select className="input py-1 w-auto" value={rule.inARow ? 'row' : 'total'}
+                    onChange={e => update(r.id, { skipAheads: (r.skipAheads ?? []).map((x, k) => k === ri ? { ...x, inARow: e.target.value === 'row' } : x) })}>
+                    <option value="total">total</option>
+                    <option value="row">in a row</option>
+                  </select>
+                  <span className="text-ink-faint text-xs">→ jump to</span>
+                  <select className="input py-1 w-auto" value={rule.toRungId}
+                    onChange={e => update(r.id, { skipAheads: (r.skipAheads ?? []).map((x, k) => k === ri ? { ...x, toRungId: e.target.value } : x) })}>
+                    {rungs.map((rr, k) => k > i ? <option key={rr.id} value={rr.id}>Rung {k + 1}</option> : null)}
+                  </select>
+                  <button className="text-ink-faint hover:text-danger px-1" onClick={() => update(r.id, { skipAheads: (r.skipAheads ?? []).filter((_, k) => k !== ri) })}>✕</button>
+                </div>
+              ))}
+              <button className="self-start text-xs text-accent hover:underline"
+                onClick={() => update(r.id, { skipAheads: [...(r.skipAheads ?? []), { on: availableSkipTriggers(r)[0]!, times: 1, toRungId: rungs[Math.min(i + 2, rungs.length - 1)]!.id }] })}>
+                + Add skip-ahead rule
+              </button>
+            </div>
+          )}
         </div>
       ))}
 

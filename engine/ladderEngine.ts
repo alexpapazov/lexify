@@ -167,6 +167,20 @@ function reviewRungCore(ladder: Ladder, state: ClimbState, outcome: RungAttemptO
     }
   }
 
+  // Skip-ahead: the reverse of a drop-back. On N of a positive outcome (in a row or total this rung
+  // sitting), jump FORWARD to a later rung, skipping the ones between. Checked before the normal
+  // advance logic so it's an alternative fast path, and only ever moves forward (a same/earlier
+  // target is ignored — that's what drop-backs are for). 'pass' fires on auto-checked rungs,
+  // 'good'/'easy' on self-rated ones (they're what land in outcomeHistory for each).
+  const skip = (rung.skipAheads ?? []).find(r => {
+    if (r.inARow) return outcomeHistory.length >= r.times && outcomeHistory.slice(-r.times).every(o => o === r.on)
+    return outcomeHistory.filter(o => o === r.on).length >= r.times
+  })
+  if (skip) {
+    const idx = ladder.rungs.findIndex(r => r.id === skip.toRungId)
+    if (idx > state.rungIndex) return { state: toRung(s, idx), reshow: 'advanced', advanced: true, droppedBackTo: null }
+  }
+
   const isRating = outcome === 'again' || outcome === 'hard' || outcome === 'good' || outcome === 'easy'
 
   // ── Interval-setting rung: Anki-style graduation of this direction ──
