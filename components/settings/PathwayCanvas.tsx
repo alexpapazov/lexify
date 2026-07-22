@@ -28,7 +28,7 @@ export function conditionText(when: PathwayCondition): string {
 }
 
 // Grid geometry.
-const CELL_X = 210, CELL_Y = 190, R = 62, MARGIN = 110, WRAP = 5, BAND_GAP = 3
+const CELL_X = 210, CELL_Y = 190, R = 62, MARGIN = 110, WRAP = 6, BAND_GAP = 3
 
 type GridPos = { col: number; row: number }
 
