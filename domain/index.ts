@@ -348,6 +348,8 @@ export interface PathwayState {
   minReshowSeconds?: number
   /** The graduation sink — reaching it hands the card to the FSRS Due-Now scheduler. No presentation. */
   isTerminal?:       boolean
+  /** Saved position on the editor's snap grid (col, row). Absent → auto-laid-out. Editor-only; ignored by the engine. */
+  pos?:              { col: number; row: number }
 }
 
 /** A directed edge: on a matching condition, move from `from` to `to`. First match by priority wins. */

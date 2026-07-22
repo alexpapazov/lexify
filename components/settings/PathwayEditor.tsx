@@ -35,6 +35,8 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
 
   const patchState = (id: string, patch: Partial<PathwayState>) =>
     setP(prev => ({ ...prev, states: prev.states.map(s => s.id === id ? { ...s, ...patch } : s) }))
+  const moveState = (id: string, pos: { col: number; row: number }) =>
+    setP(prev => ({ ...prev, states: prev.states.map(s => s.id === id ? { ...s, pos } : s) }))
   const addState = () => {
     const id = uid('st-')
     const idx = p.states.filter(s => !s.isTerminal).length + 1
@@ -86,10 +88,23 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
         </label>
       </div>
 
-      {/* The map */}
-      <PathwayCanvas pathway={p} selectedStateId={selected} onSelectState={setSelected} />
-      <button className="btn-ghost text-sm py-1.5 px-3" onClick={addState}>+ Add state</button>
+      {/* ── Section 1: the node map ── */}
+      <section className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-ink">Map</h3>
+          <button className="btn-ghost text-sm py-1.5 px-3" onClick={addState}>+ Add state</button>
+        </div>
+        <PathwayCanvas pathway={p} selectedStateId={selected} onSelectState={setSelected} onMoveState={moveState} />
+        <p className="text-[11px] text-ink-faint">
+          Drag a node to reposition it (snaps to the grid) · click a node to edit it below, an arrow to edit its source ·
+          <span className="ml-1">● state&nbsp;&nbsp;▢ sets interval&nbsp;&nbsp;🎓 graduation · the dot marks the start</span>
+        </p>
+      </section>
 
+      {/* ── Section 2: configuration for the selected state ── */}
+      <div className="border-t border-line/10 pt-4">
+        <h3 className="text-sm font-medium text-ink mb-2">Configuration{sel && !sel.isTerminal ? ` — ${sel.name}` : ''}</h3>
+      </div>
       {/* Focused editor for the selected state */}
       {sel && sel.isTerminal && (
         <div className="panel text-sm text-ink-muted">🎓 <span className="text-ink">{sel.name}</span> — reaching this graduates the card. Nothing to configure.</div>
