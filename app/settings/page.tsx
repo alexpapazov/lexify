@@ -386,6 +386,8 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
   const [goalCarryShortfall,  setGoalCarryShortfall]  = useState(false)
   const [goalCarrySurplus,    setGoalCarrySurplus]    = useState(false)
+  const [goalFullDebt,        setGoalFullDebt]        = useState(false)
+  const [goalFullDebtSince,   setGoalFullDebtSince]   = useState<string | null>(null)
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
   const [langColors,          setLangColors]          = useState<Record<string, string>>({})
@@ -459,7 +461,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors, goal_carry_shortfall, goal_carry_surplus')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -475,6 +477,8 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
         setGoalCarryShortfall((profile.goal_carry_shortfall as boolean | null) ?? false)
         setGoalCarrySurplus((profile.goal_carry_surplus as boolean | null) ?? false)
+        setGoalFullDebt((profile.goal_full_debt as boolean | null) ?? false)
+        setGoalFullDebtSince((profile.goal_full_debt_since as string | null) ?? null)
         setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo' | 'standard')
         setAudioSourceByLangState((profile.audio_source_by_language as Record<string, string> | null) ?? {})
         setLangColors((profile.language_colors as Record<string, string> | null) ?? {})
@@ -515,6 +519,10 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       study_mode_autoplay:       studyModeAutoplay,
       goal_carry_shortfall:      goalCarryShortfall,
       goal_carry_surplus:        goalCarrySurplus,
+      goal_full_debt:            goalFullDebt,
+      // Stamp the enable date the first time it's turned on; clear it when turned off so a later
+      // re-enable starts a fresh debt from that day (never retroactively counts old history).
+      goal_full_debt_since:      goalFullDebt ? (goalFullDebtSince ?? getToday(timezone || 'UTC', turnoverHour)) : null,
       audio_source_default:      audioSourceDefault,
       audio_source_by_language:  audioSourceByLang,
       language_colors:           langColors,
@@ -1020,6 +1028,17 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
                   {goalCarrySurplus
                     ? 'Cards beyond a goal are credited against the next day\'s goal for that language, down to zero. Only the previous day carries over.'
                     : 'Extra cards don\'t reduce the next day\'s goal.'}
+                </p>
+              </div>
+              <div className="space-y-1 pt-2 border-t border-line/10">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input type="checkbox" checked={goalFullDebt} onChange={e => setGoalFullDebt(e.target.checked)} className="accent-accent w-4 h-4" />
+                  <span className="text-sm text-ink">Full debt</span>
+                </label>
+                <p className="text-xs text-ink-faint pl-6">
+                  {goalFullDebt
+                    ? 'From the day you turned this on, a language\'s entire running shortfall or surplus carries forward — incomplete cards always roll to the next day, and extra study rolls credit forward across as many days as it takes. Supersedes the two options above.'
+                    : 'Carryover is limited to the previous day (uses the two options above).'}
                 </p>
               </div>
             </div>

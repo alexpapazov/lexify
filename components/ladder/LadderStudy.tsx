@@ -25,7 +25,8 @@ import type { Pathway, PathwayState, Rung, ErrorType } from '@/domain'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal } from '@/lib/goalCarryover'
+import { fetchAllRows } from '@/lib/supabasePaged'
 import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
@@ -349,11 +350,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
             .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null)
             .eq('cards.source_language', src).eq('cards.target_language', tgt)
             .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString()),
-          db.from('profiles').select('goal_carry_shortfall, goal_carry_surplus').eq('user_id', uid).maybeSingle(),
+          db.from('profiles').select('goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since').eq('user_id', uid).maybeSingle(),
         ])
         const goals = pairRes.data?.goals as Record<string, number | null> | null
         const baseGoalToday = (goals?.[String(weekday)] as number | undefined) ?? 0
-        // Match the study dashboard: yesterday's shortfall/surplus adjusts today's goal.
+        const goalForWeekday = (wd: number) => { const g = goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
         let gradTodayPair = 0, gradYestPair = 0
         for (const row of gradRes.data ?? []) {
           const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
@@ -363,13 +364,41 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           if (d === todayStr) gradTodayPair++
           else if (d === yesterdayStr) gradYestPair++
         }
-        const { goal: goalToday } = carriedGoal({
-          baseGoal: baseGoalToday,
-          yesterdayGoal: (goals?.[String(yWeekday)] as number | undefined) ?? null,
-          yesterdayCount: gradYestPair,
-          carryShortfall: profRes.data?.goal_carry_shortfall ?? false,
-          carrySurplus: profRes.data?.goal_carry_surplus ?? false,
-        })
+        const fullDebtOn = profRes.data?.goal_full_debt ?? false
+        const fullDebtSince = (profRes.data?.goal_full_debt_since as string | null) ?? null
+        let goalToday: number
+        if (fullDebtOn && fullDebtSince) {
+          // Unbounded: the whole running deficit/surplus since the enable date lands on today's goal.
+          const lower = new Date(new Date(fullDebtSince + 'T00:00:00Z').getTime() - 48 * 3600 * 1000).toISOString()
+          const rows = await fetchAllRows<{ graduated_at: string; accelerated_mode: string | null }>(
+            (from, to) => db.from('card_states').select('graduated_at, accelerated_mode, cards!inner(source_language, target_language)')
+              .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null)
+              .eq('cards.source_language', src).eq('cards.target_language', tgt)
+              .gte('graduated_at', lower).order('graduated_at', { ascending: true }).range(from, to),
+          )
+          let gradsSince = 0
+          for (const row of rows) {
+            const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
+            if (!r.graduated_at) continue
+            if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+            const d = localDateWithTurnover(r.graduated_at, tzRef.current, turnoverRef.current)
+            if (d >= fullDebtSince && d < todayStr) gradsSince++
+          }
+          goalToday = fullDebtGoal({
+            baseGoal: baseGoalToday,
+            plannedThroughYesterday: plannedGoalSum(goalForWeekday, fullDebtSince, yesterdayStr),
+            gradsThroughYesterday: gradsSince,
+          }).goal
+        } else {
+          // Yesterday-only carryover (the two per-day toggles).
+          goalToday = carriedGoal({
+            baseGoal: baseGoalToday,
+            yesterdayGoal: (goals?.[String(yWeekday)] as number | undefined) ?? null,
+            yesterdayCount: gradYestPair,
+            carryShortfall: profRes.data?.goal_carry_shortfall ?? false,
+            carrySurplus: profRes.data?.goal_carry_surplus ?? false,
+          }).goal
+        }
         if (goalToday > 0) {
           // learning.length = cards already in this deck's pipeline (they'll graduate today), so front-load
           // only enough fresh cards to reach the goal — never past it.

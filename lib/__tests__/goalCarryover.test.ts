@@ -1,4 +1,4 @@
-import { carriedGoal } from '../goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal } from '../goalCarryover'
 
 const base = { baseGoal: 20, yesterdayGoal: 20, yesterdayCount: 20, carryShortfall: false, carrySurplus: false }
 
@@ -47,6 +47,39 @@ describe('carriedGoal', () => {
 
   it('is a no-op when yesterday exactly hit the goal', () => {
     expect(carriedGoal({ ...base, carryShortfall: true, carrySurplus: true }))
+      .toEqual({ goal: 20, delta: 0 })
+  })
+})
+
+describe('plannedGoalSum', () => {
+  it('sums a constant daily goal across the range (inclusive)', () => {
+    // 2026-07-20 (Mon) through 2026-07-22 (Wed) = 3 days × 10.
+    expect(plannedGoalSum(() => 10, '2026-07-20', '2026-07-22')).toBe(30)
+  })
+  it('skips rest days (weekday goal 0)', () => {
+    // goal only on weekdays (Mon–Fri = 1..5); 2026-07-18 Sat + 2026-07-19 Sun are rest.
+    const g = (wd: number) => (wd >= 1 && wd <= 5 ? 10 : 0)
+    expect(plannedGoalSum(g, '2026-07-18', '2026-07-19')).toBe(0)   // Sat+Sun
+    expect(plannedGoalSum(g, '2026-07-17', '2026-07-20')).toBe(20)  // Fri(10)+Sat(0)+Sun(0)+Mon(10)
+  })
+  it('is 0 when the range is empty (since after through)', () => {
+    expect(plannedGoalSum(() => 10, '2026-07-22', '2026-07-21')).toBe(0)
+  })
+})
+
+describe('fullDebtGoal', () => {
+  it('piles the whole running shortfall onto today', () => {
+    // planned 100 over the span, only 70 done → owe 30 on top of a base 20.
+    expect(fullDebtGoal({ baseGoal: 20, plannedThroughYesterday: 100, gradsThroughYesterday: 70 }))
+      .toEqual({ goal: 50, delta: 30 })
+  })
+  it('rolls a big surplus forward across multiple days (down to 0)', () => {
+    // 40 ahead against a base 20 → today needs nothing, and it stays credited.
+    expect(fullDebtGoal({ baseGoal: 20, plannedThroughYesterday: 100, gradsThroughYesterday: 140 }))
+      .toEqual({ goal: 0, delta: -20 })
+  })
+  it('leaves the goal alone when exactly on pace', () => {
+    expect(fullDebtGoal({ baseGoal: 20, plannedThroughYesterday: 100, gradsThroughYesterday: 100 }))
       .toEqual({ goal: 20, delta: 0 })
   })
 })

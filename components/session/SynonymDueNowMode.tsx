@@ -135,7 +135,7 @@ export function SynonymDueNowMode({
             placeholder="Type your answer…"
             value={input}
             onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && input.trim()) check() }}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && input.trim()) check() }}
             autoFocus
           />
           <div className="flex justify-center">

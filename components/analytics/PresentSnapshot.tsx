@@ -20,7 +20,7 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal } from '@/lib/goalCarryover'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
@@ -135,11 +135,13 @@ export function PresentSnapshot() {
         if (!session) { setError('Not signed in'); return }
         const uid = session.user.id
 
-        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', uid).single()
+        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since').eq('user_id', uid).single()
         const tz = (profile?.timezone as string | null) ?? 'UTC'
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
         const carryShortfall = (profile?.goal_carry_shortfall as boolean | null) ?? false
         const carrySurplus = (profile?.goal_carry_surplus as boolean | null) ?? false
+        const fullDebtOn = (profile?.goal_full_debt as boolean | null) ?? false
+        const fullDebtSince = (profile?.goal_full_debt_since as string | null) ?? null
         const today = getToday(tz, turnover)
         const todayWeekday = new Date(today + 'T12:00:00Z').getUTCDay()
         const yDate = new Date(today + 'T12:00:00Z'); yDate.setUTCDate(yDate.getUTCDate() - 1)
@@ -256,19 +258,49 @@ export function PresentSnapshot() {
           else if (day === yesterday) gradYesterday.set(key, (gradYesterday.get(key) ?? 0) + 1)
         }
 
+        // Full-debt: cumulative graduations per pair from the enable date THROUGH YESTERDAY (paged).
+        const gradSince = new Map<string, number>()
+        if (fullDebtOn && fullDebtSince) {
+          const lower = new Date(new Date(fullDebtSince + 'T00:00:00Z').getTime() - 48 * DAY_MS).toISOString()
+          const rows = await fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('card_states')
+            .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
+            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse')
+            .not('graduated_at', 'is', null).gte('graduated_at', lower)
+            .order('graduated_at', { ascending: true }).range(f, t))
+          for (const row of rows) {
+            const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
+            if (!r.graduated_at || !r.cards) continue
+            if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+            const day = localDateWithTurnover(r.graduated_at, tz, turnover)
+            if (day >= fullDebtSince && day < today) {
+              const key = `${r.cards.source_language}|${r.cards.target_language}`
+              gradSince.set(key, (gradSince.get(key) ?? 0) + 1)
+            }
+          }
+        }
+
         const goals = pairs
           .map((p: LanguagePair) => {
             const key = `${p.sourceLanguage}|${p.targetLanguage}`
             const baseGoal = (p.goals?.[String(todayWeekday)] as number | undefined) ?? 0
-            // Apply goal carryover so "words needed today" matches the Study page: a missed-yesterday
-            // shortfall raises the goal, a surplus lowers it (each opt-in). No-op when both flags are off.
-            const yGoal = p.goals?.[String(yesterdayWeekday)] as number | undefined
-            const { goal, delta } = carriedGoal({
-              baseGoal,
-              yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
-              yesterdayCount: gradYesterday.get(key) ?? 0,
-              carryShortfall, carrySurplus,
-            })
+            // Apply goal carryover so "words needed today" matches the Study page.
+            let goal: number, delta: number
+            if (fullDebtOn && fullDebtSince) {
+              const goalForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
+              ;({ goal, delta } = fullDebtGoal({
+                baseGoal,
+                plannedThroughYesterday: plannedGoalSum(goalForWeekday, fullDebtSince, yesterday),
+                gradsThroughYesterday: gradSince.get(key) ?? 0,
+              }))
+            } else {
+              const yGoal = p.goals?.[String(yesterdayWeekday)] as number | undefined
+              ;({ goal, delta } = carriedGoal({
+                baseGoal,
+                yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
+                yesterdayCount: gradYesterday.get(key) ?? 0,
+                carryShortfall, carrySurplus,
+              }))
+            }
             return { key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, baseGoal, goal, delta, done: gradToday.get(key) ?? 0 }
           })
           // Analytics shows the FULL carryover picture (incl. pairs a surplus auto-fulfilled to goal 0,

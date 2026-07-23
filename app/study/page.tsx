@@ -16,7 +16,8 @@ import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProd
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal } from '@/lib/goalCarryover'
+import { fetchAllRows } from '@/lib/supabasePaged'
+import { carriedGoal, plannedGoalSum, fullDebtGoal } from '@/lib/goalCarryover'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
@@ -293,6 +294,10 @@ export default function StudyPage() {
   const [yesterdayGradCounts, setYesterdayGradCounts] = useState<Map<string, number>>(new Map())
   const [carryShortfall,    setCarryShortfall]    = useState(false)
   const [carrySurplus,      setCarrySurplus]      = useState(false)
+  const [fullDebt,          setFullDebt]          = useState(false)
+  const [fullDebtSince,     setFullDebtSince]     = useState<string | null>(null)
+  // Full-debt: cumulative graduations per pair from the enable date THROUGH YESTERDAY (today excluded).
+  const [sinceGradCounts,   setSinceGradCounts]   = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
@@ -313,13 +318,17 @@ export default function StudyPage() {
 
     const [decks, profileRes] = await Promise.all([
       deckRepo.list(session.user.id),
-      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', session.user.id).single()),
+      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since').eq('user_id', session.user.id).single()),
     ])
 
     const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'
     const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
     setCarryShortfall((profileRes.data?.goal_carry_shortfall as boolean | null) ?? false)
     setCarrySurplus((profileRes.data?.goal_carry_surplus as boolean | null) ?? false)
+    const fullDebtOn = (profileRes.data?.goal_full_debt as boolean | null) ?? false
+    const fullDebtSinceVal = (profileRes.data?.goal_full_debt_since as string | null) ?? null
+    setFullDebt(fullDebtOn)
+    setFullDebtSince(fullDebtSinceVal)
     const todayStr     = getToday(tz, turnoverHour)
     setTodayStr(todayStr)
     setTz(tz)
@@ -477,6 +486,33 @@ export default function StudyPage() {
     }
     setTodayGradCounts(gradCounts)
     setYesterdayGradCounts(yGradCounts)
+
+    // Full-debt: cumulative graduations per pair from the enable date THROUGH YESTERDAY (today excluded),
+    // paged since the window can span many days. Bucketed by local study-day so turnover is respected.
+    if (fullDebtOn && fullDebtSinceVal) {
+      const lower = new Date(new Date(fullDebtSinceVal + 'T00:00:00Z').getTime() - 48 * 3600 * 1000).toISOString()
+      const rows = await fetchAllRows<Record<string, unknown>>(
+        (from, to) => supabase.from('card_states')
+          .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
+          .eq('user_id', session.user.id).eq('graduated', true).neq('review_direction', 'reverse')
+          .not('graduated_at', 'is', null).gte('graduated_at', lower)
+          .order('graduated_at', { ascending: true }).range(from, to),
+      )
+      const since = new Map<string, number>()
+      for (const row of rows) {
+        const r = row as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
+        if (!r.graduated_at || !r.cards) continue
+        if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+        const day = localDateWithTurnover(r.graduated_at, tz, turnoverHour)
+        if (day >= fullDebtSinceVal && day < todayStr) {
+          const key = `${r.cards.source_language}|${r.cards.target_language}`
+          since.set(key, (since.get(key) ?? 0) + 1)
+        }
+      }
+      setSinceGradCounts(since)
+    } else {
+      setSinceGradCounts(new Map())
+    }
 
     // ── Upcoming review forecast ────────────────────────────────────────
     // Per-pair FSRS config (retention/maxInt from scheduler params + measured rating mix) so the
@@ -791,16 +827,24 @@ export default function StudyPage() {
       const baseGoal = p.goals?.[String(todayWeekday)]
       if (typeof baseGoal !== 'number' || baseGoal <= 0) return []
       const key = `${p.sourceLanguage}|${p.targetLanguage}`
-      const yGoal = p.goals?.[String(yesterdayWeekday)]
-      const { goal, delta } = carriedGoal({
-        baseGoal,
-        yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
-        yesterdayCount: yesterdayGradCounts.get(key) ?? 0,
-        carryShortfall, carrySurplus,
-      })
+      const goalForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
+      let goal: number, delta: number
+      if (fullDebt && fullDebtSince) {
+        // Unbounded: the whole running deficit/surplus since the enable date lands on today.
+        const planned = plannedGoalSum(goalForWeekday, fullDebtSince, addDays(todayStr, -1))
+        ;({ goal, delta } = fullDebtGoal({ baseGoal, plannedThroughYesterday: planned, gradsThroughYesterday: sinceGradCounts.get(key) ?? 0 }))
+      } else {
+        const yGoal = p.goals?.[String(yesterdayWeekday)]
+        ;({ goal, delta } = carriedGoal({
+          baseGoal,
+          yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
+          yesterdayCount: yesterdayGradCounts.get(key) ?? 0,
+          carryShortfall, carrySurplus,
+        }))
+      }
       return [{ pair: p, key, goal, delta }]
     })
-  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus])
+  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, sinceGradCounts, todayStr])
 
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },

@@ -287,7 +287,10 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
             // = card.targetLanguage when typing the translation (incl. the echoed re-prompt, which is
             // always native), card.sourceLanguage when transcribing what you heard.
             placeholder={langNativeName(answerLang)}
-            onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && input.trim()) check() }} />
+            // Guard Enter against IME composition: while a Hangul/kana syllable is still composing, the
+            // final block hasn't committed to `input` yet — submitting there grades a string missing its
+            // last syllable. The first Enter finalizes the syllable; a second Enter submits.
+            onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && input.trim()) check() }} />
           <div className="flex justify-center"><button className="btn-primary px-10" disabled={!input.trim()} onClick={check}>Check</button></div>
           <button
             onClick={() => { setResult({ status: 'miss', overridden: false, normalized: '', errorTypes: [] }); setTimeout(() => continueRef.current?.focus(), 100) }}

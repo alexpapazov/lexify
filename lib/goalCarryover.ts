@@ -41,3 +41,38 @@ export function carriedGoal(args: {
   // against a goal of 20 when only -20 of it could land.
   return { goal, delta: goal - baseGoal }
 }
+
+/**
+ * Sum of configured goals for every day in [sinceDate, throughDate] inclusive (local YYYY-MM-DD).
+ * `goalForWeekday(0..6)` returns that weekday's configured goal (0 for a rest day). If since > through
+ * (e.g. enabled today, measuring through yesterday) the range is empty and this returns 0.
+ */
+export function plannedGoalSum(
+  goalForWeekday: (weekday: number) => number,
+  sinceDate: string,
+  throughDate: string,
+): number {
+  const start = new Date(sinceDate + 'T12:00:00Z').getTime()
+  const end   = new Date(throughDate + 'T12:00:00Z').getTime()
+  let sum = 0
+  for (let t = start; t <= end; t += 86_400_000) {
+    sum += Math.max(0, goalForWeekday(new Date(t).getUTCDay()))
+  }
+  return sum
+}
+
+/**
+ * Full-debt (unbounded) carryover: today's goal absorbs the ENTIRE running deficit/surplus accumulated
+ * since the toggle was enabled — not just yesterday. `net = gradsThroughYesterday - plannedThroughYesterday`
+ * (>0 surplus, <0 debt). Today's goal = base - net, floored at 0. So a week of shortfalls all pile onto
+ * today, and a big study day rolls credit forward across as many future days as it takes to burn off.
+ */
+export function fullDebtGoal(args: {
+  baseGoal: number
+  plannedThroughYesterday: number
+  gradsThroughYesterday: number
+}): GoalCarryover {
+  const net  = args.gradsThroughYesterday - args.plannedThroughYesterday
+  const goal = Math.max(0, args.baseGoal - net)
+  return { goal, delta: goal - args.baseGoal }
+}
