@@ -2,7 +2,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import type { TypedStrictnessLevel } from '@/domain'
 import type { SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
-import { recencyWeightedMean, retentionCalibrationFactor } from '@/lib/retentionCalibration'
+import { recencyWeightedMean, retentionCalibrationFactor, dampedCalibration, CAL_MIN_ACTUATE_HOURS } from '@/lib/retentionCalibration'
 
 export const runtime = 'nodejs'
 
@@ -83,6 +83,7 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     gradInterval8errMin: (row.grad_interval_8err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval8errMin,
     gradInterval8errMax: (row.grad_interval_8err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval8errMax,
     calibratedAt:        row.calibrated_at as string | null,
+    retentionCalibrationAt: (row.retention_calibration_at as string | null) ?? null,
     totalDueReviews:     Number(row.total_due_reviews ?? 0),
     recentRetentionRate: row.recent_retention_rate as number | null,
     forwardTypedEnabled:  Boolean(row.forward_typed_enabled ?? true),
@@ -218,15 +219,26 @@ async function calibrateBucket(
 
   // Feed measured-vs-target back into scheduling: stretch (or shrink) this track's intervals so the
   // learner actually lands near their target retention despite the stock weights' miscalibration.
-  const calibration = retentionCalibrationFactor(retentionRate, target)
+  //
+  // DAMPING: the measurement (recent_retention_rate) refreshes every pass, but the *multiplier* only
+  // moves at most once per ~day and by at most one slew-step — so a two-day hot streak nudges the
+  // schedule instead of whipsawing it. See dampedCalibration / CAL_MAX_STEP_PER_DAY.
+  const calTarget = retentionCalibrationFactor(retentionRate, target)
+  const lastMoveMs = params.retentionCalibrationAt ? Date.parse(params.retentionCalibrationAt) : NaN
+  const hoursSinceMove = Number.isNaN(lastMoveMs) ? Infinity : (nowMs - lastMoveMs) / 3_600_000
+  const actuate = hoursSinceMove >= CAL_MIN_ACTUATE_HOURS
 
   const calibratedAt = new Date().toISOString()
-  await updateParams(userId, sourceLang, targetLang, answerField, {
+  const updates: Record<string, unknown> = {
     calibrated_at:         calibratedAt,
     total_due_reviews:     newTotal,
     recent_retention_rate: retentionRate,
-    retention_calibration: calibration,
-  })
+  }
+  if (actuate) {
+    updates.retention_calibration    = dampedCalibration(params.retentionCalibration, calTarget)
+    updates.retention_calibration_at = calibratedAt
+  }
+  await updateParams(userId, sourceLang, targetLang, answerField, updates)
   // Log a history snapshot on EVERY retention change (not only when grad intervals shift), so the
   // calibration history is a complete per-track log and its newest row always matches the live value
   // shown above — otherwise the live number can look out of sync with a sparser history.

@@ -10,6 +10,8 @@ export interface SchedulerParamsRow extends SchedulerParams {
   targetLanguage: string
   answerField: string
   calibratedAt: string | null
+  /** When the interval multiplier was last actuated (moved). Gates it to ~once/day; see dampedCalibration. */
+  retentionCalibrationAt: string | null
   totalDueReviews: number
   recentRetentionRate: number | null
   forwardTypedEnabled: boolean
@@ -59,6 +61,7 @@ function rowToParams(row: Record<string, unknown>): SchedulerParamsRow {
     gradInterval8errMin: (row.grad_interval_8err_min as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval8errMin,
     gradInterval8errMax: (row.grad_interval_8err_max as number | null) ?? DEFAULT_SCHEDULER_PARAMS.gradInterval8errMax,
     calibratedAt:        row.calibrated_at as string | null,
+    retentionCalibrationAt: (row.retention_calibration_at as string | null) ?? null,
     totalDueReviews:     row.total_due_reviews as number,
     recentRetentionRate: row.recent_retention_rate as number | null,
     forwardTypedEnabled:  (row.forward_typed_enabled as boolean) ?? true,
