@@ -20,10 +20,11 @@ const uid = (p: string) => `${p}${Date.now().toString(36)}${seq++}`
 const toMin = (sec: number) => Math.round(sec / 60)
 const fromMin = (min: number) => Math.max(0, Math.round(min)) * 60
 
-export function PathwayEditor({ initial, onSave, onReset, saving }: {
+export function PathwayEditor({ initial, onSave, onReset, onPersistLayout, saving }: {
   initial: Pathway
   onSave: (p: Pathway) => void
   onReset?: () => void
+  onPersistLayout?: (p: Pathway) => void
   saving: boolean
 }) {
   const [p, setP] = useState<Pathway>(initial)
@@ -35,8 +36,11 @@ export function PathwayEditor({ initial, onSave, onReset, saving }: {
 
   const patchState = (id: string, patch: Partial<PathwayState>) =>
     setP(prev => ({ ...prev, states: prev.states.map(s => s.id === id ? { ...s, ...patch } : s) }))
-  const moveState = (id: string, pos: { col: number; row: number }) =>
-    setP(prev => ({ ...prev, states: prev.states.map(s => s.id === id ? { ...s, pos } : s) }))
+  const moveState = (id: string, pos: { col: number; row: number }) => {
+    const next = { ...p, states: p.states.map(s => s.id === id ? { ...s, pos } : s) }
+    setP(next)
+    onPersistLayout?.(next)   // save the arrangement immediately so it survives a reload
+  }
   const addState = () => {
     const id = uid('st-')
     const idx = p.states.filter(s => !s.isTerminal).length + 1

@@ -98,6 +98,12 @@ function LaddersInner() {
     await new SupabasePathwayRepository().saveForPair(userId, effSrc, effTgt, p)
     setPathwayCustom(true); setSaving(false)
   }
+  // Node rearrangement auto-persists (quietly, no spinner / no remount) so the layout survives a reload.
+  async function persistPathwayLayout(p: Pathway) {
+    if (!userId) return
+    setPathway(p); setPathwayCustom(true)
+    await new SupabasePathwayRepository().saveForPair(userId, effSrc, effTgt, p).catch(() => {})
+  }
   async function resetPathway() {
     if (!userId || !isPair) return
     setSaving(true)
@@ -135,7 +141,7 @@ function LaddersInner() {
       </div>
 
       {mode === 'pathway'
-        ? <PathwayEditor key={version} initial={pathway ?? emptyPathway()} onSave={savePathway} onReset={isPair && pathwayCustom ? resetPathway : undefined} saving={saving} />
+        ? <PathwayEditor key={version} initial={pathway ?? emptyPathway()} onSave={savePathway} onReset={isPair && pathwayCustom ? resetPathway : undefined} onPersistLayout={persistPathwayLayout} saving={saving} />
         : <LadderEditor key={version} initial={ladder} onSave={save} onReset={isPair && customized ? reset : undefined} saving={saving} />}
 
       {!isPair && pairs.length > 0 && (
