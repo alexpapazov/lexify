@@ -25,6 +25,7 @@ import type { Pathway, PathwayState, Rung, ErrorType } from '@/domain'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
+import { carriedGoal } from '@/lib/goalCarryover'
 import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
 import { LadderStudyCard } from '@/components/ladder/LadderStudyCard'
@@ -337,26 +338,39 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       if (wantGoalCap) {
         const src = primary.sourceLanguage, tgt = primary.targetLanguage
         const todayStr = getToday(tzRef.current, turnoverRef.current)
+        const yesterdayStr = new Date(new Date(todayStr + 'T12:00:00Z').getTime() - 86400000).toISOString().slice(0, 10)
         const weekday  = new Date(todayStr + 'T12:00:00Z').getUTCDay()
+        const yWeekday = (weekday + 6) % 7
         const db = createClient()
-        const [pairRes, gradRes] = await Promise.all([
+        const [pairRes, gradRes, profRes] = await Promise.all([
           db.from('language_pairs').select('goals')
             .eq('owner_id', uid).eq('source_language', src).eq('target_language', tgt).maybeSingle(),
           db.from('card_states').select('graduated_at, accelerated_mode, cards!inner(source_language, target_language)')
             .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null)
             .eq('cards.source_language', src).eq('cards.target_language', tgt)
             .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString()),
+          db.from('profiles').select('goal_carry_shortfall, goal_carry_surplus').eq('user_id', uid).maybeSingle(),
         ])
         const goals = pairRes.data?.goals as Record<string, number | null> | null
-        const goalToday = (goals?.[String(weekday)] as number | undefined) ?? 0
+        const baseGoalToday = (goals?.[String(weekday)] as number | undefined) ?? 0
+        // Match the study dashboard: yesterday's shortfall/surplus adjusts today's goal.
+        let gradTodayPair = 0, gradYestPair = 0
+        for (const row of gradRes.data ?? []) {
+          const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
+          if (!r.graduated_at) continue
+          if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+          const d = localDateWithTurnover(r.graduated_at, tzRef.current, turnoverRef.current)
+          if (d === todayStr) gradTodayPair++
+          else if (d === yesterdayStr) gradYestPair++
+        }
+        const { goal: goalToday } = carriedGoal({
+          baseGoal: baseGoalToday,
+          yesterdayGoal: (goals?.[String(yWeekday)] as number | undefined) ?? null,
+          yesterdayCount: gradYestPair,
+          carryShortfall: profRes.data?.goal_carry_shortfall ?? false,
+          carrySurplus: profRes.data?.goal_carry_surplus ?? false,
+        })
         if (goalToday > 0) {
-          let gradTodayPair = 0
-          for (const row of gradRes.data ?? []) {
-            const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
-            if (!r.graduated_at) continue
-            if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
-            if (localDateWithTurnover(r.graduated_at, tzRef.current, turnoverRef.current) === todayStr) gradTodayPair++
-          }
           // learning.length = cards already in this deck's pipeline (they'll graduate today), so front-load
           // only enough fresh cards to reach the goal — never past it.
           const budget = Math.max(0, goalToday - gradTodayPair - learning.length)
