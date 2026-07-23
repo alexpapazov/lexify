@@ -41,13 +41,20 @@ export function snapDueAtToStartOfDay(
  * `turnoverHour` in local time are bucketed into the previous calendar day.
  */
 export function localDateWithTurnover(isoTs: string, tz: string, turnoverHour: number): string {
-  const date  = new Date(isoTs)
-  const local = new Date(date.toLocaleString('en-US', { timeZone: tz }))
-  if (local.getHours() < turnoverHour) local.setDate(local.getDate() - 1)
-  const y = local.getFullYear()
-  const m = String(local.getMonth() + 1).padStart(2, '0')
-  const d = String(local.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+  const date = new Date(isoTs)
+  // Read the wall-clock hour + calendar date in `tz` via Intl (NOT `new Date(toLocaleString(...))`,
+  // which Safari/WKWebView — the iOS app — parses unreliably, mis-bucketing graduations by a day so
+  // "today's goals" never register as done). Mirrors getToday exactly, so both stay consistent.
+  const localHour = parseInt(
+    new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(date),
+    10,
+  ) % 24
+  if (turnoverHour > 0 && localHour < turnoverHour) {
+    // Before turnover → count as the previous calendar day. Shift the timestamp 24h and re-format in tz
+    // (handles month/year/DST boundaries), exactly as getToday does.
+    return new Date(date.getTime() - 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone: tz })
+  }
+  return date.toLocaleDateString('en-CA', { timeZone: tz })
 }
 
 /**
