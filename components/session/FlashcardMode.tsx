@@ -71,10 +71,11 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
   return (
     <div className="space-y-6 w-full max-w-[730px] mx-auto">
       {deckName && (
-        // When the answer is the TARGET (foreign) language, a self-graded card gives no other cue for
-        // which language to recall in — so prefix the deck label with that language (e.g. "한국어: Episode 1").
+        // Always label which language this card belongs to — the LEARNED (source) language, not the
+        // answer side. A reverse-recall card (target prompt → native answer) gives no other cue, and
+        // "English: …" would be useless there. e.g. "Italiano: House and Home 1 + 2".
         <p className="text-xs text-ink-faint text-center uppercase tracking-wider">
-          {answerIsTarget && answerLanguage ? `${langNativeName(answerLanguage)}: ${deckName}` : deckName}
+          {`${langNativeName(card.sourceLanguage)}: ${deckName}`}
         </p>
       )}
       <div className="panel relative min-h-[160px] flex items-center justify-center text-center">

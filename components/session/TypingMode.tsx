@@ -475,7 +475,8 @@ export function TypingMode({
 
   return (
     <div className="space-y-6 w-full max-w-[730px] mx-auto">
-      {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
+      {/* Label which language this card belongs to — the LEARNED (source) language. e.g. "Italiano: House and Home". */}
+      {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{`${langNativeName(card.sourceLanguage)}: ${deckName}`}</p>}
 
       {/* Prompt */}
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
