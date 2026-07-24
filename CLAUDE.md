@@ -432,6 +432,14 @@ distractors".
 
 ## Migrations
 
+**Layout (2026-07-22):** migrations `001`–`100` are archived under
+`supabase/migrations/archive/` (all already applied) so the top level shows only
+the newest few — no scrolling to find the next one to run. New migrations are
+numbered sequentially at the top level (`supabase/migrations/1NN_*.sql`); move
+them into `archive/` once they're comfortably live. Nothing reads the directory
+programmatically (migrations are pasted into the Supabase SQL editor by hand), so
+this is purely organizational. Latest applied: `103_full_debt_day_exemptions.sql`.
+
 Sequential, in `supabase/migrations/`. Latest is `029`:
 
 - `001_initial.sql` … `020_scheduler_v2.sql` — core schema, folders, language
