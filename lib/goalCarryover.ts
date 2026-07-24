@@ -81,8 +81,41 @@ export function fullDebtGoal(args: {
   baseGoal: number
   plannedThroughYesterday: number
   gradsThroughYesterday: number
+  /** From `fullDebtExemptionAdjustment` — cancels waived days' deficit/credit. */
+  exemptionAdjustment?: number
 }): GoalCarryover {
-  const net  = args.gradsThroughYesterday - args.plannedThroughYesterday
+  const net  = args.gradsThroughYesterday - args.plannedThroughYesterday + (args.exemptionAdjustment ?? 0)
   const goal = Math.max(0, args.baseGoal - net)
   return { goal, delta: goal - args.baseGoal }
+}
+
+/**
+ * Per-day exemptions from full-debt carryover, as a correction to add to `grads - planned`.
+ *
+ * A day in `skipShortfallDays` never contributes a DEFICIT (falling short is forgiven); a day in
+ * `skipSurplusDays` never contributes CREDIT (extra study doesn't bank). A day listed in both
+ * contributes nothing either way. Days outside [since, through] — or rest days — are ignored.
+ *
+ * These persist historically on purpose: the checkbox auto-unchecks once the day turns over, but the
+ * day you waived stays waived in the cumulative total forever.
+ */
+export function fullDebtExemptionAdjustment(args: {
+  skipShortfallDays: string[]
+  skipSurplusDays:   string[]
+  goalForDay:  (dateStr: string) => number
+  gradsForDay: (dateStr: string) => number
+  since:   string
+  through: string
+}): number {
+  const { skipShortfallDays, skipSurplusDays, goalForDay, gradsForDay, since, through } = args
+  const days = new Set([...skipShortfallDays, ...skipSurplusDays].filter(d => d >= since && d <= through))
+  let adj = 0
+  for (const d of days) {
+    const goal = Math.max(0, goalForDay(d))
+    if (goal <= 0) continue                       // rest day: contributes nothing regardless
+    const contribution = gradsForDay(d) - goal
+    if (contribution < 0 && skipShortfallDays.includes(d)) adj -= contribution   // cancel the deficit
+    if (contribution > 0 && skipSurplusDays.includes(d))   adj -= contribution   // cancel the credit
+  }
+  return adj
 }

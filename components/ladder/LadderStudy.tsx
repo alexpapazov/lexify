@@ -25,7 +25,7 @@ import type { Pathway, PathwayState, Rung, ErrorType } from '@/domain'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
@@ -350,7 +350,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
             .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null)
             .eq('cards.source_language', src).eq('cards.target_language', tgt)
             .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString()),
-          db.from('profiles').select('goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since').eq('user_id', uid).maybeSingle(),
+          db.from('profiles').select('goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', uid).maybeSingle(),
         ])
         const goals = pairRes.data?.goals as Record<string, number | null> | null
         const baseGoalToday = (goals?.[String(weekday)] as number | undefined) ?? 0
@@ -376,18 +376,31 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
               .eq('cards.source_language', src).eq('cards.target_language', tgt)
               .gte('graduated_at', lower).order('graduated_at', { ascending: true }).range(from, to),
           )
+          const skipShortfallDays = (profRes.data?.full_debt_skip_shortfall_days as string[] | null) ?? []
+          const skipSurplusDays   = (profRes.data?.full_debt_skip_surplus_days   as string[] | null) ?? []
+          const exemptDaySet = new Set([...skipShortfallDays, ...skipSurplusDays])
           let gradsSince = 0
+          const exemptDayGrads = new Map<string, number>()
           for (const row of rows) {
             const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
             if (!r.graduated_at) continue
             if (isAutoGraduated(r.accelerated_mode)) continue
             const d = localDateWithTurnover(r.graduated_at, tzRef.current, turnoverRef.current)
-            if (d >= fullDebtSince && d < todayStr) gradsSince++
+            if (d >= fullDebtSince && d < todayStr) {
+              gradsSince++
+              if (exemptDaySet.has(d)) exemptDayGrads.set(d, (exemptDayGrads.get(d) ?? 0) + 1)
+            }
           }
           goalToday = fullDebtGoal({
             baseGoal: baseGoalToday,
             plannedThroughYesterday: plannedGoalSum(goalForWeekday, fullDebtSince, yesterdayStr),
             gradsThroughYesterday: gradsSince,
+            exemptionAdjustment: fullDebtExemptionAdjustment({
+              skipShortfallDays, skipSurplusDays,
+              goalForDay:  (d) => goalForWeekday(new Date(d + 'T12:00:00Z').getUTCDay()),
+              gradsForDay: (d) => exemptDayGrads.get(d) ?? 0,
+              since: fullDebtSince, through: yesterdayStr,
+            }),
           }).goal
         } else {
           // Yesterday-only carryover (the two per-day toggles).

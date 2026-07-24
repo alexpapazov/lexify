@@ -1,4 +1,4 @@
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated } from '../goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment } from '../goalCarryover'
 
 const base = { baseGoal: 20, yesterdayGoal: 20, yesterdayCount: 20, carryShortfall: false, carrySurplus: false }
 
@@ -96,5 +96,45 @@ describe('isAutoGraduated', () => {
   })
   it('excludes any future mode by default rather than silently counting it', () => {
     expect(isAutoGraduated('some_new_mode')).toBe(true)
+  })
+})
+
+describe('fullDebtExemptionAdjustment', () => {
+  // A goal of 10 every day; the exempt day is 2026-07-22.
+  const base = {
+    skipShortfallDays: [] as string[], skipSurplusDays: [] as string[],
+    goalForDay: () => 10, since: '2026-07-01', through: '2026-07-31',
+  }
+
+  it('cancels a waived day’s deficit so it never rolls forward', () => {
+    // Did 4 of 10 → normally −6 debt; waived → 0.
+    const adj = fullDebtExemptionAdjustment({ ...base, skipShortfallDays: ['2026-07-22'], gradsForDay: () => 4 })
+    expect(adj).toBe(6)
+  })
+
+  it('cancels a waived day’s surplus so it never banks credit', () => {
+    // Did 25 of 10 → normally +15 credit; waived → 0.
+    const adj = fullDebtExemptionAdjustment({ ...base, skipSurplusDays: ['2026-07-22'], gradsForDay: () => 25 })
+    expect(adj).toBe(-15)
+  })
+
+  it('only waives the direction that was checked', () => {
+    // Shortfall waived, but the day was a SURPLUS → nothing to cancel.
+    expect(fullDebtExemptionAdjustment({ ...base, skipShortfallDays: ['2026-07-22'], gradsForDay: () => 25 })).toBe(0)
+    // Surplus waived, but the day was a DEFICIT → nothing to cancel.
+    expect(fullDebtExemptionAdjustment({ ...base, skipSurplusDays: ['2026-07-22'], gradsForDay: () => 4 })).toBe(0)
+  })
+
+  it('ignores days outside the window and rest days', () => {
+    expect(fullDebtExemptionAdjustment({ ...base, skipShortfallDays: ['2026-06-01'], gradsForDay: () => 0 })).toBe(0)
+    expect(fullDebtExemptionAdjustment({ ...base, skipShortfallDays: ['2026-07-22'], goalForDay: () => 0, gradsForDay: () => 0 })).toBe(0)
+  })
+
+  it('feeds through fullDebtGoal to leave today’s goal unchanged', () => {
+    // Planned 100, did 94 (a 6-card shortfall on the waived day) → without the waiver today's goal
+    // would be 10 + 6 = 16; with it, back to the plain base.
+    const adj = fullDebtExemptionAdjustment({ ...base, skipShortfallDays: ['2026-07-22'], gradsForDay: () => 4 })
+    expect(fullDebtGoal({ baseGoal: 10, plannedThroughYesterday: 100, gradsThroughYesterday: 94 }).goal).toBe(16)
+    expect(fullDebtGoal({ baseGoal: 10, plannedThroughYesterday: 100, gradsThroughYesterday: 94, exemptionAdjustment: adj }).goal).toBe(10)
   })
 })

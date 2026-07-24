@@ -30,7 +30,7 @@ export default function AnalyticsPage() {
         <div className="panel p-5 space-y-3">
           <div>
             <h2 className="text-sm font-semibold text-ink">Review history</h2>
-            <p className="text-xs text-ink-faint">Each day&apos;s ring shows the language mix; the center is % of that day&apos;s goal (green only if every language also hit its own goal). Tap a day for details.</p>
+            <p className="text-xs text-ink-faint">Each day&apos;s ring shows the language mix; the center is % of that day&apos;s <em>assigned</em> goal — after carryover, so a day counts as complete when you did what was owed (or nothing, if a surplus already covered it). Green when every language met its assigned goal. Tap a day for details.</p>
           </div>
           <ReviewCalendar />
         </div>

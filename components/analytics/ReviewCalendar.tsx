@@ -20,6 +20,7 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langName, assignLanguageColors } from '@/lib/languages'
 import { localDateWithTurnover, getToday } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
+import { carriedGoal, fullDebtGoal, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
 import { DayDetailModal } from '@/components/analytics/DayDetailModal'
 import type { LanguagePair } from '@/domain'
 
@@ -29,6 +30,8 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 /** YYYY-MM-DD for a given year/month(0-based)/day. */
 const iso = (y: number, m: number, d: number) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 const weekdayOf = (dateStr: string) => new Date(dateStr + 'T12:00:00Z').getUTCDay()
+const addDays = (dateStr: string, n: number) =>
+  new Date(new Date(dateStr + 'T12:00:00Z').getTime() + n * 86_400_000).toISOString().slice(0, 10)
 
 interface DayInfo { counts: Map<string, number>; total: number }
 
@@ -41,6 +44,12 @@ export function ReviewCalendar() {
   const [tz, setTz] = useState('UTC')
   const [turnover, setTurnover] = useState(0)
   const [colorOverrides, setColorOverrides] = useState<Record<string, string>>({})
+  // Carryover config — so a past day counts as complete when the learner did what was ASSIGNED that day
+  // (a carried-up goal, or nothing because a surplus already covered it), not the raw configured goal.
+  const [carry, setCarry] = useState<{
+    shortfall: boolean; surplus: boolean; fullDebt: boolean; since: string | null
+    skipShortfall: string[]; skipSurplus: string[]
+  }>({ shortfall: false, surplus: false, fullDebt: false, since: null, skipShortfall: [], skipSurplus: [] })
   const [selected, setSelected] = useState<string | null>(null)
   // Displayed month (year, month 0-based)
   const [view, setView] = useState<{ y: number; m: number } | null>(null)
@@ -52,12 +61,20 @@ export function ReviewCalendar() {
       if (!session) { setLoading(false); return }
       const uid = session.user.id
 
-      const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, language_colors').eq('user_id', uid).single()
+      const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', uid).single()
       const tzv = (profile?.timezone as string | null) ?? 'UTC'
       const turnoverv = (profile?.day_turnover_hour as number | null) ?? 0
       const today = getToday(tzv, turnoverv)
       setTz(tzv); setTurnover(turnoverv)
       setColorOverrides((profile?.language_colors as Record<string, string> | null) ?? {})
+      setCarry({
+        shortfall: (profile?.goal_carry_shortfall as boolean | null) ?? false,
+        surplus:   (profile?.goal_carry_surplus as boolean | null) ?? false,
+        fullDebt:  (profile?.goal_full_debt as boolean | null) ?? false,
+        since:     (profile?.goal_full_debt_since as string | null) ?? null,
+        skipShortfall: (profile?.full_debt_skip_shortfall_days as string[] | null) ?? [],
+        skipSurplus:   (profile?.full_debt_skip_surplus_days as string[] | null) ?? [],
+      })
 
       // PAGED: this pulls the user's ENTIRE graduation history, which is well past Supabase's 1000-row
       // cap. Unpaged (and unordered) it returned an arbitrary 1000 rows, so every day in the calendar
@@ -107,19 +124,55 @@ export function ReviewCalendar() {
     return (key: string) => colorMap[key.split('|')[0]!] ?? '#64748b'
   }, [pairs, colorOverrides])
 
-  const goalsByWeekday = useMemo(() => {
-    // weekday → Map<pairKey, goal>
-    const out = new Map<number, Map<string, number>>()
-    for (let wd = 0; wd < 7; wd++) {
-      const g = new Map<string, number>()
-      for (const p of pairs) {
-        const goal = p.goals?.[String(wd)]
-        if (typeof goal === 'number' && goal > 0) g.set(`${p.sourceLanguage}|${p.targetLanguage}`, goal)
-      }
-      out.set(wd, g)
+  // Effective per-pair goal for a given past DATE, applying whatever carryover the learner has configured
+  // — so "complete" means they did what was ASSIGNED that day. A pair only appears when it had a base
+  // goal that weekday (an assignment existed); its value is the carryover-adjusted target, which may be 0
+  // if a running surplus already covered the day. NOTE: uses the CURRENT carryover settings (we don't
+  // store historical config), so toggling carryover re-colours past days.
+  const effectiveGoalsForDate = useMemo(() => {
+    const baseGoal = (p: LanguagePair, date: string): number => {
+      const g = p.goals?.[String(weekdayOf(date))]
+      return typeof g === 'number' && g > 0 ? g : 0
     }
-    return out
-  }, [pairs])
+    const countFor = (key: string, date: string): number => byDay.get(date)?.counts.get(key) ?? 0
+
+    return (date: string): Map<string, number> => {
+      const out = new Map<string, number>()
+      for (const p of pairs) {
+        const key = `${p.sourceLanguage}|${p.targetLanguage}`
+        const base = baseGoal(p, date)
+        if (base <= 0) continue                 // not assigned that weekday
+        let eff = base
+        if (carry.fullDebt && carry.since && date > carry.since) {
+          const yesterday = addDays(date, -1)
+          let grads = 0, planned = 0
+          for (let d = carry.since; d <= yesterday; d = addDays(d, 1)) {
+            const g = baseGoal(p, d)
+            if (g <= 0) continue                 // rest day contributes nothing
+            planned += g
+            grads += countFor(key, d)
+          }
+          eff = fullDebtGoal({
+            baseGoal: base, plannedThroughYesterday: planned, gradsThroughYesterday: grads,
+            exemptionAdjustment: fullDebtExemptionAdjustment({
+              skipShortfallDays: carry.skipShortfall, skipSurplusDays: carry.skipSurplus,
+              goalForDay: (d) => baseGoal(p, d), gradsForDay: (d) => countFor(key, d),
+              since: carry.since, through: yesterday,
+            }),
+          }).goal
+        } else if (!carry.fullDebt && (carry.shortfall || carry.surplus)) {
+          const yesterday = addDays(date, -1)
+          const yGoal = baseGoal(p, yesterday)
+          eff = carriedGoal({
+            baseGoal: base, yesterdayGoal: yGoal > 0 ? yGoal : null,
+            yesterdayCount: countFor(key, yesterday), carryShortfall: carry.shortfall, carrySurplus: carry.surplus,
+          }).goal
+        }
+        out.set(key, eff)
+      }
+      return out
+    }
+  }, [pairs, byDay, carry])
 
   if (loading) return <p className="text-sm text-ink-faint">Loading…</p>
   if (!view || !minDate) {
@@ -163,7 +216,7 @@ export function ReviewCalendar() {
               </div>
             )
           }
-          return <DayCell key={date} day={day} date={date} info={byDay.get(date)} goals={goalsByWeekday.get(weekdayOf(date))!} colorFor={colorFor} onSelect={setSelected} />
+          return <DayCell key={date} day={day} date={date} info={byDay.get(date)} goals={effectiveGoalsForDate(date)} colorFor={colorFor} onSelect={setSelected} />
         })}
       </div>
 
@@ -178,10 +231,14 @@ function DayCell({ day, date, info, goals, colorFor, onSelect }: {
   onSelect: (date: string) => void
 }) {
   const total = info?.total ?? 0
+  // `goals` are the carryover-adjusted (effective) targets. A day with an assignment can still total 0
+  // when a running surplus already covered every language — that day is complete, not "no goal".
+  const hadAssignment = goals.size > 0
   const totalGoal = [...goals.values()].reduce((a, b) => a + b, 0)
 
-  // Percentage of the day's summed goal.
-  const pct = totalGoal > 0 ? Math.round((total / totalGoal) * 100) : null
+  // Percentage of the day's assigned (effective) goal. If the assignment was fully surplus-covered
+  // (effective 0), the day is 100% done.
+  const pct = totalGoal > 0 ? Math.round((total / totalGoal) * 100) : (hadAssignment ? 100 : null)
   const allIndividualMet = [...goals.entries()].every(([key, g]) => (info?.counts.get(key) ?? 0) >= g)
 
   let pctColor = 'text-ink-faint'

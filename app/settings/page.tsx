@@ -388,6 +388,10 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [goalCarrySurplus,    setGoalCarrySurplus]    = useState(false)
   const [goalFullDebt,        setGoalFullDebt]        = useState(false)
   const [goalFullDebtSince,   setGoalFullDebtSince]   = useState<string | null>(null)
+  // Study-days waived from full-debt carryover. "Checked" = today is in the list, so each box
+  // auto-unchecks once the day turns over, while past waivers stay honoured in the running total.
+  const [skipShortfallDays,   setSkipShortfallDays]   = useState<string[]>([])
+  const [skipSurplusDays,     setSkipSurplusDays]     = useState<string[]>([])
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
   const [langColors,          setLangColors]          = useState<Record<string, string>>({})
@@ -461,7 +465,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -479,6 +483,8 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         setGoalCarrySurplus((profile.goal_carry_surplus as boolean | null) ?? false)
         setGoalFullDebt((profile.goal_full_debt as boolean | null) ?? false)
         setGoalFullDebtSince((profile.goal_full_debt_since as string | null) ?? null)
+        setSkipShortfallDays((profile.full_debt_skip_shortfall_days as string[] | null) ?? [])
+        setSkipSurplusDays((profile.full_debt_skip_surplus_days as string[] | null) ?? [])
         setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo' | 'standard')
         setAudioSourceByLangState((profile.audio_source_by_language as Record<string, string> | null) ?? {})
         setLangColors((profile.language_colors as Record<string, string> | null) ?? {})
@@ -523,6 +529,9 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       // Stamp the enable date the first time it's turned on; clear it when turned off so a later
       // re-enable starts a fresh debt from that day (never retroactively counts old history).
       goal_full_debt_since:      goalFullDebt ? (goalFullDebtSince ?? getToday(timezone || 'UTC', turnoverHour)) : null,
+      // Kept even when full debt is off — a day already waived must stay waived if it's turned back on.
+      full_debt_skip_shortfall_days: skipShortfallDays,
+      full_debt_skip_surplus_days:   skipSurplusDays,
       audio_source_default:      audioSourceDefault,
       audio_source_by_language:  audioSourceByLang,
       language_colors:           langColors,
@@ -1041,6 +1050,40 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
                     : 'Carryover is limited to the previous day (uses the two options above).'}
                 </p>
               </div>
+
+              {/* One-day waivers — only meaningful while full debt is on. Each resets itself at day
+                  turnover (checked == today is in the list), but the day it waived stays waived. */}
+              {goalFullDebt && (() => {
+                const todayStr = getToday(timezone || 'UTC', turnoverHour)
+                const toggle = (list: string[], on: boolean) =>
+                  on ? Array.from(new Set([...list, todayStr])) : list.filter(d => d !== todayStr)
+                return (
+                  <div className="space-y-3 pl-6 border-l border-line/10">
+                    <div className="space-y-1">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" checked={skipShortfallDays.includes(todayStr)}
+                          onChange={e => setSkipShortfallDays(l => toggle(l, e.target.checked))}
+                          className="accent-accent w-4 h-4" />
+                        <span className="text-sm text-ink">Do not carry over today&apos;s incomplete cards</span>
+                      </label>
+                      <p className="text-xs text-ink-faint pl-6">
+                        Today&apos;s shortfall is forgiven instead of rolling into the debt. Resets tomorrow — re-check it each day you want it.
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" checked={skipSurplusDays.includes(todayStr)}
+                          onChange={e => setSkipSurplusDays(l => toggle(l, e.target.checked))}
+                          className="accent-accent w-4 h-4" />
+                        <span className="text-sm text-ink">Do not carry over today&apos;s surplus</span>
+                      </label>
+                      <p className="text-xs text-ink-faint pl-6">
+                        Extra cards done today don&apos;t bank credit against future days. Resets tomorrow — re-check it each day you want it.
+                      </p>
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
           </div>
         )

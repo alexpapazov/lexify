@@ -17,7 +17,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
@@ -298,6 +298,11 @@ export default function StudyPage() {
   const [fullDebtSince,     setFullDebtSince]     = useState<string | null>(null)
   // Full-debt: cumulative graduations per pair from the enable date THROUGH YESTERDAY (today excluded).
   const [sinceGradCounts,   setSinceGradCounts]   = useState<Map<string, number>>(new Map())
+  // Study-days waived from full-debt carryover, and per-`${pairKey}|${day}` grads for just those days
+  // (needed to cancel exactly that day's deficit/credit).
+  const [skipShortfallDays, setSkipShortfallDays] = useState<string[]>([])
+  const [skipSurplusDays,   setSkipSurplusDays]   = useState<string[]>([])
+  const [exemptDayGrads,    setExemptDayGrads]    = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
@@ -318,7 +323,7 @@ export default function StudyPage() {
 
     const [decks, profileRes] = await Promise.all([
       deckRepo.list(session.user.id),
-      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since').eq('user_id', session.user.id).single()),
+      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', session.user.id).single()),
     ])
 
     const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'
@@ -329,6 +334,11 @@ export default function StudyPage() {
     const fullDebtSinceVal = (profileRes.data?.goal_full_debt_since as string | null) ?? null
     setFullDebt(fullDebtOn)
     setFullDebtSince(fullDebtSinceVal)
+    const skipShort = (profileRes.data?.full_debt_skip_shortfall_days as string[] | null) ?? []
+    const skipSurp  = (profileRes.data?.full_debt_skip_surplus_days   as string[] | null) ?? []
+    setSkipShortfallDays(skipShort)
+    setSkipSurplusDays(skipSurp)
+    const exemptDaySet = new Set([...skipShort, ...skipSurp])
     const todayStr     = getToday(tz, turnoverHour)
     setTodayStr(todayStr)
     setTz(tz)
@@ -499,6 +509,7 @@ export default function StudyPage() {
           .order('graduated_at', { ascending: true }).range(from, to),
       )
       const since = new Map<string, number>()
+      const perExemptDay = new Map<string, number>()
       for (const row of rows) {
         const r = row as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
         if (!r.graduated_at || !r.cards) continue
@@ -507,11 +518,15 @@ export default function StudyPage() {
         if (day >= fullDebtSinceVal && day < todayStr) {
           const key = `${r.cards.source_language}|${r.cards.target_language}`
           since.set(key, (since.get(key) ?? 0) + 1)
+          // Only waived days need a per-day tally — that's all the exemption maths reads.
+          if (exemptDaySet.has(day)) perExemptDay.set(`${key}|${day}`, (perExemptDay.get(`${key}|${day}`) ?? 0) + 1)
         }
       }
       setSinceGradCounts(since)
+      setExemptDayGrads(perExemptDay)
     } else {
       setSinceGradCounts(new Map())
+      setExemptDayGrads(new Map())
     }
 
     // ── Upcoming review forecast ────────────────────────────────────────
@@ -831,8 +846,15 @@ export default function StudyPage() {
       let goal: number, delta: number
       if (fullDebt && fullDebtSince) {
         // Unbounded: the whole running deficit/surplus since the enable date lands on today.
-        const planned = plannedGoalSum(goalForWeekday, fullDebtSince, addDays(todayStr, -1))
-        ;({ goal, delta } = fullDebtGoal({ baseGoal, plannedThroughYesterday: planned, gradsThroughYesterday: sinceGradCounts.get(key) ?? 0 }))
+        const throughYesterday = addDays(todayStr, -1)
+        const planned = plannedGoalSum(goalForWeekday, fullDebtSince, throughYesterday)
+        const exemptionAdjustment = fullDebtExemptionAdjustment({
+          skipShortfallDays, skipSurplusDays,
+          goalForDay:  (d) => goalForWeekday(new Date(d + 'T12:00:00Z').getUTCDay()),
+          gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
+          since: fullDebtSince, through: throughYesterday,
+        })
+        ;({ goal, delta } = fullDebtGoal({ baseGoal, plannedThroughYesterday: planned, gradsThroughYesterday: sinceGradCounts.get(key) ?? 0, exemptionAdjustment }))
       } else {
         const yGoal = p.goals?.[String(yesterdayWeekday)]
         ;({ goal, delta } = carriedGoal({
@@ -844,7 +866,7 @@ export default function StudyPage() {
       }
       return [{ pair: p, key, goal, delta }]
     })
-  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, sinceGradCounts, todayStr])
+  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads])
 
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },

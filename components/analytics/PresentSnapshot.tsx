@@ -20,7 +20,7 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
@@ -135,13 +135,16 @@ export function PresentSnapshot() {
         if (!session) { setError('Not signed in'); return }
         const uid = session.user.id
 
-        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since').eq('user_id', uid).single()
+        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', uid).single()
         const tz = (profile?.timezone as string | null) ?? 'UTC'
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
         const carryShortfall = (profile?.goal_carry_shortfall as boolean | null) ?? false
         const carrySurplus = (profile?.goal_carry_surplus as boolean | null) ?? false
         const fullDebtOn = (profile?.goal_full_debt as boolean | null) ?? false
         const fullDebtSince = (profile?.goal_full_debt_since as string | null) ?? null
+        const skipShortfallDays = (profile?.full_debt_skip_shortfall_days as string[] | null) ?? []
+        const skipSurplusDays   = (profile?.full_debt_skip_surplus_days   as string[] | null) ?? []
+        const exemptDaySet = new Set([...skipShortfallDays, ...skipSurplusDays])
         const today = getToday(tz, turnover)
         const todayWeekday = new Date(today + 'T12:00:00Z').getUTCDay()
         const yDate = new Date(today + 'T12:00:00Z'); yDate.setUTCDate(yDate.getUTCDate() - 1)
@@ -260,6 +263,7 @@ export function PresentSnapshot() {
 
         // Full-debt: cumulative graduations per pair from the enable date THROUGH YESTERDAY (paged).
         const gradSince = new Map<string, number>()
+        const exemptDayGrads = new Map<string, number>()   // `${key}|${day}` for waived days only
         if (fullDebtOn && fullDebtSince) {
           const lower = new Date(new Date(fullDebtSince + 'T00:00:00Z').getTime() - 48 * DAY_MS).toISOString()
           const rows = await fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('card_states')
@@ -275,6 +279,7 @@ export function PresentSnapshot() {
             if (day >= fullDebtSince && day < today) {
               const key = `${r.cards.source_language}|${r.cards.target_language}`
               gradSince.set(key, (gradSince.get(key) ?? 0) + 1)
+              if (exemptDaySet.has(day)) exemptDayGrads.set(`${key}|${day}`, (exemptDayGrads.get(`${key}|${day}`) ?? 0) + 1)
             }
           }
         }
@@ -291,6 +296,12 @@ export function PresentSnapshot() {
                 baseGoal,
                 plannedThroughYesterday: plannedGoalSum(goalForWeekday, fullDebtSince, yesterday),
                 gradsThroughYesterday: gradSince.get(key) ?? 0,
+                exemptionAdjustment: fullDebtExemptionAdjustment({
+                  skipShortfallDays, skipSurplusDays,
+                  goalForDay:  (d) => goalForWeekday(new Date(d + 'T12:00:00Z').getUTCDay()),
+                  gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
+                  since: fullDebtSince, through: yesterday,
+                }),
               }))
             } else {
               const yGoal = p.goals?.[String(yesterdayWeekday)] as number | undefined
