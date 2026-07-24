@@ -1759,10 +1759,11 @@ export default function DeckDetailPage() {
           <Link
             href={parentFolder
               ? routes.library(parentFolder.id, { source: deck.sourceLanguage, target: deck.targetLanguage })
-              : '/library'}
+              // No folder → back to THIS language's library (the pair view), not the all-languages root.
+              : `/library?source=${encodeURIComponent(deck.sourceLanguage)}&target=${encodeURIComponent(deck.targetLanguage)}`}
             className="text-xs text-ink-muted hover:text-ink mb-2 inline-block"
           >
-            ← {parentFolder ? parentFolder.name : 'Library'}
+            ← {parentFolder ? parentFolder.name : langName(deck.sourceLanguage)}
           </Link>
           {renamingDeck ? (
             <input
