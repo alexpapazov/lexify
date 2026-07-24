@@ -20,7 +20,7 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated } from '@/lib/goalCarryover'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
@@ -248,7 +248,7 @@ export function PresentSnapshot() {
         for (const row of gradRows) {
           const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
           if (!r.graduated_at || !r.cards) continue
-          if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+          if (isAutoGraduated(r.accelerated_mode)) continue
           const key = `${r.cards.source_language}|${r.cards.target_language}`
           const w = recencyWeight((now - new Date(r.graduated_at).getTime()) / DAY_MS)
           gradWAll += w
@@ -270,7 +270,7 @@ export function PresentSnapshot() {
           for (const row of rows) {
             const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
             if (!r.graduated_at || !r.cards) continue
-            if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+            if (isAutoGraduated(r.accelerated_mode)) continue
             const day = localDateWithTurnover(r.graduated_at, tz, turnover)
             if (day >= fullDebtSince && day < today) {
               const key = `${r.cards.source_language}|${r.cards.target_language}`

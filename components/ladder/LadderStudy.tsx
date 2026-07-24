@@ -25,7 +25,7 @@ import type { Pathway, PathwayState, Rung, ErrorType } from '@/domain'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated } from '@/lib/goalCarryover'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
@@ -359,7 +359,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         for (const row of gradRes.data ?? []) {
           const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
           if (!r.graduated_at) continue
-          if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+          if (isAutoGraduated(r.accelerated_mode)) continue
           const d = localDateWithTurnover(r.graduated_at, tzRef.current, turnoverRef.current)
           if (d === todayStr) gradTodayPair++
           else if (d === yesterdayStr) gradYestPair++
@@ -380,7 +380,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           for (const row of rows) {
             const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
             if (!r.graduated_at) continue
-            if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+            if (isAutoGraduated(r.accelerated_mode)) continue
             const d = localDateWithTurnover(r.graduated_at, tzRef.current, turnoverRef.current)
             if (d >= fullDebtSince && d < todayStr) gradsSince++
           }

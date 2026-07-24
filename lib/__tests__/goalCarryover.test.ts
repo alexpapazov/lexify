@@ -1,4 +1,4 @@
-import { carriedGoal, plannedGoalSum, fullDebtGoal } from '../goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated } from '../goalCarryover'
 
 const base = { baseGoal: 20, yesterdayGoal: 20, yesterdayCount: 20, carryShortfall: false, carrySurplus: false }
 
@@ -81,5 +81,20 @@ describe('fullDebtGoal', () => {
   it('leaves the goal alone when exactly on pace', () => {
     expect(fullDebtGoal({ baseGoal: 20, plannedThroughYesterday: 100, gradsThroughYesterday: 100 }))
       .toEqual({ goal: 20, delta: 0 })
+  })
+})
+
+describe('isAutoGraduated', () => {
+  it('excludes both auto-graduate paths from goal counts', () => {
+    expect(isAutoGraduated('import_known')).toBe(true)   // fast-tracked import
+    expect(isAutoGraduated('bulk_known')).toBe(true)     // bulk "I already knew these"
+  })
+  it('counts normally-learned cards', () => {
+    expect(isAutoGraduated('none')).toBe(false)
+    expect(isAutoGraduated(null)).toBe(false)
+    expect(isAutoGraduated(undefined)).toBe(false)
+  })
+  it('excludes any future mode by default rather than silently counting it', () => {
+    expect(isAutoGraduated('some_new_mode')).toBe(true)
   })
 })

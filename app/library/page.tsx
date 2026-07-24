@@ -169,6 +169,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [newName,        setNewName]        = useState('')
   const [folderCounts, setFolderCounts] = useState<Record<string, FolderCounts>>({})
+  const [deckCounts,   setDeckCounts]   = useState<Record<string, FolderCounts>>({})
   const [pairCounts,   setPairCounts]   = useState<FolderCounts>(EMPTY_COUNTS)
   const [pairDeckStats, setPairDeckStats] = useState<DeckStats[]>([])
   // Due-now context (from the bulk load) so the card-list "Due" filter matches the counts.
@@ -265,6 +266,12 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       return [folder.id, counts] as const
     }))
     setFolderCounts(Object.fromEntries(entries))
+
+    // Per-deck counts for the deck rows. Served entirely from the same `bulk` above, so this adds
+    // zero queries — computeDeckCounts only hits the network when no bulk is supplied.
+    const deckEntries = await Promise.all(decks.map(async d =>
+      [d.id, await computeDeckCounts([d.id], session.user.id, cardRepo, stateRepo, bulk)] as const))
+    setDeckCounts(Object.fromEntries(deckEntries))
 
     // Pairing-wide totals (every deck in this language pairing, regardless
     // of which folder it lives in).
@@ -1601,6 +1608,18 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                     </Link>
                     <div className="text-xs text-ink-muted mt-0.5">{deck.targetLanguage.toUpperCase()}</div>
                   </div>
+                  {(() => {
+                    const c = deckCounts[deck.id]
+                    if (!c || (c.unlearned + c.learning + c.graduated) === 0) return null
+                    return (
+                      <div className="hidden sm:flex items-center gap-3 text-xs shrink-0">
+                        <span className="text-ink-muted">{c.unlearned} new</span>
+                        <span className="text-warning">{c.learning} learning</span>
+                        <span className="text-success">{c.graduated} done</span>
+                        <span className="text-accent-soft">{c.dueNow} due</span>
+                      </div>
+                    )
+                  })()}
                   <div className="flex items-center gap-2 shrink-0">
                     <button onClick={() => handlePin(deck.id, !deck.isPinned)}
                       className="text-ink-faint hover:text-warning transition-colors text-sm">

@@ -48,7 +48,12 @@ export function rowToCardState(row: Record<string, unknown>): CardState {
     relearning:           Boolean(row.relearning ?? false),
     goodStreak:           Number(row.good_streak  ?? 0),
     againStreak:          Number(row.again_streak ?? 0),
-    acceleratedMode:        (row.accelerated_mode as string) === 'import_known' ? 'import_known' : 'none',
+    // Preserve BOTH auto-graduated modes. This used to collapse 'bulk_known' → 'none', which then got
+    // written straight back by cardStateToRow — silently erasing the marker on the first re-save, so
+    // bulk-graduated cards started counting toward the daily goal.
+    acceleratedMode:        (row.accelerated_mode as string) === 'import_known' ? 'import_known'
+                          : (row.accelerated_mode as string) === 'bulk_known'   ? 'bulk_known'
+                          : 'none',
     acceleratedLocked:      Boolean(row.accelerated_locked ?? false),
     acceleratedWrongStreak: Number(row.accelerated_wrong_streak ?? 0),
     acceleratedPenalty:     Number(row.accelerated_penalty      ?? 0),

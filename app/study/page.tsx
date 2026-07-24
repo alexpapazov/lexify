@@ -17,7 +17,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
-import { carriedGoal, plannedGoalSum, fullDebtGoal } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated } from '@/lib/goalCarryover'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
@@ -478,7 +478,7 @@ export default function StudyPage() {
     for (const row of (recentGradsRes.data ?? [])) {
       const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
       if (!r.graduated_at || !r.cards) continue
-      if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+      if (isAutoGraduated(r.accelerated_mode)) continue
       const day = localDateWithTurnover(r.graduated_at, tz, turnoverHour)
       const key = `${r.cards.source_language}|${r.cards.target_language}`
       if (day === todayStr) gradCounts.set(key, (gradCounts.get(key) ?? 0) + 1)
@@ -502,7 +502,7 @@ export default function StudyPage() {
       for (const row of rows) {
         const r = row as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
         if (!r.graduated_at || !r.cards) continue
-        if (r.accelerated_mode === 'import_known' || r.accelerated_mode === 'bulk_known') continue
+        if (isAutoGraduated(r.accelerated_mode)) continue
         const day = localDateWithTurnover(r.graduated_at, tz, turnoverHour)
         if (day >= fullDebtSinceVal && day < todayStr) {
           const key = `${r.cards.source_language}|${r.cards.target_language}`

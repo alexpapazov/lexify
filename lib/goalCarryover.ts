@@ -7,6 +7,16 @@
  * to be served more new cards.
  */
 
+/**
+ * Auto-graduated cards NEVER count toward a daily goal — you didn't learn them that day. Covers both
+ * paths: fast-tracked import ('import_known') and bulk "I already knew these" ('bulk_known'). Treats
+ * ANY non-'none' mode as auto-graduated, so a future mode is excluded by default rather than silently
+ * counting.
+ */
+export function isAutoGraduated(acceleratedMode: string | null | undefined): boolean {
+  return acceleratedMode != null && acceleratedMode !== 'none'
+}
+
 export type GoalCarryover = {
   /** The goal to show and measure against today. Never negative. */
   goal: number
