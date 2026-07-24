@@ -14,6 +14,7 @@
  * as hard as a 40-word day. A window with too few graduations plots nothing instead of a wild ratio.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { localDateWithTurnover } from '@/lib/dates'
@@ -63,7 +64,7 @@ export function LearningEfficiency() {
         const uid = session.user.id
 
         const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, language_colors').eq('user_id', uid).single()
-        const tz = (profile?.timezone as string | null) ?? 'UTC'
+        const tz = (profile?.timezone as string | null) ?? deviceTimeZone()
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
         if (!cancelled) setLangColors((profile?.language_colors as Record<string, string> | null) ?? {})
 

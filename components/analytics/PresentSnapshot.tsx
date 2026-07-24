@@ -9,6 +9,7 @@
  *      today's Due Now reviews and learning the remaining new-word goal.
  */
 import { useEffect, useMemo, useState } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabasePaged'
@@ -136,7 +137,7 @@ export function PresentSnapshot() {
         const uid = session.user.id
 
         const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', uid).single()
-        const tz = (profile?.timezone as string | null) ?? 'UTC'
+        const tz = (profile?.timezone as string | null) ?? deviceTimeZone()
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
         const carryShortfall = (profile?.goal_carry_shortfall as boolean | null) ?? false
         const carrySurplus = (profile?.goal_carry_surplus as boolean | null) ?? false

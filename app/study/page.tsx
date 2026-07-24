@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef, useMemo } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { routes } from '@/lib/routes'
@@ -326,7 +327,7 @@ export default function StudyPage() {
       loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', session.user.id).single()),
     ])
 
-    const tz           = (profileRes.data?.timezone as string | null) ?? 'UTC'
+    const tz           = (profileRes.data?.timezone as string | null) ?? deviceTimeZone()
     const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
     setCarryShortfall((profileRes.data?.goal_carry_shortfall as boolean | null) ?? false)
     setCarrySurplus((profileRes.data?.goal_carry_surplus as boolean | null) ?? false)

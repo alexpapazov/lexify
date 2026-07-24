@@ -7,6 +7,7 @@
  */
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { useActiveTimer } from '@/lib/activeTimer'
 import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { apiUrl } from '@/lib/apiBase'
@@ -236,7 +237,7 @@ function FolderSessionInner() {
       ])
       setFolder(thisFolder)
 
-      const tz           = (profileData.data?.timezone as string | null) ?? 'UTC'
+      const tz           = (profileData.data?.timezone as string | null) ?? deviceTimeZone()
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
       setAudioSourceDefault(profileData.data?.audio_source_default as string | null)
       setAudioSourceByLanguage(profileData.data?.audio_source_by_language as Record<string, string> | null)

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { routes } from '@/lib/routes'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -324,7 +325,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         const audioPref = await createClient().from('profiles').select('audio_source_default, audio_source_by_language, timezone, day_turnover_hour').eq('user_id', uid).single()
         setAudioSourceDefault(audioPref.data?.audio_source_default as string | null)
         setAudioSourceByLanguage(audioPref.data?.audio_source_by_language as Record<string, string> | null)
-        tzRef.current       = (audioPref.data?.timezone as string | null) ?? 'UTC'
+        tzRef.current       = (audioPref.data?.timezone as string | null) ?? deviceTimeZone()
         turnoverRef.current = (audioPref.data?.day_turnover_hour as number | null) ?? 0
       }
 

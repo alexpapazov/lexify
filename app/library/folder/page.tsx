@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useEffect, useRef, useState } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { routes } from '@/lib/routes'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -218,7 +219,7 @@ function FolderPageInner() {
         .then(r => r.data).catch(() => null),
       new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id).catch(() => []),
     ])
-    const dTz = (profileRow?.timezone as string | null) ?? 'UTC'
+    const dTz = (profileRow?.timezone as string | null) ?? deviceTimeZone()
     const dToday = getToday(dTz, (profileRow?.day_turnover_hour as number | null) ?? 0)
     const enabledByPair = buildEnabledTracksMap(paramRows)
     setDueCtx({ enabledByPair, tz: dTz, today: dToday })

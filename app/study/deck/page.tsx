@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -1250,7 +1251,7 @@ export default function DeckDetailPage() {
 
     if (profile?.default_daily_new_cards) setDefaultLimit(profile.default_daily_new_cards)
     if (profile?.spillover_due !== undefined) setDefaultSpillover(profile.spillover_due)
-    setTz((profile?.timezone as string | null) ?? 'UTC')
+    setTz((profile?.timezone as string | null) ?? deviceTimeZone())
     setTurnoverHour((profile?.day_turnover_hour as number | null) ?? 0)
 
     if (!d) { router.push('/study'); return }

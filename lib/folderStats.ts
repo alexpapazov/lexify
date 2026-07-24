@@ -1,4 +1,5 @@
 import type { Folder, Deck, UserId, Card, CardState } from '@/domain'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import type { CardRepository, CardStateRepository } from '@/lib/data/interfaces'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
@@ -107,7 +108,7 @@ export async function loadLibraryBulk(
     const arr = statesByCard.get(s.cardId)
     if (arr) arr.push(s); else statesByCard.set(s.cardId, [s])
   }
-  const tz = (profile?.timezone as string | null) ?? 'UTC'
+  const tz = (profile?.timezone as string | null) ?? deviceTimeZone()
   const today = getToday(tz, (profile?.day_turnover_hour as number | null) ?? 0)
   const pairByDeck = new Map(decks.map(d => [d.id, `${d.sourceLanguage}|${d.targetLanguage}`]))
   return {

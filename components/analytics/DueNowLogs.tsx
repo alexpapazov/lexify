@@ -6,6 +6,7 @@
  * a card's orbit radius uses its CURRENT interval from card_states (accurate for recent sessions).
  */
 import { useEffect, useState } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { createClient } from '@/lib/supabase/client'
 import { groupDueDays, type DueSession, type RawDueEvent } from '@/lib/dueNowLog'
 import { langName, langFlag } from '@/lib/languages'
@@ -46,7 +47,7 @@ export function DueNowLogs() {
             .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since)
             .order('reviewed_at', { ascending: false }).limit(20000),
         ])
-        const tz = (profile?.timezone as string | null) ?? 'UTC'
+        const tz = (profile?.timezone as string | null) ?? deviceTimeZone()
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
 
         const raw: RawDueEvent[] = (evs ?? []).map(e => ({

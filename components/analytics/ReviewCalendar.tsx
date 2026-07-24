@@ -15,6 +15,7 @@
  * goals uses). Navigation spans [first day with data … today]; out-of-range days are greyed out.
  */
 import { useEffect, useMemo, useState } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langName, assignLanguageColors } from '@/lib/languages'
@@ -62,7 +63,7 @@ export function ReviewCalendar() {
       const uid = session.user.id
 
       const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', uid).single()
-      const tzv = (profile?.timezone as string | null) ?? 'UTC'
+      const tzv = (profile?.timezone as string | null) ?? deviceTimeZone()
       const turnoverv = (profile?.day_turnover_hour as number | null) ?? 0
       const today = getToday(tzv, turnoverv)
       setTz(tzv); setTurnover(turnoverv)
