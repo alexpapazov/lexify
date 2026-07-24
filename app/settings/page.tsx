@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckPreferencesRepository }  from '@/lib/data/deckPreferences'
@@ -528,7 +529,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       goal_full_debt:            goalFullDebt,
       // Stamp the enable date the first time it's turned on; clear it when turned off so a later
       // re-enable starts a fresh debt from that day (never retroactively counts old history).
-      goal_full_debt_since:      goalFullDebt ? (goalFullDebtSince ?? getToday(timezone || 'UTC', turnoverHour)) : null,
+      goal_full_debt_since:      goalFullDebt ? (goalFullDebtSince ?? getToday(timezone || deviceTimeZone(), turnoverHour)) : null,
       // Kept even when full debt is off — a day already waived must stay waived if it's turned back on.
       full_debt_skip_shortfall_days: skipShortfallDays,
       full_debt_skip_surplus_days:   skipSurplusDays,
@@ -555,7 +556,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
     setRedistributing(true)
     setRedistributeMsg(null)
     try {
-      const todayStr = getToday()
+      const todayStr = getToday(timezone || deviceTimeZone(), turnoverHour)
       const today    = new Date(todayStr + 'T00:00:00.000Z')
 
       const stateRepo = new SupabaseCardStateRepository()
@@ -1054,7 +1055,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
               {/* One-day waivers — only meaningful while full debt is on. Each resets itself at day
                   turnover (checked == today is in the list), but the day it waived stays waived. */}
               {goalFullDebt && (() => {
-                const todayStr = getToday(timezone || 'UTC', turnoverHour)
+                const todayStr = getToday(timezone || deviceTimeZone(), turnoverHour)
                 const toggle = (list: string[], on: boolean) =>
                   on ? Array.from(new Set([...list, todayStr])) : list.filter(d => d !== todayStr)
                 return (
