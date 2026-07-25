@@ -18,7 +18,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
@@ -304,6 +304,8 @@ export default function StudyPage() {
   const [skipShortfallDays, setSkipShortfallDays] = useState<string[]>([])
   const [skipSurplusDays,   setSkipSurplusDays]   = useState<string[]>([])
   const [exemptDayGrads,    setExemptDayGrads]    = useState<Map<string, number>>(new Map())
+  // "Move today's load to tomorrow" — list of `${src}|${tgt}|${date}` deferred study-days.
+  const [deferrals,         setDeferrals]         = useState<string[]>([])
   const [showDuePicker, setShowDuePicker] = useState(false)
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
@@ -324,7 +326,7 @@ export default function StudyPage() {
 
     const [decks, profileRes] = await Promise.all([
       deckRepo.list(session.user.id),
-      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', session.user.id).single()),
+      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', session.user.id).single()),
     ])
 
     const tz           = (profileRes.data?.timezone as string | null) ?? deviceTimeZone()
@@ -339,6 +341,7 @@ export default function StudyPage() {
     const skipSurp  = (profileRes.data?.full_debt_skip_surplus_days   as string[] | null) ?? []
     setSkipShortfallDays(skipShort)
     setSkipSurplusDays(skipSurp)
+    setDeferrals((profileRes.data?.goal_deferrals as string[] | null) ?? [])
     const exemptDaySet = new Set([...skipShort, ...skipSurp])
     const todayStr     = getToday(tz, turnoverHour)
     setTodayStr(todayStr)
@@ -836,38 +839,51 @@ export default function StudyPage() {
   const todayWeekday = todayStr ? new Date(todayStr + 'T12:00:00Z').getUTCDay() : -1
   const yesterdayWeekday = todayWeekday < 0 ? -1 : (todayWeekday + 6) % 7
 
-  /** Pairs with a goal today, each already adjusted by yesterday's carryover. */
+  /** Pairs with a goal today, each already adjusted by carryover + "move to tomorrow" deferrals. */
   const pairsWithGoalsToday = useMemo(() => {
     if (todayWeekday < 0) return []
     return langPairs.flatMap(p => {
-      const baseGoal = p.goals?.[String(todayWeekday)]
-      if (typeof baseGoal !== 'number' || baseGoal <= 0) return []
       const key = `${p.sourceLanguage}|${p.targetLanguage}`
-      const goalForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
+      const configuredForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
+      const isDeferred = (d: string) => deferrals.includes(`${key}|${d}`)
+      // owed(D) = configured minus deferral: a day deferred owes 0 and hands its goal to the next day.
+      const owed = (d: string) => owedGoalForDate(d, configuredForWeekday, isDeferred)
+      const baseOwed = owed(todayStr)
+      // Nothing owed today (no assignment, or deferred away with no carry-in) → not on the list.
+      if (configuredForWeekday(todayWeekday) <= 0 && baseOwed <= 0) return []
       let goal: number, delta: number
       if (fullDebt && fullDebtSince) {
-        // Unbounded: the whole running deficit/surplus since the enable date lands on today.
         const throughYesterday = addDays(todayStr, -1)
-        const planned = plannedGoalSum(goalForWeekday, fullDebtSince, throughYesterday)
+        const planned = plannedGoalSum(owed, fullDebtSince, throughYesterday)
         const exemptionAdjustment = fullDebtExemptionAdjustment({
           skipShortfallDays, skipSurplusDays,
-          goalForDay:  (d) => goalForWeekday(new Date(d + 'T12:00:00Z').getUTCDay()),
-          gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
+          goalForDay: owed, gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
           since: fullDebtSince, through: throughYesterday,
         })
-        ;({ goal, delta } = fullDebtGoal({ baseGoal, plannedThroughYesterday: planned, gradsThroughYesterday: sinceGradCounts.get(key) ?? 0, exemptionAdjustment }))
+        ;({ goal, delta } = fullDebtGoal({ baseGoal: baseOwed, plannedThroughYesterday: planned, gradsThroughYesterday: sinceGradCounts.get(key) ?? 0, exemptionAdjustment }))
       } else {
-        const yGoal = p.goals?.[String(yesterdayWeekday)]
+        const yOwed = owed(addDays(todayStr, -1))
         ;({ goal, delta } = carriedGoal({
-          baseGoal,
-          yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
+          baseGoal: baseOwed,
+          yesterdayGoal: yOwed > 0 ? yOwed : null,
           yesterdayCount: yesterdayGradCounts.get(key) ?? 0,
           carryShortfall, carrySurplus,
         }))
       }
       return [{ pair: p, key, goal, delta }]
     })
-  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads])
+  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals])
+
+  // "Move today's load to tomorrow" for one language: record today's study-day as deferred for that pair.
+  // owedGoalForDate then zeroes it today and adds it to tomorrow; the row drops off the list immediately.
+  async function deferGoalToTomorrow(key: string) {
+    if (!userId || !todayStr) return
+    const entry = `${key}|${todayStr}`
+    if (deferrals.includes(entry)) return
+    const next = [...deferrals, entry]
+    setDeferrals(next)
+    await supabase.from('profiles').update({ goal_deferrals: next }).eq('user_id', userId).then(() => {}, () => {})
+  }
 
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },
@@ -923,7 +939,15 @@ export default function StudyPage() {
                     <div key={key} className="space-y-1.5">
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
-                        <span className="text-ink-muted">{count}/{goal}</span>
+                        <div className="flex items-center gap-3">
+                          {/* Small remaining load → offer to push it to tomorrow instead of doing a card or two now. */}
+                          {(goal - count) > 0 && (goal - count) < 5 && (
+                            <button onClick={() => deferGoalToTomorrow(key)}
+                              className="text-xs text-ink-faint hover:text-accent transition-colors"
+                              title="Move today's remaining cards for this language to tomorrow">→ tomorrow</button>
+                          )}
+                          <span className="text-ink-muted">{count}/{goal}</span>
+                        </div>
                       </div>
                       <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">
                         <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${pct}%` }} />

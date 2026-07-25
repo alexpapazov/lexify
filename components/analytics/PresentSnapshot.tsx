@@ -21,7 +21,7 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
@@ -136,7 +136,7 @@ export function PresentSnapshot() {
         if (!session) { setError('Not signed in'); return }
         const uid = session.user.id
 
-        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', uid).single()
+        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).single()
         const tz = (profile?.timezone as string | null) ?? deviceTimeZone()
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
         const carryShortfall = (profile?.goal_carry_shortfall as boolean | null) ?? false
@@ -146,6 +146,7 @@ export function PresentSnapshot() {
         const skipShortfallDays = (profile?.full_debt_skip_shortfall_days as string[] | null) ?? []
         const skipSurplusDays   = (profile?.full_debt_skip_surplus_days   as string[] | null) ?? []
         const exemptDaySet = new Set([...skipShortfallDays, ...skipSurplusDays])
+        const deferrals = (profile?.goal_deferrals as string[] | null) ?? []
         const today = getToday(tz, turnover)
         const todayWeekday = new Date(today + 'T12:00:00Z').getUTCDay()
         const yDate = new Date(today + 'T12:00:00Z'); yDate.setUTCDate(yDate.getUTCDate() - 1)
@@ -288,27 +289,28 @@ export function PresentSnapshot() {
         const goals = pairs
           .map((p: LanguagePair) => {
             const key = `${p.sourceLanguage}|${p.targetLanguage}`
-            const baseGoal = (p.goals?.[String(todayWeekday)] as number | undefined) ?? 0
+            const configuredForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
+            const isDeferred = (d: string) => deferrals.includes(`${key}|${d}`)
+            const owed = (d: string) => owedGoalForDate(d, configuredForWeekday, isDeferred)
+            const baseGoal = owed(today)  // deferral-adjusted "owed today"
             // Apply goal carryover so "words needed today" matches the Study page.
             let goal: number, delta: number
             if (fullDebtOn && fullDebtSince) {
-              const goalForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
               ;({ goal, delta } = fullDebtGoal({
                 baseGoal,
-                plannedThroughYesterday: plannedGoalSum(goalForWeekday, fullDebtSince, yesterday),
+                plannedThroughYesterday: plannedGoalSum(owed, fullDebtSince, yesterday),
                 gradsThroughYesterday: gradSince.get(key) ?? 0,
                 exemptionAdjustment: fullDebtExemptionAdjustment({
                   skipShortfallDays, skipSurplusDays,
-                  goalForDay:  (d) => goalForWeekday(new Date(d + 'T12:00:00Z').getUTCDay()),
-                  gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
+                  goalForDay: owed, gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
                   since: fullDebtSince, through: yesterday,
                 }),
               }))
             } else {
-              const yGoal = p.goals?.[String(yesterdayWeekday)] as number | undefined
+              const yOwed = owed(yesterday)
               ;({ goal, delta } = carriedGoal({
                 baseGoal,
-                yesterdayGoal: typeof yGoal === 'number' ? yGoal : null,
+                yesterdayGoal: yOwed > 0 ? yOwed : null,
                 yesterdayCount: gradYesterday.get(key) ?? 0,
                 carryShortfall, carrySurplus,
               }))
@@ -316,8 +318,8 @@ export function PresentSnapshot() {
             return { key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, baseGoal, goal, delta, done: gradToday.get(key) ?? 0 }
           })
           // Analytics shows the FULL carryover picture (incl. pairs a surplus auto-fulfilled to goal 0,
-          // rendered as a green ✓), so filter on the BASE goal — any pair that had a target today shows.
-          .filter(g => g.baseGoal > 0)
+          // rendered as a green ✓), so filter on the owed base — any pair with a target today shows.
+          .filter(g => g.baseGoal > 0 || g.goal > 0)
         const remainingNew = goals.reduce((sum, g) => sum + Math.max(0, g.goal - g.done), 0)
 
         // ── Time today + projections ──

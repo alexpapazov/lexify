@@ -53,12 +53,13 @@ export function carriedGoal(args: {
 }
 
 /**
- * Sum of configured goals for every day in [sinceDate, throughDate] inclusive (local YYYY-MM-DD).
- * `goalForWeekday(0..6)` returns that weekday's configured goal (0 for a rest day). If since > through
- * (e.g. enabled today, measuring through yesterday) the range is empty and this returns 0.
+ * Sum of the goal OWED on every day in [sinceDate, throughDate] inclusive (local YYYY-MM-DD).
+ * `goalForDay(dateStr)` returns that day's owed goal (0 for a rest day; deferral-adjusted — see
+ * `owedGoalForDate`). If since > through (e.g. enabled today, measuring through yesterday) the range is
+ * empty and this returns 0.
  */
 export function plannedGoalSum(
-  goalForWeekday: (weekday: number) => number,
+  goalForDay: (dateStr: string) => number,
   sinceDate: string,
   throughDate: string,
 ): number {
@@ -66,9 +67,28 @@ export function plannedGoalSum(
   const end   = new Date(throughDate + 'T12:00:00Z').getTime()
   let sum = 0
   for (let t = start; t <= end; t += 86_400_000) {
-    sum += Math.max(0, goalForWeekday(new Date(t).getUTCDay()))
+    sum += Math.max(0, goalForDay(new Date(t).toISOString().slice(0, 10)))
   }
   return sum
+}
+
+/**
+ * The goal actually OWED on a date, after "move to tomorrow" deferrals.
+ *   owed(D) = (D deferred ? 0 : configured(D)) + (D-1 deferred ? configured(D-1) : 0)
+ * i.e. a deferred day owes nothing and hands its goal to the next day. Threading this single function
+ * through the base goal AND the carryover history keeps every mode consistent — the deferred amount just
+ * shifts one day within the running total, never doubled or lost.
+ */
+export function owedGoalForDate(
+  date: string,
+  configuredForWeekday: (weekday: number) => number,
+  isDeferred: (dateStr: string) => boolean,
+): number {
+  const wd = (d: string) => new Date(d + 'T12:00:00Z').getUTCDay()
+  const prev = new Date(new Date(date + 'T12:00:00Z').getTime() - 86_400_000).toISOString().slice(0, 10)
+  const todayPart = isDeferred(date) ? 0 : Math.max(0, configuredForWeekday(wd(date)))
+  const carriedIn = isDeferred(prev) ? Math.max(0, configuredForWeekday(wd(prev))) : 0
+  return todayPart + carriedIn
 }
 
 /**

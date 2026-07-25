@@ -1,4 +1,4 @@
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment } from '../goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '../goalCarryover'
 
 const base = { baseGoal: 20, yesterdayGoal: 20, yesterdayCount: 20, carryShortfall: false, carrySurplus: false }
 
@@ -52,18 +52,38 @@ describe('carriedGoal', () => {
 })
 
 describe('plannedGoalSum', () => {
+  const wd = (d: string) => new Date(d + 'T12:00:00Z').getUTCDay()
   it('sums a constant daily goal across the range (inclusive)', () => {
     // 2026-07-20 (Mon) through 2026-07-22 (Wed) = 3 days × 10.
     expect(plannedGoalSum(() => 10, '2026-07-20', '2026-07-22')).toBe(30)
   })
-  it('skips rest days (weekday goal 0)', () => {
-    // goal only on weekdays (Mon–Fri = 1..5); 2026-07-18 Sat + 2026-07-19 Sun are rest.
-    const g = (wd: number) => (wd >= 1 && wd <= 5 ? 10 : 0)
+  it('skips rest days (goal 0)', () => {
+    const g = (d: string) => (wd(d) >= 1 && wd(d) <= 5 ? 10 : 0)
     expect(plannedGoalSum(g, '2026-07-18', '2026-07-19')).toBe(0)   // Sat+Sun
     expect(plannedGoalSum(g, '2026-07-17', '2026-07-20')).toBe(20)  // Fri(10)+Sat(0)+Sun(0)+Mon(10)
   })
   it('is 0 when the range is empty (since after through)', () => {
     expect(plannedGoalSum(() => 10, '2026-07-22', '2026-07-21')).toBe(0)
+  })
+})
+
+describe('owedGoalForDate (defer "move to tomorrow")', () => {
+  const configured = () => 10  // goal 10 every weekday
+  const deferred = (set: string[]) => (d: string) => set.includes(d)
+  it('owes the configured goal on a normal day', () => {
+    expect(owedGoalForDate('2026-07-22', configured, deferred([]))).toBe(10)
+  })
+  it('owes 0 on a day it was deferred', () => {
+    expect(owedGoalForDate('2026-07-22', configured, deferred(['2026-07-22']))).toBe(0)
+  })
+  it("adds yesterday's goal when yesterday was deferred", () => {
+    // Jul 21 deferred → its 10 lands on Jul 22, on top of Jul 22's own 10 = 20.
+    expect(owedGoalForDate('2026-07-22', configured, deferred(['2026-07-21']))).toBe(20)
+  })
+  it('conserves the total across the shift (deferred day 0, next day double)', () => {
+    const isDef = deferred(['2026-07-21'])
+    const total = owedGoalForDate('2026-07-21', configured, isDef) + owedGoalForDate('2026-07-22', configured, isDef)
+    expect(total).toBe(20)  // same as two undeferred days: 10 + 10
   })
 })
 

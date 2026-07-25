@@ -26,7 +26,7 @@ import type { Pathway, PathwayState, Rung, ErrorType } from '@/domain'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
@@ -342,7 +342,6 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         const todayStr = getToday(tzRef.current, turnoverRef.current)
         const yesterdayStr = new Date(new Date(todayStr + 'T12:00:00Z').getTime() - 86400000).toISOString().slice(0, 10)
         const weekday  = new Date(todayStr + 'T12:00:00Z').getUTCDay()
-        const yWeekday = (weekday + 6) % 7
         const db = createClient()
         const [pairRes, gradRes, profRes] = await Promise.all([
           db.from('language_pairs').select('goals')
@@ -351,11 +350,15 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
             .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null)
             .eq('cards.source_language', src).eq('cards.target_language', tgt)
             .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString()),
-          db.from('profiles').select('goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days').eq('user_id', uid).maybeSingle(),
+          db.from('profiles').select('goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).maybeSingle(),
         ])
         const goals = pairRes.data?.goals as Record<string, number | null> | null
-        const baseGoalToday = (goals?.[String(weekday)] as number | undefined) ?? 0
-        const goalForWeekday = (wd: number) => { const g = goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
+        const configuredForWeekday = (wd: number) => { const g = goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
+        // Deferrals ("move today's load to tomorrow") shift a day's goal to the next day — thread the
+        // same owed(D) through the base + planned so the cap targets the true owed amount.
+        const deferrals = (profRes.data?.goal_deferrals as string[] | null) ?? []
+        const owed = (d: string) => owedGoalForDate(d, configuredForWeekday, (ds) => deferrals.includes(`${src}|${tgt}|${ds}`))
+        const baseGoalToday = owed(todayStr)
         let gradTodayPair = 0, gradYestPair = 0
         for (const row of gradRes.data ?? []) {
           const r = row as unknown as { graduated_at: string; accelerated_mode: string | null }
@@ -394,20 +397,20 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           }
           goalToday = fullDebtGoal({
             baseGoal: baseGoalToday,
-            plannedThroughYesterday: plannedGoalSum(goalForWeekday, fullDebtSince, yesterdayStr),
+            plannedThroughYesterday: plannedGoalSum(owed, fullDebtSince, yesterdayStr),
             gradsThroughYesterday: gradsSince,
             exemptionAdjustment: fullDebtExemptionAdjustment({
               skipShortfallDays, skipSurplusDays,
-              goalForDay:  (d) => goalForWeekday(new Date(d + 'T12:00:00Z').getUTCDay()),
-              gradsForDay: (d) => exemptDayGrads.get(d) ?? 0,
+              goalForDay: owed, gradsForDay: (d) => exemptDayGrads.get(d) ?? 0,
               since: fullDebtSince, through: yesterdayStr,
             }),
           }).goal
         } else {
           // Yesterday-only carryover (the two per-day toggles).
+          const yOwed = owed(yesterdayStr)
           goalToday = carriedGoal({
             baseGoal: baseGoalToday,
-            yesterdayGoal: (goals?.[String(yWeekday)] as number | undefined) ?? null,
+            yesterdayGoal: yOwed > 0 ? yOwed : null,
             yesterdayCount: gradYestPair,
             carryShortfall: profRes.data?.goal_carry_shortfall ?? false,
             carrySurplus: profRes.data?.goal_carry_surplus ?? false,
