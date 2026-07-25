@@ -324,10 +324,16 @@ export default function StudyPage() {
     const cardRepo  = new SupabaseCardRepository()
     const stateRepo = new SupabaseCardStateRepository()
 
-    const [decks, profileRes] = await Promise.all([
+    let [decks, profileRes] = await Promise.all([
       deckRepo.list(session.user.id),
       loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', session.user.id).single()),
     ])
+    // Resilience: if a carryover column isn't migrated yet, the whole select errors → data null →
+    // timezone/turnover silently reset to UTC/midnight. Fall back to the core columns (always present)
+    // so day-turnover keeps working; the newer carryover fields just default off until the migration runs.
+    if (!profileRes.data) {
+      profileRes = await loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', session.user.id).single())
+    }
 
     const tz           = (profileRes.data?.timezone as string | null) ?? deviceTimeZone()
     const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
