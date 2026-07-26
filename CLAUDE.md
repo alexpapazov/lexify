@@ -930,6 +930,21 @@ categories keep their "Back to <pair>" + "Study ahead" screen. (Usually `moreDue
 finishing, since a scoped session loads all due cards uncapped — Continue appears only when new cards
 became due or a relearn timer elapsed.)
 
+## Self-graded "Almost" rating (2026-07-25)
+
+Due Now self-graded cards have an orange **Almost** button between Again and Hard (post-reveal) for
+near-miss recalls (el cráno for el cráneo) — Again is too harsh (lapse + relearn), Good is dishonest.
+Pressing it: (1) logs a 0.3-weight near-miss review event (same accounting as a typed spelling slip —
+feeds measured retention → damped calibration), (2) bumps the card's FSRS **difficulty** by the Hard
+delta via `nextDifficulty(d,'hard')` (small, per-card, mean-reverted), (3) leaves the SCHEDULE untouched
+and re-queues the card `ALMOST_REQUEUE_OFFSET = 4` ahead this session (its queue copy carries the
+updated state); the re-show's rating sets the next interval from the slightly-penalized state.
+Implementation: `RatingButtons` gained optional `onAlmost` (renders the extra button only when passed);
+`FlashcardMode` threads it; each of the 3 session pages has a `handleAlmost` right above `handleAnswer`,
+wired only on the graduated self-graded `FlashcardMode` (NOT the re-rate view, ladder — which shares
+FlashcardMode but never passes `onAlmost` — or any pre-grad path). No undo-stack entry for Almost (the
+effect is small; a mis-tap self-corrects when the re-show is rated).
+
 ## Hint + Hard re-shows instead of advancing (2026-07-11)
 
 In Due Now reviews, if a hint was used (any number of times) and the card is then rated **Hard**, the

@@ -190,6 +190,28 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
   useEffect(() => { frontRef.current?.focus() }, [])
 
+  // iOS body-scroll lock: while the modal is open, touch-scrolling must move the MODAL, not the study
+  // page behind it (on iPhone the touch scroll "chained" to the background, so the modal never scrolled
+  // and the Save button at the bottom was unreachable). position:fixed on <body> is the reliable iOS
+  // Safari/WKWebView lock — overflow:hidden alone doesn't stop touch scrolling there. Restores the
+  // page's scroll offset on close.
+  useEffect(() => {
+    const scrollY = window.scrollY
+    const body = document.body
+    const prev = { position: body.style.position, top: body.style.top, width: body.style.width, overflow: body.style.overflow }
+    body.style.position = 'fixed'
+    body.style.top = `-${scrollY}px`
+    body.style.width = '100%'
+    body.style.overflow = 'hidden'
+    return () => {
+      body.style.position = prev.position
+      body.style.top = prev.top
+      body.style.width = prev.width
+      body.style.overflow = prev.overflow
+      window.scrollTo(0, scrollY)
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     Promise.all([
@@ -786,7 +808,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="panel w-full max-w-lg space-y-4 mx-4 max-h-[90vh] overflow-y-auto">
+      <div className="panel w-full max-w-lg space-y-4 mx-4 max-h-[90vh] overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-ink">Edit card</h2>
           <div className="flex items-center gap-2">

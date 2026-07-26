@@ -27,8 +27,8 @@ import { progressAfterReview, initialCardState, appendHistory } from '@/engine/p
 import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
 import { smoothDueDate } from '@/engine/density'
 import { classifyReviewMode, isGraduatedDueByDate, graduationIntervalRange } from '@/engine/scheduler'
-import { scheduleGraduatedFsrs, RELEARN_MINUTES } from '@/engine/dueNow'
-import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange } from '@/engine/fsrs'
+import { scheduleGraduatedFsrs, RELEARN_MINUTES, seedDifficulty } from '@/engine/dueNow'
+import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange, nextDifficulty } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Pipeline, Rating, GradingSettings, CardConfusion, SynonymGroup, SynonymAnswerField, SynonymProductionPrompt, GradingIssueType, SchedulerParams, TypedErrorCategory, TypedStrictness } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
@@ -53,6 +53,7 @@ import { triggerSyncFill } from '@/lib/triggerSyncFill'
 const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
 const HINT_HARD_REQUEUE_OFFSET = 6   // hint-assisted "Hard" re-shows this session instead of advancing
+const ALMOST_REQUEUE_OFFSET = 4      // self-graded "Almost" re-shows this session; the re-rating schedules
 const DRILL_OFFSET             = 3   // A-vs-B confusion drill lands this many cards ahead (before A/B recur)
 
 interface SessionCard {
@@ -850,6 +851,49 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     setAllCards(prev => prev.map(c => c.id === cardId ? updated : c))
     setQueue(prev => prev.map(it => it.card.id === cardId ? { ...it, card: updated } : it))
   }, [allCards, sourceLanguage, targetLanguage, handleChoicesCached])
+
+  // Orange "Almost" on a self-graded due card: recalled it with a small slip (el crano for el craneo)
+  // — not a clean success, but nowhere near an Again-grade lapse. Reuses the typed near-miss
+  // accounting: a 0.3-weight near-miss event (dings measured retention slightly; the damped
+  // calibration turns persistent sloppiness into shorter intervals) + an FSRS difficulty bump by the
+  // Hard delta (small, per-card, mean-reverted). The SCHEDULE is untouched — the card re-shows
+  // ~ALMOST_REQUEUE_OFFSET ahead this session, and the re-rating there sets the next interval from
+  // the slightly-penalized state.
+  async function handleAlmost() {
+    const current = queue[index]
+    if (!current || submitting) return
+    const { card, state } = current
+    if (!state.graduated) return
+    setSubmitting(true)
+    try {
+      hintRef.current = null
+      const isRev = (state.reviewDirection ?? 'forward') === 'reverse'
+      new SupabaseReviewEventRepository().create({
+        userId, cardId: card.id, mode: 'recognition',
+        promptSide: isRev ? 'front' : 'back', answerSide: isRev ? 'back' : 'front',
+        promptShown: isRev ? card.front : card.back,
+        expected:    isRev ? card.back : card.front,
+        userAnswer: '', wasCorrect: true, rating: 'hard', responseMs: reviewTimer.current?.read() ?? null,
+        reviewMode: 'due', wasTyped: false,
+        wasAccelerated: state.acceleratedMode === 'import_known',
+        reviewDirection: (state.reviewDirection ?? 'forward') as 'forward' | 'reverse',
+        reps: state.reps, nearMiss: true, nearMissWeight: 0.3,
+        graduationErrorCount: state.graduationErrorCount ?? 0,
+        sourceLanguage: sourceLanguage, targetLanguage: targetLanguage,
+      }).catch(err => console.error('Failed to record almost event:', err))
+      const newState = { ...state, difficulty: nextDifficulty(state.difficulty ?? seedDifficulty(state.lapses), 'hard') }
+      await new SupabaseCardStateRepository().upsert(newState)
+      setQueue(prev => {
+        const at = Math.min(index + 1 + ALMOST_REQUEUE_OFFSET, prev.length)
+        const next = [...prev]; next.splice(at, 0, { ...current, state: newState }); return next
+      })
+      setIndex(i => i + 1)
+    } catch (err) {
+      setAnswerError(err instanceof Error ? err.message : 'Failed to record')
+    } finally {
+      setSubmitting(false)
+    }
+  }
 
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '', _issueType?: GradingIssueType, softWrongRecallRating?: Rating) => {
     const current = queue[index]
@@ -2094,6 +2138,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
+          onAlmost={state.graduated ? handleAlmost : undefined}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}

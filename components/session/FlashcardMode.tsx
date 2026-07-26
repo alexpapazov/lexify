@@ -16,8 +16,11 @@ import { CardInfoButton } from './CardInfoButton'
  * (rare — only if a custom pipeline ends on a recognition step).
  * Shows Again/Hard/Good/Easy once the answer is revealed.
  */
-export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRate, onPromptEdit, onAnswerEdit, onInfo, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, resumeAnswered = false }: {
+export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRate, onAlmost, onPromptEdit, onAnswerEdit, onInfo, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, resumeAnswered = false }: {
   card: Card; promptSide: 'front' | 'back'; deckName?: string; onRate: (r: Rating) => void
+  /** Due Now only: orange "Almost" rating for a near-miss recall — light penalty + re-show this
+   *  session. Omit (ladder / pre-grad / re-rate views) and the button is absent. */
+  onAlmost?: () => void
   /** Mount already-revealed, showing the rating buttons — used by the first Undo press so the
    *  learner lands back on the answered card and can re-pick a rating without redoing it. */
   resumeAnswered?: boolean
@@ -141,7 +144,7 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
               <button onClick={() => onRate('again')} className="btn-primary px-10">Continue</button>
             </div>
           ) : (
-            <RatingButtons onRate={onRate} />
+            <RatingButtons onRate={onRate} onAlmost={onAlmost} />
           )}
         </div>
       )}
