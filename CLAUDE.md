@@ -932,8 +932,9 @@ became due or a relearn timer elapsed.)
 
 ## Self-graded "Almost" rating (2026-07-25)
 
-Due Now self-graded cards have an orange **Almost** button between Again and Hard (post-reveal) for
-near-miss recalls (el cráno for el cráneo) — Again is too harsh (lapse + relearn), Good is dishonest.
+Due Now self-graded cards have an orange **Almost** button UNDERNEATH the rating row (post-reveal,
+ghost/Hint-button style — deliberately separated because it is NOT a rating) for near-miss recalls
+(el cráno for el cráneo) — Again is too harsh (lapse + relearn), Good is dishonest.
 Pressing it: (1) logs a 0.3-weight near-miss review event (same accounting as a typed spelling slip —
 feeds measured retention → damped calibration), (2) bumps the card's FSRS **difficulty** by the Hard
 delta via `nextDifficulty(d,'hard')` (small, per-card, mean-reverted), (3) leaves the SCHEDULE untouched

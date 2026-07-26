@@ -144,7 +144,20 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
               <button onClick={() => onRate('again')} className="btn-primary px-10">Continue</button>
             </div>
           ) : (
-            <RatingButtons onRate={onRate} onAlmost={onAlmost} />
+            <div className="space-y-3">
+              <RatingButtons onRate={onRate} />
+              {/* "Almost" is deliberately NOT a rating — it's a near-miss escape hatch (light penalty +
+                  re-show this session), so it sits underneath in the Hint button's ghost style rather
+                  than in the rating row. */}
+              {onAlmost && (
+                <div className="flex justify-center">
+                  <button onClick={onAlmost} className="btn-ghost text-orange-400"
+                    title="Recalled it with a small slip — light penalty, re-shows this session">
+                    Almost
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
