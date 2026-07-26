@@ -151,7 +151,8 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
                   than in the rating row. */}
               {onAlmost && (
                 <div className="flex justify-center">
-                  <button onClick={onAlmost} className="btn-ghost text-orange-400"
+                  <button onClick={onAlmost}
+                    className="btn-ghost text-orange-400 border border-yellow-400/50 bg-yellow-400/5 hover:bg-yellow-400/10"
                     title="Recalled it with a small slip — light penalty, re-shows this session">
                     Almost
                   </button>
