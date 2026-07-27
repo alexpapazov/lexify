@@ -5,6 +5,9 @@ chat sessions. Read it at the start of any session touching this codebase.
 Update it (briefly) whenever you ship a feature or learn something a future
 session would need.
 
+> **New session? Read `HANDOFF.md` first** — it's the current "what's live / what's half-done / what to do
+> next" summary (updated 2026-07-25). This file is the deep reference; HANDOFF is the on-ramp.
+
 ## Feature documentation
 
 Detailed explanations of how each major feature works live in `features/`.
@@ -432,13 +435,14 @@ distractors".
 
 ## Migrations
 
-**Layout (2026-07-22):** migrations `001`–`100` are archived under
+**Layout (2026-07-22):** migrations `001`–`104` are archived under
 `supabase/migrations/archive/` (all already applied) so the top level shows only
 the newest few — no scrolling to find the next one to run. New migrations are
 numbered sequentially at the top level (`supabase/migrations/1NN_*.sql`); move
 them into `archive/` once they're comfortably live. Nothing reads the directory
 programmatically (migrations are pasted into the Supabase SQL editor by hand), so
-this is purely organizational. Latest applied: `103_full_debt_day_exemptions.sql`.
+this is purely organizational. **Latest applied: `104_goal_deferrals.sql`** — the
+next migration is `105`. The top-level folder is currently EMPTY (nothing pending).
 
 Sequential, in `supabase/migrations/`. Latest is `029`:
 
@@ -1053,6 +1057,74 @@ now floors the schedule interval at `Math.max(1, intervalForRetention(...))`, so
 day (due tomorrow, not today). Propagates to all 3 session pages via `scheduleGraduatedFsrs`. Note: difficulty
 pinned at 10 still makes stability grow slowly (only Easy walks difficulty down) — a genuinely hard card reviews
 daily until it stabilizes; that's expected, not a bug.
+
+## Session 2026-07-22 → 07-25 (goals, timezone, scheduling, UI) — consolidated
+
+Everything below shipped in this window. Each has a fuller note elsewhere in this file where cross-referenced.
+
+**Scheduling — retention-calibration damping (Stage A of the "minimize reviews" plan).** The interval
+multiplier (`retention_calibration`) used to be replaced outright each session from a 7-day retention mean,
+clamped 0.5–2.5 → it oscillated (a 2-good-day streak inflated intervals, causing misses days later). Now a
+slow, slew-rate-limited controller: measurement (`recent_retention_rate`) still refreshes every session, but
+the multiplier moves at most `CAL_MAX_STEP_PER_DAY = 0.08` and at most once per `CAL_MIN_ACTUATE_HOURS = 20`
+(gated by new `retention_calibration_at`, migration **101**), within a tight **0.7–1.5** band; half-life
+widened 7→14d. `lib/retentionCalibration.ts` (`dampedCalibration`, tightened `CAL_MIN/MAX`) + `calibrate/route.ts`
+(split measurement from actuation). Forecasts read the stored multiplier so they match automatically. The
+user's chosen target retention: **0.85 forward, 0.80 reverse** (set in the per-pair SRS modal). **Stage B
+(the per-feature learned/gradient-descent model) was designed and explicitly DEFERRED** — do not build without
+the user re-opening it; the design (residual multiplier, log-loss recall model, min-workload retention, online
+SGD + hierarchical prior, shadow mode) lives in the chat history, not a doc.
+
+**Goals — full debt + waivers + deferrals (big carryover expansion; all in `lib/goalCarryover.ts`, tested).**
+- **Full debt** (migration **102**: `profiles.goal_full_debt` + `goal_full_debt_since`): unbounded cumulative
+  carryover. Stateless — `fullDebtGoal({baseGoal, plannedThroughYesterday, gradsThroughYesterday})`, today's
+  goal = base − (grads since enable − planned since enable). Supersedes the two yesterday-only toggles.
+- **Per-day waivers** (migration **103**: `full_debt_skip_shortfall_days` / `full_debt_skip_surplus_days`
+  JSONB lists): two checkboxes under Full debt, "don't carry today's incomplete cards" / "…surplus". Stored as
+  date-lists so each auto-unchecks at turnover while the waived day stays waived. `fullDebtExemptionAdjustment`.
+- **"Move today's load to tomorrow"** (migration **104**: `profiles.goal_deferrals` JSONB list of
+  `${src}|${tgt}|${date}`): a `→ tomorrow` button on the dashboard when a language's remaining goal is `< 5`.
+  `owedGoalForDate(D)` = `(D deferred?0:configured(D)) + (D-1 deferred?configured(D-1):0)` — shifts a day's goal
+  forward one day, conserved. **`plannedGoalSum` was changed from `goalForWeekday` to a per-date `goalForDay`
+  function** so `owed(D)` threads through base + carryover history + exemptions in EVERY mode (plain / carry /
+  full debt). Wired in all three goal consumers: `app/study/page.tsx`, `components/analytics/PresentSnapshot.tsx`,
+  the ladder stop-at-goal cap (`LadderStudy`). **ReviewCalendar** is carryover-aware too (green when the day's
+  ASSIGNED goal, after carryover, was met — incl. surplus-covered days showing 100%).
+- **Auto-graduated cards never count toward daily goals** — was a real bug: `rowToCardState` collapsed
+  `accelerated_mode 'bulk_known' → 'none'` on read and wrote it back, erasing the marker on first re-save.
+  Fixed the mapping; added shared `isAutoGraduated()` (any non-'none' mode) replacing the 6 hard-coded literal
+  checks. (Rows already flipped to 'none' by the old bug can't be recovered.)
+
+**Timezone — the big one (was causing "goals reset at midnight not my 4am turnover").** Root cause was NOT the
+turnover code (verified by executing it): the profile `timezone` fallback was **UTC**. On US-Eastern with an
+unset zone, a 4am-UTC turnover fires at midnight local. **Fix: fall back to `deviceTimeZone()`** (from
+`lib/offline/profilePrefs.ts`, what Settings auto-detect + offline already use) at **all 13 client
+date-bucketing sites** + the 3 Settings spots (waiver checkboxes, full-debt enable date, global Redistribute
+which was calling `getToday()` with NO args). Also made `localDateWithTurnover` robust (Intl parts, not
+`new Date(toLocaleString())` which Safari/WKWebView misparses). **Advise the user to also Save their timezone
+in Settings** so it's correct server-side. **KNOWN LANDMINE the user hit twice**: a profiles `SELECT` that
+references a not-yet-migrated column errors the WHOLE `.single()` → data null → turnover/tz/carryover silently
+reset to defaults. The study dashboard now falls back to a core-columns select if the full one returns null;
+**other surfaces (PresentSnapshot, ladder cap) are NOT hardened** — apply migrations before deploying code that
+selects new profile columns.
+
+**Self-graded "Almost" rating** — see its own section below (orange ghost button under the rating row, Due Now
+self-graded only, near-miss log + difficulty bump + re-show, no schedule change).
+
+**UI / misc.** Learning Pathways editor: big draggable grid-snap node map, positions persist on
+`PathwayState.pos` (JSONB, no migration), double-click-drag draws a transition, 8-per-row/vertical-scroll,
+edge-label collision relaxation; "State N" not "Rung N"; page widened to `max-w-6xl`. Library pair view: restored
+per-deck `new/learning/done/due` counters (served from `loadLibraryBulk`, zero extra queries). Deck back link
+returns to that language's library, not the all-languages root. Due Now cards labelled `Language: Deck` via
+`langNativeName(card.sourceLanguage)` (FlashcardMode + TypingMode). **Korean IME fix**: the ladder Dictation +
+SynonymDueNow inputs submitted on Enter without a composition guard, dropping the last Hangul syllable — added
+`!e.nativeEvent.isComposing`. Card ℹ modal (`CardEditModal`) mobile scroll fix was **started but the Save-button
+sticky-footer / body-scroll-lock was NOT finished** — see handoff.
+
+**Standing rules reinforced this session** (also in [[feedback-lexify-commits]]): commit blocks now START with
+`cd "…/lexify"` and use **`git add -A`** (not `git add .` — a subfolder cwd silently missed files) and the
+`build:cap && cap sync ios` line at the end; **never put `!` in a commit message** (zsh history-expansion fails
+the commit — this actually left files staged-but-uncommitted once).
 
 ## Learning Pathways — Phase 0 engine only (2026-07-21)
 
