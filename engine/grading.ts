@@ -106,6 +106,17 @@ const ARTICLES_BY_LANG: Record<string, string[]> = {
   it: ["l'", 'lo', 'il', 'la', 'i', 'gli', 'le', 'un', 'uno', 'una'],
   pt: ['o', 'a', 'os', 'as', 'um', 'uma'],
   de: ['der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'einen', 'einer', 'eines'],
+  // Greek declines its definite article, so all three cases are listed — a card may store
+  // "το απόγευμα" (nom.) or "της Ελλάδας" (gen.). Without these, `hintPlan` treated the article as
+  // the content word and its two hint levels just spelled it out ("τ", "το"), revealing nothing.
+  // Indefinite forms appear both accented and bare because `normalizeFlexible` strips accents BEFORE
+  // calling here when `ignoreAccents` is on, so only the bare form would match at grading time.
+  el: [
+    'ο', 'η', 'το', 'οι', 'τα',              // nominative
+    'του', 'της', 'των',                     // genitive
+    'τον', 'την', 'τους', 'τις',             // accusative (το/τα shared with nom.)
+    'ένας', 'ενας', 'μία', 'μια', 'ένα', 'ενα', // indefinite
+  ],
 }
 // Fallback when language is unknown — all articles from all supported languages
 const ALL_ARTICLES = new Set(Object.values(ARTICLES_BY_LANG).flat())

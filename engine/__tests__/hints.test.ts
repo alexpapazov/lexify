@@ -30,6 +30,29 @@ describe('hintPlan — alphabetic', () => {
     expect(p.levelText).toEqual(["l'a", "l'ac"])
   })
 
+  // Regression: Greek was missing from ARTICLES_BY_LANG, so "το απόγευμα" was treated as one
+  // content word and the two hint levels just spelled out the article ("τ", "το") — the learner
+  // burned both hints and learned nothing about the answer.
+  it('Greek definite article "το απόγευμα" reveals το α, το απ (not τ, το)', () => {
+    const p = hintPlan('το απόγευμα', 'el')
+    expect(p.levelText).toEqual(['το α', 'το απ'])
+    expect(p.isShortWord).toBe(false)
+  })
+
+  it('Greek feminine/masculine articles are stripped too', () => {
+    expect(hintPlan('η μέρα', 'el').levelText).toEqual(['η μ', 'η μέ'])
+    expect(hintPlan('ο άνθρωπος', 'el').levelText).toEqual(['ο ά', 'ο άν'])
+  })
+
+  it('Greek genitive article "της Ελλάδας" is stripped', () => {
+    expect(hintPlan('της Ελλάδας', 'el').levelText).toEqual(['της Ε', 'της Ελ'])
+  })
+
+  it('a single-word Greek answer that IS an article is left alone', () => {
+    // No trailing content word, so there is nothing to strip — reveal normally.
+    expect(hintPlan('τα', 'el').levelText).toEqual(['τ'])
+  })
+
   it('two-letter word gets a single (short) hint', () => {
     const p = hintPlan('tú', 'es')
     expect(p.maxLevel).toBe(1)

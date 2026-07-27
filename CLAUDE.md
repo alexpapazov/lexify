@@ -1775,6 +1775,26 @@ Left narrow on purpose: the `max-w-md` "session complete" / error screens (a cen
 right for those), and the ladder (`components/ladder/LadderStudy.tsx`) — that's the pre-graduation
 pipeline, not Due Now. If the ladder should match, it needs the same change separately.
 
+## Greek articles added to the grading/hint article table (2026-07-27)
+
+`ARTICLES_BY_LANG` in `engine/grading.ts` only knew `es/fr/it/pt/de`, so for Greek
+`stripLeadingArticle` was a no-op. Consequence in Due Now: `lib/hints.ts: hintPlan` counts its reveal
+from the CONTENT word (article kept visible, letters counted after it) — with no Greek entry it treated
+"το απόγευμα" as one word, so the two hint levels just spelled out the article ("τ", then "το") and the
+learner spent both hints learning nothing. Added `el:` with all three cases of the definite article
+(ο/η/το/οι/τα, του/της/των, τον/την/τους/τις) plus indefinites.
+
+Two things to know if you extend this table:
+- **List accented AND bare indefinite forms** ('ένα' and 'ενα'). `normalizeFlexible` runs
+  `stripAccents` BEFORE `stripLeadingArticle` when `ignoreAccents` is on, so only the bare form ever
+  reaches the lookup in that path — while the hint path passes raw text and needs the accented one.
+- The table feeds BOTH grading (`ignoreDefiniteArticles`) and hints, and its values are unioned into
+  `ALL_ARTICLES`, the fallback for an unknown answer language. Greek is safe there because its
+  characters don't collide with the Latin sets.
+
+Tests: `engine/__tests__/hints.test.ts` (Greek reveal levels, single-word article left alone) and
+`engine/__tests__/grading.test.ts` (definite + accent-stripped indefinite).
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

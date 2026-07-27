@@ -29,6 +29,19 @@ describe('normalizeAnswer', () => {
   it('strips leading article when ignoreDefiniteArticles is true', () => {
     expect(normalizeAnswer('el colchón', { ...FLEX_BASE, ignoreDefiniteArticles: true })).toBe('colchón')
   })
+  it('strips a Greek definite article when ignoreDefiniteArticles is true', () => {
+    const s = { ...FLEX_BASE, ignoreDefiniteArticles: true, answerLanguage: 'el' }
+    expect(normalizeAnswer('το απόγευμα', s)).toBe('απόγευμα')
+    expect(normalizeAnswer('η μέρα', s)).toBe('μέρα')
+    // FLEX_BASE has ignoreCapitalization: false, so the capital survives the strip.
+    expect(normalizeAnswer('της Ελλάδας', s)).toBe('Ελλάδας')
+  })
+  it('strips a Greek indefinite article with accents already removed', () => {
+    // ignoreAccents runs BEFORE the article strip, so the bare form is what reaches the lookup —
+    // this is why both 'ένα' and 'ενα' are listed for Greek.
+    const s = { ...FLEX_BASE, ignoreAccents: true, ignoreDefiniteArticles: true, answerLanguage: 'el' }
+    expect(normalizeAnswer('ένα βιβλίο', s)).toBe('βιβλιο')
+  })
   it('strict mode only lowercases (no accent strip)', () => {
     expect(normalizeAnswer('Corazón', STRICT)).toBe('corazón')
   })
