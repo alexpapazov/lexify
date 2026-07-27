@@ -1322,8 +1322,10 @@ page also guards `showElectivePicker`):
   to the end** (regardless of clock) instead of ending — the session doesn't finish with unresolved
   relearns.
 
-`lib/relearnPool.ts: partitionRelearnPool` and `SessionCard.relearnLapsedAt`/`batchSizeRef` are now unused
-(the batch-size "roll over after N cards" window was removed); left in place but dead.
+`lib/relearnPool.ts: partitionRelearnPool` and `batchSizeRef` are unused (the batch-size "roll over
+after N cards" window was removed); left in place but dead. `SessionCard.relearnLapsedAt` is NO LONGER
+dead (2026-07-27): it's set at every relearn-pool add site and nowhere else, and `handleUndo` now reads
+it as the marker identifying spliced relearn copies to remove — keep setting it on any new pool-add.
 
 ## Audio: TTS hardening + multi-source + per-deck speed (2026-07-10)
 
@@ -1707,6 +1709,17 @@ Pressing Undo after rating a graduated card now has two stages, in all 3 session
    original typed answer, a self-graded card recomputes correctness from the new rating.
 2. **Second press** (while the answered view is up) — `handleUndo` early-returns `setReRate(null)`,
    which remounts the real card component **blank** for a full redo. No DB write (already reverted).
+
+**Undo fully erases the rating's relearn re-show (2026-07-27).** Rating Again (or Hard inside the
+relearn loop) adds a COPY of the card to `relearnPool`; after ~5 min the resurface effect splices that
+copy into the QUEUE. `handleUndo` used to clear only the pool, so a copy that had already been spliced
+survived the undo — it re-showed later carrying the undone rating's relearning state, and answering it
+upserted that stale state (resurrecting the erased rating). Now `handleUndo` (all 3 pages) also drops
+queue items past `entry.queueIndex` matching the rated item's `card.id` + `reviewTrack` + `isReverse`
+with `relearnLapsedAt` set (the relearn-copy marker — see the relearn section). Only later items are
+removed, so `entry.queueIndex` stays valid for the prevState map. Known asymmetry, deliberate: REDO
+does not re-add the removed relearn copy (it re-upserts `newState` only) — same as redo's pre-existing
+behavior of not restoring pool entries.
 
 Wiring notes: the 3 `setUndoStack` record sites now also store `userAnswer, wasCorrect, selfGraded:
 productionMode === 'self-graded'` on the `UndoEntry`. `handleAnswer` clears `reRate` at the top (a

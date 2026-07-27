@@ -1533,7 +1533,20 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       if (entry.eventId) new SupabaseReviewEventRepository().delete(entry.eventId).catch(() => {})
       if (entry.overrideAdd) handleOverrideAnswer(entry.overrideAdd.cardId, entry.overrideAdd.answerSide, entry.overrideAdd.answerText, false)
       setCardStates(prev => { const n = new Map(prev); n.set(entry.prevState.cardId, entry.prevState); return n })
-      setQueue(prev => prev.map((item, i) => i === entry.queueIndex ? { ...item, state: entry.prevState } : item))
+      // Erase the rating's relearn re-show too. An Again (or relearn-loop Hard) puts a COPY of the
+      // card in the relearn pool, and once its 5-minute clock passes the resurface effect moves that
+      // copy INTO the queue — so filtering the pool alone leaves a stale copy carrying the undone
+      // rating's relearning state; it would re-show later and upsert the very state this undo just
+      // erased. Relearn copies are identified by the relearnLapsedAt marker (set at every pool-add
+      // site, nowhere else) plus the rated item's card+track identity. Only items PAST the restored
+      // index are dropped, so entry.queueIndex still points at the rated item for the map below.
+      setQueue(prev => {
+        const rated = prev[entry.queueIndex]
+        return prev
+          .filter((item, i) => !(rated && i > entry.queueIndex && item.relearnLapsedAt !== undefined &&
+            item.card.id === rated.card.id && item.reviewTrack === rated.reviewTrack && item.isReverse === rated.isReverse))
+          .map((item, i) => i === entry.queueIndex ? { ...item, state: entry.prevState } : item)
+      })
       setRelearnPool(prev => prev.filter(item => item.card.id !== entry.prevState.cardId))
       setDone(false)
       setIndex(entry.queueIndex)
