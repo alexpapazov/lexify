@@ -275,6 +275,9 @@ export default function StudyPage() {
   const [smartThresholds, setSmartThresholds] = useState<Map<string, number>>(new Map())
   const [forecastCfg, setForecastCfg] = useState<Map<string, PairForecastCfg>>(new Map())
   const [loading,      setLoading]      = useState(true)
+  // The forecast is computed AFTER the page paints (see load()), so an empty `forecast` is ambiguous:
+  // it means "still simulating" until this flips. Without it the chart flashes "Nothing scheduled yet".
+  const [forecastReady, setForecastReady] = useState(false)
   const [authed,       setAuthed]       = useState(false)
   const [userId,       setUserId]       = useState('')
   const [todayStr,     setTodayStr]     = useState('')
@@ -323,16 +326,39 @@ export default function StudyPage() {
     const deckRepo  = new SupabaseDeckRepository()
     const cardRepo  = new SupabaseCardRepository()
     const stateRepo = new SupabaseCardStateRepository()
+    const climbRepo = new SupabaseLadderClimbRepository()
+    const uid = session.user.id
 
-    let [decks, profileRes] = await Promise.all([
-      deckRepo.list(session.user.id),
-      loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', session.user.id).single()),
-    ])
+    // Fire everything that needs only the user id AT ONCE. This used to run as four SEQUENTIAL
+    // stages — profile+decks, then scheduler params, then the whole-library bulk read, then
+    // language pairs + recent graduations — each awaiting the one before it despite having no data
+    // dependency on it. That was ~3 round-trips of pure latency on the critical path before a
+    // single pixel rendered, on top of the paged reads. Only the deck→card grouping and the
+    // full-debt scan genuinely need an earlier result; those are still awaited in order below.
+    const decksP   = deckRepo.list(uid)
+    const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).single())
+    const paramsP  = new SupabaseUserSchedulerParamsRepository().listForUser(uid)
+    const cardsP   = cardRepo.listAllForUser(uid)
+    const statesP  = stateRepo.listAllForUser(uid)
+    const climbP   = climbRepo.listAllForUser(uid).catch(() => new Map())
+    const pairsP   = new SupabaseLanguagePairRepository().list(uid)
+    const recentGradsP = supabase
+      .from('card_states')
+      .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
+      .eq('user_id', uid)
+      .eq('graduated', true)
+      .neq('review_direction', 'reverse')
+      .not('graduated_at', 'is', null)
+      // 72h, not 48: with a 4am turnover, the *logical* yesterday can begin nearly 48h before
+      // "now" late in the day, leaving no margin. The extra day is cheap and removes the edge.
+      .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString())
+
+    let profileRes = await profileP
     // Resilience: if a carryover column isn't migrated yet, the whole select errors → data null →
     // timezone/turnover silently reset to UTC/midnight. Fall back to the core columns (always present)
     // so day-turnover keeps working; the newer carryover fields just default off until the migration runs.
     if (!profileRes.data) {
-      profileRes = await loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', session.user.id).single())
+      profileRes = await loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', uid).single())
     }
 
     const tz           = (profileRes.data?.timezone as string | null) ?? deviceTimeZone()
@@ -355,9 +381,23 @@ export default function StudyPage() {
     const todayDate    = new Date(todayStr + 'T00:00:00.000Z')
     const now          = new Date()
 
+    // Full-debt's cumulative scan needs the profile flags derived just above, so it can't join the
+    // first wave — but it no longer waits behind the whole library read either. Fired here, awaited
+    // down with the rest of the goal data.
+    const fullDebtRowsP: Promise<Record<string, unknown>[]> = (fullDebtOn && fullDebtSinceVal)
+      ? fetchAllRows<Record<string, unknown>>(
+          (from, to) => supabase.from('card_states')
+            .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
+            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse')
+            .not('graduated_at', 'is', null)
+            .gte('graduated_at', new Date(new Date(fullDebtSinceVal + 'T00:00:00Z').getTime() - 48 * 3600 * 1000).toISOString())
+            .order('graduated_at', { ascending: true }).range(from, to),
+        )
+      : Promise.resolve([])
+
     // Per-pair enabled review tracks — disabled tracks are excluded from due counts
     // and the forecast (a card whose track is off shouldn't be studied or tallied).
-    const paramRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
+    const paramRows = await paramsP
     const enabledMap = buildEnabledTracksMap(paramRows)
     setEnabledTracks(enabledMap)
     // Per-pair smart-typing threshold (canonical on the forward_typed row).
@@ -367,15 +407,14 @@ export default function StudyPage() {
     }
     setSmartThresholds(thresholdMap)
 
-    const climbRepo = new SupabaseLadderClimbRepository()
     // Load the whole library in FOUR queries instead of three per deck. The old shape fetched
     // cards + states per deck and then chained a climb lookup on the returned card ids, so with N
     // decks it was 3N round-trips with a serial dependency — which is why the dashboard sat empty
     // (and the Library showed 0 0 0 0 0) until every one of them came back.
+    // These three were started in the first wave; only the deck→card map needs `decks` first.
+    const decks = await decksP
     const [allCards, allStates, allClimb, deckIdByCard] = await Promise.all([
-      cardRepo.listAllForUser(session.user.id),
-      stateRepo.listAllForUser(session.user.id),
-      climbRepo.listAllForUser(session.user.id).catch(() => new Map()),
+      cardsP, statesP, climbP,
       cardRepo.deckIdsByCard(decks.map(d => d.id)),
     ])
     const cardsByDeck = new Map<string, typeof allCards>()
@@ -477,19 +516,7 @@ export default function StudyPage() {
     setGlobal(globalCounts)
 
     // ── Goal progress ───────────────────────────────────────────────────
-    const [pairs, recentGradsRes] = await Promise.all([
-      new SupabaseLanguagePairRepository().list(session.user.id),
-      supabase
-        .from('card_states')
-        .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
-        .eq('user_id', session.user.id)
-        .eq('graduated', true)
-        .neq('review_direction', 'reverse')
-        .not('graduated_at', 'is', null)
-        // 72h, not 48: with a 4am turnover, the *logical* yesterday can begin nearly 48h before
-        // "now" late in the day, leaving no margin. The extra day is cheap and removes the edge.
-        .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString()),
-    ])
+    const [pairs, recentGradsRes] = await Promise.all([pairsP, recentGradsP])
     setLangPairs(pairs)
 
     const yesterdayStr = addDays(todayStr, -1)
@@ -510,14 +537,7 @@ export default function StudyPage() {
     // Full-debt: cumulative graduations per pair from the enable date THROUGH YESTERDAY (today excluded),
     // paged since the window can span many days. Bucketed by local study-day so turnover is respected.
     if (fullDebtOn && fullDebtSinceVal) {
-      const lower = new Date(new Date(fullDebtSinceVal + 'T00:00:00Z').getTime() - 48 * 3600 * 1000).toISOString()
-      const rows = await fetchAllRows<Record<string, unknown>>(
-        (from, to) => supabase.from('card_states')
-          .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
-          .eq('user_id', session.user.id).eq('graduated', true).neq('review_direction', 'reverse')
-          .not('graduated_at', 'is', null).gte('graduated_at', lower)
-          .order('graduated_at', { ascending: true }).range(from, to),
-      )
+      const rows = await fullDebtRowsP
       const since = new Map<string, number>()
       const perExemptDay = new Map<string, number>()
       for (const row of rows) {
@@ -539,9 +559,20 @@ export default function StudyPage() {
       setExemptDayGrads(new Map())
     }
 
+    // Everything above the fold — the counters, today's goals, "Study all due" — is ready, so paint
+    // NOW rather than holding the whole dashboard hostage to the forecast below.
+    setLoading(false)
+
     // ── Upcoming review forecast ────────────────────────────────────────
     // Per-pair FSRS config (retention/maxInt from scheduler params + measured rating mix) so the
     // "Coming up" bars simulate the same way the analytics projection does.
+    //
+    // Deliberately AFTER setLoading(false), behind a yield: this is a synchronous FSRS simulation of
+    // every graduated card (buildForecastDays walks each one through a per-track stability model),
+    // and the chart it feeds sits below the fold. Running it first meant the entire page — counters
+    // included — waited on a chart most loads never scroll to. The setTimeout lets React commit and
+    // paint the counters before the simulation blocks the main thread; the bars fill in after.
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
     const forecastCfgMap = buildForecastCfg(paramRows, stats)
     setForecastCfg(forecastCfgMap)
     const initStart = todayStr
@@ -549,8 +580,7 @@ export default function StudyPage() {
     setForecastStartDate(initStart)
     setForecastEndDate(initEnd)
     setForecast(buildForecastDays(stats, initStart, initEnd, todayStr, { langPairs: [], directions: [], modes: [], accel: [] }, tz, enabledMap, thresholdMap, forecastCfgMap))
-
-    setLoading(false)
+    setForecastReady(true)
   }
 
   async function handleRedistribute() {
@@ -1201,7 +1231,9 @@ export default function StudyPage() {
               <p className="text-xs text-ink-faint -mt-1">Offline — this forecast only reflects the cards you downloaded.</p>
             )}
 
-            {forecast.every(d => d.count === 0) ? (
+            {!forecastReady ? (
+              <div className="panel text-ink-faint text-sm text-center py-6">Building forecast…</div>
+            ) : forecast.every(d => d.count === 0) ? (
               <div className="panel text-ink-muted text-sm text-center py-6">
                 Nothing scheduled yet — keep studying to build up your review queue.
               </div>

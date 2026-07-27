@@ -808,8 +808,12 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="panel w-full max-w-lg space-y-4 mx-4 max-h-[90vh] overflow-y-auto overscroll-contain" style={{ WebkitOverflowScrolling: 'touch' }}>
-        <div className="flex items-center justify-between">
+      {/* Three-part layout so Save is always reachable on a phone: a non-scrolling header, a flex-1
+          scroll body, and a pinned action row. Before this the whole panel was ONE scroll area with
+          Save at the very bottom, so on iOS you could never scroll far enough to press it.
+          dvh (not vh) so Safari's collapsing toolbar doesn't push the footer off-screen. */}
+      <div className="panel w-full max-w-lg mx-4 max-h-[90dvh] flex flex-col gap-4 overflow-hidden">
+        <div className="flex items-center justify-between shrink-0">
           <h2 className="text-base font-semibold text-ink">Edit card</h2>
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -911,6 +915,9 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             <button onClick={onClose} className="text-ink-faint hover:text-ink text-lg leading-none">✕</button>
           </div>
         </div>
+
+        {/* Scroll body — everything between the header and the pinned action row. */}
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-4" style={{ WebkitOverflowScrolling: 'touch' }}>
 
         {resetAction && (
           <ConfirmDialog
@@ -1930,26 +1937,6 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
         {validErr && <p className="text-danger text-xs">{validErr}</p>}
 
-        <div className="flex gap-3 flex-wrap">
-          <button
-            className="btn-primary flex-1"
-            onClick={handleSave}
-            disabled={saving}
-          >
-            {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
-          </button>
-          {onSyncCard && (
-            <button
-              className="btn-ghost text-accent border border-accent/30 hover:border-accent/60"
-              onClick={onSyncCard}
-              title="Sync to other language pairs"
-            >
-              ⟳ Sync
-            </button>
-          )}
-          <button className="btn-ghost" onClick={onClose}>Cancel</button>
-        </div>
-
         {onMerge && !merging && (
           <button
             onClick={openMerge}
@@ -2058,6 +2045,29 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             )}
           </div>
         )}
+
+        </div>{/* /scroll body */}
+
+        {/* Pinned action row — never scrolls out of reach. */}
+        <div className="flex gap-3 flex-wrap shrink-0 border-t border-line/10 pt-4">
+          <button
+            className="btn-primary flex-1"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save'}
+          </button>
+          {onSyncCard && (
+            <button
+              className="btn-ghost text-accent border border-accent/30 hover:border-accent/60"
+              onClick={onSyncCard}
+              title="Sync to other language pairs"
+            >
+              ⟳ Sync
+            </button>
+          )}
+          <button className="btn-ghost" onClick={onClose}>Cancel</button>
+        </div>
       </div>
     </div>
   )

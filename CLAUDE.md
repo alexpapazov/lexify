@@ -1611,6 +1611,40 @@ Ranked by impact per unit of effort:
    Study pays full cost three times. A module-level cache with a short TTL would make tab-switching
    feel instant.
 
+### Study dashboard load — serial chain + payload fixed (2026-07-27)
+
+The dashboard sat on "Loading…" for many seconds. (The *two* loaders users see are different components:
+the small faint one is `AuthWall`'s `<Loader />` waiting on `getSession()`; the larger one is
+`app/study/page.tsx:902`. Only the second is slow.) Three causes, all fixed — no migration:
+
+1. **The dependency graph was serial for no reason.** `load()` ran four stages back to back —
+   profile+decks → scheduler params → whole-library bulk read → language pairs + recent graduations —
+   each awaiting the previous despite needing nothing from it. Now every query that needs only the user
+   id is fired at once as un-awaited promises and awaited in dependency order; only `deckIdsByCard`
+   (needs `decks`) and the full-debt scan (needs the profile flags) come later, and the full-debt scan
+   now overlaps the library read instead of following it. ~3 round-trips off the critical path.
+2. **The bulk read shipped the whole library to count integers.** `BULK_CARD_COLUMNS` included
+   `choices` — the cached AI distractor pools + synonym lists, a JSONB blob per card — plus `hints`,
+   `accepted_*_alternatives`, `synced_from_language(s)`, `origin_word(s)`. No whole-library consumer
+   (study dashboard, `loadLibraryBulk`, library page) reads any of them; only the session pages do, and
+   they load per-deck via `listByDeck` (still `*`). All removed. `rowToCard` already null-safed every
+   one, so bulk cards now have `choices: null` and those arrays empty — **do NOT use a bulk card to
+   decide whether distractors exist**, same rule as the pre-existing `audioData` caveat.
+3. **The page waited on a below-the-fold chart.** `buildForecastDays` — a synchronous FSRS simulation
+   of every graduated card — ran before `setLoading(false)`. Now it runs after, behind a
+   `setTimeout(0)` yield so React paints the counters/goals first. New `forecastReady` state gates the
+   chart's empty-state branch, otherwise `forecast.every(...)` on `[]` flashes the wrong
+   "Nothing scheduled yet" message while it computes.
+
+**Investigated and deliberately NOT changed:** `load()` calls `getSession()` even though `AuthWall`
+already did. In supabase-js v2 `__loadSession()` returns from local storage unless the token is
+expired, so it is not a round-trip — threading a session through context would touch every page for
+no gain.
+
+Still open from the list above: #1 (Postgres GROUP BY RPCs), #2 (lazy-load off-screen analytics
+charts), #4 (cross-navigation cache), and the per-deck fan-out in `LadderStudy`,
+`DueForecastProjection`, `VocabGrowthProjection`, `PresentSnapshot` and the 3 session pages.
+
 Counts (Unlearned/Learning/Graduated/Due/Dormant) are a special case of #1 — they pull every card and
 state to display five integers. `count: 'exact', head: true` queries would do it without shipping rows.
 

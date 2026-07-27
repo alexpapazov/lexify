@@ -33,15 +33,15 @@ half-done, what to do next" summary for the incoming agent. Everything committed
 
 ## 2. Open threads / unfinished work (highest priority first)
 
-1. **CardEditModal mobile scroll — NOT finished.** On iOS, opening the ℹ menu during study scrolls the page
-   behind the modal instead of the modal, so the Save button at the bottom is unreachable. I started but did
-   not complete this. The modal is `components/CardEditModal.tsx`; outer is
-   `fixed inset-0 … flex items-center justify-center` and the panel is
-   `panel … max-h-[90vh] overflow-y-auto` (~line 787-789), with Save/Cancel inside the scroll area (~line 1911).
-   **Plan:** (a) lock body scroll while the modal is mounted (useEffect toggling `document.body.style.overflow`),
-   (b) add `overscroll-contain` to the scroll container to stop scroll-chaining, (c) ideally restructure the panel
-   into `flex flex-col` + inner `flex-1 overflow-y-auto` + a **sticky/non-scrolling footer** so Save is always
-   reachable. Nothing was committed for this — start fresh.
+1. ~~**CardEditModal mobile scroll**~~ — **DONE 2026-07-27.** (Correction to the note that was here: the
+   work was NOT uncommitted. The body-scroll lock and `overscroll-contain` had ridden along in commit
+   `1f6e224` "Almost rating" via `git add -A`; only the unreachable-Save part was actually missing.)
+   `components/CardEditModal.tsx` is now three regions: a `shrink-0` header, a
+   `flex-1 min-h-0 overflow-y-auto overscroll-contain` scroll body, and a **pinned action row**
+   (Save / ⟳ Sync / Cancel) outside the scroll area, so Save can never scroll out of reach. Panel is
+   `flex flex-col` + `overflow-hidden`, and `max-h-[90vh]` → `max-h-[90dvh]` so Safari's collapsing
+   toolbar doesn't push the footer off-screen. **Not device-verified** — build + 418 tests pass, but the
+   iOS touch behavior needs a real phone.
 
 2. **Scheduling "Stage B" (the learned/gradient-descent interval model) — designed, DEFERRED.** The user wants
    to eventually minimize reviews via a per-feature model, but we shipped only **Stage A (damping)** and agreed
@@ -63,9 +63,11 @@ half-done, what to do next" summary for the incoming agent. Everything committed
 
 - **`#55`** Merge duplicate cards creates a new duplicate instead of reusing the existing card.
 - **`#59`** Exact-duplicate cards can still get duplicated on save.
-- **Performance (diagnosed 2026-07-20, mostly NOT fixed)** — see the "Performance findings" section in
-  CLAUDE.md. Biggest wins remaining: Postgres GROUP BY RPCs for analytics charts; lazy-load off-screen charts;
-  a short-TTL cross-navigation cache. (The per-deck N+1 was fixed for Study/Library/card-search only.)
+- **Performance (diagnosed 2026-07-20, partly fixed)** — see the "Performance findings" section in
+  CLAUDE.md. The **study dashboard load** was fixed 2026-07-27 (serial chain parallelized, `choices` +
+  other unused blobs dropped from the bulk card read, forecast moved after first paint). Biggest wins
+  remaining: Postgres GROUP BY RPCs for analytics charts; lazy-load off-screen charts; a short-TTL
+  cross-navigation cache. Analytics → Present is still the worst offender and is untouched.
 - **On-device sync-back leg unverified** — offline study → reconnect → outbox drain has never been confirmed on
   a real device (the risky data-loss leg). Everything else offline/PWA is device-verified.
 - **Learning Pathways**: engine + config + study + visual editor all built (Phases 0–3 + drag/canvas). NOT

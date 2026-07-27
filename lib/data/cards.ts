@@ -15,12 +15,22 @@ import { localCardsByDeck, localGetCard, localUpdateCard } from '@/lib/offline/l
  *
  * Cards from these bulk reads therefore have `audioData`/`audioSources` null — do NOT use them to
  * decide whether a card has audio.
+ *
+ * The same reasoning later removed the other bulk payload columns. `choices` (the cached AI
+ * distractor pools + synonym lists) is the big one — it's a JSONB blob per card, and the whole-library
+ * callers below only ever need identity, languages and front/back to count and search. `hints`,
+ * `accepted_*_alternatives`, `synced_from_language(s)` and `origin_word(s)` came out for the same
+ * reason: array/JSONB columns that no bulk consumer reads. Only the session pages read `choices`, and
+ * they load per-deck via `listByDeck`, which still selects `*`.
+ *
+ * So bulk-read cards ALSO have `choices` null, `hints`/`acceptedFrontAlternatives`/
+ * `acceptedBackAlternatives`/`syncedFromLanguages`/`originWords` empty — do NOT use a bulk card to
+ * decide whether distractors have been generated, or you'll regenerate every card in the library.
  */
 const BULK_CARD_COLUMNS =
-  'id, owner_id, source_language, target_language, front, back, hints, choices, position, ' +
+  'id, owner_id, source_language, target_language, front, back, position, ' +
   'created_at, updated_at, deleted_at, synonym_group_id, register, region, ' +
-  'accepted_front_alternatives, accepted_back_alternatives, synced_from_languages, synced_from_language, ' +
-  'origin_words, origin_word, audio_generated, audio_source, ipa'
+  'audio_generated, audio_source, ipa'
 
 function rowToCard(row: Record<string, unknown>): Card {
   return {
