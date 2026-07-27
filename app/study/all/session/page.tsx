@@ -1558,7 +1558,7 @@ function AllDueSessionInner() {
   // A-vs-B discrimination drill (pure practice — advancing schedules nothing).
   if (current.drill) {
     return (
-      <div className="space-y-8 max-w-2xl mx-auto">
+      <div className="space-y-8">
         <div className="relative flex items-center justify-between">
           <Link href={backHref} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
           <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>
@@ -1597,7 +1597,7 @@ function AllDueSessionInner() {
   const hintable = isGraduatedDueByDate(state, tzRef.current, getToday(tzRef.current, turnoverRef.current))
 
   return (
-    <div className="space-y-8 max-w-2xl mx-auto">
+    <div className="space-y-8">
       {dormantNotice && (
         <div className="fixed left-1/2 -translate-x-1/2 top-6 z-50 px-4 py-2 rounded-card bg-surface-raised border border-line/70 text-sm text-ink shadow-lg">
           💤 Card is now dormant

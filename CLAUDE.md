@@ -1761,6 +1761,20 @@ adds 0 (so you graduate exactly 10, not 11).
   for one-deck-per-pair (the common case); a multi-deck pair could under-count other decks' in-flight
   pipelines. Offline is excluded (goal data isn't bundled).
 
+## Due Now session width — full content column (2026-07-27)
+
+The study-session views were `max-w-2xl mx-auto` inside a `max-w-5xl` `<main>`, leaving a wide empty
+gutter either side of the card. They're now unconstrained (`space-y-8` only), so they fill `<main>` —
+which uses the SAME `max-w-5xl mx-auto px-4` as the navbar container (`components/nav/Navbar.tsx`), so
+the card edges line up exactly with the Lexify logo and the profile bubble. Changed in **all three**
+session pages (`app/study/{all,deck,folder}/session/page.tsx`), **two spots each**: the main card view
+AND the A-vs-B confusion drill view — both are mid-session, so widening only one would make the layout
+jump when a drill appears.
+
+Left narrow on purpose: the `max-w-md` "session complete" / error screens (a centered short column is
+right for those), and the ladder (`components/ladder/LadderStudy.tsx`) — that's the pre-graduation
+pipeline, not Due Now. If the ladder should match, it needs the same change separately.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
