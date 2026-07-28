@@ -17,6 +17,7 @@ import { SupabaseLadderClimbRepository }     from '@/lib/data/ladderClimb'
 import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { setAudioPlaybackRate, setAudioVolume, setAudioSourceDefault, setAudioSourceByLanguage } from '@/lib/speak'
+import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
@@ -317,6 +318,23 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     })
 
     if (finalQueue.length === 0) { setEmptySession(true); setDone(true); setLoading(false); return }
+    // Stored-clip hydration for the trimmed session card read (see SESSION_CARD_COLUMNS): the first
+    // card autoplays on mount, so when it has a stored clip, wait for that one row; the rest patch
+    // in from the background. Patches audioSources too — the ℹ modal's "Use this" spreads it back.
+    const applyAudioHydration = (patch: AudioPatch) => {
+      setQueue(prev => prev.map(item => {
+        const card = applyAudioPatch(item.card, patch)
+        return card === item.card ? item : { ...item, card }
+      }))
+      setAllCards(prev => prev.map(c => applyAudioPatch(c, patch)))
+    }
+    const first = finalQueue[0]
+    if (first && needsAudioHydration(first.card)) {
+      const patch = await hydrateSessionAudio([first.card], applyAudioHydration)
+      const p = patch.get(first.card.id)
+      if (p) first.card = { ...first.card, audioData: p.audioData, audioSources: p.audioSources }
+    }
+    void hydrateSessionAudio(finalQueue.slice(1).map(i => i.card), applyAudioHydration)
     setQueue(finalQueue)
     setLoading(false)
 
@@ -416,13 +434,22 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const pipelineRepo = new SupabasePipelineRepository()
       const prefRepo     = new SupabaseDeckPreferencesRepository()
 
-      const [deck, cards, pipeline, prefs, profileData] = await Promise.all([
+      // One wave for everything that needs only the user id + the deckId prop. The states, overrides,
+      // scheduler-params and confusion-link fetches used to run as serial stages AFTER this wave —
+      // ~5 round trips of pure latency. Cards come via listForDecks (SESSION_CARD_COLUMNS — no audio
+      // blobs; queued clips hydrate in finalizeQueue).
+      const [deck, cardsByDeck, pipeline, prefs, profileData, existingStates, existingOverrides, allRows, intraLinksAll] = await Promise.all([
         deckRepo.get(deckId),
-        cardRepo.listByDeck(deckId),
+        cardRepo.listForDecks([deckId]),
         pipelineRepo.getDefault(),
         prefRepo.get(session.user.id, deckId),
         loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
+        stateRepo.listByDeck(session.user.id, deckId),
+        new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id),
+        new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
+        new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => []),
       ])
+      const cards = cardsByDeck.get(deckId) ?? []
 
       const tz           = (profileData.data?.timezone as string | null) ?? deviceTimeZone()
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
@@ -441,14 +468,17 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       let enabledTracks: EnabledTracks | undefined
       try {
-        const paramsRow = await new SupabaseUserSchedulerParamsRepository().getOrCreate(
-          session.user.id, deck.sourceLanguage, deck.targetLanguage, 'forward_typed',
-        )
+        // The pair's row is almost always in the bulk listForUser result — the old getOrCreate here
+        // cost 2 extra serial round trips. Only a genuinely new pair still awaits the create.
+        const paramsRow =
+          allRows.find(r => r.sourceLanguage === deck.sourceLanguage && r.targetLanguage === deck.targetLanguage && r.answerField === 'forward_typed')
+          ?? await new SupabaseUserSchedulerParamsRepository().getOrCreate(
+            session.user.id, deck.sourceLanguage, deck.targetLanguage, 'forward_typed',
+          )
         setSchedulerParams(paramsRow)
         setForwardTypedEnabled(paramsRow.forwardTypedEnabled ?? true)
         setForwardRecallEnabled(paramsRow.forwardRecallEnabled ?? true)
         // Per-pair enabled review tracks (each flag lives on its own answer_field row).
-        const allRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
         enabledTracks = buildEnabledTracksMap(allRows).get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
         const cm = buildCalibrationMap(allRows)
         const rm = buildRetentionMap(allRows)
@@ -473,13 +503,11 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const groupsMap = await new SupabaseSynonymGroupRepository().listForCards(cards.map(c => c.id))
       setSynonymGroups(groupsMap)
 
-      const existingStates  = await stateRepo.listByDeck(session.user.id, deckId)
       const forwardStates   = existingStates.filter(s => s.reviewDirection !== 'reverse')
       const reverseStatesList = existingStates.filter(s => s.reviewDirection === 'reverse')
       const stateMap = forwardStateMap(forwardStates)
       setCardStates(stateMap)
 
-      const existingOverrides = await new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id)
       const overrideMap = new Map<string, Set<string>>()
       for (const o of existingOverrides) {
         const key = `${o.cardId}:${o.answerSide}`
@@ -502,7 +530,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       }
 
       // Intra-language confusion links → interleave confusable pairs so they land next to each other.
-      const intraLinks = (await new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => [])).filter(l => l.kind === 'intra')
+      const intraLinks = intraLinksAll.filter(l => l.kind === 'intra')
 
       // ?category= elective study: build a queue from exactly that category
       // (matching the deck-detail page's stat counts) and skip the normal

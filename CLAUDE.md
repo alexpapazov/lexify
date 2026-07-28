@@ -1644,8 +1644,45 @@ expired, so it is not a round-trip — threading a session through context would
 no gain.
 
 Still open from the list above: #1 (Postgres GROUP BY RPCs), #2 (lazy-load off-screen analytics
-charts), #4 (cross-navigation cache), and the per-deck fan-out in `LadderStudy`,
-`DueForecastProjection`, `VocabGrowthProjection`, `PresentSnapshot` and the 3 session pages.
+charts), #4 (cross-navigation cache), and the per-deck fan-out in `DueForecastProjection`,
+`VocabGrowthProjection`, `PresentSnapshot`. (LadderStudy and the 3 session pages were fixed — below.)
+
+### Session start latency — sessions + ladder fixed (2026-07-27)
+
+Starting any study session (Due Now via the 3 session pages, or the learning pipeline via
+`LadderStudy`) sat on "Loading…" for seconds. Three causes, all fixed; no migration:
+
+1. **Serial uid-only stages.** Each loader ran 4–6 sequential awaits (overrides → decks/profile →
+   scheduler params → confusion links → …) with no data dependencies. All four loaders now fire
+   everything keyed on the user id in ONE `Promise.all` wave and await later results in dependency
+   order. The `getOrCreate` scheduler-params call (2 serial RTTs: upsert + select) is now derived
+   from the bulk `listForUser` rows, falling back to `getOrCreate` only for a genuinely new pair.
+2. **Per-deck N+1.** all/folder sessions looped decks with `listByDeck` + the 2-query
+   `stateRepo.listByDeck` (2 serial RTTs × N decks); LadderStudy fan-out was 3 requests × N. Replaced
+   by `cardRepo.listForDecks(deckIds)` (ONE paged query for the whole scope, chunked `.in()`),
+   `stateRepo.listAllForUser` grouped client-side, and `prefRepo.listForDecks`.
+   `ladderClimb.listForCards` chunks now run in parallel (chunking bounds the query string, it never
+   needed to serialize).
+3. **Audio payload.** `listByDeck` selects `cards(*)` including `audio_data`/`audio_sources` — base64
+   MP3s, tens of KB per card, shipped for EVERY card in scope. `listForDecks` uses
+   **SESSION_CARD_COLUMNS** (`lib/data/cards.ts`): everything a session needs (`choices`, `hints`,
+   alternatives) minus the blobs. Stored clips are then hydrated for QUEUED cards only via
+   `cardRepo.audioForCards` + **`lib/sessionAudio.ts`** (`hydrateSessionAudio` / `needsAudioHydration`
+   / `applyAudioPatch`): the FIRST card's clip is awaited when it has one (it autoplays on mount),
+   the rest patch in from the background.
+
+**Traps for future work here:**
+- Without hydration, a missing `audioData` is NOT harmless: every play path self-heals by
+  REGENERATING via `/api/tts`, and `LadderStudyCard`'s fetch-on-miss then `cardRepo.update`s the
+  regenerated clip over the stored one — a Forvo native recording would be permanently replaced.
+  Patch `audioSources` too, not just `audioData`: `CardEditModal`'s "Use this" writes
+  `{...card.audioSources, [src]: …}` back, so a null `audioSources` clobbers other providers' clips.
+- LadderStudy's two profiles selects were merged into one first-wave select WITH the
+  core-columns fallback — this also hardened the stop-at-goal cap against the
+  not-yet-migrated-profile-column landmine (open thread #3 in HANDOFF, ladder part now done;
+  PresentSnapshot is still un-hardened).
+- The deck page's `finalizeQueue` is the single queue-commit point (load + Study ahead + elective
+  picker) — hydration lives there; keep it that way if you add queue sources.
 
 Counts (Unlearned/Learning/Graduated/Due/Dormant) are a special case of #1 — they pull every card and
 state to display five integers. `count: 'exact', head: true` queries would do it without shipping rows.

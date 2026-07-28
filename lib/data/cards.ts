@@ -20,8 +20,8 @@ import { localCardsByDeck, localGetCard, localUpdateCard } from '@/lib/offline/l
  * distractor pools + synonym lists) is the big one — it's a JSONB blob per card, and the whole-library
  * callers below only ever need identity, languages and front/back to count and search. `hints`,
  * `accepted_*_alternatives`, `synced_from_language(s)` and `origin_word(s)` came out for the same
- * reason: array/JSONB columns that no bulk consumer reads. Only the session pages read `choices`, and
- * they load per-deck via `listByDeck`, which still selects `*`.
+ * reason: array/JSONB columns that no bulk consumer reads. The session pages DO read `choices` —
+ * they load via `listForDecks` / SESSION_CARD_COLUMNS below, which keeps it.
  *
  * So bulk-read cards ALSO have `choices` null, `hints`/`acceptedFrontAlternatives`/
  * `acceptedBackAlternatives`/`syncedFromLanguages`/`originWords` empty — do NOT use a bulk card to
@@ -31,6 +31,20 @@ const BULK_CARD_COLUMNS =
   'id, owner_id, source_language, target_language, front, back, position, ' +
   'created_at, updated_at, deleted_at, synonym_group_id, register, region, ' +
   'audio_generated, audio_source, ipa'
+
+/**
+ * Columns for STUDY-SESSION reads: everything a session needs to grade and render — `choices`
+ * (distractor pools + synonyms), `hints`, accepted alternatives — but NOT `audio_data` /
+ * `audio_sources` (the base64 MP3 blobs, by far the heaviest columns; a whole-library session load
+ * shipped megabytes of them to queue a few dozen cards). Cards read this way have `audioData` /
+ * `audioSources` null; the session pages hydrate stored clips for QUEUED cards only via
+ * `audioForCards` — do NOT play/skip based on a missing blob alone, check `audioGenerated`.
+ */
+const SESSION_CARD_COLUMNS =
+  'id, owner_id, source_language, target_language, front, back, hints, choices, position, ' +
+  'created_at, updated_at, deleted_at, synonym_group_id, register, region, ' +
+  'accepted_front_alternatives, accepted_back_alternatives, synced_from_languages, synced_from_language, ' +
+  'origin_words, origin_word, audio_generated, audio_source, ipa'
 
 function rowToCard(row: Record<string, unknown>): Card {
   return {
@@ -99,6 +113,67 @@ export class SupabaseCardRepository implements CardRepository {
     const rows = await fetchAllRows<{ deck_id: string; card_id: string }>((f, t) => this.db
       .from('deck_cards').select('deck_id, card_id').in('deck_id', deckIds).order('card_id').range(f, t))
     for (const r of rows) if (!out.has(r.card_id)) out.set(r.card_id, r.deck_id)
+    return out
+  }
+
+  /**
+   * Session-page card read for one or many decks in a SINGLE paged query (vs. `listByDeck` once per
+   * deck — the all/folder session pages were paying 1 round trip per deck). Uses
+   * SESSION_CARD_COLUMNS, so the audio blobs are NOT included — hydrate queued cards' stored clips
+   * with `audioForCards`. Returns deckId → cards ordered by position (a shared card appears under
+   * every deck that links it, mirroring N× `listByDeck`). Deck ids are chunked to keep the `.in()`
+   * query string bounded (see the 1000-row-cap notes in CLAUDE.md).
+   */
+  async listForDecks(deckIds: DeckId[]): Promise<Map<string, Card[]>> {
+    const out = new Map<string, Card[]>()
+    if (deckIds.length === 0) return out
+    if (isOfflineActive()) {
+      for (const id of deckIds) out.set(id, await localCardsByDeck(id))
+      return out
+    }
+    const CHUNK = 200
+    const chunks: DeckId[][] = []
+    for (let i = 0; i < deckIds.length; i += CHUNK) chunks.push(deckIds.slice(i, i + CHUNK))
+    const rowsPerChunk = await Promise.all(chunks.map(chunk =>
+      fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('deck_cards')
+        .select(`deck_id, position, cards(${SESSION_CARD_COLUMNS})`)
+        .in('deck_id', chunk)
+        // Deterministic order for paging; per-deck position order is restored below.
+        .order('deck_id').order('card_id').range(f, t) as unknown as
+        PromiseLike<{ data: Record<string, unknown>[] | null; error: unknown }>)))
+    for (const rows of rowsPerChunk) {
+      for (const raw of rows) {
+        const row = raw as unknown as { deck_id: string; position: number; cards: Record<string, unknown> | null }
+        if (!row.cards || row.cards.deleted_at !== null) continue
+        const card = { ...rowToCard(row.cards), position: row.position }
+        const arr = out.get(row.deck_id)
+        if (arr) arr.push(card); else out.set(row.deck_id, [card])
+      }
+    }
+    for (const arr of out.values()) arr.sort((a, b) => a.position - b.position)
+    return out
+  }
+
+  /**
+   * Stored audio for the given cards: id → { audioData, audioSources }. The companion to
+   * `listForDecks`/SESSION_CARD_COLUMNS — call with the QUEUED card ids (ideally pre-filtered to
+   * `audioGenerated || audioSource`) so a session ships a handful of clips instead of the whole
+   * library's. Offline is a no-op: local-store cards already carry their audio.
+   */
+  async audioForCards(cardIds: CardId[]): Promise<Map<string, { audioData: string | null; audioSources: Card['audioSources'] }>> {
+    const out = new Map<string, { audioData: string | null; audioSources: Card['audioSources'] }>()
+    if (cardIds.length === 0 || isOfflineActive()) return out
+    const CHUNK = 50 // audio rows are tens of KB each — small chunks keep responses snappy
+    const chunks: CardId[][] = []
+    for (let i = 0; i < cardIds.length; i += CHUNK) chunks.push(cardIds.slice(i, i + CHUNK))
+    const results = await Promise.all(chunks.map(chunk => this.db.from('cards')
+      .select('id, audio_data, audio_sources').in('id', chunk)))
+    for (const { data, error } of results) {
+      if (error) continue // hydration is best-effort; playback self-heals via TTS
+      for (const r of (data ?? []) as { id: string; audio_data: string | null; audio_sources: Card['audioSources'] }[]) {
+        out.set(r.id, { audioData: r.audio_data, audioSources: r.audio_sources })
+      }
+    }
     return out
   }
 

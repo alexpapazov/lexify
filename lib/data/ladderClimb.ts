@@ -38,17 +38,23 @@ export class SupabaseLadderClimbRepository {
     if (cardIds.length === 0) return new Map()
     const CHUNK = 400, PAGE = 1000
     const out = new Map<string, ClimbState>()
-    for (let i = 0; i < cardIds.length; i += CHUNK) {
-      const chunk = cardIds.slice(i, i + CHUNK)
+    // Chunks exist to bound the `.in()` query string, not to serialize — run them in parallel.
+    // (Paging within a chunk stays serial: page n+1's offset depends on page n being full.)
+    const chunks: CardId[][] = []
+    for (let i = 0; i < cardIds.length; i += CHUNK) chunks.push(cardIds.slice(i, i + CHUNK))
+    const perChunk = await Promise.all(chunks.map(async chunk => {
+      const rows: { card_id: string; state: ClimbState }[] = []
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await this.db.from('ladder_climb')
           .select('card_id, state').eq('user_id', userId).in('card_id', chunk)
           .order('card_id').range(from, from + PAGE - 1)
         if (error) throw new Error(error.message)
-        for (const r of data ?? []) out.set(r.card_id as string, r.state as ClimbState)
+        for (const r of data ?? []) rows.push({ card_id: r.card_id as string, state: r.state as ClimbState })
         if (!data || data.length < PAGE) break
       }
-    }
+      return rows
+    }))
+    for (const rows of perChunk) for (const r of rows) out.set(r.card_id, r.state)
     return out
   }
 

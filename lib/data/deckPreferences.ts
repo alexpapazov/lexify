@@ -42,6 +42,30 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
     return rowToPrefs(data)
   }
 
+  /** Preferences for many decks in one query (vs. `get` once per deck in the session pages).
+   *  Decks with no row are simply absent from the map. Offline loops the local store (no network). */
+  async listForDecks(userId: UserId, deckIds: DeckId[]): Promise<Map<string, DeckPreferences>> {
+    const out = new Map<string, DeckPreferences>()
+    if (deckIds.length === 0) return out
+    if (isOfflineActive()) {
+      for (const id of deckIds) {
+        const row = await getLocalStore().getDeckPreferences(id).catch(() => undefined)
+        if (row) out.set(id, rowToPrefs(row as Record<string, unknown>))
+      }
+      return out
+    }
+    const CHUNK = 200
+    const chunks: DeckId[][] = []
+    for (let i = 0; i < deckIds.length; i += CHUNK) chunks.push(deckIds.slice(i, i + CHUNK))
+    const results = await Promise.all(chunks.map(chunk => this.db
+      .from('user_deck_preferences').select('*').eq('user_id', userId).in('deck_id', chunk)))
+    for (const { data, error } of results) {
+      if (error) continue
+      for (const row of data ?? []) out.set((row as { deck_id: string }).deck_id, rowToPrefs(row))
+    }
+    return out
+  }
+
   async upsert(prefs: DeckPreferences): Promise<DeckPreferences> {
     const { data, error } = await this.db
       .from('user_deck_preferences')

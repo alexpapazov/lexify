@@ -25,6 +25,7 @@ import { resolveEffectivePathway, ladderToPathway } from '@/lib/pathway'
 import type { Pathway, PathwayState, Rung, ErrorType } from '@/domain'
 import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
+import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
 import { fetchAllRows } from '@/lib/supabasePaged'
@@ -206,6 +207,25 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       if (!session) return
       const uid = session.user.id; setUserId(uid)
 
+      // ── Fire everything that needs only the user id NOW, await in dependency order below ──
+      // These four used to run as separate serial stages sprinkled through this function (overrides
+      // after the card load, language pairs after the ladder, prefs and profile after the climb),
+      // each adding a full round trip to the time before the first card could render.
+      const offline = isOfflineActive()
+      const overridesP = new SupabaseTypedAnswerOverrideRepository().listForUser(uid)
+      const pairsListP = offline ? Promise.resolve([]) : new SupabaseLanguagePairRepository().list(uid).catch(() => [])
+      const prefsP = (scope.kind === 'deck' && !offline) ? new SupabaseDeckPreferencesRepository().get(uid, scope.deckId) : Promise.resolve(null)
+      // ONE profiles select for audio + timezone + the goal/carryover flags (this function used to
+      // select profiles twice). Falls back to the core columns if a not-yet-migrated goal column
+      // errors the full select — the same hardening the study dashboard has (see CLAUDE.md landmine).
+      const PROFILE_CORE = 'audio_source_default, audio_source_by_language, timezone, day_turnover_hour'
+      const profileP = offline ? Promise.resolve(null) : (async () => {
+        const full = await createClient().from('profiles').select(`${PROFILE_CORE}, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals`).eq('user_id', uid).maybeSingle()
+        if (full.data) return full.data as Record<string, unknown>
+        const core = await createClient().from('profiles').select(PROFILE_CORE).eq('user_id', uid).maybeSingle()
+        return (core.data as Record<string, unknown> | null) ?? null
+      })()
+
       // ── Resolve which decks this scope covers ──
       const deckRepo = new SupabaseDeckRepository()
       let decks: Deck[] = []
@@ -231,14 +251,29 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       setDecksById(new Map(decks.map(d => [d.id, d])))
 
       // ── Merge cards across decks (tracking each card's deck) ──
+      // Bulk reads: ONE paged card query for the whole scope + one states query, instead of 3 per
+      // deck (cards + the 2-step listByDeck states lookup) — a 20-deck folder was 60 requests.
+      // Cards come back WITHOUT audio blobs (SESSION_CARD_COLUMNS); queued clips hydrate below.
+      // The ladder fetch rides along — it only needs the primary deck's pair, known already.
       const cardRepo = new SupabaseCardRepository()
       const stateRepo = new SupabaseCardStateRepository()
-      const perDeck = await Promise.all(decks.map(async d => {
-        // Cards and states are independent reads — awaiting them in sequence doubled the wait per
-        // deck, which is what made the loading state linger on a multi-deck scope.
-        const [cards, states] = await Promise.all([cardRepo.listByDeck(d.id), stateRepo.listByDeck(uid, d.id)])
-        return { deck: d, cards, states }
-      }))
+      const primary = decks[0]!
+      const ladderRepo = new SupabaseLadderRepository()
+      const [cardsByDeck, allStatesList, pair, def] = await Promise.all([
+        cardRepo.listForDecks(decks.map(d => d.id)),
+        stateRepo.listAllForUser(uid),
+        ladderRepo.getForPair(uid, primary.sourceLanguage, primary.targetLanguage),
+        ladderRepo.getDefault(uid),
+      ])
+      const statesByCard = new Map<string, typeof allStatesList>()
+      for (const s of allStatesList) {
+        const arr = statesByCard.get(s.cardId)
+        if (arr) arr.push(s); else statesByCard.set(s.cardId, [s])
+      }
+      const perDeck = decks.map(d => {
+        const cards = cardsByDeck.get(d.id) ?? []
+        return { deck: d, cards, states: cards.flatMap(c => statesByCard.get(c.id) ?? []) }
+      })
       const allCards: Card[] = []
       const cardDeck = new Map<string, string>()
       const gradSet = new Set<string>()
@@ -258,8 +293,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       setCardsById(new Map(allCards.map(c => [c.id, c])))
       setDeckByCard(cardDeck)
 
-      // Persisted typed-answer overrides.
-      const overrideRows = await new SupabaseTypedAnswerOverrideRepository().listForUser(uid)
+      // Persisted typed-answer overrides (fired in the first wave).
+      const overrideRows = await overridesP
       const overrideMap = new Map<string, Set<string>>()
       for (const o of overrideRows) {
         const key = `${o.cardId}:${o.answerSide}`
@@ -268,18 +303,15 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       }
       setOverrides(overrideMap)
 
-      // One ladder for the whole scope (decks share a pair).
-      const primary = decks[0]!
-      const ladderRepo = new SupabaseLadderRepository()
-      const [pair, def] = await Promise.all([ladderRepo.getForPair(uid, primary.sourceLanguage, primary.targetLanguage), ladderRepo.getDefault(uid)])
+      // One ladder for the whole scope (decks share a pair) — fetched in the bulk wave above.
       const effLadder = resolveEffectiveLadder(pair, def)
       setLadder(effLadder)
 
       // Pathway mode? Per-pair flag on the primary pair (offline is always ladder — pathways aren't bundled).
       setPathway(null)
       let effPathway: Pathway | null = null
-      if (!isOfflineActive()) {
-        const pairsList = await new SupabaseLanguagePairRepository().list(uid).catch(() => [])
+      if (!offline) {
+        const pairsList = await pairsListP
         const mode = pairsList.find(pp => pp.sourceLanguage === primary.sourceLanguage && pp.targetLanguage === primary.targetLanguage)?.learningMode ?? 'ladder'
         if (mode === 'pathway') {
           const pathRepo = new SupabasePathwayRepository()
@@ -310,23 +342,24 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       }
       setStates(reconciled)
 
-      // Audio + timezone prefs. Per-deck intake caps only apply to single-deck scope.
+      // Audio + timezone prefs (fired in the first wave). Per-deck intake caps only apply to
+      // single-deck scope.
       const prefsRepo = new SupabaseDeckPreferencesRepository()
-      const prefs = (scope.kind === 'deck' && !isOfflineActive()) ? await prefsRepo.get(uid, scope.deckId) : null
+      const prefs = await prefsP
       setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
       setAudioVolume(prefs?.audioVolume ?? 1)
+      const profileRow = await profileP
       // Offline: no AI audio, and use the device's own timezone (device-local time is authoritative offline).
-      if (isOfflineActive()) {
+      if (offline) {
         setAudioSourceDefault('browser')
         setAudioSourceByLanguage(null)
         try { tzRef.current = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { tzRef.current = 'UTC' }
         turnoverRef.current = 0
       } else {
-        const audioPref = await createClient().from('profiles').select('audio_source_default, audio_source_by_language, timezone, day_turnover_hour').eq('user_id', uid).single()
-        setAudioSourceDefault(audioPref.data?.audio_source_default as string | null)
-        setAudioSourceByLanguage(audioPref.data?.audio_source_by_language as Record<string, string> | null)
-        tzRef.current       = (audioPref.data?.timezone as string | null) ?? deviceTimeZone()
-        turnoverRef.current = (audioPref.data?.day_turnover_hour as number | null) ?? 0
+        setAudioSourceDefault((profileRow?.audio_source_default as string | null) ?? null)
+        setAudioSourceByLanguage((profileRow?.audio_source_by_language as Record<string, string> | null) ?? null)
+        tzRef.current       = (profileRow?.timezone as string | null) ?? deviceTimeZone()
+        turnoverRef.current = (profileRow?.day_turnover_hour as number | null) ?? 0
       }
 
       // "Stop at daily goal": cap TOTAL new-card intake so graduatedToday(pair) + inPipeline +
@@ -336,21 +369,29 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       // from this pool, so the session stops introducing once the budget is exhausted).
       let eligibleFresh = fresh
       const wantGoalCap = !!prefs?.capNewToGoal && scope.kind === 'deck'
-        && category !== 'new' && category !== 'learning' && !isOfflineActive()
+        && category !== 'new' && category !== 'learning' && !offline
       if (wantGoalCap) {
         const src = primary.sourceLanguage, tgt = primary.targetLanguage
         const todayStr = getToday(tzRef.current, turnoverRef.current)
         const yesterdayStr = new Date(new Date(todayStr + 'T12:00:00Z').getTime() - 86400000).toISOString().slice(0, 10)
         const weekday  = new Date(todayStr + 'T12:00:00Z').getUTCDay()
         const db = createClient()
-        const [pairRes, gradRes, profRes] = await Promise.all([
+        // Goal/carryover flags come from the merged first-wave profile select (with its
+        // core-columns fallback), so this block no longer issues its own profiles query — which
+        // also hardens the stop-at-goal cap against the not-yet-migrated-column landmine.
+        const profRes = { data: profileRow as {
+          goal_carry_shortfall?: boolean; goal_carry_surplus?: boolean
+          goal_full_debt?: boolean; goal_full_debt_since?: string | null
+          full_debt_skip_shortfall_days?: string[] | null; full_debt_skip_surplus_days?: string[] | null
+          goal_deferrals?: string[] | null
+        } | null }
+        const [pairRes, gradRes] = await Promise.all([
           db.from('language_pairs').select('goals')
             .eq('owner_id', uid).eq('source_language', src).eq('target_language', tgt).maybeSingle(),
           db.from('card_states').select('graduated_at, accelerated_mode, cards!inner(source_language, target_language)')
             .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse').not('graduated_at', 'is', null)
             .eq('cards.source_language', src).eq('cards.target_language', tgt)
             .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString()),
-          db.from('profiles').select('goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).maybeSingle(),
         ])
         const goals = pairRes.data?.goals as Record<string, number | null> | null
         const configuredForWeekday = (wd: number) => { const g = goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
@@ -463,10 +504,29 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       setQueue(items); setTotal(rollingRef.current ? items.length + pendingFreshRef.current.length : items.length)
       // Rolling mode already holds the whole set (queue + pending) → nothing more to load afterwards.
       setHasMore(rollingRef.current ? false : (eligibleFresh.length + learning.length) > items.length)
-      setCurrentId(pickNextCard(items, Date.now())?.cardId ?? null)
+
+      // Stored-clip hydration for the trimmed card read (SESSION_CARD_COLUMNS). Without it,
+      // LadderStudyCard's play path would treat a stored clip as missing, REGENERATE via TTS and
+      // write the regenerated clip back over the stored one (its fetch-on-miss does cardRepo.update)
+      // — a Forvo native recording would be permanently replaced. The first card's clip is awaited
+      // (it autoplays on mount); the rest of the queue hydrates in the background.
+      const applyAudioHydration = (patch: AudioPatch) => setCardsById(prev => {
+        let changed = false
+        const next = new Map(prev)
+        for (const [id] of patch) {
+          const c = next.get(id)
+          if (c) { next.set(id, applyAudioPatch(c, patch)); changed = true }
+        }
+        return changed ? next : prev
+      })
+      const firstId = pickNextCard(items, Date.now())?.cardId ?? null
+      const firstCard = firstId ? allCards.find(c => c.id === firstId) : undefined
+      if (firstCard && needsAudioHydration(firstCard)) await hydrateSessionAudio([firstCard], applyAudioHydration)
+      setCurrentId(firstId)
       setLoading(false)
 
       const qSet = new Set(q)
+      void hydrateSessionAudio(allCards.filter(c => qSet.has(c.id) && c.id !== firstId), applyAudioHydration)
       void prefetchAudio(
         allCards.filter(c => qSet.has(c.id)).map(c => ({ card: c, sourceLanguage: c.sourceLanguage })),
         (cardId, audioData) => setCardsById(prev => {

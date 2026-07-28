@@ -31,6 +31,7 @@ import { smoothDueDate } from '@/engine/density'
 import { classifyReviewMode, isGraduatedDueByDate, graduationIntervalRange } from '@/engine/scheduler'
 import { scheduleGraduatedFsrs, RELEARN_MINUTES, seedDifficulty } from '@/engine/dueNow'
 import { setAudioSourceDefault, setAudioSourceByLanguage } from '@/lib/speak'
+import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
 import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange, nextDifficulty } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Deck, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
@@ -224,7 +225,24 @@ function AllDueSessionInner() {
       if (!session) { router.push('/auth'); return }
       setUserId(session.user.id)
 
-      const existingOverrides = await new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id)
+      const deckRepo     = new SupabaseDeckRepository()
+      const cardRepo     = new SupabaseCardRepository()
+      const stateRepo    = new SupabaseCardStateRepository()
+      const pipelineRepo = new SupabasePipelineRepository()
+      const prefRepo     = new SupabaseDeckPreferencesRepository()
+
+      // One wave for everything that needs only the user id. These used to run as FOUR sequential
+      // stages (overrides → decks/pipeline/profile → scheduler params → confusion links), each
+      // waiting on the one before it despite no data dependency — pure latency on the path to the
+      // first card. Same restructuring as the study dashboard's load().
+      const [existingOverrides, decks, pipeline, profileData, allParamRows, intraLinksAll] = await Promise.all([
+        new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id),
+        deckRepo.list(session.user.id),
+        pipelineRepo.getDefault(),
+        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
+        new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
+        new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => []),
+      ])
       const overrideMap = new Map<string, Set<string>>()
       for (const o of existingOverrides) {
         const key = `${o.cardId}:${o.answerSide}`
@@ -233,18 +251,6 @@ function AllDueSessionInner() {
         overrideMap.set(key, set)
       }
       setOverrides(overrideMap)
-
-      const deckRepo     = new SupabaseDeckRepository()
-      const cardRepo     = new SupabaseCardRepository()
-      const stateRepo    = new SupabaseCardStateRepository()
-      const pipelineRepo = new SupabasePipelineRepository()
-      const prefRepo     = new SupabaseDeckPreferencesRepository()
-
-      const [decks, pipeline, profileData] = await Promise.all([
-        deckRepo.list(session.user.id),
-        pipelineRepo.getDefault(),
-        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
-      ])
 
       const tz           = (profileData.data?.timezone as string | null) ?? deviceTimeZone()
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
@@ -264,22 +270,18 @@ function AllDueSessionInner() {
         return new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= today
       }
 
-      // Load scheduler params for the primary language pair (URL params if provided, else first deck)
-      if (sourceLang && targetLang) {
+      // Scheduler params for the primary language pair (URL params if provided, else first deck).
+      // The row is almost always already in the listForUser result above — the old getOrCreate here
+      // cost 2 extra serial round trips (upsert + select) per session start. Only a genuinely new
+      // pair (no row yet) still awaits the create.
+      const primaryPair = sourceLang && targetLang
+        ? { src: sourceLang, tgt: targetLang }
+        : decks.length > 0 ? { src: decks[0]!.sourceLanguage, tgt: decks[0]!.targetLanguage } : null
+      if (primaryPair) {
         try {
-          const paramsRow = await new SupabaseUserSchedulerParamsRepository().getOrCreate(
-            session.user.id, sourceLang, targetLang, 'forward_typed',
-          )
-          setSchedulerParams(paramsRow)
-          setForwardTypedEnabled(paramsRow.forwardTypedEnabled ?? true)
-          setForwardRecallEnabled(paramsRow.forwardRecallEnabled ?? true)
-        } catch { /* fall back to defaults */ }
-      } else if (decks.length > 0) {
-        try {
-          const firstDeck = decks[0]!
-          const paramsRow = await new SupabaseUserSchedulerParamsRepository().getOrCreate(
-            session.user.id, firstDeck.sourceLanguage, firstDeck.targetLanguage, 'forward_typed',
-          )
+          const paramsRow =
+            allParamRows.find(r => r.sourceLanguage === primaryPair.src && r.targetLanguage === primaryPair.tgt && r.answerField === 'forward_typed')
+            ?? await new SupabaseUserSchedulerParamsRepository().getOrCreate(session.user.id, primaryPair.src, primaryPair.tgt, 'forward_typed')
           setSchedulerParams(paramsRow)
           setForwardTypedEnabled(paramsRow.forwardTypedEnabled ?? true)
           setForwardRecallEnabled(paramsRow.forwardRecallEnabled ?? true)
@@ -288,7 +290,6 @@ function AllDueSessionInner() {
 
       // Per-pair enabled review tracks — a disabled track's due cards are ghosted
       // (filtered from Due Now) but their scheduling is preserved.
-      const allParamRows = await new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id)
       const enabledTracksMap = buildEnabledTracksMap(allParamRows)
       calMapRef.current = buildCalibrationMap(allParamRows)
       retMapRef.current = buildRetentionMap(allParamRows)
@@ -310,7 +311,47 @@ function AllDueSessionInner() {
       // Persist for the on-complete "more due?" re-check (Continue button).
       decksRef.current = decks; enabledMapRef.current = enabledTracksMap; paramMapRef.current = pMap
       // Intra-language confusion links → interleave confusable pairs so they land next to each other.
-      const intraLinks = (await new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => [])).filter(l => l.kind === 'intra')
+      const intraLinks = intraLinksAll.filter(l => l.kind === 'intra')
+
+      // Second wave: the whole scope's cards, states and deck prefs in THREE bulk queries instead of
+      // 2-3 per deck. The old per-deck for…of serialized ~2 round trips per deck (a dozen decks ≈ two
+      // dozen sequential round trips before the queue could build). Cards come back WITHOUT the
+      // base64 audio blobs (SESSION_CARD_COLUMNS) — stored clips are hydrated for queued cards below.
+      const deckIds = decks.map(d => d.id)
+      const [cardsByDeck, allStatesList, prefsByDeck] = await Promise.all([
+        cardRepo.listForDecks(deckIds),
+        stateRepo.listAllForUser(session.user.id),
+        prefRepo.listForDecks(session.user.id, deckIds),
+      ])
+      const statesByCard = new Map<string, typeof allStatesList>()
+      for (const s of allStatesList) {
+        const arr = statesByCard.get(s.cardId)
+        if (arr) arr.push(s); else statesByCard.set(s.cardId, [s])
+      }
+      const statesForDeck = (deckCards: { id: string }[]) => deckCards.flatMap(c => statesByCard.get(c.id) ?? [])
+
+      // Stored-clip hydration for the trimmed session reads (see SESSION_CARD_COLUMNS). Patches both
+      // audioData AND audioSources — the ℹ modal's "Use this" writes `{...audioSources, [src]: …}`
+      // back, so a null audioSources there would clobber the other providers' stored clips.
+      const applyAudioHydration = (patch: AudioPatch) => {
+        setQueue(prev => prev.map(item => {
+          const card = applyAudioPatch(item.card, patch)
+          if (card === item.card && !item.deckCards.some(c => patch.has(c.id))) return item
+          return { ...item, card, deckCards: item.deckCards.map(c => applyAudioPatch(c, patch)) }
+        }))
+      }
+      const hydrateQueueAudio = async (finalQueue: SessionCard[]) => {
+        const first = finalQueue[0]
+        if (first && needsAudioHydration(first.card)) {
+          // The first card autoplays on mount — wait for its one stored clip so playback doesn't
+          // fall back to regenerating via TTS (cost, and a Forvo recording can't be regenerated).
+          const patch = await hydrateSessionAudio([first.card], applyAudioHydration)
+          const p = patch.get(first.card.id)
+          if (p) first.card = { ...first.card, audioData: p.audioData, audioSources: p.audioSources }
+        }
+        // Everything else lands in the background and patches the queue as it arrives.
+        void hydrateSessionAudio(finalQueue.slice(1).map(i => i.card), applyAudioHydration)
+      }
 
       // ?category= elective study: build queue from only that category across
       // all decks (or, when source/target are given, just that language pair).
@@ -320,10 +361,8 @@ function AllDueSessionInner() {
         const hasLangFilter = !!(sourceLang && targetLang)
         for (const deck of decks) {
           if (hasLangFilter && (deck.sourceLanguage !== sourceLang || deck.targetLanguage !== targetLang)) continue
-          const [cards, states] = await Promise.all([
-            cardRepo.listByDeck(deck.id),
-            stateRepo.listByDeck(session.user.id, deck.id),
-          ])
+          const cards  = cardsByDeck.get(deck.id) ?? []
+          const states = statesForDeck(cards)
           const stateMap          = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
           const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
           const common     = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
@@ -363,6 +402,7 @@ function AllDueSessionInner() {
         const finalQueue = interleaveConfusablePairs(hasLangFilter ? shuffle(dedupedCards) : shuffle(dedupedCards).slice(0, ALL_ELECTIVE_LIMIT), intraLinks)
         if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
         setElectiveSession(true)
+        await hydrateQueueAudio(finalQueue)
         setQueue(finalQueue)
         setLoading(false)
         const prefetchItems: PrefetchItem[] = finalQueue.slice(1).map(item => {
@@ -379,11 +419,9 @@ function AllDueSessionInner() {
       const allCards: SessionCard[] = []
 
       for (const deck of decks) {
-        const [cards, states, prefs] = await Promise.all([
-          cardRepo.listByDeck(deck.id),
-          stateRepo.listByDeck(session.user.id, deck.id),
-          prefRepo.get(session.user.id, deck.id),
-        ])
+        const cards  = cardsByDeck.get(deck.id) ?? []
+        const states = statesForDeck(cards)
+        const prefs  = prefsByDeck.get(deck.id) ?? null
 
         const forwardStates     = states.filter(s => s.reviewDirection !== 'reverse')
         const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
@@ -469,6 +507,7 @@ function AllDueSessionInner() {
       const newCards  = dedupedAll.filter(c => !c.state.lastReviewedAt)
       const seenCards = shuffle(dedupedAll.filter(c => c.state.lastReviewedAt))
       const finalQueue = interleaveConfusablePairs([...newCards, ...seenCards], intraLinks)
+      await hydrateQueueAudio(finalQueue)
       setQueue(finalQueue)
       setLoading(false)
 

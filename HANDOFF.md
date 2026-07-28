@@ -52,11 +52,12 @@ half-done, what to do next" summary for the incoming agent. Everything committed
    **0.80**) rather than pinning a fixed target; roll out in **shadow mode** first (log would-be intervals,
    check calibration) then live with a tight clamp.
 
-3. **Timezone hardening is incomplete.** The study dashboard now survives a not-yet-migrated profile column
-   (falls back to a core-columns select). **PresentSnapshot and the LadderStudy stop-at-goal cap do NOT** — they
-   select `goal_deferrals`/full-debt columns and will null-out (→ turnover 0, carryover off) if a future profile
-   column is added before its migration runs. Consider applying the same fallback, or better: split profile
-   reads into "core (always-present)" + "features (best-effort)". Low urgency now (104 is applied) but it's a
+3. **Timezone hardening is incomplete — PresentSnapshot only now.** The study dashboard AND (as of
+   2026-07-27) the LadderStudy stop-at-goal cap survive a not-yet-migrated profile column (core-columns
+   fallback; the ladder's two profile selects were merged into one hardened first-wave read).
+   **`components/analytics/PresentSnapshot.tsx` is still NOT hardened** — it selects
+   `goal_deferrals`/full-debt columns and will null-out (→ turnover 0, carryover off) if a future
+   profile column is added before its migration runs. Low urgency now (104 is applied) but it's a
    recurring landmine.
 
 ## 3. Backlog carried from before (still open)
