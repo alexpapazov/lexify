@@ -20,6 +20,8 @@ import { speak, fetchAudioSource, playAudioClip } from '@/lib/speak'
 import { isOfflineActive } from '@/lib/offline/mode'
 import type { AudioSource } from '@/domain'
 import { classifyReviewMode } from '@/engine/scheduler'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
 import { batchFastTrackDueDates } from '@/engine/density'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -153,6 +155,9 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [rungHistory,        setRungHistory]        = useState<number[] | null>(null)
   const [historyTrack,       setHistoryTrack]       = useState<'typed' | 'recall' | 'recognition'>('typed')
   const [reverseCardState,   setReverseCardState]   = useState<CardState | null | undefined>(undefined) // undefined = not yet loaded
+  // Which review tracks are enabled for this card's pair — drives the per-track schedule display
+  // (every enabled track gets its own group with its own due date; disabled ones are labelled).
+  const [enabledTracks,      setEnabledTracks]      = useState<EnabledTracks | null>(null)
   const [forwardCardState,   setForwardCardState]   = useState<CardState | null | undefined>(undefined) // the forward row's own D/S
   // Synonym editing state
   const [sourceSynonymInput, setSourceSynonymInput] = useState('')
@@ -219,12 +224,14 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
       new SupabaseCardConfusionLinkRepository().listForCard(userId, card.id),
       new SupabaseTypedAnswerOverrideRepository().listForUser(userId),
       new SupabasePipelineRepository().getDefault(),
-    ]).then(([rows, links, allOverrides, pl]) => {
+      new SupabaseUserSchedulerParamsRepository().listForUser(userId).catch(() => []),
+    ]).then(([rows, links, allOverrides, pl, paramRows]) => {
       if (cancelled) return
       setConfusions(rows)
       setConfusionLinks(links)
       setOverrides(allOverrides.filter(o => o.cardId === card.id))
       setPipeline(pl)
+      setEnabledTracks(buildEnabledTracksMap(paramRows).get(`${sourceLanguage}|${targetLanguage}`) ?? null)
     }).catch(err => console.error('Failed to load card stats:', err))
     return () => { cancelled = true }
   }, [userId, card.id])
@@ -1401,25 +1408,46 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                       ? state.intervalHistory[0]! : null
                     const isSmartTrack = state.graduated && state.smartDueAt != null
                     const isDualTrack = state.graduated && state.typedDueAt != null
-                    const hasRecallTrack = state.graduated && (state.recallDueAt != null || state.recallIntervalDays != null)
+                    // Show the forward self-graded recall group when the pair's track is ENABLED,
+                    // not only when its columns are populated — an enabled track with no data yet
+                    // still deserves a row ("—") so every active review type is visible at a glance.
+                    const hasRecallTrack = state.graduated && (state.recallDueAt != null || state.recallIntervalDays != null || enabledTracks?.recall === true)
                     const prodInterval = state.smartIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
                     const prodDue = state.smartDueAt ?? state.typedDueAt ?? state.dueAt
                     const prodTitle = isSmartTrack ? 'Smart typing track (typed below threshold, else self-graded)'
                       : isDualTrack ? 'Production track (typed / self-graded)' : 'Scheduling'
+                    // A track can hold scheduling data while being switched off in the pair's SRS
+                    // settings — those due dates are ghosted (never queued), so label them.
+                    const prodDisabled    = enabledTracks != null && !(enabledTracks.typed || enabledTracks.smart)
+                    const recallDisabled  = enabledTracks != null && !enabledTracks.recall
+                    const reverseDisabled = enabledTracks != null && !enabledTracks.reverse
                     return (<>
                       {/* Production track (typed / smart / self-graded forward reviews) */}
                       <StatGroup title={prodTitle} rows={[
+                        ...(prodDisabled ? [['Status', 'Track disabled — due date ghosted'] as [string, string]] : []),
                         ['Interval (ideal)',    formatIntervalDays(prodInterval)],
                         ['Scheduled interval',  formatIntervalDays(state.scheduledIntervalDays)],
                         ['Next due',            state.graduated ? formatDate(prodDue) : '—'],
                         ['Last reviewed',       formatDate(state.lastReviewedAt, 'Never')],
                       ]} />
 
-                      {/* Recall track (created by soft-wrong dual-track splits) */}
+                      {/* Forward self-graded recall track (its own schedule on the forward row) */}
                       {hasRecallTrack && (
-                        <StatGroup title="Recall track" rows={[
+                        <StatGroup title="Self-graded recall track" rows={[
+                          ...(recallDisabled ? [['Status', 'Track disabled — due date ghosted'] as [string, string]] : []),
                           ['Interval',  formatIntervalDays(state.recallIntervalDays)],
-                          ['Next due',  formatDate(state.recallDueAt)],
+                          ['Next due',  formatDate(state.recallDueAt, '—')],
+                        ]} />
+                      )}
+
+                      {/* Reverse recognition track — a SEPARATE card_states row with its own schedule. */}
+                      {reverseCardState && (
+                        <StatGroup title="Recognition (reverse) track" rows={[
+                          ['Status', reverseCardState.dormant ? 'Paused'
+                            : reverseDisabled ? 'Track disabled — due date ghosted' : 'Active'],
+                          ['Interval',      formatIntervalDays(reverseCardState.recallIntervalDays ?? reverseCardState.intervalDays)],
+                          ['Next due',      reverseCardState.graduated ? formatDate(reverseCardState.recallDueAt ?? reverseCardState.dueAt) : '—'],
+                          ['Last reviewed', formatDate(reverseCardState.lastReviewedAt, 'Never')],
                         ]} />
                       )}
 

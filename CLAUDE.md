@@ -1849,6 +1849,26 @@ Two things to know if you extend this table:
 Tests: `engine/__tests__/hints.test.ts` (Greek reveal levels, single-word article left alone) and
 `engine/__tests__/grading.test.ts` (definite + accent-stripped indefinite).
 
+## Card ℹ panel: every enabled track's own schedule (2026-07-27)
+
+The ℹ stats panel showed ONE schedule group (the active production lane) plus a recall group only when
+its columns happened to be populated — so a card's reverse/recognition due date was invisible even
+though it's independently scheduled. `components/CardEditModal.tsx` now renders a group per track:
+
+- **Production** (typed / smart / self-graded forward) — unchanged, reads
+  `smart_* ?? typed_* ?? due_at`/`interval_days`.
+- **Self-graded recall** — `recall_due_at` / `recall_interval_days` on the FORWARD row. Now also shown
+  when the pair's `recall` track is merely ENABLED (values render "—" until first reviewed), not only
+  when the columns are non-null.
+- **Recognition (reverse)** — read off `reverseCardState` (the separate `reviewDirection='reverse'`
+  row the modal already loads for the pause control), with its own interval, due date and last-reviewed.
+
+Each group carries a Status row when relevant: `Paused` (dormant) or **"Track disabled — due date
+ghosted"**, since a disabled track keeps its scheduling data but is never queued (see the disabled-track
+ghosting section). Enabled-ness comes from `buildEnabledTracksMap(listForUser)` keyed by the card's
+pair — one extra query added to the modal's existing stats `Promise.all`, `.catch(() => [])` so a
+failure just falls back to no status labels rather than breaking the panel.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
