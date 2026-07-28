@@ -892,6 +892,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     if (!current || submitting) return
     const { card, state } = current
     if (!state.graduated) return
+    // Almost can also be picked from the first-Undo re-rate view ("actually, that was a near-miss")
+    // — the undo already reverted the original rating, so this applies cleanly to the restored
+    // state. Clear the view like handleAnswer does, else the Undo FAB lingers on a stale reRate.
+    setReRate(null)
     setSubmitting(true)
     try {
       hintRef.current = null
@@ -2099,6 +2103,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         <FlashcardMode key={`rerate-${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
           resumeAnswered autoPlayAudio={false}
           onRate={rating => handleAnswer(rating, reRate.selfGraded ? rating !== 'again' : reRate.wasCorrect, reRate.userAnswer)}
+          onAlmost={reRate.selfGraded && state.graduated ? handleAlmost : undefined}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}

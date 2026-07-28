@@ -946,9 +946,13 @@ and re-queues the card `ALMOST_REQUEUE_OFFSET = 4` ahead this session (its queue
 updated state); the re-show's rating sets the next interval from the slightly-penalized state.
 Implementation: `RatingButtons` gained optional `onAlmost` (renders the extra button only when passed);
 `FlashcardMode` threads it; each of the 3 session pages has a `handleAlmost` right above `handleAnswer`,
-wired only on the graduated self-graded `FlashcardMode` (NOT the re-rate view, ladder — which shares
-FlashcardMode but never passes `onAlmost` — or any pre-grad path). No undo-stack entry for Almost (the
-effect is small; a mis-tap self-corrects when the re-show is rated).
+wired on the graduated self-graded `FlashcardMode` AND (2026-07-27) the first-Undo re-rate view when
+the original review was self-graded (`reRate.selfGraded`) — so "undo, then decide it was actually a
+near-miss" works: the undo already reverted the rating, so Almost applies to the restored state.
+`handleAlmost` clears `reRate` at the top (like `handleAnswer`) so the Undo FAB can't linger on a
+stale re-rate view. Still NOT wired on: the ladder (shares FlashcardMode but never passes `onAlmost`),
+any pre-grad path, or typed re-rates (typed near-misses are auto-detected by the grader). No
+undo-stack entry for Almost (the effect is small; a mis-tap self-corrects when the re-show is rated).
 
 ## Hint + Hard re-shows instead of advancing (2026-07-11)
 
