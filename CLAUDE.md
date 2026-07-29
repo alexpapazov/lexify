@@ -441,8 +441,10 @@ the newest few — no scrolling to find the next one to run. New migrations are
 numbered sequentially at the top level (`supabase/migrations/1NN_*.sql`); move
 them into `archive/` once they're comfortably live. Nothing reads the directory
 programmatically (migrations are pasted into the Supabase SQL editor by hand), so
-this is purely organizational. **Latest applied: `104_goal_deferrals.sql`** — the
-next migration is `105`. The top-level folder is currently EMPTY (nothing pending).
+this is purely organizational. **Latest applied: `104_goal_deferrals.sql`.**
+**PENDING at top level: `105_reverse_dormancy_backfill.sql` — MUST be run** (per-direction
+dormancy; without it every existing dormant card's recognition reviews come back at once).
+Next migration number after that is `106`.
 
 Sequential, in `supabase/migrations/`. Latest is `029`:
 
@@ -689,8 +691,35 @@ becomes due automatically. **Migration 068** adds `card_states.dormant` (bool) +
   + "Wake from dormancy" / "Make dormant now". Status shows **Dormant**.
 - **Excluded from Due Now everywhere**: all 3 session queues (forward + reverse
   rows), the dashboard `dueNow` count + forecast (`buildForecastDays` +
-  `forecastCards`), and `lib/folderStats.ts` counts. Reverse rows check the
-  forward counterpart's `dormant` via the forward stateMap.
+  `forecastCards`), and `lib/folderStats.ts` counts.
+
+### Dormancy is PER-DIRECTION (2026-07-28, migration 105)
+
+Previously the FORWARD row's `dormant` was a master switch: every Due Now surface skipped a card's
+reverse row when the forward row was dormant. That made the ℹ panel's "Resume recognition" a no-op on
+a dormant card — you could flip the reverse flag and nothing came back. Now **each direction gates on
+its own `dormant` flag**; the forward row's dormancy pauses production only. (The forward *graduated*
+check on reverse rows STAYS — that's about graduation, not dormancy.)
+
+- **Migration `105_reverse_dormancy_backfill.sql` MUST BE APPLIED** — it copies forward dormancy onto
+  existing reverse rows. Without it, every existing dormant card's recognition reviews become due at
+  once the moment this code deploys.
+- **Whole-card pauses must set BOTH rows.** Two paths do: the ℹ panel's "Make dormant now" (via
+  `setDormancy(..., 'all')` — new `direction: 'all'` mode updates every row for the card and returns
+  the forward one), and **auto-dormancy** (reps >= `dormancyThreshold`), which previously wrote only
+  the forward row — it now also calls `markReverseDormant` (`lib/dormancy.ts`) at all 6 session-page
+  sites (smart + forward branches × 3 pages). Miss that and "go dormant after N reviews" would leave
+  recognition running.
+- **UI**: when a reverse row exists the panel shows two status lines with independent
+  Pause/Resume for production and recognition; "Wake from dormancy (both)" appears only when BOTH are
+  dormant, otherwise the per-direction controls do the work.
+- **Known gap**: `markReverseDormant` uses `setDormancy`, which has no offline local-store path, so an
+  auto-dormancy trigger that fires OFFLINE pauses production only (the forward flag rides the normal
+  offline state upsert). Best-effort by design — it swallows both that and the no-reverse-row case.
+- Sites that changed: `lib/dueStatus.ts`, `app/study/page.tsx` (reverseDueOn + the forecast's
+  per-row dormancy filter), and the reverse-queue builders + the all-session `moreDue` re-check (which
+  had never checked the reverse row's own flag at all — it could inflate "Continue (N)").
+- Tested in `lib/__tests__/dueStatus.test.ts` ("dormancy is per-direction").
 - **`?category=dormant`** studies dormant cards (they **stay dormant** — elective).
 - **Dormant stat box** (neutral/white, after Due Now) + **"Dormant"** card-list
   label at deck detail, folder (`library/[folderId]`), and library-pair
@@ -1900,6 +1929,27 @@ ghosted"**, since a disabled track keeps its scheduling data but is never queued
 ghosting section). Enabled-ness comes from `buildEnabledTracksMap(listForUser)` keyed by the card's
 pair — one extra query added to the modal's existing stats `Promise.all`, `.catch(() => [])` so a
 failure just falls back to no status labels rather than breaking the panel.
+
+## IPA toggle on every target-language prompt (2026-07-28)
+
+The IPA button was missing on Due Now self-graded cards (the reverse-recall / "Show answer" flashcard),
+which is exactly where it's most wanted — the prompt IS the target-language word. Cause: all three
+session pages passed `ipaText`/`onToggleIPA` to `MultipleChoiceMode` and `TypingMode` but **never to
+`FlashcardMode`**, even though FlashcardMode has supported both props all along (it renders the faint
+"IPA" corner button). The all-session page also passed `ipaText` to its two TypingMode renders without
+`onToggleIPA`, so IPA could display there but never be switched on.
+
+Now every mode render in all 3 pages gets `ipaText={currentIpaText} onToggleIPA={ipaToggle}` (5 sites
+per page: MC, pre-grad Typing, graduated Typing, the graduated FlashcardMode, and the undo re-rate
+FlashcardMode).
+
+`ipaToggle` is gated on `promptShowsSource` — the button only appears when the prompt is the
+target-language word (`card.front`), which is the text `/api/ipa` transcribes. Previously the button
+also rendered on native-language prompts, where `currentIpaText` is undefined by construction, so
+clicking it flipped the stored preference and appeared to do nothing. Forward production reviews
+(English shown → produce Spanish) therefore have no IPA button by design; reverse recall does.
+
+`SynonymDueNowMode` still has no IPA support (it accepts no such props) — a separate change if wanted.
 
 ## Known backlog / open issues
 

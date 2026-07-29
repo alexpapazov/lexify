@@ -171,12 +171,21 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     return rowToCardState(data)
   }
 
-  /** Targeted dormancy update on the forward row (avoids a full-row upsert). */
+  /**
+   * Targeted dormancy update (avoids a full-row upsert).
+   *
+   * `direction` picks which row(s): 'forward' = production, 'reverse' = recognition, **'all' = both**
+   * (used by "Make dormant now", which pauses the whole card in one action — each direction can then
+   * be resumed independently, since Due Now gates each on its OWN dormant flag).
+   *
+   * Always returns the FORWARD row when one was updated — it's the canonical row for the card's
+   * overall dormant status and `dormancyThreshold` — falling back to the first updated row.
+   */
   async setDormancy(
     userId: UserId,
     cardId: CardId,
     patch: { dormant?: boolean; dormancyThreshold?: number | null },
-    direction: 'forward' | 'reverse' = 'forward',
+    direction: 'forward' | 'reverse' | 'all' = 'forward',
   ): Promise<CardState> {
     invalidateReads('states:')
     const dbPatch: Record<string, unknown> = {}
@@ -184,15 +193,13 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     if ('dormancyThreshold' in patch) dbPatch.dormancy_threshold = patch.dormancyThreshold
     // Update EVERY row for this card + direction (some accounts have duplicate rows) so dormancy is
     // card-level per direction — no stale duplicate can keep it due. `.select()` tolerates multi-row.
-    // Forward = the production (target-language) side, which determines the card's overall dormant type.
-    // Reverse = the recognition side, which can be paused independently.
-    const { data, error } = await this.db.from('card_states')
-      .update(dbPatch)
-      .eq('user_id', userId).eq('card_id', cardId).eq('review_direction', direction)
-      .select()
+    let q = this.db.from('card_states').update(dbPatch).eq('user_id', userId).eq('card_id', cardId)
+    if (direction !== 'all') q = q.eq('review_direction', direction)
+    const { data, error } = await q.select()
     if (error) throw new Error(error.message)
     if (!data || data.length === 0) throw new Error(`setDormancy: no ${direction} row found for card`)
-    return rowToCardState(data[0])
+    const forward = data.find(r => (r as { review_direction?: string }).review_direction !== 'reverse')
+    return rowToCardState(forward ?? data[0])
   }
 
   async upsertBatch(states: CardState[]): Promise<void> {

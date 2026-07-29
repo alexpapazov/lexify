@@ -19,8 +19,9 @@ half-done, what to do next" summary for the incoming agent. Everything committed
   Use `git add -A` (not `git add .`). **No `!` in commit messages** (zsh history-expansion silently fails the
   commit — it has burned us). Quote any `[bracket]` route paths.
 - **Migrations are applied by hand** in the Supabase SQL editor — tell the user, don't assume. Numbering is
-  sequential; `001`–`104` are in `supabase/migrations/archive/` (all applied). **Next migration = `105`.** The
-  top-level `supabase/migrations/` folder is empty right now.
+  sequential; `001`–`104` are in `supabase/migrations/archive/` (all applied). **`105_reverse_dormancy_backfill.sql`
+  is PENDING at the top level and must be run** — per-direction dormancy; without it every existing dormant
+  card's recognition reviews become due at once. Next number after that = `106`.
 - **User logs in with `alex_papazov@college.harvard.edu`** (not the gmail in the profile).
 - Verify before committing nontrivial work: `npm run build` + `npm test` (currently **418 tests green**).
 

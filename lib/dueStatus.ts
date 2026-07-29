@@ -40,9 +40,12 @@ export function isCardStateDueNow(
 
   if (s.reviewDirection === 'reverse') {
     const fwd = opts.forwardState
-    // `!s.dormant` = the reverse row's own (recognition) dormancy; the forward dormant check = whole-card.
+    // Dormancy is PER-DIRECTION: recognition is gated on the REVERSE row's own `dormant` only. The
+    // forward row's dormancy is deliberately NOT checked here — pausing production must not force
+    // recognition off, or "Resume recognition" on a dormant card would be a no-op. (The forward
+    // GRADUATED check stays: a card can't be recognised before it has graduated.)
     return trackEnabled(tracks, 'recall', true) &&
-      fwd?.graduated === true && !fwd?.dormant && !s.dormant &&
+      fwd?.graduated === true && !s.dormant &&
       due(s.recallDueAt ?? s.dueAt)
   }
 

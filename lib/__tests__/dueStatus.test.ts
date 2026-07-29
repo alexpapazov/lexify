@@ -49,11 +49,21 @@ describe('isCardStateDueNow', () => {
     expect(isCardStateDueNow(s, { tracks: ALL, tz: TZ, today: TODAY })).toBe(true)
   })
 
-  it('reverse row: due on recall_due_at only if the forward counterpart is graduated + not dormant', () => {
+  it('reverse row: due on recall_due_at only if the forward counterpart is graduated', () => {
     const rev = grad({ reviewDirection: 'reverse', recallDueAt: `${TODAY}T00:00:00.000Z`, dueAt: '2026-01-01T00:00:00.000Z' })
     expect(isCardStateDueNow(rev, { tracks: ALL, tz: TZ, today: TODAY, forwardState: grad() })).toBe(true)
     expect(isCardStateDueNow(rev, { tracks: ALL, tz: TZ, today: TODAY, forwardState: grad({ graduated: false }) })).toBe(false)
-    expect(isCardStateDueNow(rev, { tracks: ALL, tz: TZ, today: TODAY, forwardState: grad({ dormant: true }) })).toBe(false)
+  })
+
+  it('dormancy is per-direction: a dormant FORWARD row does not pause recognition', () => {
+    // Deliberate change (migration 105): the forward flag used to be a master switch, which made
+    // "Resume recognition" on a dormant card a no-op. Each direction now gates on its own flag.
+    const rev = grad({ reviewDirection: 'reverse', recallDueAt: `${TODAY}T00:00:00.000Z`, dueAt: '2026-01-01T00:00:00.000Z' })
+    expect(isCardStateDueNow(rev, { tracks: ALL, tz: TZ, today: TODAY, forwardState: grad({ dormant: true }) })).toBe(true)
+    // ...and the reverse row's OWN flag still pauses it, whatever production is doing.
+    const revDormant = { ...rev, dormant: true }
+    expect(isCardStateDueNow(revDormant, { tracks: ALL, tz: TZ, today: TODAY, forwardState: grad() })).toBe(false)
+    expect(isCardStateDueNow(revDormant, { tracks: ALL, tz: TZ, today: TODAY, forwardState: grad({ dormant: true }) })).toBe(false)
   })
 
   it('dormant cards are never due', () => {

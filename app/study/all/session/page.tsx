@@ -32,6 +32,7 @@ import { classifyReviewMode, isGraduatedDueByDate, graduationIntervalRange } fro
 import { scheduleGraduatedFsrs, RELEARN_MINUTES, seedDifficulty } from '@/engine/dueNow'
 import { setAudioSourceDefault, setAudioSourceByLanguage } from '@/lib/speak'
 import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
+import { markReverseDormant } from '@/lib/dormancy'
 import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange, nextDifficulty } from '@/engine/fsrs'
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Deck, Pipeline, Rating, GradingSettings, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
@@ -390,8 +391,7 @@ function AllDueSessionInner() {
           if (category === 'due' && dirParam !== 'forward') {
             for (const reverseState of reverseStatesList) {
               if (!trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)) continue
-              if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant (production)
-              if (reverseState.dormant) continue                          // recognition paused independently
+              if (reverseState.dormant) continue   // recognition paused (per-direction dormancy)
               if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
               const revCard = cards.find(c => c.id === reverseState.cardId)
               if (revCard) categoryCards.push({ ...deckCommon, card: revCard, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
@@ -490,8 +490,7 @@ function AllDueSessionInner() {
         const reverseEnabled = trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)
         for (const reverseState of reverseStatesList) {
           if (!reverseEnabled) break
-          if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant (production)
-          if (reverseState.dormant) continue                          // recognition paused independently
+          if (reverseState.dormant) continue   // recognition paused (per-direction dormancy)
           if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) allCards.push({ ...deckCommon, card, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
@@ -596,12 +595,15 @@ function AllDueSessionInner() {
         const en = enabledMapRef.current?.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
         const threshold = paramMapRef.current?.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)?.smartTypingThresholdDays ?? 20
         const states = perDeck[di]!
-        const fwdMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
         for (const s of states) {
           if (!s.graduated) continue
           if (s.reviewDirection === 'reverse') {
             if (wantTyping || dirParam === 'forward') continue                 // reverse is self-graded
-            if (!trackEnabled(en, 'recall', true) || fwdMap.get(s.cardId)?.dormant) continue
+            // Per-direction dormancy: gate on the REVERSE row's own flag, matching the queue builder.
+            // (This block previously checked the FORWARD row's dormancy and never the reverse row's,
+            // so a paused-recognition card could still be counted here and inflate "Continue (N)".)
+            if (s.dormant) continue
+            if (!trackEnabled(en, 'recall', true)) continue
             if (dueByDate(s.recallDueAt ?? s.dueAt)) count++
           } else {
             if (s.dormant || dirParam === 'reverse') continue
@@ -964,6 +966,9 @@ function AllDueSessionInner() {
           }
           if (smartNewState.graduated && !smartNewState.dormant && smartNewState.dormancyThreshold != null && smartNewState.reps >= smartNewState.dormancyThreshold) {
             smartNewState = { ...smartNewState, dormant: true }
+            // Dormancy is per-direction now, so pause recognition too — "go dormant after N reviews"
+            // means the whole card, not just production. (Best-effort; see lib/dormancy.ts.)
+            markReverseDormant(userId, card.id)
             if (wasCorrect) setDormantNotice(true)
           }
         }
@@ -1181,6 +1186,9 @@ function AllDueSessionInner() {
       // Dormancy: auto-go dormant after N production reviews (this path = forward production).
       if (newState.graduated && !newState.dormant && newState.dormancyThreshold != null && newState.reps >= newState.dormancyThreshold) {
         newState = { ...newState, dormant: true }
+        // Dormancy is per-direction now, so pause recognition too — "go dormant after N reviews"
+        // means the whole card, not just production. (Best-effort; see lib/dormancy.ts.)
+        markReverseDormant(userId, card.id)
         if (wasCorrect) setDormantNotice(true)
       }
 
@@ -1648,6 +1656,10 @@ function AllDueSessionInner() {
   const currentIpaText = showIPA && promptShowsSource
     ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
     : undefined
+  // The IPA toggle is only offered when the prompt IS the target-language word (card.front) — that's
+  // the text /api/ipa transcribes. On a native-language prompt the button had nothing to show, so it
+  // silently toggled a preference and appeared broken.
+  const ipaToggle = promptShowsSource ? () => setShowIPA(v => !v) : undefined
   const softWrongEnabled = state.graduated && !currentIsReverse &&
     current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled
   const hintable = isGraduatedDueByDate(state, tzRef.current, getToday(tzRef.current, turnoverRef.current))
@@ -1694,7 +1706,8 @@ function AllDueSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
-          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />
+          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
@@ -1710,7 +1723,7 @@ function AllDueSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
           onInfo={() => setInfoOpen(true)}
-          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
@@ -1729,7 +1742,7 @@ function AllDueSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
           onInfo={() => setInfoOpen(true)}
-          ipaText={currentIpaText} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
@@ -1738,7 +1751,8 @@ function AllDueSessionInner() {
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
           hintable={hintable} onHint={handleHint}
-          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />
+          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
@@ -1761,7 +1775,7 @@ function AllDueSessionInner() {
           onTypedPenalty={handleTypedPenalty}
           strictness={strictnessMap.get(`${sourceLanguage}|${targetLanguage}`) ?? DEFAULT_TYPED_STRICTNESS}
           softWrongEnabled={softWrongEnabled}
-          ipaText={currentIpaText} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       )}
 
       <UndoFab show={undoStack.length > 0 || reRate !== null} onUndo={() => void handleUndo()} />

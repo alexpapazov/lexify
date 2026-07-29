@@ -106,17 +106,28 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [card.id, state?.dormancyThreshold])
 
-  // Persist a dormancy change (threshold and/or dormant flag) on the forward row.
+  // Persist a dormancy change (threshold and/or dormant flag).
+  // `scope: 'all'` pauses/resumes BOTH directions in one write — used by "Make dormant now", since
+  // making a card dormant by hand means the whole card. Each direction can then be resumed
+  // independently below (Due Now gates each on its own flag).
   // Every outcome sets an inline message so failures are never silent.
-  async function applyDormancy(patch: { dormant?: boolean; dormancyThreshold?: number | null }) {
+  async function applyDormancy(
+    patch: { dormant?: boolean; dormancyThreshold?: number | null },
+    scope: 'forward' | 'all' = 'forward',
+  ) {
     if (!state) { setDormancyMsg({ ok: false, text: 'No card state loaded — cannot save.' }); return }
     if (!userId) { setDormancyMsg({ ok: false, text: 'No user id — cannot save.' }); return }
     setDormancyBusy(true)
     setDormancyMsg(null)
     try {
-      const updated = await new SupabaseCardStateRepository().setDormancy(userId, card.id, patch)
+      const updated = await new SupabaseCardStateRepository().setDormancy(userId, card.id, patch, scope)
       onStateChange(updated)
-      setDormancyMsg({ ok: true, text: `Saved (threshold: ${updated.dormancyThreshold ?? 'none'}, dormant: ${updated.dormant})` })
+      // Keep the reverse row's displayed status in step when this write covered it.
+      if (scope === 'all' && reverseCardState && patch.dormant !== undefined) {
+        setReverseCardState({ ...reverseCardState, dormant: patch.dormant })
+      }
+      const bothNote = scope === 'all' && reverseCardState ? ' — production and recognition' : ''
+      setDormancyMsg({ ok: true, text: `Saved (threshold: ${updated.dormancyThreshold ?? 'none'}, dormant: ${updated.dormant})${bothNote}` })
     } catch (err) {
       const text = err instanceof Error ? err.message : String(err)
       console.error('[dormancy] save failed:', err)
@@ -125,8 +136,8 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
       setDormancyBusy(false)
     }
   }
-  // Pause / resume the RECOGNITION (reverse) track independently of production. The card's overall
-  // dormant type stays governed by the production (forward) side; this only affects reverse reviews.
+  // Pause / resume the RECOGNITION (reverse) track independently of production — Due Now gates each
+  // direction on its own flag, so this works whether or not production is dormant.
   async function applyReverseDormancy(dormant: boolean) {
     if (!userId || !reverseCardState) { setDormancyMsg({ ok: false, text: 'No recognition track to pause.' }); return }
     setDormancyBusy(true); setDormancyMsg(null)
@@ -1344,12 +1355,12 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                       <span className="text-xs text-ink-muted">production reviews</span>
                     </div>
                     <div className="flex items-center gap-3 pt-0.5">
-                      {state.dormant ? (
+                      {state.dormant && (!reverseCardState || reverseCardState.dormant) ? (
                         <button
                           disabled={dormancyBusy}
                           className="text-xs text-accent hover:underline disabled:opacity-50"
-                          onClick={() => applyDormancy({ dormant: false }).catch(() => {})}
-                        >↺ Wake from dormancy</button>
+                          onClick={() => applyDormancy({ dormant: false }, 'all').catch(() => {})}
+                        >↺ Wake from dormancy{reverseCardState ? ' (both)' : ''}</button>
                       ) : (
                         <>
                         <button
@@ -1361,24 +1372,39 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         <button
                           disabled={dormancyBusy || !state.graduated}
                           className="text-xs text-ink-faint hover:text-ink disabled:opacity-40"
-                          onClick={() => applyDormancy({ dormant: true }).catch(() => {})}
+                          onClick={() => applyDormancy({ dormant: true }, 'all').catch(() => {})}
+                          title="Pauses both directions — resume either one below"
                         >Make dormant now</button>
                         </>
                       )}
                     </div>
 
-                    {/* Per-subtype: pause just the RECOGNITION (reverse) track. Only when a reverse row
-                        exists (the card is studied both ways). Production/whole-card dormancy is above. */}
+                    {/* Per-direction controls. Dormancy is independent per direction, so each row can
+                        be resumed on its own after a whole-card "Make dormant now". The production
+                        line only appears alongside a reverse row — with no reverse row the buttons
+                        above already say everything. */}
                     {reverseCardState && (
-                      <div className="pt-1.5 border-t border-line/5 flex items-center justify-between gap-2">
-                        <span className="text-[11px] text-ink-muted">
-                          Recognition (reverse) reviews: <span className={reverseCardState.dormant ? 'text-ink' : 'text-success'}>{reverseCardState.dormant ? 'Paused' : 'Active'}</span>
-                        </span>
-                        <button
-                          disabled={dormancyBusy}
-                          className="text-xs text-accent hover:underline disabled:opacity-50 shrink-0"
-                          onClick={() => applyReverseDormancy(!reverseCardState.dormant).catch(() => {})}
-                        >{reverseCardState.dormant ? '↺ Resume recognition' : 'Pause recognition'}</button>
+                      <div className="pt-1.5 border-t border-line/5 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-ink-muted">
+                            Production (forward) reviews: <span className={state.dormant ? 'text-ink' : 'text-success'}>{state.dormant ? 'Paused' : 'Active'}</span>
+                          </span>
+                          <button
+                            disabled={dormancyBusy || !state.graduated}
+                            className="text-xs text-accent hover:underline disabled:opacity-50 shrink-0"
+                            onClick={() => applyDormancy({ dormant: !state.dormant }, 'forward').catch(() => {})}
+                          >{state.dormant ? '↺ Resume production' : 'Pause production'}</button>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-ink-muted">
+                            Recognition (reverse) reviews: <span className={reverseCardState.dormant ? 'text-ink' : 'text-success'}>{reverseCardState.dormant ? 'Paused' : 'Active'}</span>
+                          </span>
+                          <button
+                            disabled={dormancyBusy}
+                            className="text-xs text-accent hover:underline disabled:opacity-50 shrink-0"
+                            onClick={() => applyReverseDormancy(!reverseCardState.dormant).catch(() => {})}
+                          >{reverseCardState.dormant ? '↺ Resume recognition' : 'Pause recognition'}</button>
+                        </div>
                       </div>
                     )}
 

@@ -46,6 +46,7 @@ import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblings, needsChoices, ensureChoicesGenerated, type PrefetchItem, type ConfusionPromotionItem } from '@/lib/distractors'
 import { setAudioSourceDefault, setAudioSourceByLanguage } from '@/lib/speak'
 import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
+import { markReverseDormant } from '@/lib/dormancy'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, buildCalibrationMap, calibrationFor, buildRetentionMap, retentionFor, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
@@ -456,8 +457,7 @@ function FolderSessionInner() {
         const reverseEnabled = trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)
         for (const reverseState of reverseStatesList) {
           if (!reverseEnabled) break
-          if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant (production side)
-          if (reverseState.dormant) continue                          // recognition paused independently
+          if (reverseState.dormant) continue   // recognition paused (per-direction dormancy)
           if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
           const card = cards.find(c => c.id === reverseState.cardId)
           if (card) {
@@ -883,6 +883,9 @@ function FolderSessionInner() {
           }
           if (smartNewState.graduated && !smartNewState.dormant && smartNewState.dormancyThreshold != null && smartNewState.reps >= smartNewState.dormancyThreshold) {
             smartNewState = { ...smartNewState, dormant: true }
+            // Dormancy is per-direction now, so pause recognition too — "go dormant after N reviews"
+            // means the whole card, not just production. (Best-effort; see lib/dormancy.ts.)
+            markReverseDormant(userId, card.id)
             if (wasCorrect) setDormantNotice(true)
           }
         }
@@ -1099,6 +1102,9 @@ function FolderSessionInner() {
       // Dormancy: auto-go dormant after N production reviews (this path = forward production).
       if (newState.graduated && !newState.dormant && newState.dormancyThreshold != null && newState.reps >= newState.dormancyThreshold) {
         newState = { ...newState, dormant: true }
+        // Dormancy is per-direction now, so pause recognition too — "go dormant after N reviews"
+        // means the whole card, not just production. (Best-effort; see lib/dormancy.ts.)
+        markReverseDormant(userId, card.id)
         if (wasCorrect) setDormantNotice(true)
       }
 
@@ -1544,6 +1550,10 @@ function FolderSessionInner() {
   const currentIpaText = showIPA && promptShowsSource
     ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
     : undefined
+  // The IPA toggle is only offered when the prompt IS the target-language word (card.front) — that's
+  // the text /api/ipa transcribes. On a native-language prompt the button had nothing to show, so it
+  // silently toggled a preference and appeared broken.
+  const ipaToggle = promptShowsSource ? () => setShowIPA(v => !v) : undefined
   const softWrongEnabled = state.graduated && !currentIsReverse &&
     current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled
   const hintable = isGraduatedDueByDate(state, tzRef.current, getToday(tzRef.current, turnoverRef.current))
@@ -1589,7 +1599,8 @@ function FolderSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
-          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />
+          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
@@ -1605,7 +1616,7 @@ function FolderSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
           onInfo={() => setInfoOpen(true)}
-          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
@@ -1624,7 +1635,7 @@ function FolderSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
           onInfo={() => setInfoOpen(true)}
-          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
@@ -1633,7 +1644,8 @@ function FolderSessionInner() {
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
           hintable={hintable} onHint={handleHint}
-          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />
+          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
@@ -1656,7 +1668,7 @@ function FolderSessionInner() {
           onTypedPenalty={handleTypedPenalty}
           strictness={strictnessMap.get(`${sourceLanguage}|${targetLanguage}`) ?? DEFAULT_TYPED_STRICTNESS}
           softWrongEnabled={softWrongEnabled}
-          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       )}
 
       <UndoFab show={undoStack.length > 0 || reRate !== null} onUndo={() => void handleUndo()} />

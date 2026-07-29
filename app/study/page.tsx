@@ -237,12 +237,11 @@ function buildForecastDays(
     const en = enabledTracks.get(pairKey)
     const pc = cfg.get(pairKey) ?? DEFAULT_PAIR_CFG
     const threshold = thresholds.get(pairKey) ?? 20
-    // Dormant cards never become due — exclude both their forward and reverse rows.
-    const dormantCards = new Set(states.filter(s => s.reviewDirection !== 'reverse' && s.dormant).map(s => s.cardId))
-
     for (const s of states) {
       if (!s.graduated) continue
-      if (dormantCards.has(s.cardId)) continue
+      // Dormancy is per-direction — a row is excluded by its OWN flag, so a card with production
+      // paused but recognition resumed still contributes its reverse reviews to the forecast.
+      if (s.dormant) continue
       if (!accelFilterAllows(s, filters)) continue
       // One count per state-row per day (a forward row's typed+recall reviews on the same day are the
       // same card to review); reverse is its own row. Matches the click-to-expand list exactly.
@@ -467,10 +466,10 @@ export default function StudyPage() {
       // Reverse rows are scheduled by recall_due_at; their due_at is often stale in the
       // past. Prefer recall_due_at (fall back to due_at only when recall is null) so a
       // reverse card whose real schedule is in the future isn't counted as due.
-      // `!s.dormant` = the reverse row's OWN dormancy (recognition paused independently); the forward
-      // stateMap.dormant check = whole-card dormancy (production side pauses everything).
+      // Dormancy is per-direction: gate on the REVERSE row's own `dormant` only (the forward row's
+      // dormancy pauses production, not recognition). The forward GRADUATED check stays.
       const reverseDueOn = (s: CardState) => trackEnabled(en, 'recall', true) &&
-        stateMap.get(s.cardId)?.graduated === true && !stateMap.get(s.cardId)?.dormant &&
+        stateMap.get(s.cardId)?.graduated === true &&
         !s.dormant && isDueByDate(s.recallDueAt ?? s.dueAt)
       // How a due forward card is presented (mirrors the session: enabled production lane wins over
       // recall). Uses the active lane (not the date column) so a legacy/ladder card scheduled on

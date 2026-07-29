@@ -18,6 +18,7 @@ import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { setAudioPlaybackRate, setAudioVolume, setAudioSourceDefault, setAudioSourceByLanguage } from '@/lib/speak'
 import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
+import { markReverseDormant } from '@/lib/dormancy'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
@@ -681,8 +682,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const reverseEnabled = trackEnabled(enabledTracks, 'recall', true)
       for (const reverseState of reverseStatesList) {
         if (!reverseEnabled) break
-        if (stateMap.get(reverseState.cardId)?.dormant) continue   // whole card dormant (production side)
-        if (reverseState.dormant) continue                          // recognition paused independently
+        if (reverseState.dormant) continue   // recognition paused (per-direction dormancy)
         if (!reverseState.recallDueAt || new Date(reverseState.recallDueAt) > now) continue
         const card = cards.find(c => c.id === reverseState.cardId)
         if (card) dueCards.push({ card, state: reverseState, pipeline, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
@@ -1193,6 +1193,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           }
           if (smartNewState.graduated && !smartNewState.dormant && smartNewState.dormancyThreshold != null && smartNewState.reps >= smartNewState.dormancyThreshold) {
             smartNewState = { ...smartNewState, dormant: true }
+            // Dormancy is per-direction now, so pause recognition too — "go dormant after N reviews"
+            // means the whole card, not just production. (Best-effort; see lib/dormancy.ts.)
+            markReverseDormant(userId, card.id)
             if (wasCorrect) setDormantNotice(true)
           }
         }
@@ -1423,6 +1426,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       // reviews only — this path is reached only for forward production reviews).
       if (newState.graduated && !newState.dormant && newState.dormancyThreshold != null && newState.reps >= newState.dormancyThreshold) {
         newState = { ...newState, dormant: true }
+        // Dormancy is per-direction now, so pause recognition too — "go dormant after N reviews"
+        // means the whole card, not just production. (Best-effort; see lib/dormancy.ts.)
+        markReverseDormant(userId, card.id)
         if (wasCorrect) setDormantNotice(true)
       }
 
@@ -2053,6 +2059,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
   const currentIpaText = showIPA && promptShowsSource
     ? (ipaCache.get(card.id) ?? card.ipa ?? undefined)
     : undefined
+  // The IPA toggle is only offered when the prompt IS the target-language word (card.front) — that's
+  // the text /api/ipa transcribes. On a native-language prompt the button had nothing to show, so it
+  // silently toggled a preference and appeared broken.
+  const ipaToggle = promptShowsSource ? () => setShowIPA(v => !v) : undefined
   const softWrongEnabled = state.graduated && !currentIsReverse &&
     current.reviewTrack !== 'recall' && forwardTypedEnabled && forwardRecallEnabled
   // Hint is offered only on genuinely-due graduated reviews (not the pipeline,
@@ -2107,7 +2117,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
-          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />
+          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated && step.stepType === 'recognition' ? (
         // ── Pre-graduation MC ────────────────────────────────────────────────
         // Stage 1 (native→target): exclude other group members' fronts from
@@ -2130,7 +2141,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
           onInfo={() => setInfoOpen(true)}
-          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
         // Stages 2 & 3 where group members have distinct expected answers.
@@ -2179,7 +2190,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
           onInfo={() => setInfoOpen(true)}
-          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
@@ -2189,7 +2200,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
           hintable={hintable} onHint={handleHint}
-          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage} />
+          answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : synMemberCards.length > 0 ? (
         // ── Post-graduation typed recall with synonym chain ──────────────────
         <SynonymDueNowMode
@@ -2227,7 +2239,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onTypedPenalty={handleTypedPenalty}
           strictness={{ spelling: schedulerParams.strictSpelling, accents: schedulerParams.strictAccents, articles: schedulerParams.strictArticles }}
           softWrongEnabled={softWrongEnabled}
-          ipaText={currentIpaText} onToggleIPA={() => setShowIPA(v => !v)} />
+          ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       )}
 
       <UndoFab show={undoStack.length > 0 || reRate !== null} onUndo={() => void handleUndo()} />
