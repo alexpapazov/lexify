@@ -11,6 +11,7 @@ import { gradeTyping, resolveTypedPenalty } from '@/engine/grading'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
+import { EditableAnswerText } from '@/components/session/EditableAnswerText'
 import { speak, speakViaTts, stripAnnotations } from '@/lib/speak'
 import { langName, langNativeName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { SupabaseCardRepository } from '@/lib/data/cards'
@@ -155,7 +156,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   // hear) or the native (its translation), per the rung's direction.
   return <Dictation card={card} rung={rung} deckName={deckName} onOutcome={onOutcome} onInfo={onInfo}
     overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
-    onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)} />
+    onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
+    onAnswerEdit={onCardEdit ? (newText => onCardEdit(card.id, answerSide, newText)) : undefined} />
 }
 
 function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
@@ -165,7 +167,9 @@ function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
   )
 }
 
-function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void }) {
+function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer, onAnswerEdit }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void
+  /** Save an edited answer back to the card (already bound to this rung's answer side). */
+  onAnswerEdit?: (newText: string) => void }) {
   // You always HEAR the target word (card.front). Producing the target = type what you hear; producing
   // the native = type its translation (card.back). Audio is unchanged; only the graded side differs.
   const native = producesNative(rung)
@@ -254,7 +258,15 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
           <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>{isCorrect ? displayText(answerText) : (input || '—')}</div>
           <p className="text-center text-sm text-ink-muted">{native ? displayText(card.front) : card.back}</p>
           {!isCorrect && (
-            <p className="text-center text-sm text-ink-muted">Correct answer: <span className="font-mono text-ink">{displayText(answerText)}</span></p>
+            // Double-click the answer to fix the card in place — same affordance the typing/MCQ rungs
+            // already have via TypingMode's EditableAnswerText. The dictation rung renders its result
+            // inline (it isn't a TypingMode), so it had no way to correct a typo you only notice here.
+            <p className="text-center text-sm text-ink-muted">
+              Correct answer:{' '}
+              {onAnswerEdit
+                ? <EditableAnswerText text={displayText(answerText)} onEdit={onAnswerEdit} />
+                : <span className="font-mono text-ink">{displayText(answerText)}</span>}
+            </p>
           )}
           <div className="flex flex-col items-center gap-2">
             {rateToAdvance ? (

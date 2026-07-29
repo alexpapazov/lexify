@@ -2000,6 +2000,24 @@ All shuffling is gone — cards now enter the pipeline and are served **front to
   due queues deliberately — that's review, and `interleaveConfusablePairs` depends on reordering
   there. If you want Due Now ordered too, that's a separate change.
 
+## Dictation rung: editable "Correct answer" (2026-07-28)
+
+The dictation rung is the one screen `LadderStudyCard` renders itself (the `Dictation` sub-component)
+rather than delegating to TypingMode/MultipleChoiceMode/FlashcardMode — so it was the only place a
+revealed answer could NOT be double-click-edited. Fixed: the "Correct answer: …" text is now an
+`EditableAnswerText` (double-click to edit, Enter saves, Esc cancels, empty = delete the card).
+
+Wiring: `Dictation` gained an `onAnswerEdit?: (newText: string) => void` prop, bound at the call site
+to `onCardEdit(card.id, answerSide, …)` — the same pre-bound pattern as its `onOverrideAnswer`. It
+falls back to a plain span when no editor is supplied. `LadderStudy`'s `onCardEdit` already handles
+persistence, deletion on empty text, and clearing audio/choices when the front changes.
+
+Note: editing does NOT re-grade the attempt just shown — the answer was already marked wrong. Use
+"Override as correct" for that. Same behavior as TypingMode's inline editor.
+
+Still plain text (not editable) on this screen: the line above showing the OTHER side (`card.front` /
+`card.back`). Easy follow-up if wanted — bind a second prop to `onCardEdit(card.id, promptSide, …)`.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
