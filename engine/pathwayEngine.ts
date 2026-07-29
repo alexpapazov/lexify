@@ -13,7 +13,7 @@
 import type {
   Pathway, PathwayState, Transition, PathwayCondition, PathwayCounter, ErrorType, RungOutcome, Rating,
 } from '@/domain'
-import { easyInterval, type IntervalRange } from '@/engine/ladderEngine'
+import { easyInterval, outcomeErrorWeight, type IntervalRange } from '@/engine/ladderEngine'
 
 /** Per-card runtime position + accumulated history through a pathway. Stored in the climb row's JSON. */
 export interface RouteState {
@@ -75,11 +75,14 @@ function bumpCounters(route: RouteState, ev: PathwayEvent): RouteState {
   const r = { ...route, attemptsInState: route.attemptsInState + 1, lastErrorTypes: ev.errorTypes }
   const isRating = ev.outcome === 'again' || ev.outcome === 'hard' || ev.outcome === 'good' || ev.outcome === 'easy'
   if (isRating) r.lastRating = ev.outcome as Rating
+  // Lifetime error SCORE, accumulated outside the streak branches below so `hard` contributes its
+  // half point here even though it stays streak-neutral for transitions. Same weights as the ladder.
+  const weight = outcomeErrorWeight(ev.outcome as Parameters<typeof outcomeErrorWeight>[0])
+  if (weight > 0) r.lifetimeErrors = (route.lifetimeErrors ?? 0) + weight
   if (isSuccess(ev.outcome)) {                       // pass / good / easy
     r.consecutiveGood += 1; r.consecutiveAgain = 0; r.totalGood += 1
   } else if (ev.outcome === 'again' || ev.outcome === 'almost' || ev.outcome === 'miss') {
     r.consecutiveAgain += 1; r.consecutiveGood = 0; r.totalAgain += 1
-    r.lifetimeErrors = (route.lifetimeErrors ?? 0) + 1
   } else {                                           // hard — neutral, breaks both streaks
     r.consecutiveGood = 0; r.consecutiveAgain = 0
   }

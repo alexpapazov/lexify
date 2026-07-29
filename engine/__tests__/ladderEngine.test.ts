@@ -1,6 +1,6 @@
 import type { Ladder, Rung, RungType, RungDirection } from '@/domain'
 import {
-  initialClimbState, reviewRung, applyWindow, isWindowExpired, easyInterval,
+  initialClimbState, reviewRung, applyWindow, isWindowExpired, easyInterval, outcomeErrorWeight,
   CLIMB_WINDOW_MS, type ClimbState, type RungAttemptOutcome,
 } from '@/engine/ladderEngine'
 
@@ -48,18 +48,19 @@ describe('interval-setting rung (Anki graduation)', () => {
     expect(run(l, ['good', 'hard', 'good', 'good']).graduated).toBe(true)
   })
 
-  // Easy is scored purely on the climb's LIFETIME error count: 0-2 → 3-4d, 3 → 2-3d, 4+ → 2d.
-  // (The old table keyed off the final rung's messUps and had an extra "Easy right after a Good"
-  // branch; both are gone.)
+  // Easy is scored on the climb's LIFETIME error SCORE — wrong = 1, hard/almost = 0.5 —
+  // banded ≤2 → 3-4d, ≤3 → 2-3d, >3 → 2d.
   it.each([
-    [['easy'], { min: 3, max: 4 }],                                        // 0 errors
-    [['good', 'easy'], { min: 3, max: 4 }],                                // 0 errors
-    [['again', 'good', 'easy'], { min: 3, max: 4 }],                       // 1 error
-    [['hard', 'easy'], { min: 3, max: 4 }],                                // 1 error
-    [['again', 'hard', 'easy'], { min: 3, max: 4 }],                       // 2 errors
-    [['again', 'hard', 'again', 'easy'], { min: 2, max: 3 }],              // 3 errors
-    [['again', 'hard', 'again', 'hard', 'easy'], { min: 2, max: 2 }],      // 4 errors
-    [['again', 'again', 'again', 'again', 'again', 'easy'], { min: 2, max: 2 }], // 5 errors
+    [['easy'], { min: 3, max: 4 }],                                        // 0
+    [['good', 'easy'], { min: 3, max: 4 }],                                // 0
+    [['again', 'good', 'easy'], { min: 3, max: 4 }],                       // 1
+    [['hard', 'easy'], { min: 3, max: 4 }],                                // 0.5
+    [['again', 'hard', 'easy'], { min: 3, max: 4 }],                       // 1.5
+    [['again', 'again', 'easy'], { min: 3, max: 4 }],                      // 2 — top of the band
+    [['again', 'hard', 'again', 'easy'], { min: 2, max: 3 }],              // 2.5
+    [['again', 'again', 'again', 'easy'], { min: 2, max: 3 }],             // 3 — top of the band
+    [['again', 'hard', 'again', 'hard', 'again', 'easy'], { min: 2, max: 2 }],   // 4
+    [['again', 'again', 'again', 'again', 'again', 'easy'], { min: 2, max: 2 }], // 5
   ])('Easy after %j → %j', (seq, expected) => {
     const s = run(l, seq as RungAttemptOutcome[])
     expect(s.graduated).toBe(true)
@@ -88,9 +89,19 @@ describe('lifetime error count drives the Easy interval', () => {
 
   it('failed auto-checks count as errors (they never touched messUps)', () => {
     const l: Ladder = { rungs: [rung({ advanceTimes: 1 }), rung({ selfRated: true, intervalInit: true })] }
-    expect(run(l, ['miss', 'pass', 'easy']).totalMessUps).toBe(1)
-    expect(run(l, ['almost', 'almost', 'pass', 'easy']).totalMessUps).toBe(2)
+    expect(run(l, ['miss', 'pass', 'easy']).totalMessUps).toBe(1)         // wrong = 1
+    expect(run(l, ['almost', 'almost', 'pass', 'easy']).totalMessUps).toBe(1)  // slip = 0.5 each
     expect(run(l, ['pass', 'easy']).totalMessUps).toBe(0)
+  })
+
+  it('weights a slip at half a wrong answer', () => {
+    const l: Ladder = { rungs: [rung({ selfRated: true, intervalInit: true })] }
+    expect(run(l, ['hard', 'easy']).totalMessUps).toBe(0.5)
+    expect(run(l, ['hard', 'hard', 'easy']).totalMessUps).toBe(1)
+    expect(run(l, ['again', 'hard', 'easy']).totalMessUps).toBe(1.5)
+    // Four Hards weigh the same as two wrongs — both land at 2, top of the 3-4 day band.
+    expect(run(l, ['hard', 'hard', 'hard', 'hard', 'easy']).targetInterval).toEqual({ min: 3, max: 4 })
+    expect(run(l, ['again', 'again', 'easy']).targetInterval).toEqual({ min: 3, max: 4 })
   })
 
   it('survives a drop-back (errors are not forgiven by returning to an earlier rung)', () => {
@@ -107,18 +118,31 @@ describe('lifetime error count drives the Easy interval', () => {
 })
 
 describe('easyInterval() directly', () => {
-  it('0-2 lifetime errors → 3-4 days', () => {
+  it('score ≤ 2 → 3-4 days', () => {
     expect(easyInterval(0)).toEqual({ min: 3, max: 4 })
     expect(easyInterval(1)).toEqual({ min: 3, max: 4 })
     expect(easyInterval(2)).toEqual({ min: 3, max: 4 })
   })
-  it('exactly 3 errors → 2-3 days', () => {
+  it('score in (2, 3] → 2-3 days (half points land here too)', () => {
+    expect(easyInterval(2.5)).toEqual({ min: 2, max: 3 })
     expect(easyInterval(3)).toEqual({ min: 2, max: 3 })
   })
-  it('4+ errors → a fixed 2 days, never lower', () => {
+  it('score > 3 → a fixed 2 days, never lower', () => {
+    expect(easyInterval(3.5)).toEqual({ min: 2, max: 2 })
     expect(easyInterval(4)).toEqual({ min: 2, max: 2 })
-    expect(easyInterval(5)).toEqual({ min: 2, max: 2 })
     expect(easyInterval(50)).toEqual({ min: 2, max: 2 })
+  })
+})
+
+describe('outcomeErrorWeight()', () => {
+  it('wrong = 1, slip = 0.5, success = 0', () => {
+    expect(outcomeErrorWeight('again')).toBe(1)
+    expect(outcomeErrorWeight('miss')).toBe(1)
+    expect(outcomeErrorWeight('hard')).toBe(0.5)
+    expect(outcomeErrorWeight('almost')).toBe(0.5)
+    expect(outcomeErrorWeight('pass')).toBe(0)
+    expect(outcomeErrorWeight('good')).toBe(0)
+    expect(outcomeErrorWeight('easy')).toBe(0)
   })
 })
 

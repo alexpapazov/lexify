@@ -1959,10 +1959,18 @@ Rewrote how a card's FIRST post-graduation interval is chosen on an interval-set
 - **Good (twice in a row) → exactly 1 day**, always. Unchanged behavior, now covered by a test that
   pins it regardless of how many errors preceded it. `graduate()` already snaps to the start of the
   study day using the profile tz + `day_turnover_hour`, so "next day" respects turnover.
-- **Easy → `easyInterval(totalErrors)`**, keyed ONLY on the climb's lifetime error count:
-  **0-2 → 3-4 days, 3 → 2-3 days, 4+ → 2 days (fixed).** The old table keyed off the final rung's
+- **Easy → `easyInterval(totalErrors)`**, keyed ONLY on the climb's lifetime error SCORE:
+  **≤2 → 3-4 days, (2, 3] → 2-3 days, >3 → 2 days (fixed).** The old table keyed off the final rung's
   `messUps` and had an extra "Easy right after a Good" branch — both removed, and the signature
   dropped from `(messUps, lastRating)` to `(totalErrors)`.
+- **Errors are WEIGHTED, not counted** (`outcomeErrorWeight`): getting it **wrong** (`again`
+  self-rated / `miss` auto-checked) = **1**; a **slip** (`hard` self-rated / `almost` auto-checked)
+  = **0.5**; any success = 0. `almost` is the auto-checked counterpart of `hard`, so it takes the
+  same half weight — that pairing is an inference, not something the spec spelled out. Halves are
+  exact in binary floating point, so the score never drifts. The bands use `<=` rather than `===` so
+  a 2.5 lands in the middle band and 3.5 in the bottom one; whole numbers behave exactly as the plain
+  "1-2 / 3 / 4+ errors" reading. Practical consequence: four Hards (2.0) still graduate at 3-4 days,
+  the same as two outright wrongs.
 
 **`ClimbState.totalMessUps` — the lifetime tally (new, optional).** `messUps` is wiped by
 `resetPerRung` on every advance/drop-back, so it only ever meant "errors on the current rung".
@@ -1978,8 +1986,9 @@ Rewrote how a card's FIRST post-graduation interval is chosen on an interval-set
 
 **`RouteState.lifetimeErrors`** is the pathway-engine equivalent: its `totalAgain` is ALSO per-state
 (reset by `enterState`, despite the name), so `stepPathway` now passes `lifetimeErrors ?? totalAgain`
-to `easyInterval`. Pathways keep their own error definition (`again|almost|miss`; `hard` is neutral
-there) rather than adopting the ladder's — deliberate, to avoid changing pathway semantics.
+to `easyInterval`. It uses the SAME `outcomeErrorWeight` as the ladder, accumulated OUTSIDE the
+streak branches in `bumpCounters` — so `hard` contributes its 0.5 to the score even though it stays
+streak-neutral for transitions (pathway's `totalAgain`/`consecutiveAgain` semantics are unchanged).
 
 ## Learning pipeline feeds cards in LIST ORDER (2026-07-28)
 

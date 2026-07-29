@@ -61,11 +61,26 @@ export function initialClimbState(): ClimbState {
 }
 
 /**
- * Lifetime Again/Hard count for a climb. Falls back to the per-rung `messUps` for climbs saved
- * before `totalMessUps` existed, so an in-flight card still gets a sane (if undercounted) interval.
+ * Lifetime error SCORE for a climb. Falls back to the per-rung `messUps` for climbs saved before
+ * `totalMessUps` existed, so an in-flight card still gets a sane (if undercounted) interval.
+ * Fractional — see `outcomeErrorWeight`.
  */
 export function climbTotalMessUps(s: ClimbState): number {
   return s.totalMessUps ?? s.messUps
+}
+
+/**
+ * How much one bad attempt adds to the lifetime error score:
+ *   getting it WRONG        (`again` self-rated, `miss` auto-checked) → 1
+ *   getting it with a SLIP  (`hard` self-rated, `almost` auto-checked) → 0.5
+ *   any success             (`pass`/`good`/`easy`)                     → 0
+ * `almost` is the auto-checked counterpart of `hard` (a near-miss, e.g. an accent slip), so it gets
+ * the same half weight. Halves are exact in binary floating point, so the score never drifts.
+ */
+export function outcomeErrorWeight(outcome: RungAttemptOutcome): number {
+  if (outcome === 'again' || outcome === 'miss')   return 1
+  if (outcome === 'hard'  || outcome === 'almost') return 0.5
+  return 0
 }
 
 // ─── 12-hour window ──────────────────────────────────────────────────────────
@@ -83,19 +98,23 @@ export function applyWindow(state: ClimbState, now: number): ClimbState {
 
 /**
  * Starting interval (in days) for an Easy on an interval-setting rung, chosen by how hard the card
- * was to learn OVERALL — `totalErrors` is the climb's LIFETIME Again/Hard count (see
- * `climbTotalMessUps`), not the final rung's tally:
+ * was to learn OVERALL. `totalErrors` is the climb's LIFETIME error SCORE (see `climbTotalMessUps`
+ * and `outcomeErrorWeight`) — wrong counts 1, a slip counts 0.5 — not the final rung's tally:
  *
- *   0–2 errors → 3–4 days   (learned cleanly)
- *   3   errors → 2–3 days
- *   4+  errors → 2 days     (fixed — a hard-won card is always re-seen in 2 days)
+ *   ≤ 2      → 3–4 days   (learned cleanly)
+ *   > 2, ≤ 3 → 2–3 days
+ *   > 3      → 2 days     (fixed — a hard-won card is always re-seen in 2 days)
+ *
+ * The bands are `<=` rather than `===` so half-point scores land somewhere sensible: 2.5 (e.g. two
+ * wrongs and a slip) falls in the middle band, 3.5 in the bottom one. Whole numbers behave exactly
+ * as the plain "1-2 / 3 / 4+ errors" rule reads.
  *
  * The min/max is the fuzz window handed to the density smoother, so same-day graduations spread out.
  * A Good (twice) is NOT routed here — it always graduates at exactly 1 day (next study day).
  */
 export function easyInterval(totalErrors: number): IntervalRange {
   if (totalErrors <= 2) return { min: 3, max: 4 }
-  if (totalErrors === 3) return { min: 2, max: 3 }
+  if (totalErrors <= 3) return { min: 2, max: 3 }
   return { min: 2, max: 2 }
 }
 
@@ -175,14 +194,13 @@ function reviewRungCore(ladder: Ladder, state: ClimbState, outcome: RungAttemptO
   // 'pass' isn't a drop-back trigger but still enters the sequence (it breaks streaks).
   const outcomeKey: RungOutcome | null = outcome === 'pass' ? null : outcome
   const outcomeHistory = [...(state.outcomeHistory ?? []), outcome].slice(-10)
-  // The LIFETIME error tally is incremented ONCE here, before any branch, so every exit path counts
+  // The LIFETIME error score is accumulated ONCE here, before any branch, so every exit path counts
   // it — including drop-backs and skip-aheads, which return early and would otherwise forgive the
   // error that caused them. (`messUps` stays per-branch/per-rung; it drives nothing but display now.)
-  const isErrorOutcome = outcome === 'again' || outcome === 'hard' || outcome === 'almost' || outcome === 'miss'
   const s: ClimbState = {
     ...state,
     outcomeHistory,
-    totalMessUps: climbTotalMessUps(state) + (isErrorOutcome ? 1 : 0),
+    totalMessUps: climbTotalMessUps(state) + outcomeErrorWeight(outcome),
     ...(outcomeKey ? { outcomeCounts: { ...state.outcomeCounts, [outcomeKey]: (state.outcomeCounts[outcomeKey] ?? 0) + 1 } } : {}),
   }
 
