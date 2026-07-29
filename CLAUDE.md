@@ -1981,6 +1981,25 @@ Rewrote how a card's FIRST post-graduation interval is chosen on an interval-set
 to `easyInterval`. Pathways keep their own error definition (`again|almost|miss`; `hard` is neutral
 there) rather than adopting the ladder's — deliberate, to avoid changing pathway semantics.
 
+## Learning pipeline feeds cards in LIST ORDER (2026-07-28)
+
+`LadderStudy` shuffled every queue it built, so pressing Study served a random sample of the deck.
+All shuffling is gone — cards now enter the pipeline and are served **front to back in list order**.
+
+- **Order source**: `allCards` is assembled deck-by-deck (deck `position`) and card-by-card (card
+  `position`, sorted in `cardRepo.listForDecks`), so `fresh` / `learning` are already in list order;
+  the queue builders just stopped reordering them. `pickNextCard` serves unseen cards
+  (`readyAt === 0`) in queue order, so the ordering survives into the session, and the rolling-mode
+  refill `.shift()`s `pendingFreshRef` — also front of list.
+- **Caps limit COUNT, never selection.** Stop-at-goal (`fresh.slice(0, budget)`), batch size
+  (`eligibleFresh.slice(0, cap)`) and the daily new-card limit all now take the FIRST N off the top
+  of the list instead of sampling. Same for `?category=new` / `?category=learning`.
+- The removed helper was `const shuffle = (a) => a.sort(() => Math.random() - 0.5)` — note it sorted
+  IN PLACE, so `shuffle(fresh)` also mutated the array it was handed. Don't reintroduce it.
+- **Scope**: the learning pipeline (ladder) only. The 3 Due Now session pages still shuffle their
+  due queues deliberately — that's review, and `interleaveConfusablePairs` depends on reordering
+  there. If you want Due Now ordered too, that's a separate change.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

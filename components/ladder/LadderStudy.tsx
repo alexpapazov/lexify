@@ -328,7 +328,12 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
       const climb = await new SupabaseLadderClimbRepository().listForCards(uid, allCards.map(c => c.id))
 
-      const shuffle = <T,>(a: T[]) => a.sort(() => Math.random() - 0.5)
+      // Deck order is preserved end-to-end: `allCards` is built deck-by-deck (deck position) and
+      // card-by-card (card position) from `listForDecks`, so `fresh`/`learning` come out in the
+      // order the words appear in the list, and nothing reorders them. You get the list front to
+      // back. Caps (batch size, daily limit, stop-at-goal) still limit HOW MANY cards enter, but
+      // they take them off the TOP of the list rather than sampling at random. `pickNextCard` serves
+      // unseen cards (readyAt === 0) in queue order, so the ordering survives into the session.
       const learning: string[] = []
       const fresh: string[] = []
       const reconciled = new Map<string, ClimbState | RouteState>(climb)
@@ -461,39 +466,39 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           // learning.length = cards already in this deck's pipeline (they'll graduate today), so front-load
           // only enough fresh cards to reach the goal — never past it.
           const budget = Math.max(0, goalToday - gradTodayPair - learning.length)
-          eligibleFresh = shuffle([...fresh]).slice(0, budget)
+          eligibleFresh = fresh.slice(0, budget)   // first `budget` in list order, not a random sample
         }
       }
 
       let q: string[]
       rollingRef.current = false
       pendingFreshRef.current = []
-      if (category === 'new')          q = shuffle(fresh)
+      if (category === 'new')          q = [...fresh]
       else if (category === 'learning') {
         // "Study Learning" = every card the deck's Learning filter shows: a non-graduated forward state
         // (pristine/booted included) or a climb in progress. Not budget-capped — climb them all to grad.
         // Cards without a climb entry run from rung 0 via the initialClimbState fallback in render.
-        q = shuffle(allCards
+        q = allCards
           .filter(c => { const cl = climb.get(c.id); return !gradSet.has(c.id) && (pipelineStateSet.has(c.id) || (!!cl && !cl.graduated)) })
-          .map(c => c.id))
+          .map(c => c.id)
       }
       else {
         const cap = prefs?.cardsPerSession ?? null
         if (cap != null && cap > 0) {
           if (prefs!.learningBatchMode) {
             // Batch: a fixed group of `cap`, wait for the whole batch to graduate before the next batch.
-            q = learning.length > 0 ? shuffle(learning) : shuffle(eligibleFresh).slice(0, cap)
+            q = learning.length > 0 ? [...learning] : eligibleFresh.slice(0, cap)
           } else {
             // Rolling: keep ≤cap in the pipeline, refill from the rest as cards graduate → work through
             // the whole set (progress is out of the full set, not a batch of `cap`).
-            const all = [...shuffle(learning), ...shuffle(eligibleFresh)]
+            const all = [...learning, ...eligibleFresh]
             q = all.slice(0, cap)
             pendingFreshRef.current = all.slice(cap)
             rollingRef.current = pendingFreshRef.current.length > 0
           }
         } else {
           const newLimit = prefs ? prefsRepo.effectiveDailyLimit(prefs) : 20
-          q = [...shuffle(learning), ...shuffle(eligibleFresh).slice(0, Math.max(0, newLimit))]
+          q = [...learning, ...eligibleFresh.slice(0, Math.max(0, newLimit))]
         }
       }
       const items: QueueItem[] = q.map(cardId => ({ cardId, readyAt: 0, ratedAt: 0 }))
