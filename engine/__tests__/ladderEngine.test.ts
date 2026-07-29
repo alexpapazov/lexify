@@ -48,22 +48,77 @@ describe('interval-setting rung (Anki graduation)', () => {
     expect(run(l, ['good', 'hard', 'good', 'good']).graduated).toBe(true)
   })
 
+  // Easy is scored purely on the climb's LIFETIME error count: 0-2 → 3-4d, 3 → 2-3d, 4+ → 2d.
+  // (The old table keyed off the final rung's messUps and had an extra "Easy right after a Good"
+  // branch; both are gone.)
   it.each([
-    [['easy'], { min: 3, max: 4 }],
-    [['good', 'easy'], { min: 3, max: 4 }],
-    [['again', 'good', 'easy'], { min: 3, max: 3 }],
-    [['hard', 'easy'], { min: 2, max: 3 }],
-    [['again', 'hard', 'easy'], { min: 2, max: 2 }],
+    [['easy'], { min: 3, max: 4 }],                                        // 0 errors
+    [['good', 'easy'], { min: 3, max: 4 }],                                // 0 errors
+    [['again', 'good', 'easy'], { min: 3, max: 4 }],                       // 1 error
+    [['hard', 'easy'], { min: 3, max: 4 }],                                // 1 error
+    [['again', 'hard', 'easy'], { min: 3, max: 4 }],                       // 2 errors
+    [['again', 'hard', 'again', 'easy'], { min: 2, max: 3 }],              // 3 errors
+    [['again', 'hard', 'again', 'hard', 'easy'], { min: 2, max: 2 }],      // 4 errors
+    [['again', 'again', 'again', 'again', 'again', 'easy'], { min: 2, max: 2 }], // 5 errors
   ])('Easy after %j → %j', (seq, expected) => {
     const s = run(l, seq as RungAttemptOutcome[])
     expect(s.graduated).toBe(true)
     expect(s.targetInterval).toEqual(expected)
   })
+
+  it('Good twice still graduates at exactly 1 day no matter how many errors came before', () => {
+    const s = run(l, ['again', 'hard', 'again', 'hard', 'again', 'good', 'good'])
+    expect(s.graduated).toBe(true)
+    expect(s.targetInterval).toEqual({ min: 1, max: 1 })
+  })
+})
+
+describe('lifetime error count drives the Easy interval', () => {
+  it('counts errors from EARLIER rungs, not just the interval rung', () => {
+    // Two rungs: an auto-checked one (3 misses), then the interval rung cleared with a clean Easy.
+    // messUps is reset on advance, so the old per-rung rule would have said "0 errors → 3-4 days";
+    // the card was genuinely hard to learn, so it must land in the 3-error bucket instead.
+    const l: Ladder = { rungs: [rung({ advanceTimes: 1 }), rung({ selfRated: true, intervalInit: true })] }
+    const s = run(l, ['miss', 'miss', 'miss', 'pass', 'easy'])
+    expect(s.graduated).toBe(true)
+    expect(s.totalMessUps).toBe(3)
+    expect(s.messUps).toBe(0)                       // per-rung tally really was reset
+    expect(s.targetInterval).toEqual({ min: 2, max: 3 })
+  })
+
+  it('failed auto-checks count as errors (they never touched messUps)', () => {
+    const l: Ladder = { rungs: [rung({ advanceTimes: 1 }), rung({ selfRated: true, intervalInit: true })] }
+    expect(run(l, ['miss', 'pass', 'easy']).totalMessUps).toBe(1)
+    expect(run(l, ['almost', 'almost', 'pass', 'easy']).totalMessUps).toBe(2)
+    expect(run(l, ['pass', 'easy']).totalMessUps).toBe(0)
+  })
+
+  it('survives a drop-back (errors are not forgiven by returning to an earlier rung)', () => {
+    const l: Ladder = {
+      rungs: [
+        rung({ advanceTimes: 1 }),
+        rung({ selfRated: true, intervalInit: true, dropBacks: [{ on: 'again', times: 1, inARow: true, toRungId: 'DROP' }] }),
+      ],
+    }
+    l.rungs[1]!.dropBacks[0]!.toRungId = l.rungs[0]!.id
+    const s = run(l, ['miss', 'pass', 'again', 'pass', 'easy'])
+    expect(s.totalMessUps).toBeGreaterThanOrEqual(2)
+  })
 })
 
 describe('easyInterval() directly', () => {
-  it('never goes below 2 days', () => {
-    expect(easyInterval(5, 'hard')).toEqual({ min: 2, max: 2 })
+  it('0-2 lifetime errors → 3-4 days', () => {
+    expect(easyInterval(0)).toEqual({ min: 3, max: 4 })
+    expect(easyInterval(1)).toEqual({ min: 3, max: 4 })
+    expect(easyInterval(2)).toEqual({ min: 3, max: 4 })
+  })
+  it('exactly 3 errors → 2-3 days', () => {
+    expect(easyInterval(3)).toEqual({ min: 2, max: 3 })
+  })
+  it('4+ errors → a fixed 2 days, never lower', () => {
+    expect(easyInterval(4)).toEqual({ min: 2, max: 2 })
+    expect(easyInterval(5)).toEqual({ min: 2, max: 2 })
+    expect(easyInterval(50)).toEqual({ min: 2, max: 2 })
   })
 })
 

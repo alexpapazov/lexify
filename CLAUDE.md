@@ -1951,6 +1951,36 @@ clicking it flipped the stored preference and appeared to do nothing. Forward pr
 
 `SynonymDueNowMode` still has no IPA support (it accepts no such props) — a separate change if wanted.
 
+## Graduation intervals: Good = next day, Easy = by lifetime errors (2026-07-28)
+
+Rewrote how a card's FIRST post-graduation interval is chosen on an interval-setting rung
+(`engine/ladderEngine.ts`). No migration — climb state is opaque JSONB in `ladder_climb.state`.
+
+- **Good (twice in a row) → exactly 1 day**, always. Unchanged behavior, now covered by a test that
+  pins it regardless of how many errors preceded it. `graduate()` already snaps to the start of the
+  study day using the profile tz + `day_turnover_hour`, so "next day" respects turnover.
+- **Easy → `easyInterval(totalErrors)`**, keyed ONLY on the climb's lifetime error count:
+  **0-2 → 3-4 days, 3 → 2-3 days, 4+ → 2 days (fixed).** The old table keyed off the final rung's
+  `messUps` and had an extra "Easy right after a Good" branch — both removed, and the signature
+  dropped from `(messUps, lastRating)` to `(totalErrors)`.
+
+**`ClimbState.totalMessUps` — the lifetime tally (new, optional).** `messUps` is wiped by
+`resetPerRung` on every advance/drop-back, so it only ever meant "errors on the current rung".
+`totalMessUps` survives everything. Three subtleties, each with a test:
+- It is incremented **ONCE, centrally**, where the outcome is folded into `s` at the top of
+  `reviewRung` — so drop-backs and skip-aheads (which `return` early) can't forgive the error that
+  triggered them. Do NOT add per-branch increments; they'd double-count.
+- It counts **failed auto-checks** (`almost`/`miss` on MCQ/typing/dictation) as errors, which
+  `messUps` never did. Most rungs are auto-checked, so without this the tally would miss nearly all
+  real mistakes. Error outcomes = `again | hard | almost | miss`.
+- `climbTotalMessUps(s)` reads it with a `?? s.messUps` fallback, so a climb saved before this
+  shipped still graduates sanely — **undercounted for that one pass** (in-flight cards only).
+
+**`RouteState.lifetimeErrors`** is the pathway-engine equivalent: its `totalAgain` is ALSO per-state
+(reset by `enterState`, despite the name), so `stepPathway` now passes `lifetimeErrors ?? totalAgain`
+to `easyInterval`. Pathways keep their own error definition (`again|almost|miss`; `hard` is neutral
+there) rather than adopting the ladder's — deliberate, to avoid changing pathway semantics.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

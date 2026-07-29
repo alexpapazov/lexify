@@ -24,6 +24,12 @@ export interface RouteState {
   consecutiveAgain: number
   totalGood:        number
   totalAgain:       number
+  /**
+   * LIFETIME error count for this route — unlike `totalAgain` (which `enterState` resets per state,
+   * despite the name) this survives state transitions. Drives the Easy graduation interval, which is
+   * about how hard the card was to learn OVERALL. Optional for routes saved before it existed.
+   */
+  lifetimeErrors?:  number
   lastRating:       Rating | null
   lastErrorTypes:   ErrorType[]
   history:          string[]                 // stateIds visited, in order
@@ -56,7 +62,7 @@ export function isSuccess(outcome: PathwayEvent['outcome']): boolean {
 export function initialRouteState(pathway: Pathway): RouteState {
   return {
     stateId: pathway.startStateId, stateEnteredAt: null, attemptsInState: 0,
-    consecutiveGood: 0, consecutiveAgain: 0, totalGood: 0, totalAgain: 0,
+    consecutiveGood: 0, consecutiveAgain: 0, totalGood: 0, totalAgain: 0, lifetimeErrors: 0,
     lastRating: null, lastErrorTypes: [], history: [pathway.startStateId],
     targetInterval: null, nativeInterval: null, graduated: false,
   }
@@ -73,6 +79,7 @@ function bumpCounters(route: RouteState, ev: PathwayEvent): RouteState {
     r.consecutiveGood += 1; r.consecutiveAgain = 0; r.totalGood += 1
   } else if (ev.outcome === 'again' || ev.outcome === 'almost' || ev.outcome === 'miss') {
     r.consecutiveAgain += 1; r.consecutiveGood = 0; r.totalAgain += 1
+    r.lifetimeErrors = (route.lifetimeErrors ?? 0) + 1
   } else {                                           // hard — neutral, breaks both streaks
     r.consecutiveGood = 0; r.consecutiveAgain = 0
   }
@@ -107,6 +114,7 @@ function outgoing(pathway: Pathway, stateId: string): Transition[] {
 
 /** Reset the per-state counters on entering a state (mirrors the ladder's resetPerRung). */
 function enterState(route: RouteState, stateId: string, now: number): RouteState {
+  // NOTE: `lifetimeErrors` is deliberately NOT reset — it rides along in the spread.
   return {
     ...route, stateId, stateEnteredAt: now, attemptsInState: 0,
     consecutiveGood: 0, consecutiveAgain: 0, totalGood: 0, totalAgain: 0,
@@ -136,7 +144,7 @@ export function stepPathway(pathway: Pathway, route: RouteState, ev: PathwayEven
 
   // Leaving an interval-setting state on a SUCCESS records this direction's starting interval.
   if (cur.intervalInit && isSuccess(ev.outcome)) {
-    const iv = ev.outcome === 'easy' ? easyInterval(bumped.totalAgain, bumped.lastRating) : DAY
+    const iv = ev.outcome === 'easy' ? easyInterval(bumped.lifetimeErrors ?? bumped.totalAgain) : DAY
     if (cur.direction === 'produce_target') bumped = { ...bumped, targetInterval: iv }
     else                                    bumped = { ...bumped, nativeInterval: iv }
   }

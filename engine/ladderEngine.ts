@@ -37,6 +37,13 @@ export interface ClimbState {
   /** Every rung index the card has occupied, in order (drop-backs included). 0-indexed;
    *  e.g. [0,1,2,3,2,3,4] = "1→2→3→4→3→4→5". For display/analytics only. */
   rungHistory?:   number[]
+  /**
+   * LIFETIME Again/Hard count for this climb — unlike `messUps` this is NOT reset by `resetPerRung`,
+   * so it survives rung advances and drop-backs. Drives the Easy graduation interval, which is about
+   * how hard the card was to learn OVERALL, not just on the final rung.
+   * Optional: climbs saved before this shipped have no value, and fall back to `messUps`.
+   */
+  totalMessUps?:  number
 }
 
 /** When to show the card again if it stays on the same rung. */
@@ -50,7 +57,15 @@ export interface RungResult {
 }
 
 export function initialClimbState(): ClimbState {
-  return { rungIndex: 0, progress: 0, messUps: 0, lastRating: null, outcomeCounts: {}, startedAt: null, graduated: false, targetInterval: null, nativeInterval: null, rungHistory: [0] }
+  return { rungIndex: 0, progress: 0, messUps: 0, totalMessUps: 0, lastRating: null, outcomeCounts: {}, startedAt: null, graduated: false, targetInterval: null, nativeInterval: null, rungHistory: [0] }
+}
+
+/**
+ * Lifetime Again/Hard count for a climb. Falls back to the per-rung `messUps` for climbs saved
+ * before `totalMessUps` existed, so an in-flight card still gets a sane (if undercounted) interval.
+ */
+export function climbTotalMessUps(s: ClimbState): number {
+  return s.totalMessUps ?? s.messUps
 }
 
 // ─── 12-hour window ──────────────────────────────────────────────────────────
@@ -66,17 +81,29 @@ export function applyWindow(state: ClimbState, now: number): ClimbState {
 
 // ─── Easy interval table ─────────────────────────────────────────────────────
 
-/** Starting interval (in days) for an Easy on an interval-setting rung. */
-export function easyInterval(messUps: number, lastRating: Rating | null): IntervalRange {
-  if (lastRating === 'good') return messUps === 0 ? { min: 3, max: 4 } : { min: 3, max: 3 }
-  if (messUps === 0) return { min: 3, max: 4 }
-  if (messUps === 1) return { min: 2, max: 3 }
+/**
+ * Starting interval (in days) for an Easy on an interval-setting rung, chosen by how hard the card
+ * was to learn OVERALL — `totalErrors` is the climb's LIFETIME Again/Hard count (see
+ * `climbTotalMessUps`), not the final rung's tally:
+ *
+ *   0–2 errors → 3–4 days   (learned cleanly)
+ *   3   errors → 2–3 days
+ *   4+  errors → 2 days     (fixed — a hard-won card is always re-seen in 2 days)
+ *
+ * The min/max is the fuzz window handed to the density smoother, so same-day graduations spread out.
+ * A Good (twice) is NOT routed here — it always graduates at exactly 1 day (next study day).
+ */
+export function easyInterval(totalErrors: number): IntervalRange {
+  if (totalErrors <= 2) return { min: 3, max: 4 }
+  if (totalErrors === 3) return { min: 2, max: 3 }
   return { min: 2, max: 2 }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function resetPerRung(s: ClimbState): ClimbState {
+  // NOTE: `totalMessUps` is deliberately NOT reset — it is the climb's lifetime error count and must
+  // survive rung advances and drop-backs (it rides along in the spread). Only `messUps` is per-rung.
   return { ...s, progress: 0, messUps: 0, lastRating: null, ratingHistory: [], outcomeCounts: {}, outcomeHistory: [] }
 }
 
@@ -148,9 +175,14 @@ function reviewRungCore(ladder: Ladder, state: ClimbState, outcome: RungAttemptO
   // 'pass' isn't a drop-back trigger but still enters the sequence (it breaks streaks).
   const outcomeKey: RungOutcome | null = outcome === 'pass' ? null : outcome
   const outcomeHistory = [...(state.outcomeHistory ?? []), outcome].slice(-10)
+  // The LIFETIME error tally is incremented ONCE here, before any branch, so every exit path counts
+  // it — including drop-backs and skip-aheads, which return early and would otherwise forgive the
+  // error that caused them. (`messUps` stays per-branch/per-rung; it drives nothing but display now.)
+  const isErrorOutcome = outcome === 'again' || outcome === 'hard' || outcome === 'almost' || outcome === 'miss'
   const s: ClimbState = {
     ...state,
     outcomeHistory,
+    totalMessUps: climbTotalMessUps(state) + (isErrorOutcome ? 1 : 0),
     ...(outcomeKey ? { outcomeCounts: { ...state.outcomeCounts, [outcomeKey]: (state.outcomeCounts[outcomeKey] ?? 0) + 1 } } : {}),
   }
 
@@ -192,7 +224,7 @@ function reviewRungCore(ladder: Ladder, state: ClimbState, outcome: RungAttemptO
       return { state: { ...s, lastRating: 'good' }, reshow: 'medium', advanced: false, droppedBackTo: null }
     }
     if (outcome === 'easy') {
-      const iv = easyInterval(s.messUps, s.lastRating)
+      const iv = easyInterval(climbTotalMessUps(s))
       return { state: advance(s, ladder, now, s.rungIndex, iv), reshow: 'advanced', advanced: true, droppedBackTo: null }
     }
     // A wrong auto-check on a self-rated interval rung counts as Again.
@@ -214,6 +246,9 @@ function reviewRungCore(ladder: Ladder, state: ClimbState, outcome: RungAttemptO
   // A clean pass records as 'easy' (qualifies any clause); almost/miss records as 'again'.
   const passRating: Rating = outcome === 'pass' ? 'easy' : 'again'
   const history = [...(s.ratingHistory ?? []), passRating].slice(-10)
+  // NOTE: a failed auto-check (wrong MCQ pick / typed answer / dictation) never touched the per-rung
+  // `messUps`, but IS counted in the lifetime tally by the central increment above — most rungs are
+  // auto-checked, so otherwise "errors in the card at all" would miss nearly all of them.
   if (advanceRulesFor(rung).some(rule => ruleMet(history, rule))) {
     return { state: advance({ ...s, ratingHistory: history }, ladder, now, s.rungIndex), reshow: 'advanced', advanced: true, droppedBackTo: null }
   }
