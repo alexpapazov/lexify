@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { cachedRead, invalidateReads } from '@/lib/readCache'
 import type { Folder, UserId, FolderId } from '@/domain'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { localFolders } from '@/lib/offline/localRepos'
@@ -25,14 +26,16 @@ export class SupabaseFolderRepository {
   /** All non-deleted folders for the user — flat list, tree built in UI. */
   async list(userId: UserId): Promise<Folder[]> {
     if (isOfflineActive()) return localFolders()
-    const { data, error } = await this.db
-      .from('folders')
-      .select('*')
-      .eq('owner_id', userId)
-      .is('deleted_at', null)
-      .order('position')
-    if (error) throw new Error(error.message)
-    return (data ?? []).map(rowToFolder)
+    return cachedRead(`folders:${userId}`, async () => {
+      const { data, error } = await this.db
+        .from('folders')
+        .select('*')
+        .eq('owner_id', userId)
+        .is('deleted_at', null)
+        .order('position')
+      if (error) throw new Error(error.message)
+      return (data ?? []).map(rowToFolder)
+    })
   }
 
   async create(
@@ -41,6 +44,7 @@ export class SupabaseFolderRepository {
     parentId: FolderId | null,
     languagePair?: { sourceLanguage: string; targetLanguage: string },
   ): Promise<Folder> {
+    invalidateReads('folders:')
     const insert: Record<string, unknown> = { owner_id: userId, name, parent_id: parentId }
     if (languagePair) {
       insert.source_language = languagePair.sourceLanguage
@@ -52,6 +56,7 @@ export class SupabaseFolderRepository {
   }
 
   async rename(folderId: FolderId, name: string): Promise<Folder> {
+    invalidateReads('folders:')
     const { data, error } = await this.db
       .from('folders')
       .update({ name })
@@ -63,6 +68,7 @@ export class SupabaseFolderRepository {
 
   /** Bulk-update positions for reordering. */
   async updatePositions(updates: Array<{ id: string; position: number }>): Promise<void> {
+    invalidateReads('folders:')
     await Promise.all(
       updates.map(({ id, position }) =>
         this.db.from('folders').update({ position }).eq('id', id)
@@ -72,6 +78,7 @@ export class SupabaseFolderRepository {
 
   /** Move a folder to a new parent (or null = root). */
   async updateParent(folderId: FolderId, parentId: FolderId | null): Promise<void> {
+    invalidateReads('folders:')
     const { error } = await this.db
       .from('folders')
       .update({ parent_id: parentId })
@@ -93,6 +100,7 @@ export class SupabaseFolderRepository {
 
   /** Soft-delete. All child folders cascade due to ON DELETE CASCADE. */
   async softDelete(folderId: FolderId): Promise<void> {
+    invalidateReads('folders:', 'decks:')
     const { error } = await this.db
       .from('folders')
       .update({ deleted_at: new Date().toISOString() })

@@ -4,6 +4,7 @@ import type { CardStateRepository } from './interfaces'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { getLocalStore } from '@/lib/offline/localStore'
 import { fetchAllRows } from '@/lib/supabasePaged'
+import { cachedRead, invalidateReads } from '@/lib/readCache'
 import { localCardStatesByDeck, localUpsertCardState, localDeleteCardState } from '@/lib/offline/localRepos'
 
 export function rowToCardState(row: Record<string, unknown>): CardState {
@@ -133,30 +134,35 @@ export class SupabaseCardStateRepository implements CardStateRepository {
   /** Every card_state for the user in ONE paged query (see cards.listAllForUser for why). */
   async listAllForUser(userId: UserId): Promise<CardState[]> {
     if (isOfflineActive()) return getLocalStore().allCardStates()
-    const rows = await fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('card_states')
-      .select('*').eq('user_id', userId).order('card_id').range(f, t))
-    return rows.map(rowToCardState)
+    return cachedRead(`states:all:${userId}`, async () => {
+      const rows = await fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('card_states')
+        .select('*').eq('user_id', userId).order('card_id').range(f, t))
+      return rows.map(rowToCardState)
+    })
   }
 
   async listByDeck(userId: UserId, deckId: DeckId): Promise<CardState[]> {
     if (isOfflineActive()) return localCardStatesByDeck(deckId)
-    // cards are no longer deck-owned — join through deck_cards to find
-    // which cards belong to this deck, then fetch this user's states for them.
-    const { data: links, error: linkError } = await this.db.from('deck_cards')
-      .select('card_id').eq('deck_id', deckId)
-    if (linkError) throw new Error(linkError.message)
+    return cachedRead(`states:deck:${userId}:${deckId}`, async () => {
+      // cards are no longer deck-owned — join through deck_cards to find
+      // which cards belong to this deck, then fetch this user's states for them.
+      const { data: links, error: linkError } = await this.db.from('deck_cards')
+        .select('card_id').eq('deck_id', deckId)
+      if (linkError) throw new Error(linkError.message)
 
-    const cardIds = (links ?? []).map(l => l.card_id as string)
-    if (cardIds.length === 0) return []
+      const cardIds = (links ?? []).map(l => l.card_id as string)
+      if (cardIds.length === 0) return []
 
-    const { data, error } = await this.db.from('card_states')
-      .select('*')
-      .eq('user_id', userId).in('card_id', cardIds)
-    if (error) throw new Error(error.message)
-    return (data ?? []).map(rowToCardState)
+      const { data, error } = await this.db.from('card_states')
+        .select('*')
+        .eq('user_id', userId).in('card_id', cardIds)
+      if (error) throw new Error(error.message)
+      return (data ?? []).map(rowToCardState)
+    })
   }
 
   async upsert(state: CardState): Promise<CardState> {
+    invalidateReads('states:')
     if (isOfflineActive()) return localUpsertCardState(state)
     const { data, error } = await this.db.from('card_states')
       .upsert(cardStateToRow(state), { onConflict: 'user_id,card_id,review_direction' })
@@ -172,6 +178,7 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     patch: { dormant?: boolean; dormancyThreshold?: number | null },
     direction: 'forward' | 'reverse' = 'forward',
   ): Promise<CardState> {
+    invalidateReads('states:')
     const dbPatch: Record<string, unknown> = {}
     if ('dormant' in patch)           dbPatch.dormant = patch.dormant
     if ('dormancyThreshold' in patch) dbPatch.dormancy_threshold = patch.dormancyThreshold
@@ -190,12 +197,14 @@ export class SupabaseCardStateRepository implements CardStateRepository {
 
   async upsertBatch(states: CardState[]): Promise<void> {
     if (states.length === 0) return
+    invalidateReads('states:')
     const rows = states.map(cardStateToRow)
     const { error } = await this.db.from('card_states').upsert(rows, { onConflict: 'user_id,card_id,review_direction' })
     if (error) throw new Error(error.message)
   }
 
   async delete(userId: UserId, cardId: CardId, reviewDirection: 'forward' | 'reverse' = 'forward'): Promise<void> {
+    invalidateReads('states:')
     if (isOfflineActive()) return localDeleteCardState(cardId, reviewDirection)
     const { error } = await this.db.from('card_states')
       .delete()

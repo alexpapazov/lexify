@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/client'
 import type { SchedulerParams, TypedStrictnessLevel } from '@/domain'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
+import { cachedRead, invalidateReads } from '@/lib/readCache'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { localSchedulerParams } from '@/lib/offline/localRepos'
 
@@ -86,6 +87,7 @@ export class SupabaseUserSchedulerParamsRepository {
     targetLanguage: string,
     answerField: string,
   ): Promise<SchedulerParamsRow> {
+    invalidateReads('params:')  // may insert the row — a cached listForUser wouldn't include it
     await this.db.from('user_scheduler_params').upsert(
       { user_id: userId, source_language: sourceLanguage, target_language: targetLanguage, answer_field: answerField },
       { onConflict: 'user_id,source_language,target_language,answer_field', ignoreDuplicates: true },
@@ -104,12 +106,14 @@ export class SupabaseUserSchedulerParamsRepository {
 
   async listForUser(userId: string): Promise<SchedulerParamsRow[]> {
     if (isOfflineActive()) return localSchedulerParams()
-    const { data, error } = await this.db
-      .from('user_scheduler_params')
-      .select('*')
-      .eq('user_id', userId)
-    if (error) throw new Error(error.message)
-    return (data ?? []).map(rowToParams)
+    return cachedRead(`params:${userId}`, async () => {
+      const { data, error } = await this.db
+        .from('user_scheduler_params')
+        .select('*')
+        .eq('user_id', userId)
+      if (error) throw new Error(error.message)
+      return (data ?? []).map(rowToParams)
+    })
   }
 
   async update(
@@ -119,6 +123,7 @@ export class SupabaseUserSchedulerParamsRepository {
     answerField: string,
     updates: Partial<Record<string, unknown>>,
   ): Promise<void> {
+    invalidateReads('params:')
     const { error } = await this.db
       .from('user_scheduler_params')
       .update(updates)

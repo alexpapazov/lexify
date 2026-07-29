@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { cachedRead, invalidateReads, idsKey } from '@/lib/readCache'
 import type { DeckPreferences, UserId, DeckId } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import type { DeckPreferencesRepository } from './interfaces'
@@ -32,14 +33,16 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
       const row = await getLocalStore().getDeckPreferences(deckId).catch(() => undefined)
       return row ? rowToPrefs(row as Record<string, unknown>) : null
     }
-    const { data, error } = await this.db
-      .from('user_deck_preferences')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('deck_id', deckId)
-      .single()
-    if (error) return null
-    return rowToPrefs(data)
+    return cachedRead(`prefs:one:${userId}:${deckId}`, async () => {
+      const { data, error } = await this.db
+        .from('user_deck_preferences')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('deck_id', deckId)
+        .single()
+      if (error) return null
+      return rowToPrefs(data)
+    })
   }
 
   /** Preferences for many decks in one query (vs. `get` once per deck in the session pages).
@@ -54,19 +57,22 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
       }
       return out
     }
-    const CHUNK = 200
-    const chunks: DeckId[][] = []
-    for (let i = 0; i < deckIds.length; i += CHUNK) chunks.push(deckIds.slice(i, i + CHUNK))
-    const results = await Promise.all(chunks.map(chunk => this.db
-      .from('user_deck_preferences').select('*').eq('user_id', userId).in('deck_id', chunk)))
-    for (const { data, error } of results) {
-      if (error) continue
-      for (const row of data ?? []) out.set((row as { deck_id: string }).deck_id, rowToPrefs(row))
-    }
-    return out
+    return cachedRead(`prefs:list:${userId}:${idsKey(deckIds)}`, async () => {
+      const CHUNK = 200
+      const chunks: DeckId[][] = []
+      for (let i = 0; i < deckIds.length; i += CHUNK) chunks.push(deckIds.slice(i, i + CHUNK))
+      const results = await Promise.all(chunks.map(chunk => this.db
+        .from('user_deck_preferences').select('*').eq('user_id', userId).in('deck_id', chunk)))
+      for (const { data, error } of results) {
+        if (error) continue
+        for (const row of data ?? []) out.set((row as { deck_id: string }).deck_id, rowToPrefs(row))
+      }
+      return out
+    })
   }
 
   async upsert(prefs: DeckPreferences): Promise<DeckPreferences> {
+    invalidateReads('prefs:')
     const { data, error } = await this.db
       .from('user_deck_preferences')
       .upsert({
@@ -103,6 +109,7 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
    * Effect: the budget calc treats them as introduced today, clearing the backlog.
    */
   async resetDeckBacklog(userId: UserId, deckId: DeckId): Promise<void> {
+    invalidateReads('states:')  // writes card_states.introduced_date, not prefs
     const today = new Date().toISOString().slice(0, 10)
     // Get all card IDs in this deck
     const { data: cards } = await this.db
@@ -127,6 +134,7 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
    * Resets the backlog across ALL decks for this user.
    */
   async resetAllBacklogs(userId: UserId): Promise<void> {
+    invalidateReads('states:')  // writes card_states.introduced_date, not prefs
     const today = new Date().toISOString().slice(0, 10)
     await this.db
       .from('card_states')

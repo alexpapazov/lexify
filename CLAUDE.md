@@ -1648,8 +1648,40 @@ expired, so it is not a round-trip — threading a session through context would
 no gain.
 
 Still open from the list above: #1 (Postgres GROUP BY RPCs), #2 (lazy-load off-screen analytics
-charts), #4 (cross-navigation cache), and the per-deck fan-out in `DueForecastProjection`,
-`VocabGrowthProjection`, `PresentSnapshot`. (LadderStudy and the 3 session pages were fixed — below.)
+charts), and the per-deck fan-out in `DueForecastProjection`, `VocabGrowthProjection`,
+`PresentSnapshot`. (#4 cross-navigation cache: DONE 2026-07-28, below. LadderStudy and the 3 session
+pages were fixed — below.)
+
+### Cross-navigation read cache (2026-07-28) — `lib/readCache.ts`
+
+Every study surface refetched the same whole-library reads on mount, so dashboard → session →
+dashboard paid the full load three times in a minute — worst on the phone where each round trip is
+100–300 ms. Now the repo layer memoizes its heavy/shared reads for **60 s** via
+`cachedRead(key, fetcher)` with in-flight de-dupe; `invalidateReads(prefix)` busts by family.
+
+- **Cached reads** (key prefixes): `cards:` (listAllForUser, listForDecks, deckIdsByCard), `states:`
+  (listAllForUser, listByDeck), `climb:` (listAllForUser, listForCards), `params:` (listForUser),
+  `overrides:`, `conflinks:`, `pairs:`, `decks:` (list), `folders:` (list), `prefs:` (get,
+  listForDecks), `pipeline:default`. Id-list keys go through `idsKey()` (order-insensitive djb2).
+- **Every write method in those repos busts its family** — answering a card (states.upsert), editing
+  a card / caching choices or audio (cards.update), settings toggles (params.update), etc.
+  Cross-family cases: `decks.resetProgress` busts states+cards+climb; `prefs.resetDeckBacklog`/
+  `resetAllBacklogs` bust `states:` (they write card_states, not prefs); `folders.softDelete` busts
+  decks too; `params.getOrCreate` busts params (it can insert).
+- **Offline bypasses the cache entirely** (checked inside `cachedRead` and short-circuited by the
+  repos' own offline guards) — outbox flows must always see their own writes.
+- **Cached results are shared objects — treat as IMMUTABLE.** Copy before sorting/patching (all
+  current consumers do; there's a test asserting identity).
+- **Known bounded staleness (60 s, accepted):** server-side writes the client can't see — the
+  `/api/calibrate` route's params updates, and another device's edits. The damped calibration makes
+  the former negligible.
+- Note the dashboard (BULK_CARD_COLUMNS) and sessions (SESSION_CARD_COLUMNS) read cards via
+  DIFFERENT queries/keys, so the dashboard→session hop does NOT share the cards payload — it shares
+  states/decks/params/overrides/links/prefs. Back-to-back session starts (the "Study all due"
+  per-language buckets) share everything.
+- Tests: `lib/__tests__/readCache.test.ts` (TTL, dedupe, prefix invalidation, error eviction, idsKey).
+- If you add a repo WRITE to a cached family, add its `invalidateReads(...)` — a missed bust shows up
+  as "answered cards still counted due for up to a minute".
 
 ### Session start latency — sessions + ladder fixed (2026-07-27)
 

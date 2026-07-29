@@ -5,6 +5,7 @@ import { tier1Match } from '@/lib/duplicates'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { getLocalStore } from '@/lib/offline/localStore'
 import { fetchAllRows } from '@/lib/supabasePaged'
+import { cachedRead, invalidateReads, idsKey } from '@/lib/readCache'
 import { localCardsByDeck, localGetCard, localUpdateCard } from '@/lib/offline/localRepos'
 
 /**
@@ -93,11 +94,13 @@ export class SupabaseCardRepository implements CardRepository {
    */
   async listAllForUser(ownerId: UserId): Promise<Card[]> {
     if (isOfflineActive()) return getLocalStore().allCards()
-    // Cast: Supabase can't infer a row shape from a runtime column string.
-    const rows = await fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('cards')
-      .select(BULK_CARD_COLUMNS).eq('owner_id', ownerId).is('deleted_at', null).order('id').range(f, t) as unknown as
-      PromiseLike<{ data: Record<string, unknown>[] | null; error: unknown }>)
-    return rows.map(rowToCard)
+    return cachedRead(`cards:all:${ownerId}`, async () => {
+      // Cast: Supabase can't infer a row shape from a runtime column string.
+      const rows = await fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('cards')
+        .select(BULK_CARD_COLUMNS).eq('owner_id', ownerId).is('deleted_at', null).order('id').range(f, t) as unknown as
+        PromiseLike<{ data: Record<string, unknown>[] | null; error: unknown }>)
+      return rows.map(rowToCard)
+    })
   }
 
   /** card_id → deck_id for the given decks, in one paged query (a card may be in several decks; the
@@ -110,10 +113,12 @@ export class SupabaseCardRepository implements CardRepository {
       for (const id of deckIds) for (const cardId of await store.cardIdsForDeck(id)) if (!out.has(cardId)) out.set(cardId, id)
       return out
     }
-    const rows = await fetchAllRows<{ deck_id: string; card_id: string }>((f, t) => this.db
-      .from('deck_cards').select('deck_id, card_id').in('deck_id', deckIds).order('card_id').range(f, t))
-    for (const r of rows) if (!out.has(r.card_id)) out.set(r.card_id, r.deck_id)
-    return out
+    return cachedRead(`cards:deckids:${idsKey(deckIds)}`, async () => {
+      const rows = await fetchAllRows<{ deck_id: string; card_id: string }>((f, t) => this.db
+        .from('deck_cards').select('deck_id, card_id').in('deck_id', deckIds).order('card_id').range(f, t))
+      for (const r of rows) if (!out.has(r.card_id)) out.set(r.card_id, r.deck_id)
+      return out
+    })
   }
 
   /**
@@ -131,27 +136,29 @@ export class SupabaseCardRepository implements CardRepository {
       for (const id of deckIds) out.set(id, await localCardsByDeck(id))
       return out
     }
-    const CHUNK = 200
-    const chunks: DeckId[][] = []
-    for (let i = 0; i < deckIds.length; i += CHUNK) chunks.push(deckIds.slice(i, i + CHUNK))
-    const rowsPerChunk = await Promise.all(chunks.map(chunk =>
-      fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('deck_cards')
-        .select(`deck_id, position, cards(${SESSION_CARD_COLUMNS})`)
-        .in('deck_id', chunk)
-        // Deterministic order for paging; per-deck position order is restored below.
-        .order('deck_id').order('card_id').range(f, t) as unknown as
-        PromiseLike<{ data: Record<string, unknown>[] | null; error: unknown }>)))
-    for (const rows of rowsPerChunk) {
-      for (const raw of rows) {
-        const row = raw as unknown as { deck_id: string; position: number; cards: Record<string, unknown> | null }
-        if (!row.cards || row.cards.deleted_at !== null) continue
-        const card = { ...rowToCard(row.cards), position: row.position }
-        const arr = out.get(row.deck_id)
-        if (arr) arr.push(card); else out.set(row.deck_id, [card])
+    return cachedRead(`cards:decks:${idsKey(deckIds)}`, async () => {
+      const CHUNK = 200
+      const chunks: DeckId[][] = []
+      for (let i = 0; i < deckIds.length; i += CHUNK) chunks.push(deckIds.slice(i, i + CHUNK))
+      const rowsPerChunk = await Promise.all(chunks.map(chunk =>
+        fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('deck_cards')
+          .select(`deck_id, position, cards(${SESSION_CARD_COLUMNS})`)
+          .in('deck_id', chunk)
+          // Deterministic order for paging; per-deck position order is restored below.
+          .order('deck_id').order('card_id').range(f, t) as unknown as
+          PromiseLike<{ data: Record<string, unknown>[] | null; error: unknown }>)))
+      for (const rows of rowsPerChunk) {
+        for (const raw of rows) {
+          const row = raw as unknown as { deck_id: string; position: number; cards: Record<string, unknown> | null }
+          if (!row.cards || row.cards.deleted_at !== null) continue
+          const card = { ...rowToCard(row.cards), position: row.position }
+          const arr = out.get(row.deck_id)
+          if (arr) arr.push(card); else out.set(row.deck_id, [card])
+        }
       }
-    }
-    for (const arr of out.values()) arr.sort((a, b) => a.position - b.position)
-    return out
+      for (const arr of out.values()) arr.sort((a, b) => a.position - b.position)
+      return out
+    })
   }
 
   /**
@@ -237,6 +244,7 @@ export class SupabaseCardRepository implements CardRepository {
 
   async bulkCreate(deckId: DeckId, ownerId: UserId, sourceLanguage: string, targetLanguage: string, inputs: CreateCardInput[]): Promise<Card[]> {
     if (inputs.length === 0) return []
+    invalidateReads('cards:')
 
     // Tier 1 (exact, silent) dedup against the user's existing library in
     // this language direction — reuse matches instead of inserting new rows.
@@ -293,18 +301,21 @@ export class SupabaseCardRepository implements CardRepository {
   }
 
   async addToDeck(deckId: DeckId, cardId: CardId, position: number): Promise<void> {
+    invalidateReads('cards:')
     const { error } = await this.db.from('deck_cards')
       .upsert({ deck_id: deckId, card_id: cardId, position }, { onConflict: 'deck_id,card_id', ignoreDuplicates: true })
     if (error) throw new Error(error.message)
   }
 
   async removeFromDeck(deckId: DeckId, cardId: CardId): Promise<void> {
+    invalidateReads('cards:')
     const { error } = await this.db.from('deck_cards')
       .delete().eq('deck_id', deckId).eq('card_id', cardId)
     if (error) throw new Error(error.message)
   }
 
   async update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints' | 'choices' | 'audioGenerated' | 'audioData' | 'audioSource' | 'audioSources' | 'ipa'>>): Promise<Card> {
+    invalidateReads('cards:')
     if (isOfflineActive()) return localUpdateCard(cardId, patch)
     const dbPatch: Record<string, unknown> = {}
     if (patch.front          !== undefined) dbPatch.front           = patch.front
@@ -322,16 +333,19 @@ export class SupabaseCardRepository implements CardRepository {
   }
 
   async softDelete(cardId: CardId): Promise<void> {
+    invalidateReads('cards:')
     const { error } = await this.db.rpc('soft_delete_card', { p_card_id: cardId })
     if (error) throw new Error(error.message)
   }
 
   async undelete(cardId: CardId): Promise<void> {
+    invalidateReads('cards:')
     const { error } = await this.db.from('cards').update({ deleted_at: null }).eq('id', cardId)
     if (error) throw new Error(error.message)
   }
 
   async forkInDeck(deckId: DeckId, cardId: CardId, ownerId: UserId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints'>>): Promise<{ card: Card; forked: boolean }> {
+    invalidateReads('cards:')
     const { count, error: countError } = await this.db.from('deck_cards')
       .select('*', { count: 'exact', head: true })
       .eq('card_id', cardId)

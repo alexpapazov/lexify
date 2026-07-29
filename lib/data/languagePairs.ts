@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { cachedRead, invalidateReads } from '@/lib/readCache'
 import type { LanguagePair, UserId } from '@/domain'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { localLanguagePairs } from '@/lib/offline/localRepos'
@@ -24,14 +25,16 @@ export class SupabaseLanguagePairRepository {
   /** All language pairings for the user, ordered for display. */
   async list(userId: UserId): Promise<LanguagePair[]> {
     if (isOfflineActive()) return localLanguagePairs(userId)
-    const { data, error } = await this.db
-      .from('language_pairs')
-      .select('*')
-      .eq('owner_id', userId)
-      .order('position')
-      .order('created_at')
-    if (error) throw new Error(error.message)
-    return (data ?? []).map(rowToPair)
+    return cachedRead(`pairs:${userId}`, async () => {
+      const { data, error } = await this.db
+        .from('language_pairs')
+        .select('*')
+        .eq('owner_id', userId)
+        .order('position')
+        .order('created_at')
+      if (error) throw new Error(error.message)
+      return (data ?? []).map(rowToPair)
+    })
   }
 
   /**
@@ -40,6 +43,7 @@ export class SupabaseLanguagePairRepository {
    * instead of erroring.
    */
   async create(userId: UserId, sourceLanguage: string, targetLanguage: string, flag?: string): Promise<LanguagePair> {
+    invalidateReads('pairs:')
     // Return the existing pair unchanged if it's already there (never reset its learning mode on re-add).
     const { data: existing } = await this.db.from('language_pairs').select('*')
       .match({ owner_id: userId, source_language: sourceLanguage, target_language: targetLanguage }).maybeSingle()
@@ -62,6 +66,7 @@ export class SupabaseLanguagePairRepository {
 
   /** Update the flag emoji for an existing pairing. */
   async updateFlag(sourceLanguage: string, targetLanguage: string, flag: string): Promise<void> {
+    invalidateReads('pairs:')
     const { error } = await this.db.from('language_pairs').update({ flag })
       .match({ source_language: sourceLanguage, target_language: targetLanguage })
     if (error) throw new Error(error.message)
@@ -69,6 +74,7 @@ export class SupabaseLanguagePairRepository {
 
   /** Update weekly goals for an existing pairing (null clears all goals). */
   async updateGoals(sourceLanguage: string, targetLanguage: string, goals: Record<string, number | null> | null): Promise<void> {
+    invalidateReads('pairs:')
     const { error } = await this.db.from('language_pairs').update({ goals })
       .match({ source_language: sourceLanguage, target_language: targetLanguage })
     if (error) throw new Error(error.message)
@@ -76,6 +82,7 @@ export class SupabaseLanguagePairRepository {
 
   /** Switch a pairing between the linear ladder and a branched pathway. */
   async updateLearningMode(sourceLanguage: string, targetLanguage: string, mode: 'ladder' | 'pathway'): Promise<void> {
+    invalidateReads('pairs:')
     const { error } = await this.db.from('language_pairs').update({ learning_mode: mode })
       .match({ source_language: sourceLanguage, target_language: targetLanguage })
     if (error) throw new Error(error.message)
@@ -83,6 +90,7 @@ export class SupabaseLanguagePairRepository {
 
   /** Update the AI instructions for an existing pairing (null clears them). */
   async updateInstructions(sourceLanguage: string, targetLanguage: string, instructions: string | null): Promise<void> {
+    invalidateReads('pairs:')
     const { error } = await this.db.from('language_pairs').update({ instructions })
       .match({ source_language: sourceLanguage, target_language: targetLanguage })
     if (error) throw new Error(error.message)
@@ -90,6 +98,7 @@ export class SupabaseLanguagePairRepository {
 
   /** Bulk-update positions for reordering the library grid. */
   async updatePositions(updates: Array<{ sourceLanguage: string; targetLanguage: string; position: number }>): Promise<void> {
+    invalidateReads('pairs:')
     await Promise.all(
       updates.map(({ sourceLanguage, targetLanguage, position }) =>
         this.db.from('language_pairs').update({ position })
@@ -104,6 +113,7 @@ export class SupabaseLanguagePairRepository {
    * pairs), soft-deletes its decks, and removes the language_pairs row.
    */
   async deletePair(sourceLanguage: string, targetLanguage: string): Promise<void> {
+    invalidateReads('pairs:')
     const { error } = await this.db.rpc('delete_language_pair', {
       p_source: sourceLanguage,
       p_target: targetLanguage,

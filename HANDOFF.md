@@ -66,9 +66,13 @@ half-done, what to do next" summary for the incoming agent. Everything committed
 - **`#59`** Exact-duplicate cards can still get duplicated on save.
 - **Performance (diagnosed 2026-07-20, partly fixed)** — see the "Performance findings" section in
   CLAUDE.md. The **study dashboard load** was fixed 2026-07-27 (serial chain parallelized, `choices` +
-  other unused blobs dropped from the bulk card read, forecast moved after first paint). Biggest wins
-  remaining: Postgres GROUP BY RPCs for analytics charts; lazy-load off-screen charts; a short-TTL
-  cross-navigation cache. Analytics → Present is still the worst offender and is untouched.
+  other unused blobs dropped from the bulk card read, forecast moved after first paint); **session +
+  ladder start latency** fixed 2026-07-27 (parallel waves, bulk deck reads, audio-blob-free card reads
+  with queued-clip hydration); the **short-TTL cross-navigation cache** shipped 2026-07-28
+  (`lib/readCache.ts` — 60 s repo-level memoization with write-busting; see CLAUDE.md for the
+  invalidation rules before adding repo writes). Biggest wins remaining: Postgres GROUP BY RPCs for
+  analytics charts; lazy-load off-screen charts. Analytics → Present is still the worst offender and
+  is untouched.
 - **On-device sync-back leg unverified** — offline study → reconnect → outbox drain has never been confirmed on
   a real device (the risky data-loss leg). Everything else offline/PWA is device-verified.
 - **Learning Pathways**: engine + config + study + visual editor all built (Phases 0–3 + drag/canvas). NOT

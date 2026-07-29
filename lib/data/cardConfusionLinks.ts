@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { cachedRead, invalidateReads } from '@/lib/readCache'
 import type { CardConfusionLink, ConfusionKind, ConfusionSimilarityTag, UserId, CardId } from '@/domain'
 import { isOfflineActive } from '@/lib/offline/mode'
 
@@ -19,6 +20,7 @@ export class SupabaseCardConfusionLinkRepository {
 
   /** Create a bidirectional confusion link. Normalises order; ignores duplicate (first tags/kind win). */
   async link(userId: UserId, cardIdX: CardId, cardIdY: CardId, kind: ConfusionKind = 'intra', tags: ConfusionSimilarityTag[] = []): Promise<void> {
+    invalidateReads('conflinks:')
     const [a, b] = [cardIdX, cardIdY].sort() as [CardId, CardId]
     const { error } = await this.db
       .from('card_confusion_links')
@@ -32,13 +34,15 @@ export class SupabaseCardConfusionLinkRepository {
   /** Return every confusion link for the user (for interleaving, distractors, the distinguish tool). */
   async listForUser(userId: UserId): Promise<CardConfusionLink[]> {
     if (isOfflineActive()) return []   // confusion interleaving is a best-effort online extra
-    const { data, error } = await this.db
-      .from('card_confusion_links')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-    if (error) throw new Error(error.message)
-    return (data as Record<string, unknown>[]).map(rowToLink)
+    return cachedRead(`conflinks:${userId}`, async () => {
+      const { data, error } = await this.db
+        .from('card_confusion_links')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+      if (error) throw new Error(error.message)
+      return (data as Record<string, unknown>[]).map(rowToLink)
+    })
   }
 
   /** Return all confusion links that involve the given card. */
@@ -54,6 +58,7 @@ export class SupabaseCardConfusionLinkRepository {
   }
 
   async unlink(userId: UserId, cardIdX: CardId, cardIdY: CardId): Promise<void> {
+    invalidateReads('conflinks:')
     const [a, b] = [cardIdX, cardIdY].sort() as [CardId, CardId]
     const { error } = await this.db
       .from('card_confusion_links')

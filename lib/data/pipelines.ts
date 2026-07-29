@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { cachedRead } from '@/lib/readCache'
 import type { Pipeline, PipelineStep, UserId } from '@/domain'
 import type { PipelineRepository } from './interfaces'
 
@@ -25,7 +26,8 @@ export class SupabasePipelineRepository implements PipelineRepository {
   private get db() { return createClient() }
 
   async getDefault(): Promise<Pipeline> {
-    const result = await this.get(DEFAULT_PIPELINE_ID)
+    // The default pipeline is global, effectively static config — safe to serve from the short cache.
+    const result = await cachedRead('pipeline:default', () => this.get(DEFAULT_PIPELINE_ID))
     if (!result) throw new Error('Default pipeline not found — did the migration run?')
     return result
   }

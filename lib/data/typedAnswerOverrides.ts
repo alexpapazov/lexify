@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { cachedRead, invalidateReads } from '@/lib/readCache'
 import type { TypedAnswerOverride, UserId, CardId, CardSide } from '@/domain'
 import type { TypedAnswerOverrideRepository } from './interfaces'
 import { isOfflineActive } from '@/lib/offline/mode'
@@ -18,14 +19,17 @@ export class SupabaseTypedAnswerOverrideRepository implements TypedAnswerOverrid
 
   async listForUser(userId: UserId): Promise<TypedAnswerOverride[]> {
     if (isOfflineActive()) return (await localOverridesForUser()).map(o => ({ ...o, userId }))
-    const { data, error } = await this.db.from('typed_answer_overrides')
-      .select('*')
-      .eq('user_id', userId)
-    if (error) throw new Error(error.message)
-    return (data ?? []).map(rowToOverride)
+    return cachedRead(`overrides:${userId}`, async () => {
+      const { data, error } = await this.db.from('typed_answer_overrides')
+        .select('*')
+        .eq('user_id', userId)
+      if (error) throw new Error(error.message)
+      return (data ?? []).map(rowToOverride)
+    })
   }
 
   async add(userId: UserId, cardId: CardId, answerSide: CardSide, answerText: string): Promise<void> {
+    invalidateReads('overrides:')
     if (isOfflineActive()) return localAddOverride(cardId, answerSide, answerText)
     const { error } = await this.db.from('typed_answer_overrides')
       .upsert(
@@ -36,6 +40,7 @@ export class SupabaseTypedAnswerOverrideRepository implements TypedAnswerOverrid
   }
 
   async remove(userId: UserId, cardId: CardId, answerSide: CardSide, answerText: string): Promise<void> {
+    invalidateReads('overrides:')
     if (isOfflineActive()) return localRemoveOverride(cardId, answerSide, answerText)
     const { error } = await this.db.from('typed_answer_overrides')
       .delete()

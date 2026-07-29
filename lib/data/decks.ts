@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { cachedRead, invalidateReads } from '@/lib/readCache'
 import type { Deck, UserId, DeckId, GradingSettings } from '@/domain'
 import { DEFAULT_GRADING_SETTINGS } from '@/domain'
 import type { DeckRepository, CreateDeckInput } from './interfaces'
@@ -30,10 +31,12 @@ export class SupabaseDeckRepository implements DeckRepository {
 
   async list(userId: UserId): Promise<Deck[]> {
     if (isOfflineActive()) return localDecks()
-    const { data, error } = await this.db.from('decks').select('*')
-      .eq('owner_id', userId).is('deleted_at', null).order('position', { ascending: true })
-    if (error) throw new Error(error.message)
-    return (data ?? []).map(rowToDeck)
+    return cachedRead(`decks:${userId}`, async () => {
+      const { data, error } = await this.db.from('decks').select('*')
+        .eq('owner_id', userId).is('deleted_at', null).order('position', { ascending: true })
+      if (error) throw new Error(error.message)
+      return (data ?? []).map(rowToDeck)
+    })
   }
 
   async listPublic(query?: string): Promise<Deck[]> {
@@ -53,6 +56,7 @@ export class SupabaseDeckRepository implements DeckRepository {
   }
 
   async create(userId: UserId, input: CreateDeckInput): Promise<Deck> {
+    invalidateReads('decks:', 'cards:')
     const { data, error } = await this.db.from('decks').insert({
       owner_id: userId, name: input.name,
       source_language: input.sourceLanguage,
@@ -64,6 +68,7 @@ export class SupabaseDeckRepository implements DeckRepository {
   }
 
   async update(deckId: DeckId, patch: Partial<Pick<Deck, 'name' | 'gradingSettings' | 'pipelineId' | 'isPublic' | 'isPinned' | 'folderId' | 'position' | 'sourceLanguage' | 'targetLanguage'>>): Promise<Deck> {
+    invalidateReads('decks:')
     const update: Record<string, unknown> = {}
     if (patch.name            !== undefined) update.name             = patch.name
     if (patch.gradingSettings !== undefined) update.grading_settings = patch.gradingSettings
@@ -81,6 +86,7 @@ export class SupabaseDeckRepository implements DeckRepository {
 
   /** Bulk-update positions for reordering. */
   async updatePositions(updates: Array<{ id: string; position: number }>): Promise<void> {
+    invalidateReads('decks:')
     await Promise.all(
       updates.map(({ id, position }) =>
         this.db.from('decks').update({ position }).eq('id', id)
@@ -89,11 +95,14 @@ export class SupabaseDeckRepository implements DeckRepository {
   }
 
   async softDelete(deckId: DeckId): Promise<void> {
+    invalidateReads('decks:', 'cards:', 'states:')
     const { error } = await this.db.rpc('soft_delete_deck', { p_deck_id: deckId })
     if (error) throw new Error(error.message)
   }
 
   async resetProgress(deckId: DeckId): Promise<void> {
+    // Clears card_states AND cached choices for the deck's cards (SQL RPC) — bust all three families.
+    invalidateReads('states:', 'cards:', 'climb:')
     const { error } = await this.db.rpc('reset_deck_progress', { p_deck_id: deckId })
     if (error) throw new Error(error.message)
   }

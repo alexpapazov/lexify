@@ -5,6 +5,7 @@ import type { RouteState } from '@/engine/pathwayEngine'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { getLocalStore } from '@/lib/offline/localStore'
 import { localClimbForCards, localSaveClimb, localRemoveClimb } from '@/lib/offline/localRepos'
+import { cachedRead, invalidateReads, idsKey } from '@/lib/readCache'
 
 export class SupabaseLadderClimbRepository {
   private get db() { return createClient() }
@@ -16,15 +17,17 @@ export class SupabaseLadderClimbRepository {
       for (const r of await getLocalStore().allClimb()) out.set(r.cardId, r.state as ClimbState)
       return out
     }
-    const PAGE = 1000
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await this.db.from('ladder_climb')
-        .select('card_id, state').eq('user_id', userId).order('card_id').range(from, from + PAGE - 1)
-      if (error) throw new Error(error.message)
-      for (const r of data ?? []) out.set(r.card_id as string, r.state as ClimbState)
-      if (!data || data.length < PAGE) break
-    }
-    return out
+    return cachedRead(`climb:all:${userId}`, async () => {
+      const PAGE = 1000
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await this.db.from('ladder_climb')
+          .select('card_id, state').eq('user_id', userId).order('card_id').range(from, from + PAGE - 1)
+        if (error) throw new Error(error.message)
+        for (const r of data ?? []) out.set(r.card_id as string, r.state as ClimbState)
+        if (!data || data.length < PAGE) break
+      }
+      return out
+    })
   }
 
   /**
@@ -36,6 +39,7 @@ export class SupabaseLadderClimbRepository {
   async listForCards(userId: UserId, cardIds: CardId[]): Promise<Map<string, ClimbState>> {
     if (isOfflineActive()) return localClimbForCards(cardIds)
     if (cardIds.length === 0) return new Map()
+    return cachedRead(`climb:cards:${userId}:${idsKey(cardIds)}`, async () => {
     const CHUNK = 400, PAGE = 1000
     const out = new Map<string, ClimbState>()
     // Chunks exist to bound the `.in()` query string, not to serialize — run them in parallel.
@@ -56,10 +60,12 @@ export class SupabaseLadderClimbRepository {
     }))
     for (const rows of perChunk) for (const r of rows) out.set(r.card_id, r.state)
     return out
+    })
   }
 
   // `state` is opaque JSON — a ClimbState (ladder) or a RouteState (pathway); the row stores either.
   async save(userId: UserId, cardId: CardId, deckId: DeckId, state: ClimbState | RouteState): Promise<void> {
+    invalidateReads('climb:')
     if (isOfflineActive()) return localSaveClimb(cardId, deckId, state as ClimbState)
     const { error } = await this.db.from('ladder_climb').upsert(
       { user_id: userId, card_id: cardId, deck_id: deckId, state, updated_at: new Date().toISOString() },
@@ -70,6 +76,7 @@ export class SupabaseLadderClimbRepository {
 
   /** Removes a card's climb row so it restarts from the CURRENT ladder config next time. */
   async remove(userId: UserId, cardId: CardId): Promise<void> {
+    invalidateReads('climb:')
     if (isOfflineActive()) return localRemoveClimb(cardId)
     const { error } = await this.db.from('ladder_climb')
       .delete().eq('user_id', userId).eq('card_id', cardId)
