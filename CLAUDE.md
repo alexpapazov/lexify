@@ -2021,11 +2021,25 @@ to `onCardEdit(card.id, answerSide, …)` — the same pre-bound pattern as its 
 falls back to a plain span when no editor is supplied. `LadderStudy`'s `onCardEdit` already handles
 persistence, deletion on empty text, and clearing audio/choices when the front changes.
 
-Note: editing does NOT re-grade the attempt just shown — the answer was already marked wrong. Use
-"Override as correct" for that. Same behavior as TypingMode's inline editor.
+**All three revealed texts are editable**: the big green answer panel (correct case), the smaller
+line showing the card's OTHER side, and "Correct answer: …" (wrong case). `Dictation` takes
+`onAnswerEdit` / `onPromptEdit`, bound at the call site to `onCardEdit(card.id, answerSide|promptSide, …)`.
 
-Still plain text (not editable) on this screen: the line above showing the OTHER side (`card.front` /
-`card.back`). Easy follow-up if wanted — bind a second prop to `onCardEdit(card.id, promptSide, …)`.
+**Deliberately NOT editable: the red panel on a wrong answer.** That shows what the LEARNER typed,
+not a card field — making it editable would write the typo back onto the card.
+
+`EditableAnswerText` gained an optional `className` (default `'font-mono text-ink'`) so it can sit
+inside panels with other type styling — the dictation reveal needs `text-lg text-success` for the
+green answer and a non-mono `text-sm text-ink-muted` for the other-side line. Existing call sites are
+unaffected by the default.
+
+Note: editing does NOT re-grade the attempt just shown. Use "Override as correct" for that. Same
+behavior as TypingMode's inline editor.
+
+**Quoted-literal display bug fixed here too**: the other-side line rendered `card.back` RAW, so a back
+stored as a quoted literal (`"to extract/draw (from)"` — quotes are kept in the DB on purpose to
+suppress comma/slash splitting in grading) leaked its quotes into the reveal. Both sides now go
+through `displayText`, per the convention documented at the top of `lib/cardText.ts`.
 
 ## Known backlog / open issues
 

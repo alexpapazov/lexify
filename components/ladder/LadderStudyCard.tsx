@@ -157,7 +157,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   return <Dictation card={card} rung={rung} deckName={deckName} onOutcome={onOutcome} onInfo={onInfo}
     overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
     onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
-    onAnswerEdit={onCardEdit ? (newText => onCardEdit(card.id, answerSide, newText)) : undefined} />
+    onAnswerEdit={onCardEdit ? (newText => onCardEdit(card.id, answerSide, newText)) : undefined}
+    onPromptEdit={onCardEdit ? (newText => onCardEdit(card.id, promptSide, newText)) : undefined} />
 }
 
 function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
@@ -167,9 +168,11 @@ function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
   )
 }
 
-function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer, onAnswerEdit }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void
+function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer, onAnswerEdit, onPromptEdit }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void
   /** Save an edited answer back to the card (already bound to this rung's answer side). */
-  onAnswerEdit?: (newText: string) => void }) {
+  onAnswerEdit?: (newText: string) => void
+  /** Save an edited OTHER-side text back to the card (already bound to this rung's prompt side). */
+  onPromptEdit?: (newText: string) => void }) {
   // You always HEAR the target word (card.front). Producing the target = type what you hear; producing
   // the native = type its translation (card.back). Audio is unchanged; only the graded side differs.
   const native = producesNative(rung)
@@ -255,8 +258,24 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
         <>
           {/* Correct → show the answer (green). Wrong → show what the LEARNER typed (red), with the
               correct answer spelled out below. */}
-          <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>{isCorrect ? displayText(answerText) : (input || '—')}</div>
-          <p className="text-center text-sm text-ink-muted">{native ? displayText(card.front) : card.back}</p>
+          <div className={`panel text-center font-mono text-lg ${isCorrect ? 'text-success' : 'text-danger'}`}>
+            {isCorrect
+              // Editable only when correct — a wrong answer shows what the LEARNER typed here, which
+              // is not a card field and must never be written back to the card.
+              ? (onAnswerEdit
+                  ? <EditableAnswerText text={displayText(answerText)} onEdit={onAnswerEdit} className="font-mono text-lg text-success" />
+                  : displayText(answerText))
+              : (input || '—')}
+          </div>
+          {/* displayText on BOTH sides: a back stored as a quoted literal — "to extract/draw (from)" —
+              keeps its quotes in the DB on purpose (it suppresses comma/slash splitting in grading),
+              and they must be stripped everywhere the learner sees the text. This branch rendered
+              `card.back` raw, so the quotes leaked into the reveal. */}
+          <p className="text-center text-sm text-ink-muted">
+            {onPromptEdit
+              ? <EditableAnswerText text={displayText(native ? card.front : card.back)} onEdit={onPromptEdit} className="text-sm text-ink-muted" />
+              : displayText(native ? card.front : card.back)}
+          </p>
           {!isCorrect && (
             // Double-click the answer to fix the card in place — same affordance the typing/MCQ rungs
             // already have via TypingMode's EditableAnswerText. The dictation rung renders its result

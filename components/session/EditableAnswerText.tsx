@@ -11,9 +11,13 @@ import { useEffect, useRef, useState } from 'react'
 export function EditableAnswerText({
   text,
   onEdit,
+  className = 'font-mono text-ink',
 }: {
   text:   string
   onEdit: (newText: string) => void
+  /** Type styling for both the resting text and the editor, so the control can sit inside panels
+   *  that aren't the default mono/ink (e.g. the dictation reveal's large green answer). */
+  className?: string
 }) {
   const [editing, setEditing] = useState(false)
   const [value,   setValue]   = useState(text)
@@ -58,7 +62,7 @@ export function EditableAnswerText({
           if (e.key === 'Escape') cancel()
         }}
         onBlur={submit}
-        className="font-mono text-ink bg-transparent border-b border-ink-faint/40 outline-none text-center"
+        className={`${className} bg-transparent border-b border-ink-faint/40 outline-none text-center`}
         style={{ width: `${Math.max(value.length, 4)}ch` }}
       />
     )
@@ -66,7 +70,7 @@ export function EditableAnswerText({
 
   return (
     <span
-      className="font-mono text-ink cursor-default select-none"
+      className={`${className} cursor-default select-none`}
       onDoubleClick={start}
       title="Double-click to edit"
     >
