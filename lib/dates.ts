@@ -1,4 +1,35 @@
 /**
+ * Cached `Intl.DateTimeFormat` instances, keyed by timezone.
+ *
+ * Constructing a formatter is expensive (tens of microseconds) and these run in hot loops — the
+ * analytics Present tab calls `localDateWithTurnover` once per review event, so a 30-day window with
+ * ~14k reviews was building ~30k formatters (hundreds of ms of pure formatting) on every load.
+ * `toLocaleDateString`/`toLocaleString` construct one internally per call too, hence the explicit
+ * `.format()` calls below rather than the terser Date methods.
+ */
+const dateFmtCache = new Map<string, Intl.DateTimeFormat>()
+const hourFmtCache = new Map<string, Intl.DateTimeFormat>()
+
+/** YYYY-MM-DD formatter for a timezone ('en-CA' yields ISO-shaped dates). */
+function dateFmt(tz: string): Intl.DateTimeFormat {
+  let f = dateFmtCache.get(tz)
+  if (!f) { f = new Intl.DateTimeFormat('en-CA', { timeZone: tz }); dateFmtCache.set(tz, f) }
+  return f
+}
+
+/** 0-23 hour formatter for a timezone. */
+function hourFmt(tz: string): Intl.DateTimeFormat {
+  let f = hourFmtCache.get(tz)
+  if (!f) { f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }); hourFmtCache.set(tz, f) }
+  return f
+}
+
+/** Calendar date (YYYY-MM-DD) for an instant in a timezone, via the cached formatter. */
+export function localDate(date: Date, tz: string): string {
+  return dateFmt(tz).format(date)
+}
+
+/**
  * Given any ISO `dueAt` timestamp, returns the ISO timestamp for the START of
  * the logical day it falls in — i.e. `turnoverHour:00:00` in `tz` on the
  * same calendar day (or the previous day if the hour is before `turnoverHour`).
@@ -45,16 +76,15 @@ export function localDateWithTurnover(isoTs: string, tz: string, turnoverHour: n
   // Read the wall-clock hour + calendar date in `tz` via Intl (NOT `new Date(toLocaleString(...))`,
   // which Safari/WKWebView — the iOS app — parses unreliably, mis-bucketing graduations by a day so
   // "today's goals" never register as done). Mirrors getToday exactly, so both stay consistent.
-  const localHour = parseInt(
-    new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(date),
-    10,
-  ) % 24
-  if (turnoverHour > 0 && localHour < turnoverHour) {
+  // Fast path: with no turnover the hour is irrelevant, so skip the hour formatter entirely.
+  if (turnoverHour <= 0) return localDate(date, tz)
+  const localHour = parseInt(hourFmt(tz).format(date), 10) % 24
+  if (localHour < turnoverHour) {
     // Before turnover → count as the previous calendar day. Shift the timestamp 24h and re-format in tz
     // (handles month/year/DST boundaries), exactly as getToday does.
-    return new Date(date.getTime() - 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone: tz })
+    return localDate(new Date(date.getTime() - 24 * 60 * 60 * 1000), tz)
   }
-  return date.toLocaleDateString('en-CA', { timeZone: tz })
+  return localDate(date, tz)
 }
 
 /**
@@ -69,16 +99,12 @@ export function getToday(tz = 'UTC', turnoverHour = 0): string {
   const now = new Date()
   if (turnoverHour > 0) {
     // Get the current hour in the user's timezone (en-US h23 gives 0-23)
-    const localHour = parseInt(
-      new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(now),
-      10
-    ) % 24  // guard against locale returning "24" for midnight
+    const localHour = parseInt(hourFmt(tz).format(now), 10) % 24  // guard against "24" for midnight
     if (localHour < turnoverHour) {
       // It's before the turnover — treat as the previous calendar day
-      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      return yesterday.toLocaleDateString('en-CA', { timeZone: tz })
+      return localDate(new Date(now.getTime() - 24 * 60 * 60 * 1000), tz)
     }
   }
   if (tz === 'UTC') return now.toISOString().slice(0, 10)
-  return now.toLocaleDateString('en-CA', { timeZone: tz })
+  return localDate(now, tz)
 }

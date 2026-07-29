@@ -2064,6 +2064,52 @@ forward. The cap is a CEILING only: a surplus still lowers the goal below base. 
 report what actually landed (+12 against a base of 8, not the raw +25), matching the existing
 "never claim a credit that couldn't fit" behavior.
 
+## Analytics Present + Future load (2026-07-28)
+
+Both tabs were slow for different reasons; all fixed without a migration.
+
+**Present — the same windows were fetched three times.** `PresentSnapshot`, `AccuracyTrend` and
+`LearningEfficiency` each independently pulled the SAME 30-day `review_events` (plus `ladder_events`
+and graduations, and `profiles` three ways). `fetchAllRows` pages sequentially, so ~14k reviews meant
+~14 serial round trips PER component — and because the two charts render inside PresentSnapshot's
+`if (!data)` gate they don't even mount until its chain resolves, so those fetches were serial with
+each other, not concurrent. New **`lib/analyticsData.ts`** routes all of them through `cachedRead`:
+identical requests now collapse to one (in-flight de-dupe covers the same-tick mount, the 60s TTL
+covers tab switches). Two invariants to preserve there:
+- `windowStartIso` floors to **UTC midnight**. The old per-component `Date.now() - N*DAY` produced a
+  different ISO string in each caller (milliseconds apart), so cache keys would never match.
+- The column lists are the **UNION** of all three consumers' needs. Trimming one to suit a single
+  component silently breaks the others, which read fields off the shared rows.
+
+**Present — per-deck fan-out shipping audio blobs.** Its loop ran ~4 requests per deck in 3 dependent
+waves, via `cardRepo.listByDeck` → `cards(*)`, which includes `audio_data`/`audio_sources`. It was
+shipping the whole library's base64 MP3s to render a card list and five counters. Now four cached
+bulk reads (`listAllForUser` + `listAllForUser` states + `listAllForUser` climb + `deckIdsByCard`)
+grouped client-side. Also fixed there: `states.some(...)` inside the per-graduated-card loop
+(O(cards × states)) is now a prebuilt reverse-row Map, and `isDue` formats through one hoisted
+formatter. `fetchAnalyticsProfile` is hardened with the core-columns fallback, which closes the
+PresentSnapshot half of the long-standing not-yet-migrated-profile-column landmine.
+
+**Future — the Monte Carlo pinned the main thread.** `DueForecastProjection` runs K FSRS trajectories
+per track per graduated card (millions of iterations) synchronously in the same tick the fetch
+resolved, so the tab froze rather than showing "Building projection…". Now `await setTimeout(0)`
+before the simulation (same treatment the study dashboard's forecast already had). Both Future
+components also swapped their per-deck `listByDeck` fan-out for one cached `listAllForUser` +
+`deckIdsByCard`, regrouped per deck so the downstream logic is untouched.
+
+**`lib/dates.ts` caches its `Intl.DateTimeFormat` instances** (keyed by timezone) instead of building
+one per call. `localDateWithTurnover` runs once per review event, so a 30-day window was constructing
+~30k formatters — hundreds of ms of pure formatting. New `localDate(date, tz)` export is the cached
+path for callers that were reaching for `toLocaleDateString` in a loop. `localDateWithTurnover` also
+short-circuits the hour lookup entirely when `turnoverHour <= 0`.
+
+**`cardRepo.listByDeck` is now cached too** — it was the only read in `lib/data/cards.ts` without it.
+It remains the only card read that ships the audio blobs, which is intentional for callers that need
+audio; it is the WRONG method for whole-library work (use `listForDecks` or `listAllForUser`).
+
+Still open: Postgres GROUP BY RPCs would replace the paged row shipping entirely (~30 chart points
+instead of ~14k rows), and off-screen charts still fetch eagerly rather than on scroll.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

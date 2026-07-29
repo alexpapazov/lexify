@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
@@ -132,12 +133,32 @@ export function DueForecastProjection() {
         const seedD = seedDifficulty
 
         const stateRepo = new SupabaseCardStateRepository()
-        const deckStates = await Promise.all(decks.map(d => stateRepo.listByDeck(uid, d.id)))
+        // ONE cached paged read for the whole library instead of a per-deck fan-out (each of which
+        // was itself 2 serial round trips). Grouped back per deck so the logic below is untouched.
+        const [allStates, deckIdByCard] = await Promise.all([
+          stateRepo.listAllForUser(uid),
+          new SupabaseCardRepository().deckIdsByCard(decks.map(d => d.id)),
+        ])
+        const statesByDeck = new Map<string, typeof allStates>()
+        for (const s of allStates) {
+          const dId = deckIdByCard.get(s.cardId)
+          if (!dId) continue
+          const arr = statesByDeck.get(dId)
+          if (arr) arr.push(s); else statesByDeck.set(dId, [s])
+        }
+        const deckStates = decks.map(d => statesByDeck.get(d.id) ?? [])
 
         // Per-run total-load accumulators (K realizations) → the p10–p90 confidence band, kept PER
         // PAIR so each language filter gets its own band (the all-languages band sums them per run).
         // Each card contributes its run-k sample to system-run k; independent RNG streams make run k a
         // valid i.i.d. draw. Scale K down on large libraries to bound compute.
+        // Yield before the Monte Carlo. Everything below is synchronous FSRS simulation — K runs per
+        // track per graduated card, easily millions of iterations — and with no yield it ran in the
+        // same tick as the fetch resolution, pinning the main thread so the tab froze rather than
+        // showing "Building projection…". (The study dashboard's forecast already does this.)
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        if (cancelled) return
+
         const gradedRows = deckStates.reduce((n, ss) => n + ss.reduce((m, s) => m + (s.graduated ? 1 : 0), 0), 0)
         const K = gradedRows > 1500 ? 24 : gradedRows > 600 ? 40 : RUNS
         const runsByPair = new Map<string, Float64Array[]>()

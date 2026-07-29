@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 
@@ -49,7 +50,20 @@ export function VocabGrowthProjection() {
           new SupabaseLanguagePairRepository().list(uid),
         ])
         const stateRepo = new SupabaseCardStateRepository()
-        const deckStates = await Promise.all(decks.map(d => stateRepo.listByDeck(uid, d.id)))
+        // ONE cached paged read for the whole library instead of a per-deck fan-out (each of which
+        // was itself 2 serial round trips). Grouped back per deck so the logic below is untouched.
+        const [allStates, deckIdByCard] = await Promise.all([
+          stateRepo.listAllForUser(uid),
+          new SupabaseCardRepository().deckIdsByCard(decks.map(d => d.id)),
+        ])
+        const statesByDeck = new Map<string, typeof allStates>()
+        for (const s of allStates) {
+          const dId = deckIdByCard.get(s.cardId)
+          if (!dId) continue
+          const arr = statesByDeck.get(dId)
+          if (arr) arr.push(s); else statesByDeck.set(dId, [s])
+        }
+        const deckStates = decks.map(d => statesByDeck.get(d.id) ?? [])
 
         // Learned-now per source language = distinct graduated forward cards (dedupe shared cards).
         const gradByLang = new Map<string, Set<string>>()

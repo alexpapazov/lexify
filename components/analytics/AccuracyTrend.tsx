@@ -17,6 +17,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
+import { fetchAnalyticsProfile, fetchReviewEventsWindow } from '@/lib/analyticsData'
 import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { localDateWithTurnover } from '@/lib/dates'
@@ -74,17 +75,14 @@ export function AccuracyTrend() {
         if (!session) { setError('Not signed in'); return }
         const uid = session.user.id
 
-        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, language_colors').eq('user_id', uid).single()
+        const profile = await fetchAnalyticsProfile(uid)
         const tz = (profile?.timezone as string | null) ?? deviceTimeZone()
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
         if (!cancelled) setLangColors((profile?.language_colors as Record<string, string> | null) ?? {})
 
-        const since = new Date(Date.now() - rangeDays * DAY_MS).toISOString()
-        // Paged: a month of reviews is far past Supabase's 1000-row cap, which `.limit()` won't lift.
-        const rows = await fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('review_events')
-          .select('reviewed_at, was_correct, near_miss, near_miss_weight, source_language, review_direction, was_typed')
-          .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', since)
-          .order('reviewed_at', { ascending: false }).range(f, t))
+        // Shared with PresentSnapshot + LearningEfficiency (same window, same filter) — one paged
+        // fetch instead of three. Still paged internally; see lib/analyticsData.ts.
+        const rows = await fetchReviewEventsWindow(uid, rangeDays)
 
         const out: Sample[] = []
         for (const e of rows) {

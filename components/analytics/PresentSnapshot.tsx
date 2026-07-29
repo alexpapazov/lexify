@@ -10,6 +10,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
+import { fetchAnalyticsProfile, fetchGraduationsWindow, fetchLadderEventsWindow, fetchReviewEventsWindow, fetchGraduationsSince } from '@/lib/analyticsData'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabasePaged'
@@ -18,9 +19,10 @@ import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
+import type { ClimbState } from '@/engine/ladderEngine'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
-import { getToday, localDateWithTurnover } from '@/lib/dates'
+import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
@@ -136,7 +138,15 @@ export function PresentSnapshot() {
         if (!session) { setError('Not signed in'); return }
         const uid = session.user.id
 
-        const { data: profile } = await supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).single()
+        // Shared + hardened (core-columns fallback) and cached, so the two charts below reuse it
+        // instead of each issuing their own profiles read. Fired alongside the window queries — none
+        // of them need anything but the user id, and they used to run as separate serial stages.
+        const windowRowsP = Promise.all([
+          fetchGraduationsWindow(uid, WINDOW_DAYS),
+          fetchLadderEventsWindow(uid, WINDOW_DAYS),
+          fetchReviewEventsWindow(uid, WINDOW_DAYS),
+        ])
+        const profile = await fetchAnalyticsProfile(uid)
         const tz = (profile?.timezone as string | null) ?? deviceTimeZone()
         const turnover = (profile?.day_turnover_hour as number | null) ?? 0
         const carryShortfall = (profile?.goal_carry_shortfall as boolean | null) ?? false
@@ -175,7 +185,9 @@ export function PresentSnapshot() {
           const k = paceKey(src, tgt, dir, typed)
           dueBuckets.set(k, (dueBuckets.get(k) ?? 0) + 1)
         }
-        const isDue = (dateStr: string | null | undefined) => !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= today
+        // `tz`/`today` are loop-invariant, so format through ONE cached formatter — this used to
+        // build a fresh Intl.DateTimeFormat per call, several times per graduated card.
+        const isDue = (dateStr: string | null | undefined) => !!dateStr && localDate(new Date(dateStr), tz) <= today
 
         // Per-deck cards + states + climb → status buckets.
         const cardRepo = new SupabaseCardRepository()
@@ -183,9 +195,32 @@ export function PresentSnapshot() {
         const climbRepo = new SupabaseLadderClimbRepository()
         const lists: Record<Category, CardEntry[]> = { new: [], learning: [], graduated: [], due: [], dormant: [] }
 
-        await Promise.all(decks.map(async (deck: Deck) => {
-          const [cards, states] = await Promise.all([cardRepo.listByDeck(deck.id), stateRepo.listByDeck(uid, deck.id)])
-          const climb = await climbRepo.listForCards(uid, cards.map(c => c.id)).catch(() => new Map())
+        // Whole library in FOUR cached queries instead of ~4 requests PER DECK in 3 dependent waves.
+        // These also drop the audio blobs: the old per-deck `listByDeck` selects `cards(*)`, which
+        // includes the base64 MP3s — megabytes shipped to render a card list and five counters.
+        const [allCards, allStates, allClimb, deckIdByCard] = await Promise.all([
+          cardRepo.listAllForUser(uid),
+          stateRepo.listAllForUser(uid),
+          climbRepo.listAllForUser(uid).catch((): Map<string, ClimbState> => new Map()),
+          cardRepo.deckIdsByCard(decks.map((d: Deck) => d.id)),
+        ])
+        const cardsByDeck = new Map<string, Card[]>()
+        for (const c of allCards) {
+          const dId = deckIdByCard.get(c.id)
+          if (!dId) continue
+          const arr = cardsByDeck.get(dId)
+          if (arr) arr.push(c); else cardsByDeck.set(dId, [c])
+        }
+        const statesByCard = new Map<string, typeof allStates>()
+        for (const s of allStates) {
+          const arr = statesByCard.get(s.cardId)
+          if (arr) arr.push(s); else statesByCard.set(s.cardId, [s])
+        }
+
+        decks.forEach((deck: Deck) => {
+          const cards = cardsByDeck.get(deck.id) ?? []
+          const states = cards.flatMap(c => statesByCard.get(c.id) ?? [])
+          const climb = allClimb
           const fwd = states.filter(s => s.reviewDirection !== 'reverse')
           const stateMap = new Map(fwd.map(s => [s.cardId, s]))
           const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
@@ -195,6 +230,9 @@ export function PresentSnapshot() {
           const recallDue = (s: typeof states[number]) => !s.dormant && trackEnabled(en, 'recall', false) && isDue(s.recallDueAt)
           const reverseDue = (r: typeof states[number]) => trackEnabled(en, 'recall', true) && stateMap.get(r.cardId)?.graduated === true
             && !stateMap.get(r.cardId)?.dormant && !r.dormant && isDue(r.recallDueAt ?? r.dueAt)
+          // Indexed once — this was a full `states.some(...)` scan per graduated card (O(cards x states)).
+          const reverseByCard = new Map<string, typeof states[number]>()
+          for (const r of states) if (r.reviewDirection === 'reverse') reverseByCard.set(r.cardId, r)
           const entry = (card: Card): CardEntry => ({ card, deckId: deck.id, deckName: deck.name, source: deck.sourceLanguage, target: deck.targetLanguage })
           for (const card of cards) {
             const s = stateMap.get(card.id)
@@ -203,7 +241,8 @@ export function PresentSnapshot() {
             if (s?.graduated) {
               lists.graduated.push(entry(card))
               const fwdProd = prodDue(s), fwdRecall = recallDue(s)
-              const revDue = states.some(r => r.cardId === card.id && r.reviewDirection === 'reverse' && reverseDue(r))
+              const revRow = reverseByCard.get(card.id)
+              const revDue = !!revRow && reverseDue(revRow)
               // One forward review at most (production outranks recall in dedupeDueReviews); reverse is
               // its own review. Presentation decides pace: production may be typed, recall/reverse never.
               if (fwdProd) {
@@ -220,7 +259,7 @@ export function PresentSnapshot() {
             if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) lists.learning.push(entry(card))
             else lists.new.push(entry(card))
           }
-        }))
+        })
         const counts = { new: lists.new.length, learning: lists.learning.length, graduated: lists.graduated.length, due: lists.due.length, dormant: lists.dormant.length }
 
         // ── Today's goals + how many new words graduated today (per pair) ──
@@ -229,21 +268,7 @@ export function PresentSnapshot() {
         // client-side `.limit()` does NOT lift — it just truncates. The graduations query is the worst
         // offender: at a 50-word daily goal it's ~1500 rows, and without an explicit order the cap
         // would drop an arbitrary subset, so today's graduations could vanish from goal progress.
-        const [gradRows, ladderRows, dueRows] = await Promise.all([
-          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('card_states')
-            .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
-            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse')
-            .not('graduated_at', 'is', null).gte('graduated_at', sinceWindow)
-            .order('graduated_at', { ascending: false }).range(f, t)),
-          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('ladder_events')
-            .select('created_at, duration_ms, source_language, target_language')
-            .eq('user_id', uid).gte('created_at', sinceWindow)
-            .order('created_at', { ascending: false }).range(f, t)),
-          fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('review_events')
-            .select('reviewed_at, response_ms, source_language, target_language, review_direction, was_typed')
-            .eq('user_id', uid).eq('review_mode', 'due').gte('reviewed_at', sinceWindow)
-            .order('reviewed_at', { ascending: false }).range(f, t)),
-        ])
+        const [gradRows, ladderRows, dueRows] = await windowRowsP
 
         const gradToday = new Map<string, number>()
         const gradYesterday = new Map<string, number>()   // for goal carryover
@@ -268,11 +293,7 @@ export function PresentSnapshot() {
         const exemptDayGrads = new Map<string, number>()   // `${key}|${day}` for waived days only
         if (fullDebtOn && fullDebtSince) {
           const lower = new Date(new Date(fullDebtSince + 'T00:00:00Z').getTime() - 48 * DAY_MS).toISOString()
-          const rows = await fetchAllRows<Record<string, unknown>>((f, t) => supabase.from('card_states')
-            .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
-            .eq('user_id', uid).eq('graduated', true).neq('review_direction', 'reverse')
-            .not('graduated_at', 'is', null).gte('graduated_at', lower)
-            .order('graduated_at', { ascending: true }).range(f, t))
+          const rows = await fetchGraduationsSince(uid, lower)
           for (const row of rows) {
             const r = row as unknown as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
             if (!r.graduated_at || !r.cards) continue

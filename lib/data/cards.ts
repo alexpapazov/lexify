@@ -184,18 +184,26 @@ export class SupabaseCardRepository implements CardRepository {
     return out
   }
 
+  /**
+   * Full single-deck read, `cards(*)` — the ONLY read here that still ships `audio_data` /
+   * `audio_sources`. That's intentional for callers that genuinely need a card's audio, but it makes
+   * this the wrong method for whole-library work: prefer `listForDecks` (session columns) or
+   * `listAllForUser` (bulk columns), both of which exclude the blobs.
+   */
   async listByDeck(deckId: DeckId): Promise<Card[]> {
     if (isOfflineActive()) return localCardsByDeck(deckId)
-    const { data, error } = await this.db.from('deck_cards')
-      .select('position, cards(*)')
-      .eq('deck_id', deckId)
-      .order('position')
-    if (error) throw new Error(error.message)
+    return cachedRead(`cards:deck:${deckId}`, async () => {
+      const { data, error } = await this.db.from('deck_cards')
+        .select('position, cards(*)')
+        .eq('deck_id', deckId)
+        .order('position')
+      if (error) throw new Error(error.message)
 
-    return (data ?? [])
-      .map(row => row as unknown as { position: number; cards: Record<string, unknown> | null })
-      .filter(row => row.cards && row.cards.deleted_at === null)
-      .map(row => ({ ...rowToCard(row.cards!), position: row.position }))
+      return (data ?? [])
+        .map(row => row as unknown as { position: number; cards: Record<string, unknown> | null })
+        .filter(row => row.cards && row.cards.deleted_at === null)
+        .map(row => ({ ...rowToCard(row.cards!), position: row.position }))
+    })
   }
 
   async get(cardId: CardId): Promise<Card | null> {
