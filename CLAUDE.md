@@ -2041,6 +2041,29 @@ stored as a quoted literal (`"to extract/draw (from)"` — quotes are kept in th
 suppress comma/slash splitting in grading) leaked its quotes into the reveal. Both sides now go
 through `displayText`, per the convention documented at the top of `lib/cardText.ts`.
 
+## Daily goals capped at 2.5x the configured goal (2026-07-28)
+
+Full-debt carryover could pile an unclearable target onto one day (an 8/day Bulgarian pair showing
+**33**). `lib/goalCarryover.ts` now clamps every carryover-adjusted goal to
+**`MAX_GOAL_MULTIPLE = 2.5` × that day's CONFIGURED goal** via `capGoal(goal, baseGoal)`, applied
+inside BOTH `carriedGoal` and `fullDebtGoal` — so all four consumers (study dashboard,
+`PresentSnapshot`, `ReviewCalendar`, and the ladder's stop-at-goal intake cap) get it for free.
+
+**The overflow is deferred, not forgiven — and that falls out of the existing model for free.** Debt
+is derived from history, not stored: `plannedGoalSum` sums the CONFIGURED goals and the deficit is
+recomputed as `grads - planned` every day. Capping only the DISPLAYED goal therefore leaves the
+withheld amount in the running deficit, where it reappears tomorrow and is capped again. An 8/day
+pair owing 25 drains **20 → 20 → 9 → 8** (unit-tested, including that the totals reconcile).
+
+**Do NOT cap `plannedGoalSum`.** Capping the planned side too would delete the debt instead of
+deferring it, and the cascade above would collapse to a single capped day.
+
+Details: floors rather than rounds, so a base of 5 caps at 12 (not 13) and the result is never
+strictly above the multiple. A rest day (base 0) caps at 0 — it stays a rest day and pushes its share
+forward. The cap is a CEILING only: a surplus still lowers the goal below base. `delta` continues to
+report what actually landed (+12 against a base of 8, not the raw +25), matching the existing
+"never claim a credit that couldn't fit" behavior.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

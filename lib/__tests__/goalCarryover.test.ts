@@ -1,4 +1,4 @@
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '../goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, capGoal, MAX_GOAL_MULTIPLE } from '../goalCarryover'
 
 const base = { baseGoal: 20, yesterdayGoal: 20, yesterdayCount: 20, carryShortfall: false, carrySurplus: false }
 
@@ -156,5 +156,68 @@ describe('fullDebtExemptionAdjustment', () => {
     const adj = fullDebtExemptionAdjustment({ ...base, skipShortfallDays: ['2026-07-22'], gradsForDay: () => 4 })
     expect(fullDebtGoal({ baseGoal: 10, plannedThroughYesterday: 100, gradsThroughYesterday: 94 }).goal).toBe(16)
     expect(fullDebtGoal({ baseGoal: 10, plannedThroughYesterday: 100, gradsThroughYesterday: 94, exemptionAdjustment: adj }).goal).toBe(10)
+  })
+})
+
+describe('capGoal — a day can never exceed 2.5x its configured goal', () => {
+  it('caps at floor(base * 2.5) and leaves smaller goals alone', () => {
+    expect(MAX_GOAL_MULTIPLE).toBe(2.5)
+    expect(capGoal(33, 8)).toBe(20)   // the reported case: 8/day pair showing 33
+    expect(capGoal(20, 8)).toBe(20)   // exactly at the ceiling
+    expect(capGoal(12, 8)).toBe(12)   // under the ceiling — untouched
+    expect(capGoal(0, 8)).toBe(0)
+  })
+
+  it('floors rather than rounds, so it never lands strictly above the multiple', () => {
+    expect(capGoal(99, 5)).toBe(12)   // 5 * 2.5 = 12.5 -> 12, not 13
+    expect(capGoal(99, 3)).toBe(7)    // 3 * 2.5 = 7.5  -> 7
+  })
+
+  it('a rest day (base 0) stays 0 — its share of the debt rolls forward', () => {
+    expect(capGoal(40, 0)).toBe(0)
+  })
+
+  it('applies to both carryover modes', () => {
+    expect(fullDebtGoal({ baseGoal: 8, plannedThroughYesterday: 25, gradsThroughYesterday: 0 }).goal).toBe(20)
+    expect(carriedGoal({ baseGoal: 8, yesterdayGoal: 40, yesterdayCount: 0, carryShortfall: true, carrySurplus: false }).goal).toBe(20)
+  })
+
+  it('reports the delta that actually landed, not the raw debt', () => {
+    // 25 owed on top of a base of 8 would be +25; only +12 fits under the cap.
+    expect(fullDebtGoal({ baseGoal: 8, plannedThroughYesterday: 25, gradsThroughYesterday: 0 }).delta).toBe(12)
+  })
+
+  it('a surplus still lowers the goal (the cap is a ceiling only)', () => {
+    expect(carriedGoal({ baseGoal: 8, yesterdayGoal: 8, yesterdayCount: 14, carryShortfall: false, carrySurplus: true }).goal).toBe(2)
+  })
+})
+
+describe('capped debt DRAINS across days rather than being forgiven', () => {
+  it('an 8/day pair owing 25 runs 20 -> 20 -> 9 -> 8', () => {
+    const baseGoal = 8
+    // Stateless model: debt is (grads - planned) recomputed from history each day.
+    let planned = 25, grads = 0          // 25 owed, nothing done
+    const shown: number[] = []
+    for (let day = 0; day < 5; day++) {
+      const goal = fullDebtGoal({ baseGoal, plannedThroughYesterday: planned, gradsThroughYesterday: grads }).goal
+      shown.push(goal)
+      // The learner completes exactly the shown goal; history grows by the CONFIGURED base, which is
+      // what keeps the withheld remainder owed.
+      grads   += goal
+      planned += baseGoal
+    }
+    expect(shown).toEqual([20, 20, 9, 8, 8])
+  })
+
+  it('the withheld amount is deferred, not deleted (totals reconcile)', () => {
+    const baseGoal = 8
+    let planned = 25, grads = 0
+    let done = 0
+    for (let day = 0; day < 4; day++) {
+      const goal = fullDebtGoal({ baseGoal, plannedThroughYesterday: planned, gradsThroughYesterday: grads }).goal
+      done += goal; grads += goal; planned += baseGoal
+    }
+    // 25 backlog + 4 days x 8 = 57 owed over the window; all of it eventually assigned.
+    expect(done).toBe(57)
   })
 })

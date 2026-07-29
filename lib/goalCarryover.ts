@@ -17,6 +17,28 @@ export function isAutoGraduated(acceleratedMode: string | null | undefined): boo
   return acceleratedMode != null && acceleratedMode !== 'none'
 }
 
+/**
+ * A day's goal can never exceed this multiple of that day's CONFIGURED goal, however much carryover
+ * debt has piled up — an 8/day pair tops out at 20, not 33. Carryover is meant to keep you honest,
+ * not to hand you an unclearable wall.
+ *
+ * The excess is NOT forgiven. Debt is derived from history (`plannedGoalSum` sums the CONFIGURED
+ * goals, never the capped ones), so whatever the cap withholds is still owed and simply reappears in
+ * tomorrow's total — where it is capped again. An 8/day pair carrying 25 owed therefore drains
+ * 20 → 20 → 9 → 8, exactly as if the overflow had been queued forward. Do NOT "fix" this by capping
+ * `plannedGoalSum` too; that would delete the debt instead of deferring it.
+ */
+export const MAX_GOAL_MULTIPLE = 2.5
+
+/**
+ * Clamps a carryover-adjusted goal to `MAX_GOAL_MULTIPLE ×` the base. Floors, so the result is never
+ * strictly above the multiple (a base of 5 caps at 12, not 13). A base of 0 (rest day) caps at 0 —
+ * a rest day stays a rest day and pushes its share of the debt forward.
+ */
+export function capGoal(goal: number, baseGoal: number): number {
+  return Math.min(goal, Math.max(0, Math.floor(Math.max(0, baseGoal) * MAX_GOAL_MULTIPLE)))
+}
+
 export type GoalCarryover = {
   /** The goal to show and measure against today. Never negative. */
   goal: number
@@ -45,8 +67,9 @@ export function carriedGoal(args: {
   if (diff < 0 && carryShortfall) delta = -diff      // owed: raise today's goal
   else if (diff > 0 && carrySurplus) delta = -diff   // credit: lower today's goal
 
-  // Floor at 0 — a big surplus can fully cover today, but the goal can't go negative.
-  const goal = Math.max(0, baseGoal + delta)
+  // Floor at 0 — a big surplus can fully cover today, but the goal can't go negative — and ceiling
+  // at MAX_GOAL_MULTIPLE × base so a big shortfall can't produce an unclearable day.
+  const goal = capGoal(Math.max(0, baseGoal + delta), baseGoal)
   // Report the delta actually applied, not the raw one, so the UI never claims a -50 credit
   // against a goal of 20 when only -20 of it could land.
   return { goal, delta: goal - baseGoal }
@@ -105,7 +128,9 @@ export function fullDebtGoal(args: {
   exemptionAdjustment?: number
 }): GoalCarryover {
   const net  = args.gradsThroughYesterday - args.plannedThroughYesterday + (args.exemptionAdjustment ?? 0)
-  const goal = Math.max(0, args.baseGoal - net)
+  // Capped at MAX_GOAL_MULTIPLE × base. The withheld remainder stays in the running deficit (this
+  // function is stateless — `net` is recomputed from history each day), so it rolls to tomorrow.
+  const goal = capGoal(Math.max(0, args.baseGoal - net), args.baseGoal)
   return { goal, delta: goal - args.baseGoal }
 }
 
