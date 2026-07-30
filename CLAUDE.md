@@ -2110,6 +2110,33 @@ audio; it is the WRONG method for whole-library work (use `listForDecks` or `lis
 Still open: Postgres GROUP BY RPCs would replace the paged row shipping entirely (~30 chart points
 instead of ~14k rows), and off-screen charts still fetch eagerly rather than on scroll.
 
+## AuthWall: the small "Loading…" that could hang forever (2026-07-28)
+
+The FIRST loader on every page — small/faint, `components/AuthWall.tsx` — gates the whole app. Three
+defects, all fixed:
+
+1. **It could hang indefinitely.** `check()` awaited a `profiles` query with **no `.catch()`
+   anywhere**: `getSession().then(check)` was a floating promise, so any rejection meant `setStatus`
+   never ran and the gate sat on "Loading…" forever with no error and no recovery. Both the
+   `getSession()` chain and the profile lookup are now guarded, and `setStatus('authed')` runs
+   whenever a session exists regardless of what the profile lookup did.
+2. **It cost a second blocking round trip on EVERY load.** `getSession()` may itself refresh an
+   expired token (network), and the onboarding lookup ran serially after it. `onboarding_completed`
+   is a **one-way** flag, so it's now memoized per user in `localStorage`
+   (`lexify-onboarded:<uid>`) and the query is skipped entirely on every subsequent load. Only `true`
+   is ever cached — a user mid-setup must keep being redirected.
+3. **It queried twice on mount.** `onAuthStateChange` fires `INITIAL_SESSION` on subscribe, so
+   `check()` ran once from `getSession()` and once from the subscription. The lookup now goes through
+   `cachedRead`, whose in-flight de-dupe collapses them.
+
+Also: `single()` → `maybeSingle()` (a user with no profiles row yet is normal, not an error), and an
+absent/unknown flag is treated as onboarded — never trap someone outside the app on bad data.
+
+**If you add another place that completes onboarding, call `markOnboardingComplete(uid)`** (exported
+from `AuthWall`). It writes the localStorage memo AND invalidates the cached read; without it the
+gate keeps serving its cached "not onboarded" answer for up to 60s and bounces the user straight back
+into setup. Both call sites in `app/onboarding/page.tsx` do this.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead

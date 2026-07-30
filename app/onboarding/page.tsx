@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { markOnboardingComplete } from '@/components/AuthWall'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
@@ -72,7 +73,10 @@ export default function OnboardingPage() {
     try {
       const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
-      if (session) await supabase.from('profiles').update({ onboarding_completed: true }).eq('user_id', session.user.id)
+      if (session) {
+        await supabase.from('profiles').update({ onboarding_completed: true }).eq('user_id', session.user.id)
+        markOnboardingComplete(session.user.id)   // else AuthWall's cached answer bounces us back here
+      }
       // Hard navigation so AuthWall re-reads the (now-completed) onboarding flag.
       window.location.href = '/study'
     } catch { setApplying(false) }
@@ -126,6 +130,7 @@ export default function OnboardingPage() {
 
       try { localStorage.setItem('lexify-theme', theme) } catch { /* ignore */ }
       await supabase.from('profiles').update({ onboarding_completed: true }).eq('user_id', uid)
+      markOnboardingComplete(uid)   // else AuthWall's cached answer bounces us back here
 
       // Kick off the guided tour on the next page (persists across the reload).
       startTour()
