@@ -42,6 +42,12 @@ Current feature files:
 - `features/Vocabulary Onboarding.md` — bulk intake of words you already know:
   AI accuracy check, front-only duplicate drop, four confidence bands mapped to
   FSRS difficulty/stability + spread due dates, resumable queue (migration 107).
+- `features/Batch Deck Import.md` — Word document → folders + decks, NO AI. Heading
+  structure becomes the tree; decks saved one at a time through the normal
+  duplicate check. Parser (zip + WordprocessingML + outline) in `lib/docx.ts`.
+- `features/Card Connection Agent (proposal).md` — PINNED, not built. Contains the
+  synonym/confusion infrastructure audit — including a real `addMember` merge bug
+  worth fixing independently of the agent.
 
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
@@ -2234,6 +2240,42 @@ the route directly with a big input truncates without an error.
 New shared helper `lib/mapLimit.ts` (bounded-concurrency map + `chunk`); `lib/offline/download.ts`'s
 private copy was removed in favour of it. `buildFolderOptions` moved out of `app/create/page.tsx` into
 `lib/folderOptions.ts` so the preview and onboarding destination pickers share it.
+
+## Batch deck import — Word doc → folders + decks (2026-07-30, no migration)
+
+Create now has a **"Single deck / Batch of decks"** toggle at the very top. Batch mode reads a `.docx`
+locally and builds the folder/deck tree its headings describe, then saves the decks ONE AT A TIME
+through the normal two-step duplicate check. **No AI anywhere.** Read
+`features/Batch Deck Import.md` before touching it. Things easy to get wrong:
+
+- **`lib/docx.ts` adds no dependency** — a `.docx` is a ZIP, read with the platform's
+  `DecompressionStream('deflate-raw')` (Chrome 80+/Safari 16.4+; iOS 16.4+ WKWebView). Three layers:
+  `unzipEntry` → `extractDocxParagraphs` (pure) → `parseDeckPlan` (pure). 24 tests, including a ZIP
+  round-trip built with `CompressionStream` — no binary fixture in the repo.
+- **Heading detection has two paths.** Real Word heading styles (`Heading1`/`Title`/`outlineLvl`) win
+  outright, and when present bold is ignored as mere emphasis. Otherwise bold lines are headings,
+  ranked by font size (largest = shallowest, document-default size sorts deepest). The second path is
+  the important one: assistant-generated docs often use direct bold formatting and NO `w:pStyle` — the
+  user's `Spanish_First_200.docx` has none at all.
+- **A bold line that parses as a word line is vocabulary, not a heading** — losing a heading merges
+  decks, losing a line loses data.
+- **Duplicate checks accumulate across the import**: the in-memory library is appended after each deck
+  saves, so deck 7 sees the words deck 2 created. Folders are reused by name per level, so a re-import
+  doesn't fork the tree.
+- **`prefetchChoices` and language sync are deliberately NOT run** in batch mode — both are AI, and 198
+  cards would be 198 model calls. `autoGroupByGloss` IS kept (deterministic).
+
+## JSX whitespace: a space after `{expr}` is eaten on a wrapped line
+
+Hit twice this session ("14 wordsrated", "library.Remove it above"). JSX trims leading/trailing
+whitespace from **every line** of a text node, including the first — so
+`{count} word{s} rated.` wrapping onto the next source line renders `wordsrated`. It only bites when
+the text node spans more than one line, which is why some strings look fine and their neighbours don't.
+
+**Fix: put any interpolated sentence in a single template literal inside one `{...}`.** JSX cannot
+alter characters inside a JS template literal, so the whole class of bug disappears rather than being
+patched. To audit: grep for `}` followed by a space and a letter, then check whether that text node
+reaches a closing tag on the same line.
 
 ## Verifying changes
 

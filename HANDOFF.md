@@ -4,7 +4,7 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~49,400 lines across 219 TS/TSX files, 675 commits, 472 passing tests (39 suites).
+- **Scale**: ~50,300 lines across 222 TS/TSX files, 676 commits, 496 passing tests (40 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`107`, applied BY HAND —
   **`107_card_onboarding.sql` is PENDING at the top level and must be run.**
@@ -26,7 +26,7 @@ implementation notes + error log); this file is the map you read first.
   (without it, vocabulary onboarding errors out the moment it tries to queue a card). Move it into
   `archive/` once it's live. Next number = **108**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **39 suites / 472 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **40 suites / 496 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -206,6 +206,15 @@ Side effect worth knowing: `INPUT_WORD_CAP` is now **5000**, and *all* AI card g
 `lib/generateCards.ts`, which chunks. Calling `/api/cards/generate` directly with a big input
 truncates at 150 cards with no error.
 
+### 3.11 Batch deck import (new 2026-07-30)
+
+Create has a **"Single deck / Batch of decks"** toggle. Batch mode reads a `.docx` **locally — no AI,
+no upload** — and turns its heading structure into folders and decks (a heading with word lines under
+it is a deck; a heading with only sub-headings is a folder), then saves the decks one at a time through
+the normal two-step duplicate check, with "Remove all duplicates" / "Ignore all" / "Skip this deck".
+Parser in `lib/docx.ts` (zip via `DecompressionStream`, no new dependency). Full detail in
+`features/Batch Deck Import.md`. No migration.
+
 ---
 
 ## 4. Performance model (hard-won — don't regress these)
@@ -331,6 +340,11 @@ before relying on vocabulary onboarding.
    If they pin at 2.0 too, lower target retention instead of raising it again.
 8. **Scheduling "Stage B"** (learned per-feature interval model) — designed, explicitly **DEFERRED**.
    Do not start without the user reopening it.
+9. **Card connection agent** — designed and PAUSED mid-conversation; see
+   `features/Card Connection Agent (proposal).md`. Its infrastructure audit found a **real bug worth
+   fixing on its own**: `synonymGroups.addMember` cannot merge two groups, so declaring A≡B when each
+   already belongs to a group strands the other group's members instead of forming one equivalence
+   class. Confusion links were audited and are already correct.
 
 ---
 
@@ -341,8 +355,8 @@ feature, and update it afterward.** Each carries its own error log.
 
 `Learning Pipeline.md` · `Due Now.md` · `Typed Grading.md` · `Confusion Handling.md` ·
 `Language Syncing.md` · `Card Data.md` · `Agent Platform.md` · `Vocabulary Onboarding.md` ·
-`Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
-`Configurable Pipeline (proposal).md`
+`Batch Deck Import.md` · `Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
+`Configurable Pipeline (proposal).md` · `Card Connection Agent (proposal).md`
 
 ---
 

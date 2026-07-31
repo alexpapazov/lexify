@@ -19,6 +19,7 @@ import { fastTrackCardState }                  from '@/engine/pipeline'
 import { batchFastTrackDueDates }              from '@/engine/density'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { OnboardSetup, type OnboardCard, type OnboardDestination } from '@/components/create/OnboardSetup'
+import { BatchDeckImport } from '@/components/create/BatchDeckImport'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { descendantDeckIds } from '@/lib/folderStats'
 import { buildFolderOptions, NEW_FOLDER_VALUE, ROOT_FOLDER_VALUE } from '@/lib/folderOptions'
@@ -36,6 +37,8 @@ import { OfflineUploadForm } from '@/components/upload/OfflineUploadForm'
 type SeparatorOption = 'tab' | 'newline' | 'custom'
 type AiMode = 'wordlist' | 'extraction'
 type Stage = 'edit' | 'preview' | 'onboard'
+/** 'single' = paste one word list; 'batch' = build a folder/deck tree from a Word document. */
+type CreateMode = 'single' | 'batch'
 
 interface ParsedCard { front: string; back: string }
 
@@ -158,6 +161,27 @@ function SeparatorPicker({ label, value, onChange, custom, onCustomChange }: {
   )
 }
 
+/**
+ * Top-level mode toggle: build ONE deck from a pasted list, or a whole folder/deck tree from a Word
+ * document. Batch mode uses no AI at all — see components/create/BatchDeckImport.tsx.
+ */
+function ModeSwitch2({ value, onChange }: { value: CreateMode; onChange: (v: CreateMode) => void }) {
+  return (
+    <div className="inline-flex items-center rounded-full border border-line/10 bg-surface p-1 text-sm mt-2">
+      {(['single', 'batch'] as CreateMode[]).map(m => (
+        <button
+          key={m}
+          type="button"
+          onClick={() => onChange(m)}
+          className={`px-3 py-1 rounded-full transition-colors ${value === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
+        >
+          {m === 'single' ? 'Single deck' : 'Batch of decks'}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** Pill-style toggle between "Wordlist" and "Extract Text". */
 function ModeSwitch({ value, onChange }: { value: AiMode; onChange: (v: AiMode) => void }) {
   return (
@@ -186,6 +210,7 @@ export default function CreatePage() {
 }
 
 function OnlineCreatePage() {
+  const [mode,          setMode]          = useState<CreateMode>('single')
   const [rawText,       setRawText]       = useState('')
   const [deckName,      setDeckName]      = useState('')
   const [pairSepOpt,    setPairSepOpt]    = useState<SeparatorOption>('tab')
@@ -1029,8 +1054,12 @@ function OnlineCreatePage() {
     <div className="space-y-6 max-w-3xl mx-auto">
       <div>
         <h1 className="text-2xl font-semibold text-ink">Create</h1>
-        <p className="text-ink-muted mt-1">Please paste your word list below.</p>
+        <ModeSwitch2 value={mode} onChange={setMode} />
       </div>
+
+      {mode === 'batch' ? <BatchDeckImport /> : (
+      <>
+      <p className="text-ink-muted -mt-2">Please paste your word list below.</p>
 
       <div className="space-y-1.5">
         <label className="text-sm text-ink-muted">Deck name</label>
@@ -1173,6 +1202,9 @@ function OnlineCreatePage() {
           Clear
         </button>
       </div>
+
+      </>
+      )}
 
       {/* Missing language popup */}
       {showLangPopup && (
