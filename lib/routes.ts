@@ -30,6 +30,8 @@ export const routes = {
   deckAdd:       (deckId: string, extra: Query = {}) => withQuery('/study/deck/add',     { deck: deckId,   ...extra }),
   /** Bulk card editor for a deck. */
   deckEdit:      (deckId: string, extra: Query = {}) => withQuery('/study/deck/edit',    { deck: deckId,   ...extra }),
+  /** Confidence-rating screen for a deck's onboarding queue. */
+  deckOnboard:   (deckId: string, extra: Query = {}) => withQuery('/study/deck/onboard', { deck: deckId,   ...extra }),
   /** Study session across a folder. */
   folderSession: (folderId: string, extra: Query = {}) => withQuery('/study/folder/session', { folder: folderId, ...extra }),
   /** Learning ladder scoped to a deck. */

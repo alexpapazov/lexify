@@ -86,6 +86,17 @@ export function intervalForRetention(stability: number, requestRetention: number
   return stability * (Math.log(clampRetention(requestRetention)) / LN_09)
 }
 
+/**
+ * Inverse of `intervalForRetention`: the stability whose scheduled interval at `retention` is
+ * `intervalDays`. Used to seed a memory state from a known interval — by the forecast (which knows a
+ * card's interval but not always its stability) and by onboarding (which picks the interval first,
+ * from the learner's self-rating, and needs a stability that explains it).
+ */
+export function stabilityForInterval(intervalDays: number, retention: number): number {
+  const perUnit = intervalForRetention(1, retention)          // days of interval per 1 day of stability
+  return Math.max(0.1, (intervalDays > 0 ? intervalDays : 1) / (perUnit || 1))
+}
+
 // ─── Difficulty ──────────────────────────────────────────────────────────────
 
 export function nextDifficulty(difficulty: number, grade: Rating): number {

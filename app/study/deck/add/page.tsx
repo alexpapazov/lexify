@@ -29,6 +29,7 @@ import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langName } from '@/lib/languages'
+import { generateCards } from '@/lib/generateCards'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
   estimateCardCount, analyzeDuplicate, type DuplicateAnalysis,
@@ -38,12 +39,6 @@ import type { Deck, Card } from '@/domain'
 type Mode = 'wordlist' | 'extraction'
 type Stage = 'input' | 'confirm' | 'generating' | 'review' | 'saving'
 type LanguageWarning = 'front' | 'back' | 'both' | null
-
-interface CandidateCard {
-  front:           string
-  back:            string
-  languageWarning: LanguageWarning
-}
 
 interface ReviewItem {
   front:           string
@@ -166,24 +161,26 @@ export default function AddCardsPage() {
     setError(null)
     setStage('generating')
     try {
-      const body = mode === 'wordlist'
-        ? { mode, content, instructions, improvedTranslations, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
-        : { mode, text, instructions, improvedTranslations, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
-
-      const res  = await fetch(apiUrl('/api/cards/generate'), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+      // Chunked: the route caps ONE response at 150 cards, well under the 5000-word input cap.
+      const data = await generateCards({
+        mode,
+        input: mode === 'wordlist' ? content : text,
+        instructions,
+        improvedTranslations,
+        sourceLanguage: deck.sourceLanguage,
+        targetLanguage: deck.targetLanguage,
       })
-      const data = await res.json()
 
       if (!data.ok) {
         setError(reasonToMessage(data.reason))
         setStage('input')
         return
       }
+      if (data.failedChunks > 0) {
+        setError(`${data.failedChunks} batch${data.failedChunks !== 1 ? 'es' : ''} of your input couldn't be generated — the rest are below.`)
+      }
 
-      const reviewItems: ReviewItem[] = (data.cards as CandidateCard[]).map(c => {
+      const reviewItems: ReviewItem[] = data.cards.map(c => {
         const duplicate = analyzeDuplicate({ front: c.front, back: c.back }, existingCards, deck.sourceLanguage, deck.targetLanguage)
         const splitSegments = detectSynonymSplit(c.front) ?? undefined
         return {

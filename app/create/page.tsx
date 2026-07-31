@@ -14,11 +14,15 @@ import { SupabaseFolderRepository }            from '@/lib/data/folders'
 import { SupabaseLanguageSyncRuleRepository }  from '@/lib/data/languageSyncRules'
 import { SupabaseLanguagePairRepository }      from '@/lib/data/languagePairs'
 import { SupabaseSynonymGroupRepository }       from '@/lib/data/synonymGroups'
+import { SupabaseCardOnboardingRepository }     from '@/lib/data/cardOnboarding'
 import { fastTrackCardState }                  from '@/engine/pipeline'
 import { batchFastTrackDueDates }              from '@/engine/density'
 import { LanguageCombobox } from '@/components/LanguageCombobox'
+import { OnboardSetup, type OnboardCard, type OnboardDestination } from '@/components/create/OnboardSetup'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
-import { folderMatchesPair, descendantDeckIds } from '@/lib/folderStats'
+import { descendantDeckIds } from '@/lib/folderStats'
+import { buildFolderOptions, NEW_FOLDER_VALUE, ROOT_FOLDER_VALUE } from '@/lib/folderOptions'
+import { generateCards } from '@/lib/generateCards'
 import { langName } from '@/lib/languages'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
@@ -29,53 +33,11 @@ import type { Card, Folder, Deck, LanguagePair } from '@/domain'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUploadForm } from '@/components/upload/OfflineUploadForm'
 
-const NEW_FOLDER_VALUE = '__new__'
-const ROOT_FOLDER_VALUE = '__root__'
-
-/**
- * Flatten the folders that belong to a language pairing (per
- * `folderMatchesPair`) into a depth-first list with indentation depth, for
- * use in a flat <select> picker.
- */
-function buildFolderOptions(folders: Folder[], decks: Deck[], sourceLanguage: string, targetLanguage: string): Array<{ folder: Folder; depth: number }> {
-  // Exclude synced folders with no descendant decks — empty, shouldn't be offered as destinations
-  const matching = folders.filter(f => {
-    if (!folderMatchesPair(f.id, folders, decks, sourceLanguage, targetLanguage)) return false
-    if (f.isSynced) {
-      const dIds: string[] = descendantDeckIds(f.id, folders, decks)
-      if (dIds.length === 0) return false
-    }
-    return true
-  })
-  const byParent = new Map<string | null, Folder[]>()
-  for (const f of matching) {
-    const arr = byParent.get(f.parentId) ?? []
-    arr.push(f)
-    byParent.set(f.parentId, arr)
-  }
-  const result: Array<{ folder: Folder; depth: number }> = []
-  function walk(parentId: string | null, depth: number) {
-    const children = (byParent.get(parentId) ?? []).slice().sort((a, b) => a.position - b.position)
-    for (const c of children) {
-      result.push({ folder: c, depth })
-      walk(c.id, depth + 1)
-    }
-  }
-  walk(null, 0)
-  return result
-}
-
 type SeparatorOption = 'tab' | 'newline' | 'custom'
 type AiMode = 'wordlist' | 'extraction'
-type Stage = 'edit' | 'preview'
+type Stage = 'edit' | 'preview' | 'onboard'
 
 interface ParsedCard { front: string; back: string }
-
-interface CandidateCard {
-  front:           string
-  back:            string
-  languageWarning: 'front' | 'back' | 'both' | null
-}
 
 interface PreviewItem {
   front:           string
@@ -237,6 +199,8 @@ function OnlineCreatePage() {
   const [agentRunning,    setAgentRunning]    = useState(false)
   const [agentRan,        setAgentRan]        = useState(false)
   const [agentError,      setAgentError]      = useState<string | null>(null)
+  /** Chunk progress while formatting a long list; null for a single-chunk run. */
+  const [agentProgress,   setAgentProgress]   = useState<{ done: number; total: number } | null>(null)
   /** Indices (into `parsed`) of agent-result cards whose front/back language still looks off after auto-fixing reversed pairs. */
   const [agentWarningLines, setAgentWarningLines] = useState<number[]>([])
 
@@ -260,6 +224,10 @@ function OnlineCreatePage() {
   // Sync checkbox (shown on the preview stage when rules exist)
   const [hasSyncRules, setHasSyncRules] = useState(false)
   const [syncEnabled,  setSyncEnabled]  = useState(true)
+
+  // Vocabulary onboarding (the confidence-rating intake)
+  const [onboardSaving, setOnboardSaving] = useState(false)
+  const [onboardError,  setOnboardError]  = useState<string | null>(null)
 
   // Fast-track graduated review
   const [fastTrackEnabled,  setFastTrackEnabled]  = useState(false)
@@ -362,25 +330,29 @@ function OnlineCreatePage() {
     }
 
     setAgentRunning(true)
+    setAgentProgress(null)
     try {
       // If user hasn't typed a custom prompt, fall back to the language pair's saved instructions
       const pairDefaultInstructions = aiPrompt.trim()
         ? aiPrompt
         : (allPairsCache.find(p => p.sourceLanguage === targetLang && p.targetLanguage === basisLang)?.instructions ?? '')
-      const body = aiMode === 'wordlist'
-        ? { mode: 'wordlist', content: rawText, instructions: pairDefaultInstructions, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
-        : { mode: 'extraction', text: rawText, instructions: pairDefaultInstructions, improvedTranslations: false, sourceLanguage: targetLang, targetLanguage: basisLang }
 
-      const res  = await fetch(apiUrl('/api/cards/generate'), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+      // Chunked: the route caps ONE response at 150 cards, and the input cap is now 5000 words.
+      const data = await generateCards({
+        mode: aiMode,
+        input: rawText,
+        instructions: pairDefaultInstructions,
+        sourceLanguage: targetLang,
+        targetLanguage: basisLang,
+        onProgress: (done, total) => setAgentProgress(total > 1 ? { done, total } : null),
       })
-      const data = await res.json()
 
       if (!data.ok) {
         setAgentError(reasonToMessage(data.reason))
         return
+      }
+      if (data.failedChunks > 0) {
+        setAgentError(`${data.failedChunks} batch${data.failedChunks !== 1 ? 'es' : ''} of your list couldn't be formatted — the rest are below. Re-run to retry the missing ones.`)
       }
 
       // If the agent flagged a card as 'both' sides being in the wrong
@@ -390,7 +362,7 @@ function OnlineCreatePage() {
       // review, since those usually mean a mistranslation rather than a
       // simple swap.
       const warningLines: number[] = []
-      const fixedCards = (data.cards as CandidateCard[]).map((c, idx) => {
+      const fixedCards = data.cards.map((c, idx) => {
         if (c.languageWarning === 'both') {
           return { front: c.back, back: c.front }
         }
@@ -408,6 +380,91 @@ function OnlineCreatePage() {
       setAgentError('Something went wrong running the agent. Please try again.')
     } finally {
       setAgentRunning(false)
+      setAgentProgress(null)
+    }
+  }
+
+  /**
+   * Enter the onboarding flow. Same preconditions as Preview — a deck name, both languages, and at
+   * least one parsed card — since it creates a real deck at the end.
+   */
+  function handleOnboard() {
+    setError(null)
+    setOnboardError(null)
+    if (!ensureLanguages()) return
+    if (!deckName.trim() || parsed.length === 0) return
+    setStage('onboard')
+    void loadFolderOptions()
+  }
+
+  /**
+   * Creates the deck, its cards, and a PENDING onboarding row per card, then hands off to the rating
+   * screen. The rows are what make the session resumable — quitting halfway leaves the deck in place
+   * with "Finish onboarding" on its page.
+   *
+   * No CardStates are written here: a card's schedule is decided by its rating, one at a time.
+   */
+  async function doOnboardSave(items: OnboardCard[], destination: OnboardDestination) {
+    setOnboardSaving(true)
+    setOnboardError(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/auth'); return }
+
+      const pipeline = await new SupabasePipelineRepository().getDefault()
+      const deckRepo = new SupabaseDeckRepository()
+      const deck = await deckRepo.create(session.user.id, {
+        name:           deckName,
+        sourceLanguage: targetLang,
+        targetLanguage: basisLang,
+        pipelineId:     pipeline.id,
+      })
+
+      let folderId = destination.folderId
+      if (destination.newFolderName) {
+        if (destination.newFolderName.toUpperCase() === 'SYNCED VOCABULARY') {
+          setOnboardError('"SYNCED VOCABULARY" is reserved for automatically synced cards.')
+          return
+        }
+        const newFolder = await new SupabaseFolderRepository().create(session.user.id, destination.newFolderName, null)
+        folderId = newFolder.id
+      }
+      if (folderId) await deckRepo.update(deck.id, { folderId })
+
+      const cardRepo = new SupabaseCardRepository()
+      const created = await cardRepo.bulkCreate(deck.id, session.user.id, targetLang, basisLang,
+        items.map((it, i) => ({ front: it.front, back: it.back, position: i })))
+
+      await new SupabaseCardOnboardingRepository().createPending(session.user.id, deck.id, created.map(c => c.id))
+
+      // Synced copies are NOT fast-tracked: the learner rated the word in THIS language, which says
+      // nothing about whether they know its counterpart in another one.
+      if (destination.syncEnabled && created.length > 0) {
+        void fetch(apiUrl('/api/sync'), {
+          method:  'POST',
+          headers: { 'content-type': 'application/json', 'authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify({
+            sourceLanguage: targetLang,
+            targetLanguage: basisLang,
+            cards: created.map(c => ({ id: c.id, front: c.front, back: c.back })),
+            fastTrackSyncMode: 'none',
+          }),
+        })
+      }
+
+      // Band-1 cards go straight into the ladder, which needs distractors — start generating now.
+      void prefetchChoices(created.map(card => ({
+        card:           { ...card, choices: null },
+        side:           'front',
+        deckCards:      created,
+        sourceLanguage: targetLang,
+        targetLanguage: basisLang,
+      })), () => {})
+
+      router.push(routes.deckOnboard(deck.id))
+    } catch (err: unknown) {
+      setOnboardError(err instanceof Error ? err.message : 'Failed to prepare onboarding')
+      setOnboardSaving(false)
     }
   }
 
@@ -715,6 +772,26 @@ function OnlineCreatePage() {
     setDupChecked(false)
     setFastTrackEnabled(false)
     setFastTrackCardIds(new Set())
+  }
+
+  // ── Onboarding stage ──────────────────────────────────────────────────────
+
+  if (stage === 'onboard') {
+    return (
+      <OnboardSetup
+        cards={parsed}
+        deckName={deckName}
+        sourceLanguage={targetLang}
+        targetLanguage={basisLang}
+        folders={folders}
+        decks={decksForFolders}
+        hasSyncRules={hasSyncRules}
+        saving={onboardSaving}
+        saveError={onboardError}
+        onCancel={() => { setStage('edit'); setOnboardSaving(false); setOnboardError(null) }}
+        onStart={(items, destination) => void doOnboardSave(items, destination)}
+      />
+    )
   }
 
   // ── Preview stage ─────────────────────────────────────────────────────────
@@ -1065,7 +1142,7 @@ function OnlineCreatePage() {
 
       {error && <p className="text-danger text-sm">{error}</p>}
 
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-3">
         <button
           className="btn-primary"
           disabled={!deckName.trim() || saving || (aiFormatEnabled ? (!agentRan || parsed.length === 0) : parsed.length === 0)}
@@ -1073,13 +1150,23 @@ function OnlineCreatePage() {
         >
           Preview deck
         </button>
+        <button
+          className="btn-ghost"
+          disabled={!deckName.trim() || saving || (aiFormatEnabled ? (!agentRan || parsed.length === 0) : parsed.length === 0)}
+          onClick={handleOnboard}
+          title="Rate how well you already know each word, and schedule the ones you know instead of learning them"
+        >
+          Onboard vocabulary
+        </button>
         {aiFormatEnabled && (
           <button
             className="btn-ghost"
             disabled={agentRunning || !rawText.trim()}
             onClick={handleRunAgent}
           >
-            {agentRunning ? 'Running…' : 'Run agent'}
+            {agentRunning
+              ? (agentProgress ? `Running… ${agentProgress.done}/${agentProgress.total}` : 'Running…')
+              : 'Run agent'}
           </button>
         )}
         <button className="btn-ghost" onClick={handleClear}>

@@ -699,6 +699,32 @@ export interface CardConfusionLink {
   createdAt: string
 }
 
+// ─── Vocabulary onboarding ────────────────────────────────────────────────────
+
+/**
+ * How well the learner says they already know a word, chosen once during onboarding.
+ *   1 — don't know it        → no CardState at all; the card enters the ladder like any new card.
+ *   2 — recognize it         → already graduated, first review ~1 week out.
+ *   3 — know it              → ~1 month out.
+ *   4 — know it cold         → ~180 days out.
+ * Bands 2–4 seed FSRS difficulty/stability directly (see engine/onboarding.ts).
+ */
+export type OnboardingBand = 1 | 2 | 3 | 4
+
+/**
+ * One card queued for (or finished with) confidence rating. `band === null` means it hasn't been
+ * rated yet — the marker that lets a half-finished onboarding session be resumed from the deck page.
+ * A band-1 card writes no CardState, so this row is the ONLY record that it was ever rated.
+ */
+export interface CardOnboarding {
+  userId:    UserId
+  cardId:    CardId
+  deckId:    DeckId
+  band:      OnboardingBand | null
+  createdAt: string
+  ratedAt:   string | null
+}
+
 // ─── TypedAnswerOverride ────────────────────────────────────────────────────
 
 /**

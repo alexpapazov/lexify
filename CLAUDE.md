@@ -39,6 +39,9 @@ Current feature files:
 - `features/Agent Platform.md` — AI agent infra (shared gateway + scoped grants +
   agents-as-configs). Phases 1–2 built; Phases 3+ (grants UI, job queue/dispatch,
   triggers) planned. See its status header for what's live vs remaining.
+- `features/Vocabulary Onboarding.md` — bulk intake of words you already know:
+  AI accuracy check, front-only duplicate drop, four confidence bands mapped to
+  FSRS difficulty/stability + spread due dates, resumable queue (migration 107).
 
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
@@ -2181,6 +2184,50 @@ session — see migration 026 above.)
   the old auto-elective behavior (silently load not-yet-due graduated cards) when
   no `?category=` is given, and have no ElectivePicker. The ElectivePicker + in-memory
   remainingElective tracking + deck-prefs-driven batch limit are only in `study/[deckId]/session`.
+
+## Vocabulary onboarding (2026-07-30, migration 107 — MUST APPLY)
+
+Bulk intake for words the learner already knows: paste a list, rate confidence 1–4, and bands 2–4
+graduate straight into Due Now instead of climbing the ladder. **Read
+`features/Vocabulary Onboarding.md` in full before touching this.** Entry point: Create → "Onboard
+vocabulary" (beside *Preview deck*). Highlights and the things easy to get wrong:
+
+- **Bands** (`engine/onboarding.ts`): 1 = don't know → **no CardState at all** (stays Unlearned, the
+  ladder takes it); 2/3/4 centre on **7 / 30 / 180 days**, windows **3–11 / 15–45 / 126–234**, which
+  are non-overlapping on purpose. Difficulty = `initialDifficulty(['hard'|'good'|'easy'])`; stability
+  = `stabilityForInterval(assignedDay, pairTargetRetention)` — from the day the card ACTUALLY landed
+  on, not the band centre, so the stored state explains its own due date.
+- **`stabilityForInterval` moved from `lib/forecastFsrs.ts` into `engine/fsrs.ts`** (the engine can't
+  import lib). Still re-exported from its old home, so existing importers are unaffected.
+- **Spreading** (`engine/density.ts`): `seedOnboardLoad` once at mount (ONE `countDueByDateRange` over
+  the 1–234 day horizon), then `claimSpreadDay` mutates that map per rating — batch-quality spreading
+  with zero queries per keystroke. Each direction claims its own day.
+- **Writes BOTH rows**, mirroring `LadderStudy.graduate()`: forward (smart *or* typed columns per
+  `activeProductionTrack`) and reverse (`recall_*`). `acceleratedMode: 'bulk_known'` → normal FSRS
+  scheduling, excluded from daily goals. `reps` stays 0 / `lastReviewedAt` null — a self-rating is not
+  a review and must not enter analytics.
+- **Duplicates are dropped on the FRONT alone** (`normalizeFrontKey` / `partitionExistingFronts` in
+  `lib/duplicates.ts`: whitespace, grammatical tags, one leading article, case). The gloss is ignored,
+  the scope is the whole language pair, and skipped words are NOT added to the new deck. Rating a word
+  you already have would create a second card with a competing self-assessed schedule.
+- **`card_onboarding` exists because band 1 writes no card_states row** — identical to an un-rated
+  card. `band IS NULL` = still queued; it's the only way a half-finished session can be resumed
+  ("Finish onboarding" on the deck page). Don't try to infer the queue from missing states.
+- **Online only** — `OfflineUnavailable`, no local-store path, nothing enqueues to the outbox.
+
+### `INPUT_WORD_CAP` 1000 → 5000, and why generation is now chunked
+
+The cap was raised so a whole frequency list can be pasted. That exposed a latent bug:
+`/api/cards/generate` answers in ONE model call and slices at `MAX_CANDIDATE_CARDS` (150), so a
+1000-word list would have returned 150 cards and **silently dropped the other 850**. All generation now
+goes through **`lib/generateCards.ts`** (75 lines per wordlist request, ~600 words per extraction
+request, 3 in flight, exact repeats dropped, `failedChunks` reported instead of losing the run). Both
+call sites use it. **Any new caller of `/api/cards/generate` must go through `generateCards`** — hitting
+the route directly with a big input truncates without an error.
+
+New shared helper `lib/mapLimit.ts` (bounded-concurrency map + `chunk`); `lib/offline/download.ts`'s
+private copy was removed in favour of it. `buildFolderOptions` moved out of `app/create/page.tsx` into
+`lib/folderOptions.ts` so the preview and onboarding destination pickers share it.
 
 ## Verifying changes
 

@@ -14,13 +14,21 @@
  */
 
 import type { Card } from '@/domain'
+import { stripGrammaticalTags } from '@/engine/grading'
 
 // ─── Input caps ──────────────────────────────────────────────────────────────
 
 export const INSTRUCTIONS_CHAR_CAP = 3000
 
-/** Shared word-count cap for the main input box, in both wordlist and extraction modes. */
-export const INPUT_WORD_CAP = 1000
+/**
+ * Shared word-count cap for the main input box, in both wordlist and extraction modes.
+ *
+ * Sized for a whole frequency list (the 1000 most common words, with glosses). The AI-format path
+ * CHUNKS its requests to stay under the per-response card cap — do not send an input this size to
+ * `/api/cards/generate` in one call, or it truncates at MAX_CANDIDATE_CARDS and silently drops the
+ * rest.
+ */
+export const INPUT_WORD_CAP = 5000
 
 // ─── Normalization ───────────────────────────────────────────────────────────
 
@@ -118,6 +126,67 @@ export function analyzeDuplicate(
 
   if (nearMatch) return { tier: 'near', existingCard: nearMatch }
   return { tier: 'none', existingCard: null }
+}
+
+// ─── Front-only matching (vocabulary onboarding) ─────────────────────────────
+//
+// Onboarding has a stricter rule than the two tiers above: a word you already have must NEVER be
+// offered for rating, because rating it would create a second card for the same word with a
+// self-assessed schedule, silently competing with the real one. So it matches on the FRONT alone
+// (the word in the language being learned) and ignores the gloss entirely — "el pan"/"bread" and
+// "el pan"/"loaf" are the same word, and only one of them belongs in the library.
+
+/**
+ * The comparison key for a front. Whitespace-collapsed, grammatical gender/number tags removed
+ * ("la miel (f)" ≡ "la miel" — the tags are never graded either), one leading article stripped, and
+ * lowercased.
+ */
+export function normalizeFrontKey(front: string, sourceLanguage: string): string {
+  return normalizeTier2(stripGrammaticalTags(front), sourceLanguage).toLowerCase()
+}
+
+export interface FrontPartition<T> {
+  /** Candidates whose front isn't in the library yet — these get onboarded. */
+  fresh: T[]
+  /** Candidates dropped as already-known, each with the library card it collided with. */
+  skipped: { candidate: T; existing: Card }[]
+}
+
+/**
+ * Splits candidates into the ones to onboard and the ones to drop.
+ *
+ * Also de-dupes WITHIN the candidate list (a frequency list can list the same lemma twice, and the
+ * AI-format pass can emit the same front from two different lines) — the first occurrence wins and
+ * later ones are reported against it, so the caller can show one honest "skipped" count.
+ */
+export function partitionExistingFronts<T extends { front: string }>(
+  candidates:     T[],
+  existing:       Card[],
+  sourceLanguage: string,
+): FrontPartition<T> {
+  const byKey = new Map<string, Card>()
+  for (const card of existing) {
+    const key = normalizeFrontKey(card.front, sourceLanguage)
+    if (key && !byKey.has(key)) byKey.set(key, card)
+  }
+
+  const fresh: T[] = []
+  const skipped: { candidate: T; existing: Card }[] = []
+  const seenInBatch = new Map<string, Card>()
+
+  for (const candidate of candidates) {
+    const key = normalizeFrontKey(candidate.front, sourceLanguage)
+    // A front that normalizes to nothing can't be compared — let it through rather than silently
+    // swallowing it; the create flow already drops genuinely blank fronts when parsing.
+    if (!key) { fresh.push(candidate); continue }
+    const hit = byKey.get(key) ?? seenInBatch.get(key)
+    if (hit) { skipped.push({ candidate, existing: hit }); continue }
+    fresh.push(candidate)
+    // Stand-in for the not-yet-created card, so a repeat later in the same list is caught.
+    seenInBatch.set(key, { front: candidate.front, back: '' } as Card)
+  }
+
+  return { fresh, skipped }
 }
 
 // ─── Pre-flight card-count estimate ─────────────────────────────────────────

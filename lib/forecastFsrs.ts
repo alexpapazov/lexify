@@ -8,14 +8,12 @@
  * MEASURED initial interval (see estimateInitialInterval) rather than a hardcoded constant.
  */
 
-import { intervalForRetention, retrievability, stabilityAfterLapse, reviewCard, fsrsFuzzRange, type FsrsConfig, DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
+import { intervalForRetention, retrievability, stabilityAfterLapse, reviewCard, fsrsFuzzRange, stabilityForInterval, type FsrsConfig, DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
 import type { Rating } from '@/domain'
 
-/** Stability whose scheduled interval (at `retention`) equals `intervalDays`. Inverse of intervalForRetention. */
-export function stabilityForInterval(intervalDays: number, retention: number): number {
-  const perUnit = intervalForRetention(1, retention)          // days of interval per 1 day of stability
-  return Math.max(0.1, (intervalDays > 0 ? intervalDays : 1) / (perUnit || 1))
-}
+// `stabilityForInterval` moved to engine/fsrs.ts (engine/onboarding.ts needs it, and the engine can't
+// import from lib). Re-exported here so existing importers of this module are unaffected.
+export { stabilityForInterval }
 
 interface ReviewStep {
   /** Day offset (from now) this review lands on. */

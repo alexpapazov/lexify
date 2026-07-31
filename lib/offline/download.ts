@@ -15,6 +15,7 @@ import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLin
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import { ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
 import { fetchAllRows } from '@/lib/supabasePaged'
+import { mapLimit } from '@/lib/mapLimit'
 
 import { cardStateKey, ladderKey, paramKey, overrideKey } from './keys'
 import { getLocalStore } from './localStore'
@@ -44,25 +45,6 @@ async function fetchByIds<T>(
     out.push(...await fetchAllRows<T>((f, t) => run(chunk, f, t)))
   }
   return out
-}
-
-/**
- * Runs `fn` over `items` with at most `limit` in flight, reporting completions to `onDone` as they
- * land (so progress still counts up smoothly even though work finishes out of order).
- */
-async function mapLimit<T>(
-  items: T[], limit: number, fn: (item: T) => Promise<void>, onDone: (completed: number) => void,
-): Promise<void> {
-  let next = 0, done = 0
-  const worker = async () => {
-    for (;;) {
-      const i = next++
-      if (i >= items.length) return
-      try { await fn(items[i]!) } catch { /* per-item errors are handled by the caller's own try */ }
-      onDone(++done)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
 }
 
 const DAY_MS = 86_400_000

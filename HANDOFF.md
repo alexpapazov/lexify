@@ -4,10 +4,10 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~47,800 lines across 212 TS/TSX files, 674 commits, 447 passing tests (37 suites).
+- **Scale**: ~49,400 lines across 219 TS/TSX files, 675 commits, 472 passing tests (39 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`106`, applied BY HAND — **all
-  applied, nothing pending.**
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`107`, applied BY HAND —
+  **`107_card_onboarding.sql` is PENDING at the top level and must be run.**
 
 ---
 
@@ -21,11 +21,12 @@ implementation notes + error log); this file is the map you read first.
   commit message** — zsh history expansion fails the commit and leaves files staged-but-uncommitted.
   Quote any `[bracket]` paths.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
-  `001`–`106` are all applied and all live in `supabase/migrations/archive/`. **The top level is
-  empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
-  run it, and move it into `archive/` once it's live. Next number = **107**.
+  `001`–`106` are applied and live in `supabase/migrations/archive/`. **Whatever sits at the top level
+  is PENDING** — right now that's **`107_card_onboarding.sql`, which the user still has to run**
+  (without it, vocabulary onboarding errors out the moment it tries to queue a card). Move it into
+  `archive/` once it's live. Next number = **108**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **37 suites / 447 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **39 suites / 472 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -190,6 +191,21 @@ Three tabs: **Past** (review calendar), **Present** (snapshot + accuracy trend +
 An AI card-editor with a scoped, audited **tool gateway** (`lib/agents/`), a change-set review flow,
 and a deterministic (non-AI) **de-dupe** action. Also exposed as a standalone MCP server.
 
+### 3.10 Vocabulary onboarding (new 2026-07-30)
+
+Bulk intake for words you already know — paste a frequency list, rate confidence, skip the ladder.
+**Create → "Onboard vocabulary"** → AI accuracy check → front-only duplicate drop → rate each card
+1–4 at `/study/deck/onboard`. Bands 2/3/4 graduate immediately, centred on **7 / 30 / 180 days**
+(windows 3–11 / 15–45 / 126–234, spread against existing load); band 1 leaves the card untouched for
+the ladder. Writes both direction rows as `bulk_known` (excluded from goals). Resumable — the deck
+page shows "Finish onboarding" while `card_onboarding` rows remain unrated.
+
+Full detail in `features/Vocabulary Onboarding.md`. **Needs migration 107.**
+
+Side effect worth knowing: `INPUT_WORD_CAP` is now **5000**, and *all* AI card generation goes through
+`lib/generateCards.ts`, which chunks. Calling `/api/cards/generate` directly with a big input
+truncates at 150 cards with no error.
+
 ---
 
 ## 4. Performance model (hard-won — don't regress these)
@@ -292,9 +308,13 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 
 ## 7. Open threads
 
-Roughly in priority order. Nothing here is half-written — the tree is clean and every migration is
-applied, so any of these is a clean start.
+Roughly in priority order. Nothing here is half-written, but **migration 107 is pending** — run it
+before relying on vocabulary onboarding.
 
+0. **Apply `107_card_onboarding.sql`**, then archive it. Onboarding is code-complete and
+   build/test-verified, but it has NOT been exercised against a real account (the flow is behind auth).
+   First run to watch: rate a handful of words, then check the deck's Due Now counts and the ℹ panel's
+   per-track schedules look right.
 1. **Ladder Stage 3** — strip the legacy pipeline from the session pages (§5.1). Biggest cleanup, and
    it shrinks the three session pages that §5.2 is about.
 2. **Offline sync-back is device-unverified** — study offline, reconnect, confirm the outbox drains.
@@ -320,7 +340,7 @@ applied, so any of these is a clean start.
 feature, and update it afterward.** Each carries its own error log.
 
 `Learning Pipeline.md` · `Due Now.md` · `Typed Grading.md` · `Confusion Handling.md` ·
-`Language Syncing.md` · `Card Data.md` · `Agent Platform.md` ·
+`Language Syncing.md` · `Card Data.md` · `Agent Platform.md` · `Vocabulary Onboarding.md` ·
 `Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
 `Configurable Pipeline (proposal).md`
 

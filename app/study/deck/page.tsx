@@ -30,6 +30,7 @@ import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { isCardStateDueNow } from '@/lib/dueStatus'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
+import { SupabaseCardOnboardingRepository } from '@/lib/data/cardOnboarding'
 import type { ClimbState } from '@/engine/ladderEngine'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName } from '@/lib/languages'
@@ -1207,6 +1208,8 @@ export default function DeckDetailPage() {
   const [tz,               setTz]               = useState('UTC')
   const [turnoverHour,     setTurnoverHour]     = useState(0)
   const [enabledTracks,    setEnabledTracks]    = useState<EnabledTracks | undefined>(undefined)
+  /** Words queued by vocabulary onboarding that were never rated (migration 107). */
+  const [pendingOnboarding, setPendingOnboarding] = useState(0)
   const [loading,          setLoading]          = useState(true)
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
   const [bulkGraduating,      setBulkGraduating]      = useState(false)
@@ -1263,6 +1266,9 @@ export default function DeckDetailPage() {
       .catch(() => {})
     // Ladder climb progress (drives the Learning status for cards on the ladder).
     new SupabaseLadderClimbRepository().listForCards(uid, c.map(x => x.id)).then(setClimb).catch(() => {})
+    // Any words left un-rated from a vocabulary-onboarding session — surfaced as "Finish onboarding".
+    new SupabaseCardOnboardingRepository().pendingCountsByDeck(uid)
+      .then(m => setPendingOnboarding(m.get(deckId) ?? 0)).catch(() => {})
     if (!d.syncingComplete) triggerSyncFill()
 
     if (d.folderId) {
@@ -1806,6 +1812,18 @@ export default function DeckDetailPage() {
           <Link href={routes.ladderDeck(deckId)}  className="btn-primary text-sm">Study</Link>
         </div>
       </div>
+
+      {pendingOnboarding > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
+          <span className="text-ink">
+            <span className="font-medium">{pendingOnboarding} word{pendingOnboarding !== 1 ? 's' : ''}</span>
+            {' '}in this deck haven&apos;t been rated yet — they won&apos;t be scheduled until you do.
+          </span>
+          <Link href={routes.deckOnboard(deckId)} className="btn-primary text-xs px-3 py-1.5">
+            Finish onboarding
+          </Link>
+        </div>
+      )}
 
       {synonymCandidates.length > 0 && !synonymScanIgnored && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
