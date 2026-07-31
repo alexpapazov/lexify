@@ -23,7 +23,7 @@ import type { ClimbState } from '@/engine/ladderEngine'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding } from '@/lib/goalCarryover'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
@@ -110,6 +110,10 @@ interface Data {
   lists: Record<Category, CardEntry[]>
   counts: Record<Category, number>
   goals: { key: string; label: string; baseGoal: number; goal: number; delta: number; done: number }[]
+  /** Full-debt running balance per language (negative = owed). Empty unless full debt is on. */
+  standings: { key: string; label: string; standing: number }[]
+  /** The date full debt was switched on, for the standing panel's subtitle. */
+  fullDebtSince: string | null
   timeTodayMs: number
   projDueMs: number
   projNewMs: number
@@ -343,6 +347,41 @@ export function PresentSnapshot() {
           .filter(g => g.baseGoal > 0 || g.goal > 0)
         const remainingNew = goals.reduce((sum, g) => sum + Math.max(0, g.goal - g.done), 0)
 
+        /**
+         * The running full-debt balance per language: how many cards you'd need to have finished by
+         * now to be level. Negative = owed, positive = banked.
+         *
+         * Full-debt mode only — it's the only mode with a cumulative balance to report. Unlike
+         * `goals` above, this deliberately keeps pairs with NO goal today: a language you owe 30
+         * cards on must not vanish from the standing because today happens to be a rest day.
+         */
+        const standings = (fullDebtOn && fullDebtSince)
+          ? pairs.flatMap((p: LanguagePair) => {
+              const key = `${p.sourceLanguage}|${p.targetLanguage}`
+              const configuredForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
+              const isDeferred = (d: string) => deferrals.includes(`${key}|${d}`)
+              // Each day's CONFIGURED goal, never the displayed one — the displayed goal is clamped
+              // to 2.5x base, and reading the balance off that would forgive the withheld remainder
+              // that is supposed to roll forward.
+              const owed = (d: string) => owedGoalForDate(d, configuredForWeekday, isDeferred)
+              const planned = plannedGoalSum(owed, fullDebtSince, yesterday)
+              const todayGoal = owed(today)
+              if (planned <= 0 && todayGoal <= 0 && (gradSince.get(key) ?? 0) === 0) return []
+              const standing = goalStanding({
+                plannedThroughYesterday: planned,
+                gradsThroughYesterday:   gradSince.get(key) ?? 0,
+                todayGoal,
+                todayGrads:              gradToday.get(key) ?? 0,
+                exemptionAdjustment: fullDebtExemptionAdjustment({
+                  skipShortfallDays, skipSurplusDays,
+                  goalForDay: owed, gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
+                  since: fullDebtSince, through: yesterday,
+                }),
+              })
+              return [{ key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, standing }]
+            })
+          : []
+
         // ── Time today + projections ──
         // Learning pace is measured PER LANGUAGE (ladder time ÷ words graduated), since a Korean word
         // takes far longer to climb the ladder than a Spanish one.
@@ -397,7 +436,7 @@ export function PresentSnapshot() {
         }
 
         if (!cancelled) setData({
-          lists, counts, goals,
+          lists, counts, goals, standings, fullDebtSince,
           timeTodayMs: ladderTodayMs + dueTodayMs,
           projDueMs,
           projNewMs,
@@ -539,7 +578,48 @@ export function PresentSnapshot() {
         </div>
       )}
 
-      {/* 3. Time tracking */}
+      {/* 3. Current standing — the running full-debt balance. Full-debt mode only, since that's the
+             only mode with a cumulative balance to report. */}
+      {data.standings.length > 0 && (() => {
+        // Bars are relative to the largest imbalance on screen, so languages compare with each other.
+        const maxMagnitude = data.standings.reduce((m, s) => Math.max(m, Math.abs(s.standing)), 0)
+        return (
+          <div className="panel space-y-3">
+            <div className="flex items-baseline justify-between gap-3">
+              <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Current standing</h2>
+              {data.fullDebtSince && <span className="text-xs text-ink-faint">since {data.fullDebtSince}</span>}
+            </div>
+            {data.standings.map(s => {
+              // Behind → red and signed, so "-30" reads as thirty cards owed. Ahead → green.
+              // Exactly level → blue, the deliberate "on the mark" state.
+              const tone = s.standing < 0 ? 'text-danger' : s.standing > 0 ? 'text-success' : 'text-accent'
+              const bar  = s.standing < 0 ? 'bg-danger'   : s.standing > 0 ? 'bg-success' : 'bg-accent'
+              const pct = maxMagnitude > 0
+                ? Math.max(s.standing === 0 ? 4 : 8, Math.round((Math.abs(s.standing) / maxMagnitude) * 100))
+                : 4
+              return (
+                <div key={s.key} className="space-y-1.5">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-ink">{s.label}</span>
+                    <span className={`tabular-nums ${tone}`}>
+                      {s.standing > 0 ? `+${s.standing}` : s.standing}
+                      {s.standing === 0 && <span className="text-ink-faint"> · on track</span>}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">
+                    <div className={`h-full rounded-full ${bar} transition-all duration-500`} style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+            <p className="text-[11px] text-ink-faint">
+              Cards you&apos;d need to have finished by now to be level, counting today&apos;s goal.
+            </p>
+          </div>
+        )
+      })()}
+
+      {/* 4. Time tracking */}
       <div className="panel space-y-4">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Time today</h2>
         <div className="flex items-baseline gap-2">

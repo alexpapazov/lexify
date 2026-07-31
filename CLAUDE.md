@@ -2267,10 +2267,14 @@ through the normal two-step duplicate check. **No AI anywhere.** Read
 
 ## "Current standing" — the running full-debt balance (2026-07-31, no migration)
 
-A panel under Today's goals on the study dashboard, shown **only in full-debt mode** (it's the only
-mode with a cumulative balance to report). Per language: how many cards you'd need to have finished by
-now to be level. **Red + signed** when behind (`-30` = thirty owed), **green** when ahead, **blue**
-when exactly level.
+A panel in **Analytics → Present** (`components/analytics/PresentSnapshot.tsx`, below Today's goals),
+shown **only in full-debt mode** — the only mode with a cumulative balance to report. Per language:
+how many cards you'd need to have finished by now to be level. **Red + signed** when behind
+(`-30` = thirty owed), **green** when ahead, **blue** when exactly level.
+
+It belongs here rather than on the study dashboard for the same reason the two goal lists differ (see
+the 2026-07-20 note): the dashboard answers "what do I still owe *today*", Analytics → Present carries
+the full carryover picture. Don't move it back.
 
 `goalStanding` in `lib/goalCarryover.ts` (pure, 8 tests):
 `grads since enable − (planned since enable + today's goal) + exemptionAdjustment`.

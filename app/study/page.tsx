@@ -18,7 +18,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
@@ -909,48 +909,6 @@ export default function StudyPage() {
     })
   }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals])
 
-  /**
-   * The running balance per language since full debt was enabled — negative = owed, positive = banked.
-   *
-   * Uses each day's CONFIGURED goal (via `owedGoalForDate`), never the displayed one: the displayed
-   * goal is clamped to 2.5× base, and reading the balance off that would quietly forgive the withheld
-   * remainder that's supposed to roll forward.
-   *
-   * Includes every pair with a full-debt history, even ones with no goal today — a language you owe 30
-   * cards on shouldn't vanish from the standing just because today is a rest day.
-   */
-  const standings = useMemo(() => {
-    if (!fullDebt || !fullDebtSince || !todayStr || todayWeekday < 0) return []
-    const throughYesterday = addDays(todayStr, -1)
-    return langPairs.flatMap(p => {
-      const key = `${p.sourceLanguage}|${p.targetLanguage}`
-      const configuredForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
-      const isDeferred = (d: string) => deferrals.includes(`${key}|${d}`)
-      const owed = (d: string) => owedGoalForDate(d, configuredForWeekday, isDeferred)
-      const planned = plannedGoalSum(owed, fullDebtSince, throughYesterday)
-      const todayGoal = owed(todayStr)
-      // Never studied and never owed anything — nothing meaningful to report.
-      if (planned <= 0 && todayGoal <= 0 && (sinceGradCounts.get(key) ?? 0) === 0) return []
-      const standing = goalStanding({
-        plannedThroughYesterday: planned,
-        gradsThroughYesterday:   sinceGradCounts.get(key) ?? 0,
-        todayGoal,
-        todayGrads:              todayGradCounts.get(key) ?? 0,
-        exemptionAdjustment: fullDebtExemptionAdjustment({
-          skipShortfallDays, skipSurplusDays,
-          goalForDay: owed, gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
-          since: fullDebtSince, through: throughYesterday,
-        }),
-      })
-      return [{ pair: p, key, standing }]
-    })
-  }, [langPairs, fullDebt, fullDebtSince, todayStr, todayWeekday, deferrals, sinceGradCounts, todayGradCounts, skipShortfallDays, skipSurplusDays, exemptDayGrads])
-
-  const maxStandingMagnitude = useMemo(
-    () => standings.reduce((m, s) => Math.max(m, Math.abs(s.standing)), 0),
-    [standings],
-  )
-
   // "Move today's load to tomorrow" for one language: record today's study-day as deferred for that pair.
   // owedGoalForDate then zeroes it today and adds it to tomorrow; the row drops off the list immediately.
   async function deferGoalToTomorrow(key: string) {
@@ -1035,45 +993,6 @@ export default function StudyPage() {
               </div>
             )
           })()}
-
-          {/* ── Current standing — the running balance since full debt was switched on. Only shown in
-               full-debt mode, because it's the only mode with a cumulative balance to report. ── */}
-          {fullDebt && fullDebtSince && standings.length > 0 && (
-            <div className="panel space-y-3">
-              <div className="flex items-baseline justify-between gap-3">
-                <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Current standing</h2>
-                <span className="text-xs text-ink-faint">since {fullDebtSince}</span>
-              </div>
-              {standings.map(({ pair, key, standing }) => {
-                // Behind → red and signed, so "-30" reads as thirty cards owed. Ahead → green.
-                // Exactly level → blue, the deliberate "on the mark" state.
-                const tone = standing < 0 ? 'text-danger' : standing > 0 ? 'text-success' : 'text-accent'
-                const bar  = standing < 0 ? 'bg-danger'   : standing > 0 ? 'bg-success' : 'bg-accent'
-                // Width is relative to the largest imbalance on screen, so the bars compare with each
-                // other; a level language still shows a sliver so the row never looks empty.
-                const pct = maxStandingMagnitude > 0
-                  ? Math.max(standing === 0 ? 4 : 8, Math.round((Math.abs(standing) / maxStandingMagnitude) * 100))
-                  : 4
-                return (
-                  <div key={key} className="space-y-1.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
-                      <span className={`tabular-nums ${tone}`}>
-                        {standing > 0 ? `+${standing}` : standing}
-                        {standing === 0 && <span className="text-ink-faint"> · on track</span>}
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">
-                      <div className={`h-full rounded-full ${bar} transition-all duration-500`} style={{ width: `${pct}%` }} />
-                    </div>
-                  </div>
-                )
-              })}
-              <p className="text-[11px] text-ink-faint">
-                Cards you&apos;d need to have finished by now to be level, counting today&apos;s goal.
-              </p>
-            </div>
-          )}
 
           {/* ── Filtered card list (cross-deck) ─────────────────────────── */}
           {activeFilter && (
