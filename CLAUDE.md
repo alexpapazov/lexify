@@ -2191,7 +2191,7 @@ session — see migration 026 above.)
   no `?category=` is given, and have no ElectivePicker. The ElectivePicker + in-memory
   remainingElective tracking + deck-prefs-driven batch limit are only in `study/[deckId]/session`.
 
-## Vocabulary onboarding (2026-07-30, migration 107 — MUST APPLY)
+## Vocabulary onboarding (2026-07-30, migration 107 — APPLIED)
 
 Bulk intake for words the learner already knows: paste a list, rate confidence 1–4, and bands 2–4
 graduate straight into Due Now instead of climbing the ladder. **Read

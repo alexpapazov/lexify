@@ -1,6 +1,6 @@
 # Vocabulary Onboarding
 
-**Status: built 2026-07-30. Needs migration `107_card_onboarding.sql` applied.**
+**Status: built 2026-07-30. Migration `107_card_onboarding.sql` applied 2026-07-30 (archived).**
 
 Bulk intake for words you already know. Paste a list (the 1000 most common Spanish words, a course
 glossary), rate your confidence on each one, and the ones you know are scheduled straight into Due Now

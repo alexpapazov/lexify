@@ -6,8 +6,8 @@ implementation notes + error log); this file is the map you read first.
 
 - **Scale**: ~50,300 lines across 222 TS/TSX files, 676 commits, 496 passing tests (40 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`107`, applied BY HAND —
-  **`107_card_onboarding.sql` is PENDING at the top level and must be run.**
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`107`, applied BY HAND — **all
+  applied, nothing pending.**
 
 ---
 
@@ -21,10 +21,9 @@ implementation notes + error log); this file is the map you read first.
   commit message** — zsh history expansion fails the commit and leaves files staged-but-uncommitted.
   Quote any `[bracket]` paths.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
-  `001`–`106` are applied and live in `supabase/migrations/archive/`. **Whatever sits at the top level
-  is PENDING** — right now that's **`107_card_onboarding.sql`, which the user still has to run**
-  (without it, vocabulary onboarding errors out the moment it tries to queue a card). Move it into
-  `archive/` once it's live. Next number = **108**.
+  `001`–`107` are all applied and all live in `supabase/migrations/archive/`. **The top level is
+  empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
+  run it, and move it into `archive/` once it's live. Next number = **108**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
   **40 suites / 496 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
@@ -200,7 +199,7 @@ Bulk intake for words you already know — paste a frequency list, rate confiden
 the ladder. Writes both direction rows as `bulk_known` (excluded from goals). Resumable — the deck
 page shows "Finish onboarding" while `card_onboarding` rows remain unrated.
 
-Full detail in `features/Vocabulary Onboarding.md`. **Needs migration 107.**
+Full detail in `features/Vocabulary Onboarding.md`. Migration 107 applied 2026-07-30.
 
 Side effect worth knowing: `INPUT_WORD_CAP` is now **5000**, and *all* AI card generation goes through
 `lib/generateCards.ts`, which chunks. Calling `/api/cards/generate` directly with a big input
@@ -317,13 +316,14 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 
 ## 7. Open threads
 
-Roughly in priority order. Nothing here is half-written, but **migration 107 is pending** — run it
-before relying on vocabulary onboarding.
+Roughly in priority order. Nothing here is half-written — the tree is clean and every migration is
+applied, so any of these is a clean start.
 
-0. **Apply `107_card_onboarding.sql`**, then archive it. Onboarding is code-complete and
-   build/test-verified, but it has NOT been exercised against a real account (the flow is behind auth).
-   First run to watch: rate a handful of words, then check the deck's Due Now counts and the ℹ panel's
-   per-track schedules look right.
+0. **Vocabulary onboarding + batch deck import are unexercised against a real account.** Both are
+   code-complete, build/test-verified, and their migrations are live, but neither was clicked through
+   (the flows are behind auth). First run to watch for onboarding: rate a handful of words, then check
+   the deck's Due Now counts and the ℹ panel's per-track schedules. For batch import: confirm the
+   folder tree lands where expected and the per-deck duplicate check behaves across successive decks.
 1. **Ladder Stage 3** — strip the legacy pipeline from the session pages (§5.1). Biggest cleanup, and
    it shrinks the three session pages that §5.2 is about.
 2. **Offline sync-back is device-unverified** — study offline, reconnect, confirm the outbox drains.
