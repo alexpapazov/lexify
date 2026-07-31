@@ -41,14 +41,22 @@ export function recencyWeightedMean(
   return wSum > 0 ? vSum / wSum : 0
 }
 
-// Clamp on the interval-calibration multiplier. Tightened from 0.5–2.5 to 0.7–1.5: a card can't be
-// stretched past 1.5× (or shrunk below 0.7×) of what FSRS says, so a noisy retention estimate can
-// never blow up a schedule — this is the "artificially inflated intervals" ceiling.
+// Clamp on the interval-calibration multiplier. Originally 0.5–2.5, tightened to 0.7–1.5 when the
+// damping controller landed, then the ceiling raised to 2.0 (2026-07-28) because every track had
+// pinned at 1.5 — the controller wanted to stretch further than it was allowed, so the clamp (not
+// the measurement) was setting the schedule. A card still can't be stretched past 2× (or shrunk
+// below 0.7×) of what FSRS says, so a noisy retention estimate can't blow up a schedule.
+//
+// Raising the ceiling is safe-ish precisely BECAUSE of the slew limit below: reaching 2.0 from 1.0
+// takes ~13 sustained days of measured retention above target, so a hot streak still can't jump the
+// schedule — it can only creep. If intervals start overshooting (retention drifting below target),
+// lower this before touching CAL_MAX_STEP_PER_DAY.
 export const CAL_MIN = 0.7
-export const CAL_MAX = 1.5
+export const CAL_MAX = 2.0
 
 /** Max the multiplier may move per actuation. A slew-rate limit: the controller creeps toward its
- *  target instead of replacing it outright, so 1.0→1.5 takes ~6 sustained days, not one hot streak. */
+ *  target instead of replacing it outright, so 1.0→1.5 takes ~6 sustained days (and 1.0→2.0 ~13),
+ *  not one hot streak. */
 export const CAL_MAX_STEP_PER_DAY = 0.08
 
 /** Minimum hours between multiplier moves. Measurement still refreshes every session; only the

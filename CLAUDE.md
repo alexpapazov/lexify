@@ -1100,7 +1100,8 @@ multiplier (`retention_calibration`) used to be replaced outright each session f
 clamped 0.5–2.5 → it oscillated (a 2-good-day streak inflated intervals, causing misses days later). Now a
 slow, slew-rate-limited controller: measurement (`recent_retention_rate`) still refreshes every session, but
 the multiplier moves at most `CAL_MAX_STEP_PER_DAY = 0.08` and at most once per `CAL_MIN_ACTUATE_HOURS = 20`
-(gated by new `retention_calibration_at`, migration **101**), within a tight **0.7–1.5** band; half-life
+(gated by new `retention_calibration_at`, migration **101**), within a **0.7–2.0** band (ceiling raised
+from 1.5 on 2026-07-28 — see below); half-life
 widened 7→14d. `lib/retentionCalibration.ts` (`dampedCalibration`, tightened `CAL_MIN/MAX`) + `calibrate/route.ts`
 (split measurement from actuation). Forecasts read the stored multiplier so they match automatically. The
 user's chosen target retention: **0.85 forward, 0.80 reverse** (set in the per-pair SRS modal). **Stage B
@@ -2136,6 +2137,26 @@ absent/unknown flag is treated as onboarded — never trap someone outside the a
 from `AuthWall`). It writes the localStorage memo AND invalidates the cached read; without it the
 gate keeps serving its cached "not onboarded" answer for up to 60s and bounces the user straight back
 into setup. Both call sites in `app/onboarding/page.tsx` do this.
+
+## Calibration ceiling raised 1.5 → 2.0 (2026-07-28)
+
+`CAL_MAX` in `lib/retentionCalibration.ts` went from 1.5 to **2.0** (band is now 0.7–2.0). Reason:
+every track on the user's account had pinned at exactly ×1.50 — the damped controller wanted to
+stretch intervals further than the clamp allowed, so the CLAMP was setting the schedule rather than
+the measurement. (Reverse recall was measuring 93% against a 90% target.)
+
+Raising it is safe-ish only because `CAL_MAX_STEP_PER_DAY = 0.08` still applies: 1.0 → 2.0 takes ~13
+sustained days of measured retention above target, so a hot streak still can't jump the schedule —
+it can only creep. That slew limit is the real anti-whipsaw mechanism; the band is a backstop.
+
+**If intervals start overshooting** (measured retention drifting BELOW target across tracks), lower
+`CAL_MAX` before touching `CAL_MAX_STEP_PER_DAY` — shrinking the step just makes the controller
+slower to correct, which is the opposite of what an overshoot needs.
+
+Note the alternative we did NOT take: lowering per-track TARGET retention. That reaches the same
+longer intervals through the FSRS math instead of a correction factor, and is arguably the more
+principled lever if the pinning returns at 2.0 — a calibration factor sitting at its ceiling is a
+symptom that the target is mis-set.
 
 ## Known backlog / open issues
 
