@@ -1,4 +1,4 @@
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, capGoal, MAX_GOAL_MULTIPLE } from '../goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, capGoal, MAX_GOAL_MULTIPLE, goalStanding } from '../goalCarryover'
 
 const base = { baseGoal: 20, yesterdayGoal: 20, yesterdayCount: 20, carryShortfall: false, carrySurplus: false }
 
@@ -219,5 +219,58 @@ describe('capped debt DRAINS across days rather than being forgiven', () => {
     }
     // 25 backlog + 4 days x 8 = 57 owed over the window; all of it eventually assigned.
     expect(done).toBe(57)
+  })
+})
+
+describe('goalStanding — the running balance since full debt was enabled', () => {
+  const base = { plannedThroughYesterday: 0, gradsThroughYesterday: 0, todayGoal: 0, todayGrads: 0 }
+
+  it('is 0 when everything owed has been done', () => {
+    expect(goalStanding({ ...base, plannedThroughYesterday: 40, gradsThroughYesterday: 40 })).toBe(0)
+  })
+
+  it('is negative by exactly the number of cards owed', () => {
+    expect(goalStanding({ ...base, plannedThroughYesterday: 50, gradsThroughYesterday: 20 })).toBe(-30)
+  })
+
+  it('is positive when ahead', () => {
+    expect(goalStanding({ ...base, plannedThroughYesterday: 20, gradsThroughYesterday: 35 })).toBe(15)
+  })
+
+  it("counts today's goal as owed and today's work as done", () => {
+    // Fresh day, nothing studied yet: you are down by today's goal.
+    expect(goalStanding({ ...base, todayGoal: 12 })).toBe(-12)
+    // Half of it done.
+    expect(goalStanding({ ...base, todayGoal: 12, todayGrads: 5 })).toBe(-7)
+    // Finished, and level.
+    expect(goalStanding({ ...base, todayGoal: 12, todayGrads: 12 })).toBe(0)
+    // Overshot.
+    expect(goalStanding({ ...base, todayGoal: 12, todayGrads: 20 })).toBe(8)
+  })
+
+  it('combines history with today', () => {
+    expect(goalStanding({
+      plannedThroughYesterday: 100, gradsThroughYesterday: 70, todayGoal: 10, todayGrads: 4,
+    })).toBe(-36)
+  })
+
+  it('treats a negative today goal as zero owed rather than as credit', () => {
+    expect(goalStanding({ ...base, todayGoal: -5, todayGrads: 3 })).toBe(3)
+  })
+
+  it('applies the exemption adjustment the same way fullDebtGoal does', () => {
+    // 30 owed, 0 done, but the whole shortfall was waived.
+    expect(goalStanding({
+      ...base, plannedThroughYesterday: 30, gradsThroughYesterday: 0, exemptionAdjustment: 30,
+    })).toBe(0)
+  })
+
+  it('agrees with fullDebtGoal about the direction of the carryover', () => {
+    const planned = 50, grads = 20, baseGoal = 10
+    const standing = goalStanding({ plannedThroughYesterday: planned, gradsThroughYesterday: grads, todayGoal: baseGoal, todayGrads: 0 })
+    const { goal } = fullDebtGoal({ baseGoal, plannedThroughYesterday: planned, gradsThroughYesterday: grads })
+    // Behind on both readings; the goal is raised (capped), the standing is negative.
+    expect(standing).toBeLessThan(0)
+    expect(goal).toBeGreaterThan(baseGoal)
   })
 })

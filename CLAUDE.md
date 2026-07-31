@@ -2265,6 +2265,26 @@ through the normal two-step duplicate check. **No AI anywhere.** Read
 - **`prefetchChoices` and language sync are deliberately NOT run** in batch mode — both are AI, and 198
   cards would be 198 model calls. `autoGroupByGloss` IS kept (deterministic).
 
+## "Current standing" — the running full-debt balance (2026-07-31, no migration)
+
+A panel under Today's goals on the study dashboard, shown **only in full-debt mode** (it's the only
+mode with a cumulative balance to report). Per language: how many cards you'd need to have finished by
+now to be level. **Red + signed** when behind (`-30` = thirty owed), **green** when ahead, **blue**
+when exactly level.
+
+`goalStanding` in `lib/goalCarryover.ts` (pure, 8 tests):
+`grads since enable − (planned since enable + today's goal) + exemptionAdjustment`.
+
+- **Counts TODAY on both sides, deliberately.** A balance through yesterday alone would sit at a
+  flattering number all day and lurch at turnover; including today means it starts each morning down
+  by today's goal and climbs to zero as you study — which is what "on track" means.
+- **Uses each day's CONFIGURED goal via `owedGoalForDate`, never the displayed one.** The displayed
+  goal is clamped to 2.5× base; reading the balance off that would forgive the withheld remainder that
+  is supposed to roll forward. Same reason `plannedGoalSum` must never be capped.
+- Includes pairs with **no goal today** — a language you owe 30 cards on must not vanish from the
+  standing because today is a rest day.
+- Bar widths are relative to the largest imbalance on screen, so languages compare against each other.
+
 ## `listOwned` was capped at 1000 rows — THE duplicate-leak root cause (2026-07-31)
 
 `cardRepo.listOwned` was a bare `select('*')` with no paging, so PostgREST silently truncated it at

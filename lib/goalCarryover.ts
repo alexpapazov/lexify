@@ -135,6 +135,34 @@ export function fullDebtGoal(args: {
 }
 
 /**
+ * The running balance since full debt was switched on: how far ahead or behind you are RIGHT NOW,
+ * counting today.
+ *
+ * `standing = (everything graduated since the enable date) − (everything owed over the same span)`,
+ * where "owed" includes today's configured goal. So it reads as the answer to "how many cards would I
+ * need to have done by now to be level": negative = that many owed, positive = that many banked.
+ *
+ * Deliberately counts TODAY on both sides. A balance through yesterday alone would sit at a flattering
+ * number all day and then lurch at turnover; including today means it starts each morning down by
+ * today's goal and climbs to zero as you study, which is what "on track" actually means.
+ *
+ * Same `exemptionAdjustment` convention as `fullDebtGoal` — waived days cancel out of the total — and
+ * the same statelessness: this is recomputed from history, never stored, so the 2.5× display cap on a
+ * single day's goal never truncates the real balance.
+ */
+export function goalStanding(args: {
+  plannedThroughYesterday: number
+  gradsThroughYesterday:   number
+  todayGoal:               number
+  todayGrads:              number
+  exemptionAdjustment?:    number
+}): number {
+  const planned = args.plannedThroughYesterday + Math.max(0, args.todayGoal)
+  const grads   = args.gradsThroughYesterday + args.todayGrads
+  return grads - planned + (args.exemptionAdjustment ?? 0)
+}
+
+/**
  * Per-day exemptions from full-debt carryover, as a correction to add to `grads - planned`.
  *
  * A day in `skipShortfallDays` never contributes a DEFICIT (falling short is forgiven); a day in
