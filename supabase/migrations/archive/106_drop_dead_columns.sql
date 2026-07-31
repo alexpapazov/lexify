@@ -1,11 +1,9 @@
 -- 106_drop_dead_columns.sql
 --
--- ⚠️  NOT YET APPLIED — REQUIRES EXPLICIT SIGN-OFF BEFORE RUNNING. ⚠️
+-- ✅ APPLIED 2026-07-30. Kept for the record.
 --
--- This is the ONE irreversible step of the 2026-07-30 dead-code cleanup. Dropping a column
--- destroys its data permanently; there is no rollback. Everything else in that cleanup was
--- TypeScript-only and is revertable with git. Read this header before pasting it into the
--- Supabase SQL editor.
+-- This was the one irreversible step of the 2026-07-30 dead-code cleanup: dropping a column
+-- destroys its data permanently. The five columns below are gone from the database.
 --
 -- Drops five columns that no code reads. Each was verified three ways before being listed here:
 --   (a) repo-wide search for the snake_case name  → zero hits in code (docs/migrations only)

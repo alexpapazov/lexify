@@ -4,9 +4,10 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~48,700 lines across 217 TS/TSX files, 673 commits, 452 passing tests (38 suites).
+- **Scale**: ~47,800 lines across 212 TS/TSX files, 674 commits, 447 passing tests (37 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`105`, applied BY HAND.
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`106`, applied BY HAND — **all
+  applied, nothing pending.**
 
 ---
 
@@ -19,10 +20,14 @@ implementation notes + error log); this file is the map you read first.
   Use `git add -A` (a subfolder cwd silently misses files with `git add .`). **Never put `!` in a
   commit message** — zsh history expansion fails the commit and leaves files staged-but-uncommitted.
   Quote any `[bracket]` paths.
-- **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential;
-  `001`–`104` live in `supabase/migrations/archive/`, **`105_reverse_dormancy_backfill.sql` is at the
-  top level and has been applied** (safe to move into `archive/`). Next number = **106**.
-- **Verify before proposing a commit**: `npm run build` + `npm test`.
+- **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
+  `001`–`106` are all applied and all live in `supabase/migrations/archive/`. **The top level is
+  empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
+  run it, and move it into `archive/` once it's live. Next number = **107**.
+- **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
+  **37 suites / 447 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
+  artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
   only updates after `npm run build:cap && npx cap sync ios` AND an Xcode rebuild.** "Did the fix
   land?" is usually a rebuild question.
@@ -70,8 +75,8 @@ supabase/migrations Hand-applied SQL.
 | `dueNow.ts` | The decision layer over FSRS: relearn gates, un-graduation, typed→rating mapping |
 | `grading.ts` | Typed-answer grading: normalization, near-misses, articles, accents |
 | `confusion.ts` | Detecting and classifying "typed a different real word" |
-| `pipeline.ts` | The LEGACY pre-ladder step machine — still used for production bookkeeping (§6) |
-| `scheduler.ts` | Legacy interval scheduler — superseded by FSRS, partially retired |
+| `pipeline.ts` | The LEGACY pre-ladder step machine — still used for production bookkeeping (§5.1) |
+| `scheduler.ts` | 87 lines, all live: `classifyReviewMode`, `graduationIntervalRange`, `isGraduatedDueByDate`. The old interval-multiplier scheduler it's named after is long gone |
 | `density.ts`, `productionMode.ts` | Due-date smoothing; typed-vs-self-graded choice |
 
 **Routing note**: there are **no dynamic route segments**. Everything is query params
@@ -213,98 +218,52 @@ The app got slow three separate ways, each with a different fix. All are documen
 
 ---
 
-## 5. DEAD CODE AUDIT — **EXECUTED 2026-07-30**
+## 5. Vestigial code and structural debt
 
-Measured, not guessed: exports cross-referenced across all prod files, with test-only usage separated
-out, then every deletion candidate adversarially re-verified (18 agents, refute-first) before removal.
-**§5.1–5.3 are DONE.** Full findings + the phase plan live in `DEAD_CODE_CLEANUP.md`.
+A dead-code cleanup ran on 2026-07-30 (commit `7bf1648`): 5 orphaned modules, ~16 unused symbols and
+~86 over-exports removed, plus migration `106` dropping 5 unread columns. **That work is closed** —
+`DEAD_CODE_CLEANUP.md` has the record if you ever need it; don't re-litigate it. What follows is what
+it deliberately did NOT touch, because each item changes behavior and needs its own decision.
 
-Post-cleanup gate: `npm run build` exits 0, `npx tsc --noEmit` clean, **37 suites / 447 tests pass**.
-The 452→447 delta is exactly the deleted `lib/__tests__/relearnPool.test.ts` (1 suite, 5 tests) — no
-test regressed and none was skipped to hide a failure.
+Two leftovers from that pass that a scanner will flag again — **they are not bugs**: a handful of
+symbols (`bestVoiceFor`, `estimateBundleBytes`, `dedupeAgainst`, most of `domain/index.ts`'s type
+aliases) are used only inside their own file, so they're intentionally non-exported. And `maxDuration`
+(`app/api/sync/route.ts`) / `viewport` (`app/layout.tsx`) look unused but are Next.js framework
+exports. Leave all of them alone.
 
-### 5.1 Orphaned modules — ✅ DELETED
+### 5.1 Vestigial features
 
-`components/library/Library.tsx` (356), `lib/autoSync.ts` (228), `lib/relearnPool.ts` (40) plus its
-test, and the `lib/data/index.ts` barrel (14). The empty `components/library/` directory went too.
-
-Two of these were live traps: the library UI actually lives inline in `app/library/page.tsx`
-(`LibraryPageInner` / `LibraryPageBody`), and auto-sync is server-side in `lib/syncProcessor.ts` +
-`/api/sync` — anyone editing the deleted files would have been editing nothing.
-
-**Careful:** the `relearnPool` **useState variable** in the three session pages is unrelated to the
-deleted module and is live — it holds the in-session relearn queue.
-
-### 5.2 Dead exports in live modules — ✅ DONE
-
-~16 symbols deleted outright and ~75 de-exported (kept, but no longer part of any module's public
-surface). Deletions included `engine/grading.ts: gradeMultiField` + `resolveAdaptiveSettings`,
-`engine/pipeline.ts: ratingToWasCorrect`, `lib/languages.ts: languageColor` + `defaultLanguageColor`,
-`lib/distractors.ts: deckSiblingAnswers`, `lib/routes.ts: ROUTE_ID_KEY`,
-`lib/sessionLimits.ts: reviewTrackField`, `lib/agents/runClient.ts: runAgentAndSave`,
-`lib/offline/localRepos.ts: localLadderDefault` + `localConfusionLinksForUser`, and in
-`domain/index.ts` the `DEFAULT_FLEXIBLE_SETTINGS`, `LanguageSyncState` and `DeckCard` fossils.
-
-Corrections to the original findings list, discovered during verification — **do not "re-fix" these**:
-`bestVoiceFor`, `estimateBundleBytes` and `dedupeAgainst` are called INTERNALLY, so they were
-de-exported, not deleted. `maxDuration` (`app/api/sync/route.ts`) and `viewport` (`app/layout.tsx`)
-look dead to any scanner but are **Next.js framework exports** — leave them alone.
-
-De-exporting the `domain/index.ts` types is safe here specifically because tsconfig has `noEmit` and
-never emits declarations, so TS4023/TS4033 ("exported variable has or is using private name") cannot
-fire. If declaration emit is ever turned on, revisit.
-
-**Still open:** the 42 test-only exports were left as-is. The `lib/ladderSession.ts` six (`rungUI`,
-`reshowDelayMs`, `pickIntervalDay`, `rungIsSingleStep`, two wait constants) are worth a functional
-look — they may be vestigial *functions*, not just over-exports.
-
-### 5.3 Dead database columns — migration written, ⚠️ **NOT APPLIED**
-
-`supabase/migrations/106_drop_dead_columns.sql` drops five verified-unread columns:
-`profiles.prefer_forvo` (superseded by `audio_source_default`, 088),
-`profiles.goals_count_accelerated` (the "auto-graduated cards never count toward goals" rule is now
-hardcoded), and `user_scheduler_params.strict_spelling` / `strict_accents` / `strict_articles`
-(superseded by `spelling_mode` / `accents_mode` / `articles_mode`, 069).
-
-**This is the one irreversible step and it needs an explicit go-ahead before being run.** Note the
-camelCase `strictSpelling` / `strictAccents` / `strictArticles` fields in TS ARE live — they read the
-`*_mode` columns, not these booleans. Don't let the name collision scare you off, and don't rename them.
-
-Correction: the legacy scheduler columns (`ease`, `lapse_cluster_count`, `last_lapse_at`,
-`pending_interval_days`) were **already dropped by migration 091** — the old note here was stale.
-Relatedly, `engine/scheduler.ts` is already trimmed to 87 lines of three live helpers; there is no
-scheduler dead code left to remove.
-
-### 5.4 Dead/vestigial features — **NOT touched by the 2026-07-30 cleanup**
-
-Everything in this subsection changes behavior or removes a real feature, so it was deliberately left
-alone. Each needs its own decision and its own plan.
-
-- **`engine/scheduler.ts`** — already fully trimmed; all 87 remaining lines are live
-  (`classifyReviewMode` / `graduationIntervalRange` / `isGraduatedDueByDate`). Nothing to remove.
 - **`engine/pipeline.ts`** — the ORIGINAL 5-step learning pipeline, replaced by the ladder. Still
   called by all three session pages: `progressAfterReview` runs for its **production bookkeeping**
   (typed accuracy window, forced typing, reps/lapses) while FSRS overrides the schedule. This is the
   long-standing backlog item "**Ladder Stage 3** — strip the pre-grad pipeline from the session pages
-  and delete the engine pipeline". It is the single biggest remaining cleanup and the reason the
-  three session pages are ~1,700–2,300 lines each.
+  and delete the engine pipeline". It is the single biggest remaining cleanup and a large part of why
+  the three session pages are ~1,700–2,300 lines each.
 - **Learning Pathways** — fully built (engine, config, visual canvas editor, session integration) but
   **opt-in and effectively unused**; the app ships no prebuilt pathways. It's a parallel code path in
-  `LadderStudy` that every ladder change must not break. Consider whether it earns its keep.
+  `LadderStudy` that every ladder change must not break. Roughly 1,000+ lines across
+  `engine/pathwayEngine.ts`, `lib/pathway.ts`, `lib/data/pathways.ts`, `PathwayEditor`/`PathwayCanvas`
+  and branches inside `LadderStudy`. Worth asking whether it earns its keep.
+- **Agent-platform scaffolding with no caller** — `lib/data/changeSets.ts: create` and
+  `lib/agents/runner.ts: runAgent` (test-only) are building blocks for the planned Agent Platform
+  Phases 3+ (grants UI, job queue, triggers). Left in place on purpose; removing them is a roadmap
+  decision.
+- **`lib/ladderSession.ts`** has six symbols reached only by their tests (`rungUI`, `reshowDelayMs`,
+  `pickIntervalDay`, `rungIsSingleStep`, two wait constants). Unresolved question: did the UI stop
+  calling them, or did the feature move? Needs a functional look, not a mechanical one.
 - **`@capacitor/core` / `@capacitor/ios`** show as unused dependencies — false positive; they're
   consumed by the native build, not imported in TS.
-- **Agent-platform scaffolding now caller-less** — deleting `runAgentAndSave` left
-  `lib/data/changeSets.ts: SupabaseChangeSetRepository.create` with no caller, and
-  `lib/agents/runner.ts: runAgent` is now reached only by its own tests. Both were LEFT IN PLACE on
-  purpose: they're building blocks for the planned Agent Platform Phases 3+ (grants UI, job queue,
-  triggers), so removing them is a roadmap decision, not dead-code cleanup.
 
-### 5.5 Structural duplication (not dead, but the top maintenance cost)
+### 5.2 Structural duplication (not dead, but the top maintenance cost)
 
 **The three session pages** (`app/study/{all,deck,folder}/session/page.tsx`) are near-identical and
-total **~5,800 lines**. Almost every fix in this codebase has to be applied three times — including
-`handleAnswer`, undo, relearn resurfacing, dormancy, IPA, and the Almost button. This is the highest-
-leverage refactor available (extract a shared session hook), and also the riskiest.
+total **~5,800 lines** (deck 2,325 · all 1,800 · folder 1,693). Almost every fix in this codebase has
+to be applied three times — including `handleAnswer`, undo, relearn resurfacing, dormancy, IPA, and
+the Almost button. **If you fix a session bug, check whether it needs applying to all three.** This is
+the highest-leverage refactor available (extract a shared session hook), and also the riskiest.
+
+Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `app/study/deck/page.tsx`
+(2,065), `app/library/page.tsx` (1,676), `app/study/page.tsx` (1,339).
 
 ---
 
@@ -323,24 +282,35 @@ leverage refactor available (extract a shared session hook), and also the riskie
 - **Two "Loading…" screens.** The small faint one is `AuthWall`; the larger is the page. Knowing
   which you're stuck on tells you where to look.
 - **Cached reads are shared objects** — treat as immutable, copy before sorting or patching.
+- **Name collisions that mislead.** `relearnPool` is a live `useState` variable in the three session
+  pages holding the in-session relearn queue (the similarly-named module is gone — don't confuse
+  them). And the TS fields `strictSpelling` / `strictAccents` / `strictArticles` read the
+  `spelling_mode` / `accents_mode` / `articles_mode` columns, NOT the `strict_*` booleans, which were
+  dropped in migration 106.
 
 ---
 
 ## 7. Open threads
 
-1. **Ladder Stage 3** — strip the legacy pipeline from the session pages (§5.4). Biggest cleanup.
-2. **Analytics still ships rows to draw points.** Postgres `GROUP BY` RPCs would replace ~14k rows
-   with ~30; off-screen charts still fetch eagerly instead of on scroll.
-3. **Offline sync-back is device-unverified** — study offline, reconnect, confirm the outbox drains.
-   This is the leg where data loss would actually appear.
-4. **Learning Pathways never runtime-verified** with a real multi-day study run.
-5. **Duplicate-card bugs `#55` / `#59`** — merge creates a new duplicate; exact duplicates can still
+Roughly in priority order. Nothing here is half-written — the tree is clean and every migration is
+applied, so any of these is a clean start.
+
+1. **Ladder Stage 3** — strip the legacy pipeline from the session pages (§5.1). Biggest cleanup, and
+   it shrinks the three session pages that §5.2 is about.
+2. **Offline sync-back is device-unverified** — study offline, reconnect, confirm the outbox drains.
+   This is the leg where data loss would actually appear, so it's the highest-risk unknown.
+3. **Duplicate-card bugs `#55` / `#59`** — merge creates a new duplicate; exact duplicates can still
    be saved.
-6. **`ReviewCalendar` profile read is unhardened** (§6).
-7. **Scheduling "Stage B"** (learned per-feature interval model) — designed, explicitly **DEFERRED**.
-   Do not start without the user reopening it.
-8. **Calibration ceiling** was just raised 1.5 → 2.0 because every track had pinned at the old max.
+4. **Analytics still ships rows to draw points.** Postgres `GROUP BY` RPCs would replace ~14k rows
+   with ~30; off-screen charts still fetch eagerly instead of on scroll.
+5. **`ReviewCalendar` profile read is unhardened** — it's the last one without the core-columns
+   fallback (§6, first bullet).
+6. **Learning Pathways never runtime-verified** with a real multi-day study run — related to the
+   keep-or-cut question in §5.1.
+7. **Calibration ceiling** was raised 1.5 → 2.0 because every track had pinned at the old max.
    If they pin at 2.0 too, lower target retention instead of raising it again.
+8. **Scheduling "Stage B"** (learned per-feature interval model) — designed, explicitly **DEFERRED**.
+   Do not start without the user reopening it.
 
 ---
 

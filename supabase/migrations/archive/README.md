@@ -1,4 +1,4 @@
-# Archived migrations (001–105)
+# Archived migrations (001–106)
 
 These are the historical migrations, moved here so the top-level
 `supabase/migrations/` folder shows only the newest few — no scrolling past 100
