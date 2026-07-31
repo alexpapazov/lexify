@@ -8,13 +8,18 @@
  * parsed locally (`lib/docx.ts`) and nothing is uploaded. Distractor pre-generation and language
  * syncing (both AI) are deliberately skipped; distractors are generated lazily at study time anyway.
  *
- * Decks are saved ONE AT A TIME, and each save runs the same two-step duplicate check the single-deck
- * flow uses: first press checks and flags, second press confirms. That's the whole point of not
- * saving them in a single batch — you get to decide what happens to each collision, with
- * "Remove all duplicates" / "Ignore all" to move fast when the answer is the same for all of them.
+ * Decks are saved ONE AT A TIME, and each save is a two-step gate: the first press checks and flags,
+ * the second confirms. That's the whole point of not saving them in a single batch — you get to
+ * decide what happens to each collision, with "Remove all duplicates" / "Add all anyway" to move fast
+ * when the answer is the same for all of them.
  *
- * Duplicates are checked against the library AND against cards created earlier in this same import,
- * since a word can easily appear under two headings of one document.
+ * **Duplicates here are FRONT-ONLY** (`analyzeFrontDuplicate`): the same word twice is a duplicate
+ * whatever the gloss says, because two cards for one word means two competing schedules. A mass
+ * import leaked duplicates precisely because front+back matching can't see "cielo = sky" vs
+ * "cielo = heaven". Genuine homographs are handled by choosing "Add anyway" per card.
+ *
+ * Checked against the library AND against lines earlier in the same deck and earlier decks of the
+ * same import, since a word easily appears under two headings of one document.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -28,18 +33,29 @@ import { SupabaseDismissedPairRepository } from '@/lib/data/dismissedPairs'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { readDeckPlanFromFile, type DeckPlan, type PlannedDeck } from '@/lib/docx'
-import { analyzeDuplicate, tier1Match, tier2Match, type DuplicateAnalysis } from '@/lib/duplicates'
+import { analyzeFrontDuplicate, normalizeFrontKey, type DuplicateAnalysis } from '@/lib/duplicates'
 import { langFlag, langName } from '@/lib/languages'
 import { routes } from '@/lib/routes'
 import type { Card, Folder, LanguagePair } from '@/domain'
 
 type Phase = 'setup' | 'review' | 'done'
 
+/**
+ * What to do with one imported line.
+ *   create          — no collision; make a new card.
+ *   merge           — the word already exists; link that card into this deck instead of duplicating.
+ *   keep-both       — make a second card anyway. The homograph escape hatch (vino = wine / he came).
+ *   delete-existing — replace the library's card with this one.
+ *   skip            — drop this line entirely (an earlier line in this same deck has the same word,
+ *                     so there is no saved card to merge with).
+ */
+type ImportAction = 'create' | 'merge' | 'keep-both' | 'delete-existing' | 'skip'
+
 interface ImportItem {
   front:     string
   back:      string
   duplicate: DuplicateAnalysis | null
-  action:    'create' | 'merge' | 'keep-both' | 'delete-existing'
+  action:    ImportAction
   /** Index of an earlier item in THIS deck that this one duplicates (neither is saved yet). */
   batchDuplicateOf?: number
   existingCardDeckNames?: string[]
@@ -178,36 +194,40 @@ export function BatchDeckImport() {
     setError(null)
 
     if (!dupChecked) {
+      // FRONT-ONLY, deliberately: the same word twice is a duplicate whatever the gloss says. Mass
+      // imports leaked duplicates for exactly the case front+back matching can't see — the library
+      // already had "cielo = sky" and the document brought "cielo = heaven".
       const withDup: ImportItem[] = items.map((it, idx) => {
-        const duplicate = analyzeDuplicate({ front: it.front, back: it.back }, library, sourceLanguage, targetLanguage)
+        const duplicate = analyzeFrontDuplicate({ front: it.front, back: it.back }, library, sourceLanguage)
         if (duplicate.tier !== 'none') {
-          return { ...it, duplicate, action: duplicate.tier === 'near' ? 'keep-both' : 'create' }
+          // Reuse the card that already exists rather than adding a second one for the same word.
+          return { ...it, duplicate, action: 'merge' }
         }
+        // Same word twice inside THIS deck. Neither copy is saved, so there's nothing to merge with —
+        // the only resolution is dropping the later one, which is what 'skip' means.
         for (let j = 0; j < idx; j++) {
-          const other = items[j]!
-          const a = { front: it.front, back: it.back }
-          const b = { front: other.front, back: other.back }
-          if (tier1Match(a, b) || tier2Match(a, b, sourceLanguage, targetLanguage)) {
-            return { ...it, duplicate: { tier: 'near', existingCard: null }, action: 'keep-both', batchDuplicateOf: j }
+          if (normalizeFrontKey(it.front, sourceLanguage) === normalizeFrontKey(items[j]!.front, sourceLanguage)
+              && normalizeFrontKey(it.front, sourceLanguage)) {
+            return { ...it, duplicate: { tier: 'front', existingCard: null }, action: 'skip', batchDuplicateOf: j }
           }
         }
         return { ...it, duplicate, action: 'create' }
       })
 
-      const exactIds = [...new Set(withDup
-        .filter(it => it.duplicate?.tier === 'exact' && it.duplicate.existingCard)
+      const hitIds = [...new Set(withDup
+        .filter(it => it.duplicate?.existingCard)
         .map(it => it.duplicate!.existingCard!.id))]
-      const deckNames = exactIds.length
-        ? await new SupabaseCardRepository().listDeckNamesForCards(exactIds).catch(() => ({} as Record<string, string[]>))
+      const deckNames = hitIds.length
+        ? await new SupabaseCardRepository().listDeckNamesForCards(hitIds).catch(() => ({} as Record<string, string[]>))
         : {}
       const resolved = withDup.map(it =>
-        it.duplicate?.tier === 'exact' && it.duplicate.existingCard
+        it.duplicate?.existingCard
           ? { ...it, existingCardDeckNames: deckNames[it.duplicate.existingCard.id] ?? [] }
           : it)
 
       setItems(resolved)
       setDupChecked(true)
-      if (resolved.some(it => it.duplicate?.tier === 'near' || it.duplicate?.tier === 'exact')) return
+      if (resolved.some(it => it.duplicate && it.duplicate.tier !== 'none')) return
       await commit(resolved, planned)
       return
     }
@@ -231,7 +251,7 @@ export function BatchDeckImport() {
       if (folderId) await deckRepo.update(deck.id, { folderId })
 
       const toMerge  = list.filter(it => it.action === 'merge' && it.duplicate?.existingCard)
-      const toCreate = list.filter(it => it.action !== 'merge')
+      const toCreate = list.filter(it => it.action !== 'merge' && it.action !== 'skip')
 
       let position = 0
       for (const it of toMerge) await cardRepo.addToDeck(deck.id, it.duplicate!.existingCard!.id, position++)
@@ -268,11 +288,19 @@ export function BatchDeckImport() {
     }
   }
 
+  /** Drop every flagged line from this deck. The existing cards stay exactly as they are. */
   function removeAllDuplicates() {
-    setItems(prev => prev.filter(it => it.duplicate?.tier !== 'exact' && it.duplicate?.tier !== 'near'))
+    setItems(prev => prev.filter(it => !it.duplicate || it.duplicate.tier === 'none'))
   }
+  /**
+   * Add every flagged line as a NEW card anyway — the homograph escape hatch. Clears the flags so the
+   * banner and the two-step gate don't keep re-asserting a decision that's already been made.
+   */
   function ignoreAll() {
-    setItems(prev => prev.map(it => it.duplicate?.tier ? { ...it, action: it.duplicate.tier === 'near' ? 'keep-both' : 'create' } : it))
+    setItems(prev => prev.map(it =>
+      it.duplicate && it.duplicate.tier !== 'none'
+        ? { ...it, action: 'keep-both' as const, duplicate: null, batchDuplicateOf: undefined }
+        : it))
   }
   function updateItem(i: number, patch: Partial<ImportItem>) {
     setItems(prev => prev.map((it, idx) => idx === i ? { ...it, ...patch } : it))
@@ -389,10 +417,10 @@ export function BatchDeckImport() {
 
   // ── Review one deck ──────────────────────────────────────────────────────
 
-  const planned   = plan!.decks[deckIndex]!
-  const nearCount  = items.filter(it => it.duplicate?.tier === 'near').length
-  const exactCount = items.filter(it => it.duplicate?.tier === 'exact').length
-  const flagged    = nearCount + exactCount
+  const planned    = plan!.decks[deckIndex]!
+  const inLibrary  = items.filter(it => it.duplicate && it.duplicate.tier !== 'none' && it.duplicate.existingCard).length
+  const inThisDeck = items.filter(it => it.batchDuplicateOf !== undefined).length
+  const flagged    = inLibrary + inThisDeck
 
   return (
     <div className="space-y-5">
@@ -413,7 +441,10 @@ export function BatchDeckImport() {
 
       {dupChecked && flagged > 0 && (
         <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
-          {`${flagged} card${flagged !== 1 ? 's' : ''} flagged — ${exactCount} already in your library, ${nearCount} similar to an existing card. Resolve them, or use the buttons below.`}
+          {`${flagged} word${flagged !== 1 ? 's' : ''} you already have${
+            inLibrary > 0 && inThisDeck > 0 ? ` — ${inLibrary} in your library, ${inThisDeck} repeated in this deck`
+            : inThisDeck > 0 ? ' — repeated within this deck' : ' in this library'
+          }. Matched on the ${langName(sourceLanguage)} word alone, so the meanings may differ.`}
         </div>
       )}
       {error && <p className="text-danger text-sm">{error}</p>}
@@ -432,23 +463,22 @@ export function BatchDeckImport() {
                 className="text-ink-faint hover:text-danger transition-colors text-sm shrink-0 mt-1.5">✕</button>
             </div>
 
-            {dupChecked && item.duplicate?.tier === 'exact' && item.duplicate.existingCard && (
-              <p className="text-xs text-ink-muted border-t border-line/10 pt-2">
-                {`${item.existingCardDeckNames?.length
-                  ? `Already in ${item.existingCardDeckNames.join(', ')}.`
-                  : 'Already in your library.'} Remove it above if you don’t want a second copy here.`}
-              </p>
-            )}
-
-            {dupChecked && item.duplicate?.tier === 'near' && (
+            {dupChecked && item.duplicate && item.duplicate.tier !== 'none' && (
               <div className="border-t border-line/10 pt-2 space-y-1.5">
                 {item.duplicate.existingCard ? (
                   <>
                     <p className="text-xs text-ink-muted">
-                      Similar to <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot; / &quot;{item.duplicate.existingCard.back}&quot;</span>
+                      {`You already have “${item.duplicate.existingCard.front}” = “${item.duplicate.existingCard.back}”${
+                        item.existingCardDeckNames?.length ? ` in ${item.existingCardDeckNames.join(', ')}` : ''
+                      }.`}
                     </p>
                     <div className="flex flex-wrap gap-3 text-xs">
-                      {([['keep-both', 'Keep as new'], ['merge', 'Use existing'], ['delete-existing', 'Delete existing']] as const).map(([val, label]) => (
+                      {([
+                        ['merge',           'Use the existing card'],
+                        ['skip',            'Leave it out'],
+                        ['keep-both',       'Add anyway (different word)'],
+                        ['delete-existing', 'Replace the existing card'],
+                      ] as const).map(([val, label]) => (
                         <label key={val} className="flex items-center gap-1.5 cursor-pointer text-ink">
                           <input type="radio" name={`dup-${deckIndex}-${i}`} checked={item.action === val}
                             onChange={() => updateItem(i, { action: val })} className="accent-accent" />
@@ -456,10 +486,20 @@ export function BatchDeckImport() {
                         </label>
                       ))}
                     </div>
+                    {item.action === 'keep-both' && (
+                      <p className="text-xs text-warning">
+                        Two cards will share this word — right for a genuine homograph, otherwise they compete for the same review slot.
+                      </p>
+                    )}
+                    {item.action === 'delete-existing' && (
+                      <p className="text-xs text-warning">
+                        {`Permanently deletes “${item.duplicate.existingCard.front}” = “${item.duplicate.existingCard.back}” everywhere it appears.`}
+                      </p>
+                    )}
                   </>
                 ) : item.batchDuplicateOf !== undefined ? (
                   <p className="text-xs text-ink-muted">
-                    Looks like a duplicate of #{item.batchDuplicateOf + 1} in this deck.
+                    {`Same word as #${item.batchDuplicateOf + 1} in this deck — this line will be left out.`}
                   </p>
                 ) : null}
               </div>
@@ -472,7 +512,9 @@ export function BatchDeckImport() {
       {dupChecked && flagged > 0 && (
         <div className="flex flex-wrap gap-3 text-xs">
           <button className="btn-ghost px-3 py-1.5" onClick={removeAllDuplicates}>Remove all duplicates ({flagged})</button>
-          <button className="btn-ghost px-3 py-1.5" onClick={ignoreAll}>Ignore all</button>
+          <button className="btn-ghost px-3 py-1.5" onClick={ignoreAll} title="Add every flagged word as a new card anyway">
+            Add all anyway
+          </button>
         </div>
       )}
 

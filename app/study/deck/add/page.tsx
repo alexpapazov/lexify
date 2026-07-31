@@ -32,7 +32,7 @@ import { langName } from '@/lib/languages'
 import { generateCards } from '@/lib/generateCards'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
-  estimateCardCount, analyzeDuplicate, type DuplicateAnalysis,
+  estimateCardCount, analyzeDuplicateWithFront, normalizeFrontKey, type DuplicateAnalysis,
 } from '@/lib/duplicates'
 import type { Deck, Card } from '@/domain'
 
@@ -46,7 +46,10 @@ interface ReviewItem {
   languageWarning: LanguageWarning
   include:         boolean
   duplicate:       DuplicateAnalysis
-  action:          'create' | 'merge' | 'keep-both'
+  /** 'skip' = an earlier card in THIS run already used this word, so there's nothing to merge with. */
+  action:          'create' | 'merge' | 'keep-both' | 'skip'
+  /** Index of an earlier item in this run that already used this front. */
+  batchDuplicateOf?: number
   /** Detected comma-separated synonym segments, if applicable. */
   splitSegments?:  string[]
   /** Whether to split into separate synonym-linked cards (default true when splitSegments set). */
@@ -180,8 +183,22 @@ export default function AddCardsPage() {
         setError(`${data.failedChunks} batch${data.failedChunks !== 1 ? 'es' : ''} of your input couldn't be generated — the rest are below.`)
       }
 
-      const reviewItems: ReviewItem[] = data.cards.map(c => {
-        const duplicate = analyzeDuplicate({ front: c.front, back: c.back }, existingCards, deck.sourceLanguage, deck.targetLanguage)
+      // Front keys of cards generated EARLIER in this same run — the AI can emit the same word twice
+      // across chunks, and neither copy is in `existingCards` yet, so nothing else would catch it.
+      const seenFronts = new Map<string, number>()
+
+      const reviewItems: ReviewItem[] = data.cards.map((c, idx) => {
+        // `analyzeDuplicateWithFront` adds the front-only tier: the same word already in this library
+        // under a different gloss is a duplicate too, which exact/near matching cannot see.
+        let duplicate = analyzeDuplicateWithFront({ front: c.front, back: c.back }, existingCards, deck.sourceLanguage, deck.targetLanguage)
+        let batchDuplicateOf: number | undefined
+        const key = normalizeFrontKey(c.front, deck.sourceLanguage)
+        if (duplicate.tier === 'none' && key && seenFronts.has(key)) {
+          batchDuplicateOf = seenFronts.get(key)!
+          duplicate = { tier: 'front', existingCard: null }
+        }
+        if (key && !seenFronts.has(key)) seenFronts.set(key, idx)
+
         const splitSegments = detectSynonymSplit(c.front) ?? undefined
         return {
           front:           c.front,
@@ -189,7 +206,11 @@ export default function AddCardsPage() {
           languageWarning: c.languageWarning,
           include:         true,
           duplicate,
-          action:          duplicate.tier === 'near' ? 'merge' : 'create',
+          batchDuplicateOf,
+          // A same-word collision defaults to reusing the existing card; an in-batch repeat has no
+          // card to reuse, so it defaults to being left out.
+          action:          duplicate.tier === 'none' || duplicate.tier === 'exact' ? 'create'
+                         : batchDuplicateOf !== undefined ? 'skip' : 'merge',
           splitSegments,
           splitIntoCards:  splitSegments ? true : undefined,
         }
@@ -221,7 +242,7 @@ export default function AddCardsPage() {
 
       const includedItems = items.filter(it => it.include)
       const toMerge  = includedItems.filter(it => it.action === 'merge' && it.duplicate.existingCard)
-      const toCreate = includedItems.filter(it => it.action !== 'merge')
+      const toCreate = includedItems.filter(it => it.action !== 'merge' && it.action !== 'skip')
 
       // Expand split items into individual synonym card specs.
       type CardSpec = { front: string; back: string; originalItem: ReviewItem }
@@ -515,10 +536,13 @@ export default function AddCardsPage() {
                   </p>
                 )}
 
-                {item.duplicate.tier === 'near' && item.duplicate.existingCard && (
+                {(item.duplicate.tier === 'near' || item.duplicate.tier === 'front') && item.duplicate.existingCard && (
                   <div className="pl-7 space-y-2 border-t border-line/10 pt-3">
                     <p className="text-xs text-ink-muted">
-                      Similar to existing card: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
+                      {item.duplicate.tier === 'front'
+                        ? 'You already have this word, with a different meaning: '
+                        : 'Similar to existing card: '}
+                      <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
                     </p>
                     <div className="flex gap-4 text-sm">
                       <label className="flex items-center gap-1.5 cursor-pointer text-ink">
@@ -531,6 +555,12 @@ export default function AddCardsPage() {
                       </label>
                     </div>
                   </div>
+                )}
+
+                {item.batchDuplicateOf !== undefined && (
+                  <p className="text-xs text-warning pl-7 border-t border-line/10 pt-3">
+                    {`Same word as card #${item.batchDuplicateOf + 1} above — this one will be left out.`}
+                  </p>
                 )}
 
                 {item.splitSegments && item.splitSegments.length >= 2 && (

@@ -2265,6 +2265,63 @@ through the normal two-step duplicate check. **No AI anywhere.** Read
 - **`prefetchChoices` and language sync are deliberately NOT run** in batch mode — both are AI, and 198
   cards would be 198 model calls. `autoGroupByGloss` IS kept (deterministic).
 
+## Front-only duplicate detection — the non-AI layer (2026-07-31, no migration)
+
+A mass import leaked duplicates because **nothing in the app matched on the front alone**: `tier1` is
+exact front AND back, `tier2` is front and back after article-stripping and lowercasing. So a library
+holding "cielo = sky" plus an imported "cielo = heaven" was flagged by *nothing*. Two cards for one
+word means two competing schedules — that's a duplicate whatever the glosses say.
+
+- **`lib/duplicates.ts` gained a third tier, `'front'`** (same word, different gloss), plus
+  `findFrontMatch`, `analyzeDuplicateWithFront` (exact/near/front) and `analyzeFrontDuplicate`
+  (front-only, gloss ignored entirely). All build on the existing `normalizeFrontKey` — NFC, grammatical
+  tags stripped, one leading article stripped, lowercased.
+- **`normalizeTier1` now applies NFC.** It was the missing piece everywhere: iOS keyboards and web
+  paste emit DECOMPOSED accents, which compared unequal to precomposed ones, so the same visible word
+  sailed through every gate. Tested with explicit `\u` escapes (a decomposed literal is invisible in
+  source and an editor would silently normalize it into a tautology).
+- **Batch import is FRONT-ONLY** (`analyzeFrontDuplicate`) — the user's explicit call. Default action
+  on a hit is `merge` (reuse the existing card); a repeat *within* the same deck gets the new `'skip'`
+  action, because neither copy is saved yet so there is nothing to merge with. "Ignore all" became
+  **"Add all anyway"** and clears the flags, so the banner and the two-step gate stop re-asserting a
+  decision already made.
+- **Create + deck-add use `analyzeDuplicateWithFront`** — exact/near still win; `'front'` is an extra
+  flag with the same resolve-per-card UI. The deck-add page also gained the in-batch scan it never had
+  (the AI can emit the same word twice across chunks and neither copy is in the library yet).
+- **`bulkCreate`'s silent reuse is deliberately still exact front+back.** It has no UI; silently
+  merging "vino = wine" into "vino = he came" would be invisible data loss.
+- **Homographs land in this tier by design** (vino, banco, cielo). It flags, never blocks — the
+  per-card "Add anyway" is the escape hatch.
+
+## Card-editor agent: side visibility + group de-dupe (2026-07-31)
+
+- **Sides (`front` / `back` / `both`)** — the agent can be blinded to one side so it isn't swayed by
+  it ("find cards with the same word" shouldn't read the glosses). The hidden side is stripped at
+  `analyzeBatch` (`lib/agents/cardEditor.ts`), the ONLY point where card text leaves the browser, and
+  **a blinded agent may not edit that side** — it can't know the current text, so anything it produced
+  would be invented. Enforced in three places: the prompt is built per-side, the route filters
+  hidden-side edits and strips stray values, and the client drops them again.
+  **`split` requires backs** (it's defined purely in `primaryBack`/`extraBacks`) and is removed from
+  the schema in front-only mode. The REVIEW UI always shows the whole card — proposals are rebuilt
+  from the local `ScopedCard`, never from the model response.
+  This fixed a latent crash: the route's no-op filter did `e.back.trim() !== src.back.trim()` with no
+  guard, so a missing side threw a `TypeError` inside `.filter()` and surfaced as an unhandled 500.
+- **De-dupe emits ONE proposal per GROUP**, not one per extra copy. `EditProposal` gained
+  `action: 'dedupe'` with `group` (every copy) + `keepCardId` + a stable `id`; **on a dedupe proposal
+  the inherited `cardId`/`deckId` are meaningless — never read them.** Two modes: *same word*
+  (front-only) and *exact copies* (front+back).
+- **The default keeper is the copy with the most review progress** (graduated > learning > untouched,
+  then reps). Approving used to keep whichever copy came first, which could delete months of study in
+  favour of a fresh import. Every copy is rendered in full — keeper in normal ink, the rest red — and
+  clicking any card makes it the keeper.
+- **De-dupe now requires a scope.** It used to fall back to "all decks if none selected"; that is not
+  a safe implicit answer for something that proposes deletions.
+- A group can **span decks**, so each delete gets a grant for its own deck; a partial failure throws
+  and the proposal stays on screen instead of being advanced past half-applied. `approved`/`denied`
+  count CARDS, not proposals.
+- **Deletes are still not Cmd+Z-undoable** (that path is edit-only, pre-existing). Soft-delete means
+  recovery is a SQL `deleted_at` reset.
+
 ## JSX whitespace: a space after `{expr}` is eaten on a wrapped line
 
 Hit twice this session ("14 wordsrated", "library.Remove it above"). JSX trims leading/trailing

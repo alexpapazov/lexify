@@ -27,8 +27,7 @@ import { generateCards } from '@/lib/generateCards'
 import { langName } from '@/lib/languages'
 import {
   INSTRUCTIONS_CHAR_CAP, INPUT_WORD_CAP,
-  analyzeDuplicate, type DuplicateAnalysis,
-  tier1Match, tier2Match,
+  analyzeDuplicateWithFront, normalizeFrontKey, type DuplicateAnalysis,
 } from '@/lib/duplicates'
 import type { Card, Folder, Deck, LanguagePair } from '@/domain'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
@@ -736,36 +735,37 @@ function OnlineCreatePage() {
         const existing = await cardRepo.listOwned(session.user.id, targetLang, basisLang)
 
         const withDup: PreviewItem[] = previewItems.map((it, idx) => {
-          const duplicate = analyzeDuplicate({ front: it.front, back: it.back }, existing, targetLang, basisLang)
+          // `analyzeDuplicateWithFront` adds the front-only tier on top of exact/near: the same word
+          // already in this library with a DIFFERENT gloss ("el pan = bread" vs "el pan = loaf") used
+          // to pass every check, because both tiers require the backs to match too.
+          const duplicate = analyzeDuplicateWithFront({ front: it.front, back: it.back }, existing, targetLang, basisLang)
           if (duplicate.tier !== 'none') {
-            return { ...it, duplicate, action: duplicate.tier === 'near' ? 'keep-both' as const : 'create' as const }
+            return { ...it, duplicate, action: duplicate.tier === 'exact' ? 'create' as const : 'keep-both' as const }
           }
 
-          // No match in the saved library — check whether this looks like a
-          // near/exact duplicate of an earlier card in this same batch (which
-          // wouldn't show up in `existing` since neither is saved yet).
+          // No match in the saved library — check whether this duplicates an earlier card in this
+          // same batch (which wouldn't show up in `existing` since neither is saved yet). Front-only
+          // here too, so the in-batch rule matches the library rule.
           for (let j = 0; j < idx; j++) {
             const other = previewItems[j]!
-            const a = { front: it.front, back: it.back }
-            const b = { front: other.front, back: other.back }
-            if (tier1Match(a, b) || tier2Match(a, b, targetLang, basisLang)) {
-              return { ...it, duplicate: { tier: 'near' as const, existingCard: null }, action: 'keep-both' as const, batchDuplicateOf: j }
+            const key = normalizeFrontKey(it.front, targetLang)
+            if (key && key === normalizeFrontKey(other.front, targetLang)) {
+              return { ...it, duplicate: { tier: 'front' as const, existingCard: null }, action: 'keep-both' as const, batchDuplicateOf: j }
             }
           }
 
           return { ...it, duplicate, action: 'create' as const }
         })
 
-        // For exact (Tier-1) matches, look up which deck(s) the existing card
-        // already lives in, so we can tell the user where the duplicate is.
-        const exactCardIds = [...new Set(
+        // Look up which deck(s) each matched card already lives in, so we can say where it is.
+        const matchedCardIds = [...new Set(
           withDup
-            .filter(it => it.duplicate?.tier === 'exact' && it.duplicate.existingCard)
+            .filter(it => it.duplicate?.existingCard)
             .map(it => it.duplicate!.existingCard!.id)
         )]
-        const deckNamesByCard = await cardRepo.listDeckNamesForCards(exactCardIds)
+        const deckNamesByCard = await cardRepo.listDeckNamesForCards(matchedCardIds)
         const withDeckNames = withDup.map(it =>
-          it.duplicate?.tier === 'exact' && it.duplicate.existingCard
+          it.duplicate?.existingCard
             ? { ...it, existingCardDeckNames: deckNamesByCard[it.duplicate.existingCard.id] ?? [] }
             : it
         )
@@ -773,7 +773,7 @@ function OnlineCreatePage() {
         setPreviewItems(withDeckNames)
         setDupChecked(true)
 
-        const hasFlag = withDeckNames.some(it => it.duplicate?.tier === 'near' || it.duplicate?.tier === 'exact')
+        const hasFlag = withDeckNames.some(it => it.duplicate && it.duplicate.tier !== 'none')
         if (hasFlag) return
 
         await doSave(withDeckNames)
@@ -824,7 +824,9 @@ function OnlineCreatePage() {
   if (stage === 'preview') {
     const nearCount     = previewItems.filter(it => it.duplicate?.tier === 'near').length
     const exactCount    = previewItems.filter(it => it.duplicate?.tier === 'exact').length
-    const flaggedCount  = nearCount + exactCount
+    // Same word, different gloss — invisible to exact/near, and the tier that lets duplicates through.
+    const frontCount    = previewItems.filter(it => it.duplicate?.tier === 'front').length
+    const flaggedCount  = nearCount + exactCount + frontCount
     const saveLabel = !dupChecked || flaggedCount === 0 ? 'Save deck' : 'Confirm & save deck'
 
     return (
@@ -838,11 +840,11 @@ function OnlineCreatePage() {
 
         {dupChecked && flaggedCount > 0 && (
           <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
-            {flaggedCount} card{flaggedCount !== 1 ? 's' : ''} {flaggedCount !== 1 ? 'are' : 'is'} flagged below
-            {exactCount > 0 && nearCount > 0 && ` — ${exactCount} already in your library, ${nearCount} similar to existing or other cards in this list`}
-            {exactCount > 0 && nearCount === 0 && ` — already in your library`}
-            {exactCount === 0 && nearCount > 0 && ` — similar to existing cards or other cards in this list`}
-            . Review them before saving.
+            {`${flaggedCount} card${flaggedCount !== 1 ? 's' : ''} flagged below — ${[
+              exactCount > 0 ? `${exactCount} already in your library` : '',
+              nearCount  > 0 ? `${nearCount} similar to an existing card` : '',
+              frontCount > 0 ? `${frontCount} using a word you already have with a different meaning` : '',
+            ].filter(Boolean).join(', ')}. Review them before saving.`}
           </div>
         )}
 
@@ -885,19 +887,22 @@ function OnlineCreatePage() {
               {dupChecked && item.duplicate?.tier === 'exact' && item.duplicate.existingCard && (
                 <div className="pl-7 space-y-2 border-t border-line/10 pt-3">
                   <p className="text-xs text-ink-muted">
-                    {item.existingCardDeckNames && item.existingCardDeckNames.length > 0
-                      ? <>Already in <span className="text-ink">{item.existingCardDeckNames.join(', ')}</span>.</>
-                      : 'Already in your library, but not currently in any deck.'} X out this card if you do not want to add this duplicate to this deck.
+                    {`${item.existingCardDeckNames?.length
+                      ? `Already in ${item.existingCardDeckNames.join(', ')}.`
+                      : 'Already in your library, but not currently in any deck.'} X out this card if you do not want to add this duplicate to this deck.`}
                   </p>
                 </div>
               )}
 
-              {dupChecked && item.duplicate?.tier === 'near' && (
+              {dupChecked && (item.duplicate?.tier === 'near' || item.duplicate?.tier === 'front') && (
                 <div className="pl-7 space-y-2 border-t border-line/10 pt-3">
                   {item.duplicate.existingCard ? (
                     <>
                       <p className="text-xs text-ink-muted">
-                        Similar to existing card: <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
+                        {item.duplicate.tier === 'front'
+                          ? 'You already have this word, with a different meaning: '
+                          : 'Similar to existing card: '}
+                        <span className="text-ink">&quot;{item.duplicate.existingCard.front}&quot;</span> / <span className="text-ink">&quot;{item.duplicate.existingCard.back}&quot;</span>
                       </p>
                       <div className="flex flex-wrap gap-4 text-sm">
                         <label className="flex items-center gap-1.5 cursor-pointer text-ink">
@@ -922,7 +927,8 @@ function OnlineCreatePage() {
                   ) : item.batchDuplicateOf !== undefined ? (
                     <>
                       <p className="text-xs text-ink-muted">
-                        Looks like a duplicate of card #{item.batchDuplicateOf + 1} above: <span className="text-ink">&quot;{previewItems[item.batchDuplicateOf]?.front}&quot;</span> / <span className="text-ink">&quot;{previewItems[item.batchDuplicateOf]?.back}&quot;</span>
+                        {`Same word as card #${item.batchDuplicateOf + 1} above: `}
+                        <span className="text-ink">&quot;{previewItems[item.batchDuplicateOf]?.front}&quot;</span> / <span className="text-ink">&quot;{previewItems[item.batchDuplicateOf]?.back}&quot;</span>
                       </p>
                       <button type="button" onClick={() => removePreviewItem(i)} className="btn-ghost text-xs px-3 py-1">
                         Remove this card

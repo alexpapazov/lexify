@@ -749,7 +749,7 @@ function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguag
 
 // ─── Gear settings panel ──────────────────────────────────────────────────────
 
-function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, defaultSpillover, maxCards, cards, sourceLanguage, targetLanguage, onClose }: {
+function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, defaultSpillover, maxCards, cards, sourceLanguage, targetLanguage, onboardableIds, pendingOnboarding, onClose }: {
   deckId:           string
   userId:           string
   deck:             Deck
@@ -760,10 +760,15 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   cards:            Card[]
   sourceLanguage:   string
   targetLanguage:   string
+  /** Cards eligible for confidence rating — never-studied ones only (see the call site). */
+  onboardableIds:   string[]
+  /** Cards already queued by a previous onboarding run and not yet rated. */
+  pendingOnboarding: number
   onClose:          () => void
 }) {
   const today    = new Date().toISOString().slice(0, 10)
   const prefRepo = new SupabaseDeckPreferencesRepository()
+  const router   = useRouter()
 
   // ── Grading settings state ──────────────────────────────────────────────────
   const gs = deck.gradingSettings
@@ -808,6 +813,32 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   const [confirmFullReset,     setConfirmFullReset]     = useState(false)
   const [resetting,            setResetting]            = useState(false)
   const [resetError,           setResetError]           = useState<string | null>(null)
+
+  // Vocabulary onboarding for an already-saved deck
+  const [queueing,   setQueueing]   = useState(false)
+  const [queueError, setQueueError] = useState<string | null>(null)
+
+  /**
+   * Queues this deck's never-studied cards for confidence rating, then opens the rating screen.
+   *
+   * Cards that already carry an onboarding row are left alone, so re-opening this doesn't reset
+   * ratings you already gave — it just tops the queue up with anything added since.
+   */
+  async function startOnboarding() {
+    if (queueing) return
+    setQueueing(true)
+    setQueueError(null)
+    try {
+      const repo = new SupabaseCardOnboardingRepository()
+      const already = new Set((await repo.listForDeck(userId, deckId)).map(r => r.cardId))
+      const fresh = onboardableIds.filter(id => !already.has(id))
+      if (fresh.length > 0) await repo.createPending(userId, deckId, fresh)
+      router.push(routes.deckOnboard(deckId))
+    } catch (err) {
+      setQueueError(err instanceof Error ? err.message : 'Could not start onboarding.')
+      setQueueing(false)
+    }
+  }
 
   async function handleSave() {
     setSaving(true)
@@ -1125,6 +1156,36 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                   <p className="text-xs text-ink-faint">{aiInstructions.length}/250</p>
                 </div>
               )}
+            </div>
+
+            {/* ── Vocabulary onboarding ── */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Vocabulary onboarding</p>
+              <p className="text-xs text-ink-faint">
+                Rate how well you already know each word instead of learning it from scratch. Cards you
+                know are scheduled straight into Due Now.
+              </p>
+              <button
+                type="button"
+                className="btn-ghost text-sm w-full"
+                disabled={queueing || (pendingOnboarding === 0 && onboardableIds.length === 0)}
+                onClick={() => void startOnboarding()}
+              >
+                {queueing
+                  ? 'Opening…'
+                  : pendingOnboarding > 0
+                    ? `Continue onboarding (${pendingOnboarding} left)`
+                    : onboardableIds.length > 0
+                      ? `Rate ${onboardableIds.length} unlearned card${onboardableIds.length !== 1 ? 's' : ''}`
+                      : 'Nothing left to rate'}
+              </button>
+              {pendingOnboarding === 0 && onboardableIds.length === 0 && (
+                <p className="text-xs text-ink-faint">
+                  Every card here has been studied already. Onboarding only covers cards with no review
+                  history, so rating one can&apos;t overwrite real progress.
+                </p>
+              )}
+              {queueError && <p className="text-danger text-xs">{queueError}</p>}
             </div>
 
             {/* ── Audio ── */}
@@ -1757,6 +1818,11 @@ export default function DeckDetailPage() {
           defaultLimit={defaultLimit} defaultSpillover={defaultSpillover}
           maxCards={cards.length}
           cards={cards} sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage}
+          // Only never-studied cards may be onboarded: rating one writes a fresh graduated state, which
+          // would wipe the real review history (reps, lapses, tuned difficulty/stability) of a card
+          // that has actually been studied.
+          onboardableIds={cards.filter(c => !stateMap.get(c.id)).map(c => c.id)}
+          pendingOnboarding={pendingOnboarding}
           onClose={() => { setShowGear(false); loadAll(userId) }}
         />
       )}

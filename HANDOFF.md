@@ -4,7 +4,7 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~50,300 lines across 222 TS/TSX files, 676 commits, 496 passing tests (40 suites).
+- **Scale**: ~50,300 lines across 222 TS/TSX files, 677 commits, 510 passing tests (40 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`107`, applied BY HAND — **all
   applied, nothing pending.**
@@ -25,7 +25,7 @@ implementation notes + error log); this file is the map you read first.
   empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
   run it, and move it into `archive/` once it's live. Next number = **108**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **40 suites / 496 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **40 suites / 510 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -190,6 +190,16 @@ Three tabs: **Past** (review calendar), **Present** (snapshot + accuracy trend +
 An AI card-editor with a scoped, audited **tool gateway** (`lib/agents/`), a change-set review flow,
 and a deterministic (non-AI) **de-dupe** action. Also exposed as a standalone MCP server.
 
+**Side visibility (2026-07-31):** the agent can be restricted to seeing only fronts, only backs, or
+both — so it isn't swayed by the side you don't care about. A blinded agent **may not edit that side**
+(it can't know the current text), and `split` needs backs. The review UI always shows the whole card.
+
+**De-dupe (2026-07-31):** one proposal per duplicate GROUP, in two modes (*same word* / *exact
+copies*). Every copy is rendered in full — keeper in normal ink, doomed ones red — and clicking a card
+makes it the keeper. The default keeper is **the copy with the most review progress**, so approving
+can't silently discard months of study for a fresh import. **A scope must be selected**; it no longer
+falls back to the whole library.
+
 ### 3.10 Vocabulary onboarding (new 2026-07-30)
 
 Bulk intake for words you already know — paste a frequency list, rate confidence, skip the ladder.
@@ -306,6 +316,12 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 - **Two "Loading…" screens.** The small faint one is `AuthWall`; the larger is the page. Knowing
   which you're stuck on tells you where to look.
 - **Cached reads are shared objects** — treat as immutable, copy before sorting or patching.
+- **Duplicate detection has THREE tiers** (`lib/duplicates.ts`): `exact` (front+back), `near`
+  (front+back after articles/case), and `front` (same word, different gloss — added 2026-07-31,
+  because nothing matched on the front alone and mass imports leaked duplicates through that hole).
+  Batch import uses front-only outright; create/deck-add add `front` as an extra flag;
+  `bulkCreate`'s silent reuse stays exact-only on purpose. Homographs land in the `front` tier by
+  design — it flags, never blocks.
 - **Name collisions that mislead.** `relearnPool` is a live `useState` variable in the three session
   pages holding the in-session relearn queue (the similarly-named module is gone — don't confuse
   them). And the TS fields `strictSpelling` / `strictAccents` / `strictArticles` read the
@@ -329,7 +345,13 @@ applied, so any of these is a clean start.
 2. **Offline sync-back is device-unverified** — study offline, reconnect, confirm the outbox drains.
    This is the leg where data loss would actually appear, so it's the highest-risk unknown.
 3. **Duplicate-card bugs `#55` / `#59`** — merge creates a new duplicate; exact duplicates can still
-   be saved.
+   be saved. Partly mitigated 2026-07-31 by the front-only tier (§6), but the underlying
+   `bulkCreate` silent-reuse contract is unchanged: it still matches exact front+back only and gives
+   the caller no signal about what it did, so a UI verdict the user overrides still inserts a row.
+   **Six normalizations still coexist** across the intake paths (tier-1, tier-2, `normalizeFrontKey`,
+   the `|||` textarea key, `lib/generateCards.ts`, and bare `toLowerCase()` at the deck-page/sync
+   sites); NFC is now in the first three but not the rest. **There is no DB-level uniqueness at all** —
+   no unique index on `cards(front)` or `(front, back)`. Application code is the only gate.
 4. **Analytics still ships rows to draw points.** Postgres `GROUP BY` RPCs would replace ~14k rows
    with ~30; off-screen charts still fetch eagerly instead of on scroll.
 5. **`ReviewCalendar` profile read is unhardened** — it's the last one without the core-columns

@@ -68,15 +68,29 @@ failure — it does not fail silently.
 `components/create/BatchDeckImport.tsx`. You pick **the library** (a language pair — that's the only
 choice, since names come from the document) and the file, then review a plan summary.
 
-Decks are then saved **one at a time**, each running the same two-step duplicate check as the
-single-deck flow: first press checks and flags, second press confirms. That is the entire reason not to
-save them in one batch — you decide what happens to each collision. Per flagged card: *Keep as new /
-Use existing / Delete existing* for near matches, remove-the-row for exact ones. Plus
-**Remove all duplicates** and **Ignore all** to move fast, and **Skip this deck**.
+Decks are then saved **one at a time**, each a two-step gate: first press checks and flags, second
+press confirms. That is the entire reason not to save them in one batch — you decide what happens to
+each collision. Per flagged card: *Use the existing card / Leave it out / Add anyway / Replace the
+existing card*. Plus **Remove all duplicates** and **Add all anyway** to move fast, and
+**Skip this deck**.
 
-**Duplicates are checked against the library AND against cards created earlier in the same import** —
-the in-memory library is appended to after each deck saves, because a word easily appears under two
-headings of one document.
+### Duplicates here are FRONT-ONLY
+
+The gloss plays no part. `analyzeFrontDuplicate` matches on `normalizeFrontKey` alone — the same word
+twice is a duplicate whatever the meanings say, because two cards for one word means two competing
+schedules. This is the rule that closes the leak: front+back matching couldn't see a library holding
+"cielo = sky" against an imported "cielo = heaven", so hundreds of duplicates slipped through a real
+import.
+
+Consequences worth knowing:
+
+- **Genuine homographs are flagged too** — *vino* (wine / he came), *banco* (bank / bench). Use
+  **Add anyway** per card. "Remove all duplicates" would drop them, which is an accepted trade.
+- The default action on a library hit is **merge** — reuse the card you already have.
+- A repeat *within the same deck* gets the `skip` action rather than merge: neither copy is saved yet,
+  so there is no card to reuse.
+- Checked against the library **and** against cards created earlier in the same import — the in-memory
+  library is appended after each deck saves, because a word easily appears under two headings.
 
 Folders are created lazily per deck and **reused by name** at each level (case-insensitively, matching
 the pair or an unscoped folder), so re-importing a document doesn't fork the tree. Resolved ids are

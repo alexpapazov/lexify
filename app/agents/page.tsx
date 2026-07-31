@@ -6,7 +6,7 @@ import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { gatherScopedCards, analyzeBatch, applyProposal, undoEdit, chunk, findDuplicates } from '@/lib/agents/cardEditor'
-import type { ScopedCard, EditProposal } from '@/lib/agents/cardEditor'
+import type { ScopedCard, EditProposal, AgentSides, DedupeMode } from '@/lib/agents/cardEditor'
 import type { Deck, Folder, CardState, Grant } from '@/domain'
 import { langFlag } from '@/lib/languages'
 
@@ -71,10 +71,17 @@ export default function AgentsPage() {
   const [approved, setApproved] = useState(0)
   const [denied, setDenied] = useState(0)
   const [lastApplied, setLastApplied] = useState<EditProposal | null>(null)  // last approved text edit (Cmd+Z undoable)
+  /** Which side of each card the agent may SEE — and therefore edit. The review UI always shows both. */
+  const [sides, setSides] = useState<AgentSides>('both')
+  /** Which copy of a duplicate group survives. Keyed by proposal id so queue shuffling can't misapply it. */
+  const [keepChoice, setKeepChoice] = useState<Record<string, string>>({})
 
   const batchesRef = useRef<ScopedCard[][]>([])
   const nextBatchRef = useRef(0)
   const taskRef = useRef('')
+  // Read inside the background prefetch loop, which outlives the render that started the run — a
+  // stale closure over `sides` would silently analyze later batches with the wrong visibility.
+  const sidesRef = useRef<AgentSides>('both')
   const bufferRef = useRef<EditProposal[]>([])   // next non-empty batch, prefetched in the background
   const prefetchingRef = useRef(false)
 
@@ -152,7 +159,7 @@ export default function AgentsPage() {
     if (nextBatchRef.current >= batchesRef.current.length) return null
     const batch = batchesRef.current[nextBatchRef.current++]!
     setScanned(s => s + batch.length)
-    try { return await analyzeBatch(batch, taskRef.current) }
+    try { return await analyzeBatch(batch, taskRef.current, sidesRef.current) }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); return [] }
   }
 
@@ -182,6 +189,7 @@ export default function AgentsPage() {
   async function run() {
     if (!userId || selected.size === 0 || !task.trim()) return
     taskRef.current = task.trim()
+    sidesRef.current = sides
     setPhase('gathering'); setError(null); setScanned(0); setApproved(0); setDenied(0)
     bufferRef.current = []
     try {
@@ -196,25 +204,56 @@ export default function AgentsPage() {
     }
   }
 
-  // Deterministic De-dupe (no AI): find TRUE duplicates (front AND back match) in the selected scope
-  // — or all decks if none selected — and queue a delete for all but one of each. Same approve/deny UI.
-  async function runDedupe() {
+  /**
+   * Deterministic de-dupe — no AI. Finds duplicate groups in the SELECTED scope and queues one
+   * proposal per group for the normal approve/deny UI.
+   *
+   * Scope is required, not defaulted to the whole library: this proposes deletions, and "everything"
+   * is not a safe implicit answer to "where should I delete from".
+   *
+   * The default keeper is the copy with the most review progress, so approving can't silently throw
+   * away months of study in favour of an untouched import.
+   */
+  async function runDedupe(mode: DedupeMode) {
     if (!userId || busy) return
-    const deckIds = scopedDeckIds().length ? scopedDeckIds() : decks.map(d => d.id)
-    if (deckIds.length === 0) return
+    const deckIds = scopedDeckIds()
+    if (deckIds.length === 0) { setError('Pick a language, folder or deck first — de-dupe only ever deletes inside the scope you choose.'); return }
     taskRef.current = 'De-dupe'
     setPhase('gathering'); setError(null); setScanned(0); setApproved(0); setDenied(0)
     bufferRef.current = []; batchesRef.current = []; nextBatchRef.current = 0
+    setKeepChoice({})
     try {
       const grant: Grant = { operations: ['edit', 'create', 'delete'], languages: [], folderIds: [], deckIds, dryRunOnly: false }
       const cards = await filterByStatus(await gatherScopedCards(userId, grant))
       setTotal(cards.length); setScanned(cards.length)
-      const dups = findDuplicates(cards)
+      const rank = await buildProgressRank(cards)
+      const dups = findDuplicates(cards, { mode, rank })
       if (dups.length === 0) setPhase('done')
       else { setQueue(dups); setPhase('review') }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e)); setPhase('setup')
     }
+  }
+
+  /**
+   * cardId → "how much progress this copy has", for picking which duplicate survives.
+   * Graduated beats learning beats never-studied; within a tier, more reps wins. A card with no
+   * state scores 0, so an untouched import always loses to a studied copy.
+   */
+  async function buildProgressRank(cards: ScopedCard[]): Promise<(cardId: string) => number> {
+    if (!userId) return () => 0
+    const stateRepo = new SupabaseCardStateRepository()
+    const deckIds = [...new Set(cards.map(c => c.deckId))]
+    const score = new Map<string, number>()
+    await Promise.all(deckIds.map(async id => {
+      for (const s of await stateRepo.listByDeck(userId, id)) {
+        if (s.reviewDirection === 'reverse') continue
+        const tier = s.graduated ? 2_000_000 : 1_000_000
+        const value = tier + s.reps * 1000 + s.lapses
+        score.set(s.cardId, Math.max(score.get(s.cardId) ?? 0, value))
+      }
+    })).catch(() => {})
+    return (cardId: string) => score.get(cardId) ?? 0
   }
 
   function advance() {
@@ -226,12 +265,30 @@ export default function AgentsPage() {
     const current = queue[0]
     if (!current || !userId || busy) return
     setBusy(true)
-    try { await applyProposal(userId, current); setApproved(a => a + 1); setLastApplied(current.action === 'edit' ? current : null) }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    // For a group, the chosen keeper overrides the default; everything else in the group is deleted.
+    const chosen = current.id ? keepChoice[current.id] : undefined
+    const toApply = current.action === 'dedupe' && chosen ? { ...current, keepCardId: chosen } : current
+    const cardsAffected = current.action === 'dedupe' ? Math.max(0, (current.group?.length ?? 1) - 1) : 1
+    try {
+      await applyProposal(userId, toApply)
+      setApproved(a => a + cardsAffected)
+      setLastApplied(current.action === 'edit' ? current : null)
+    } catch (e) {
+      // Keep the proposal on screen — advancing here would bury a half-applied group.
+      setError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+      return
+    }
     setBusy(false)
     advance()
   }
-  function deny() { setDenied(d => d + 1); setLastApplied(null); advance() }
+  function deny() {
+    // Count CARDS, not proposals, so the tally matches `approved` (a denied group skips every copy).
+    const skipped = queue[0]?.action === 'dedupe' ? Math.max(0, (queue[0]!.group?.length ?? 1) - 1) : 1
+    setDenied(d => d + skipped)
+    setLastApplied(null)
+    advance()
+  }
 
   function exit() {
     setPhase('setup'); setQueue([]); bufferRef.current = []; setLastApplied(null)
@@ -264,7 +321,9 @@ export default function AgentsPage() {
     <div className="max-w-2xl mx-auto p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-ink">Card editor agent</h1>
-        <p className="text-sm text-ink-muted mt-1">Tell it what to change, pick which cards it may touch, and it scans them in batches of {BATCH_SIZE}. You approve or deny each proposed change; approved ones are applied immediately.</p>
+        <p className="text-sm text-ink-muted mt-1">
+          {`Tell it what to change, pick which cards it may touch and which side it may see, and it scans them in batches of ${BATCH_SIZE}. You approve or deny each proposed change; approved ones are applied immediately.`}
+        </p>
       </div>
 
       {phase === 'setup' && (
@@ -272,9 +331,15 @@ export default function AgentsPage() {
           <div className="space-y-1.5">
             <label className="text-xs text-ink-faint">Common tasks</label>
             <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={runDedupe} disabled={!userId || busy}
+              <button type="button" onClick={() => void runDedupe('front')} disabled={!userId || busy || selected.size === 0}
+                title="Group cards that use the same word, whatever the meanings say"
                 className="text-xs px-3 py-1.5 rounded-full border border-danger/30 text-ink hover:bg-danger/10 disabled:opacity-40 transition-colors">
-                🧹 De-dupe
+                🧹 De-dupe · same word
+              </button>
+              <button type="button" onClick={() => void runDedupe('front-back')} disabled={!userId || busy || selected.size === 0}
+                title="Group only cards where BOTH sides match"
+                className="text-xs px-3 py-1.5 rounded-full border border-danger/30 text-ink hover:bg-danger/10 disabled:opacity-40 transition-colors">
+                🧹 De-dupe · exact copies
               </button>
               <button type="button" onClick={() => setTask("Remove the leading 'to ' from every verb gloss (the back), e.g. 'to run' → 'run'. Only touch verbs.")}
                 className="text-xs px-3 py-1.5 rounded-full border border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
@@ -285,7 +350,12 @@ export default function AgentsPage() {
                 Add noun gender
               </button>
             </div>
-            <p className="text-[10px] text-ink-faint">De-dupe runs instantly on the selected scope (or all decks if none selected) — it finds cards with the same front AND back and proposes deleting all but one. The others fill the box above; pick scope, then Start scanning.</p>
+            <p className="text-[10px] text-ink-faint">
+              De-dupe runs instantly, with no AI, on the scope you select below — pick a language, folder
+              or deck first. Each duplicate group is shown in full so you can choose which copy survives;
+              by default it keeps the one with the most review progress. The other buttons fill the box
+              above; pick a scope, then Start scanning.
+            </p>
           </div>
 
           <div className="space-y-1">
@@ -305,6 +375,32 @@ export default function AgentsPage() {
                   selState={selState} expanded={expanded} onToggleSel={toggleDecks} onToggleExpand={toggleExpand} />
               ))}
             </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-ink-faint">
+              What the agent may see <span className="text-ink-faint/70">(you always review the whole card)</span>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {([
+                ['both',  'Both sides'],
+                ['front', 'Front only'],
+                ['back',  'Back only'],
+              ] as [AgentSides, string][]).map(([val, label]) => (
+                <button key={val} type="button" onClick={() => setSides(val)}
+                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                    sides === val ? 'border-accent bg-accent/15 text-ink' : 'border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-ink-faint">
+              {sides === 'both'
+                ? 'The agent sees the word and its meaning, and may change either.'
+                : sides === 'front'
+                  ? 'The meaning is hidden from the agent, so it can’t be swayed by it — and it may only change the word.'
+                  : 'The word is hidden from the agent, so it can’t be swayed by it — and it may only change the meaning. Splitting is unavailable without the word.'}
+            </p>
           </div>
 
           <div className="space-y-1">
@@ -343,11 +439,19 @@ export default function AgentsPage() {
       {phase === 'review' && current && (
         <div className="panel space-y-4">
           {error && <p className="text-sm text-danger">{error}</p>}
-          <ProposalView p={current} />
+          <ProposalView
+            p={current}
+            keepId={current.id ? keepChoice[current.id] : undefined}
+            onKeep={cardId => { if (current.id) setKeepChoice(prev => ({ ...prev, [current.id!]: cardId })) }}
+          />
           <p className="text-xs text-ink-faint">{current.reason}</p>
           <div className="flex gap-3">
             <button className="btn-ghost flex-1" disabled={busy} onClick={deny}>Deny</button>
-            <button className="btn-primary flex-1" disabled={busy} onClick={approve}>{busy ? 'Applying…' : 'Approve'}</button>
+            <button className="btn-primary flex-1" disabled={busy} onClick={approve}>
+              {busy ? 'Applying…'
+                : current.action === 'dedupe' ? `Delete ${Math.max(0, (current.group?.length ?? 1) - 1)}`
+                : 'Approve'}
+            </button>
           </div>
           {lastApplied && <p className="text-[10px] text-ink-faint text-center">Last approval can be undone — press ⌘Z / Ctrl+Z</p>}
         </div>
@@ -368,7 +472,45 @@ function Row({ tone, children }: { tone: 'before' | 'after' | 'del'; children: R
   return <div className={`rounded-lg border px-3 py-2 text-sm font-mono ${cls}`}>{children}</div>
 }
 
-function ProposalView({ p }: { p: EditProposal }) {
+/**
+ * One card of a duplicate group, shown in full. The keeper is normal ink; the rest are red, since
+ * approving deletes them. Clicking any card makes it the keeper — the deck name is shown because
+ * group members are otherwise identical by construction.
+ */
+function DupeCard({ card, keep, onKeep }: { card: ScopedCard; keep: boolean; onKeep: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onKeep}
+      className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${
+        keep ? 'border-line/25 bg-surface/40 text-ink' : 'border-danger/40 bg-danger/5 text-danger/80 hover:border-line/25'
+      }`}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-sm font-mono truncate">{card.front} <span className="opacity-60">=</span> {card.back}</span>
+        <span className={`text-[10px] uppercase tracking-wider shrink-0 ${keep ? 'text-success' : 'text-danger'}`}>
+          {keep ? 'Keep' : 'Delete'}
+        </span>
+      </div>
+      {card.deckName && <p className="text-[10px] text-ink-faint mt-0.5 truncate">{card.deckName}</p>}
+    </button>
+  )
+}
+
+function ProposalView({ p, keepId, onKeep }: { p: EditProposal; keepId?: string; onKeep?: (cardId: string) => void }) {
+  if (p.action === 'dedupe' && p.group) {
+    const keep = keepId ?? p.keepCardId
+    return (
+      <div className="space-y-2">
+        <p className="text-[10px] uppercase tracking-wider text-ink-faint">
+          Duplicates — click a card to keep it instead
+        </p>
+        {p.group.map(c => (
+          <DupeCard key={c.cardId} card={c} keep={c.cardId === keep} onKeep={() => onKeep?.(c.cardId)} />
+        ))}
+      </div>
+    )
+  }
   if (p.action === 'delete') {
     return (
       <div className="space-y-1">

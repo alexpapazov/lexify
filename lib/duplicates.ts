@@ -45,9 +45,15 @@ const LEADING_ARTICLES: Record<string, string[]> = {
   el: ['ο', 'η', 'το', 'οι', 'τα', 'ένας', 'μία', 'ένα'],
 }
 
-/** Tier 1: trim whitespace only (collapse internal runs of whitespace to a single space). No case changes. */
+/**
+ * Tier 1: NFC + trim + collapse internal whitespace. No case changes.
+ *
+ * NFC matters: iOS keyboards and web paste routinely produce DECOMPOSED accents (e + combining ´),
+ * which compare unequal to the precomposed é every other source produces — without normalization the
+ * same visible word sails through every duplicate gate.
+ */
 function normalizeTier1(s: string): string {
-  return s.trim().replace(/\s+/g, ' ')
+  return s.normalize('NFC').trim().replace(/\s+/g, ' ')
 }
 
 /** Tier 2: Tier-1 normalization plus stripping one leading article/determiner for the given language. */
@@ -95,7 +101,16 @@ export function tier2Match(a: FrontBack, b: FrontBack, sourceLanguage: string, t
 
 // ─── Duplicate analysis ──────────────────────────────────────────────────────
 
-type DuplicateTier = 'exact' | 'near' | 'none'
+/**
+ * 'exact' — front AND back match (whitespace-normalized, case-sensitive).
+ * 'near'  — front and back match once articles are stripped / case ignored.
+ * 'front' — the FRONT is already in the library with a DIFFERENT gloss. The same word twice is a
+ *           duplicate no matter what the back says — two cards for one word means two competing
+ *           schedules — so this is the tier that catches "el pan = bread" vs "el pan = loaf".
+ *           (Caveat: genuine homographs — vino = wine / he came — also land here. It's a flag, not a
+ *           block; the learner decides.)
+ */
+type DuplicateTier = 'exact' | 'near' | 'front' | 'none'
 
 export interface DuplicateAnalysis {
   tier:         DuplicateTier
@@ -106,6 +121,11 @@ export interface DuplicateAnalysis {
  * Checks a candidate (front, back) against a user's existing cards in the
  * same language direction. Returns the strongest match found ('exact' wins
  * over 'near').
+ *
+ * NOTE: does NOT report the 'front' tier — callers that want the front-only layer use
+ * `analyzeDuplicateWithFront` (creation flows) or `analyzeFrontDuplicate` (batch import). This one
+ * keeps its historical two-tier contract because `bulkCreate`'s silent-reuse backstop builds on
+ * `tier1Match`, and silently merging two different glosses would be invisible data loss.
  */
 export function analyzeDuplicate(
   candidate: FrontBack,
@@ -126,6 +146,47 @@ export function analyzeDuplicate(
 
   if (nearMatch) return { tier: 'near', existingCard: nearMatch }
   return { tier: 'none', existingCard: null }
+}
+
+/** The first existing card whose FRONT collides with the candidate's (per `normalizeFrontKey`). */
+export function findFrontMatch(front: string, existing: Card[], sourceLanguage: string): Card | null {
+  const key = normalizeFrontKey(front, sourceLanguage)
+  if (!key) return null
+  for (const card of existing) {
+    if (normalizeFrontKey(card.front, sourceLanguage) === key) return card
+  }
+  return null
+}
+
+/**
+ * `analyzeDuplicate` plus the front-only tier: when neither exact nor near fires but the front is
+ * already in the library, reports `'front'`. The non-AI layer for creation flows.
+ */
+export function analyzeDuplicateWithFront(
+  candidate: FrontBack,
+  existing: Card[],
+  sourceLanguage: string,
+  targetLanguage: string,
+): DuplicateAnalysis {
+  const base = analyzeDuplicate(candidate, existing, sourceLanguage, targetLanguage)
+  if (base.tier !== 'none') return base
+  const frontHit = findFrontMatch(candidate.front, existing, sourceLanguage)
+  return frontHit ? { tier: 'front', existingCard: frontHit } : base
+}
+
+/**
+ * FRONT-ONLY analysis — the batch-import rule: the gloss plays no part in whether something is a
+ * duplicate. Still distinguishes 'exact' (the whole card already exists) from 'front' (same word,
+ * different gloss) because the two deserve different copy, but BOTH are duplicates.
+ */
+export function analyzeFrontDuplicate(
+  candidate: FrontBack,
+  existing: Card[],
+  sourceLanguage: string,
+): DuplicateAnalysis {
+  const hit = findFrontMatch(candidate.front, existing, sourceLanguage)
+  if (!hit) return { tier: 'none', existingCard: null }
+  return { tier: tier1Match(candidate, hit) ? 'exact' : 'front', existingCard: hit }
 }
 
 // ─── Front-only matching (vocabulary onboarding) ─────────────────────────────
