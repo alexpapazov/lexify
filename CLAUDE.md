@@ -2265,6 +2265,36 @@ through the normal two-step duplicate check. **No AI anywhere.** Read
 - **`prefetchChoices` and language sync are deliberately NOT run** in batch mode — both are AI, and 198
   cards would be 198 model calls. `autoGroupByGloss` IS kept (deterministic).
 
+## New-word time estimate is pipeline-aware (2026-07-31, no migration)
+
+The Present tab's "~N min to learn M new words" used to be `recent ladder time ÷ recent words
+graduated` per language. Measured, but **blind to the shape of the pipeline**: shorten a ladder from
+six rungs to two and it kept quoting the old figure until a month of history washed through, and a
+language with no history borrowed a global average describing a completely different pipeline.
+
+Now, per language (`lib/pipelineCost.ts`, pure, 30 tests):
+
+```
+time per new word = minimum answers to graduate   (STRUCTURE — read from the live config)
+                  × struggle factor               (MEASURED — extra attempts actually taken)
+                  × ms per answer                 (MEASURED — that language's pace)
+```
+
+- **`ladderMinAnswers`** sums the cheapest advance rule per rung (rules are OR-ed). **`pathwayMinAnswers`**
+  is a BFS shortest path to the terminal state — a pathway has no fixed length, so the shortest route
+  is the only structural number that means anything (the adaptive preset scores 3, matching its
+  documented fast route). Drop-backs and skip-aheads are ignored: this is the FLOOR, and struggle is
+  what accounts for the messy real path.
+- **`struggleFactor` is pooled ACROSS languages, deliberately.** Per-language it would be circular —
+  dividing a language's measured answers by its own structural minimum and multiplying straight back
+  returns the measurement, so a pipeline edit would have no effect, which is the whole bug. Pooling
+  means one language's edit moves only that language, while "people make about this many mistakes"
+  stays steady. Clamped to [1, 4]: you can't beat the minimum, and a thin unlucky window shouldn't
+  quote an absurd figure.
+- `PresentSnapshot` loads each pair's ladder/pathway in the existing first query wave (pathways only
+  for pairs actually in pathway mode — there's no list API, so it's one read per such pair).
+- Falls back to the old measured per-word figure only when the pipeline can't be read at all.
+
 ## "Current standing" — the running full-debt balance (2026-07-31, no migration)
 
 A panel in **Analytics → Present** (`components/analytics/PresentSnapshot.tsx`, below Today's goals),

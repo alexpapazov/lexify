@@ -21,6 +21,10 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import type { ClimbState } from '@/engine/ladderEngine'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { SupabaseLadderRepository } from '@/lib/data/ladders'
+import { SupabasePathwayRepository } from '@/lib/data/pathways'
+import { resolveEffectivePathway } from '@/lib/pathway'
+import { minAnswersForPipeline, struggleFactor, newCardMs, DEFAULT_MS_PER_ANSWER } from '@/lib/pipelineCost'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding } from '@/lib/goalCarryover'
@@ -28,6 +32,7 @@ import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
 import { routes } from '@/lib/routes'
+import { DEFAULT_LADDER } from '@/domain'
 import type { Card, Deck, LanguagePair } from '@/domain'
 
 type Category = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
@@ -168,11 +173,26 @@ export function PresentSnapshot() {
         const yesterdayWeekday = (todayWeekday + 6) % 7
         const now = Date.now()
 
-        const [decks, pairs, paramRows] = await Promise.all([
+        // The pipeline configs join this first wave — they need nothing but the user id, and the
+        // new-word estimate now reads each language's CURRENT ladder/pathway rather than inferring
+        // its cost from history alone.
+        const pathRepo = new SupabasePathwayRepository()
+        const [decks, pairs, paramRows, savedLadders, defaultLadderRow] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
           new SupabaseLanguagePairRepository().list(uid),
           new SupabaseUserSchedulerParamsRepository().listForUser(uid),
+          new SupabaseLadderRepository().list(uid),
+          new SupabaseLadderRepository().getDefault(uid),
         ])
+        const defaultLadder = defaultLadderRow ?? DEFAULT_LADDER
+        const pairLadders = new Map(savedLadders.filter(l => l.source && l.target).map(l => [`${l.source}|${l.target}`, l.ladder]))
+        // Pathways are per-pair reads (no list API), and only pairs actually in pathway mode need one.
+        const pathwayPairs = (pairs as LanguagePair[]).filter(p => p.learningMode === 'pathway')
+        const [defaultPathway, ...pathwayList] = await Promise.all([
+          pathwayPairs.length > 0 ? pathRepo.getDefault(uid) : Promise.resolve(null),
+          ...pathwayPairs.map(p => pathRepo.getForPair(uid, p.sourceLanguage, p.targetLanguage)),
+        ])
+        const pairPathways = new Map(pathwayPairs.map((p, i) => [`${p.sourceLanguage}|${p.targetLanguage}`, pathwayList[i] ?? null]))
         const deckById = new Map(decks.map(d => [d.id, d]))
         const enabledMap = buildEnabledTracksMap(paramRows)   // for track-aware Due Now (matches the dashboard)
         // Smart-typing threshold per pair (canonical on forward_typed) — decides whether a due
@@ -383,10 +403,12 @@ export function PresentSnapshot() {
           : []
 
         // ── Time today + projections ──
-        // Learning pace is measured PER LANGUAGE (ladder time ÷ words graduated), since a Korean word
-        // takes far longer to climb the ladder than a Spanish one.
-        let ladderTodayMs = 0, ladderWAll = 0
+        // Learning pace is measured PER LANGUAGE, since a Korean word takes far longer to answer than
+        // a Spanish one. Two quantities per pair: total weighted TIME (for ms-per-answer) and total
+        // weighted ANSWER COUNT (for the struggle factor — how many attempts a word really takes).
+        let ladderTodayMs = 0, ladderWAll = 0, answerWAll = 0
         const ladderWByPair = new Map<string, number>()   // Σ (recency weight × ms)
+        const answerWByPair = new Map<string, number>()   // Σ (recency weight)  — one per answer
         for (const e of ladderRows) {
           const ms = (e.duration_ms as number | null) ?? 0
           const at = e.created_at as string
@@ -394,8 +416,13 @@ export function PresentSnapshot() {
           if (ms <= 0) continue
           const w = recencyWeight((now - new Date(at).getTime()) / DAY_MS)
           ladderWAll += ms * w
+          answerWAll += w
           const src = e.source_language as string | null, tgt = e.target_language as string | null
-          if (src && tgt) ladderWByPair.set(`${src}|${tgt}`, (ladderWByPair.get(`${src}|${tgt}`) ?? 0) + ms * w)
+          if (src && tgt) {
+            const k = `${src}|${tgt}`
+            ladderWByPair.set(k, (ladderWByPair.get(k) ?? 0) + ms * w)
+            answerWByPair.set(k, (answerWByPair.get(k) ?? 0) + w)
+          }
         }
         // Review pace bucketed by language × direction × typed-or-not (plus the widening fallbacks),
         // each sample carrying its recency weight.
@@ -422,17 +449,46 @@ export function PresentSnapshot() {
           const [src, tgt, dir, pres] = k.split('|') as [string, string, 'forward' | 'reverse', string]
           projDueMs += n * pace(paceSamples, src, tgt, dir, pres === 't')
         }
-        // Same for new words: each language's remaining goal at that language's own learning pace —
-        // recency-weighted ladder time ÷ recency-weighted words graduated (both sides weighted, so
-        // the ratio is a true "time per word lately" rather than a flat 30-day average).
+        // New words: structure × struggle × pace, per language (see lib/pipelineCost.ts).
+        //
+        // The structural part is read from the pipeline each language is CURRENTLY using, so editing
+        // a ladder, or flipping a language to pathway mode, moves the estimate on the next load
+        // instead of waiting a month for history to wash through. The other two factors stay
+        // measured, so it still tracks how fast this learner actually is.
+        const globalMsPerAnswer = answerWAll >= 3 && ladderWAll > 0 ? ladderWAll / answerWAll : DEFAULT_MS_PER_ANSWER
         const globalLearnMs = gradWAll >= 2 && ladderWAll > 0 ? ladderWAll / gradWAll : DEFAULT_LEARN_MS
+
+        const minAnswersByPair = new Map<string, number>()
+        for (const p of pairs as LanguagePair[]) {
+          const key = `${p.sourceLanguage}|${p.targetLanguage}`
+          const ladder = pairLadders.get(key) ?? defaultLadder
+          const pathway = resolveEffectivePathway(pairPathways.get(key) ?? null, defaultPathway)
+          minAnswersByPair.set(key, minAnswersForPipeline(p.learningMode ?? 'ladder', ladder, pathway))
+        }
+
+        // Struggle is pooled across languages on purpose — see the note in lib/pipelineCost.ts.
+        const struggle = struggleFactor([...minAnswersByPair].map(([key, minAnswers]) => ({
+          answers:     answerWByPair.get(key) ?? 0,
+          graduations: gradWByPair.get(key) ?? 0,
+          minAnswers,
+        })))
+
         let projNewMs = 0
         for (const g of goals) {
           const remaining = Math.max(0, g.goal - g.done)
           if (remaining === 0) continue
-          const gw = gradWByPair.get(g.key) ?? 0
+          const aw = answerWByPair.get(g.key) ?? 0
           const lw = ladderWByPair.get(g.key) ?? 0
-          projNewMs += remaining * (gw >= 2 && lw > 0 ? lw / gw : globalLearnMs)
+          // This language's own pace once it has a few answers on record; the global pace until then.
+          const msPerAnswer = aw >= 3 && lw > 0 ? lw / aw : globalMsPerAnswer
+          const gw = gradWByPair.get(g.key) ?? 0
+          projNewMs += remaining * newCardMs({
+            minAnswers: minAnswersByPair.get(g.key) ?? 0,
+            struggle,
+            msPerAnswer,
+            // Only used when the pipeline can't be read at all.
+            fallbackPerWordMs: gw >= 2 && lw > 0 ? lw / gw : globalLearnMs,
+          })
         }
 
         if (!cancelled) setData({
@@ -631,7 +687,8 @@ export function PresentSnapshot() {
             <div className="text-lg font-semibold text-accent-soft">{data.counts.due === 0 ? '0 min' : `~${fmtDuration(data.projDueMs)}`}</div>
             <div className="text-xs text-ink-faint mt-0.5">{data.counts.due === 0 ? 'Due Now reviews all done today ✓' : "to clear today's Due Now reviews"}</div>
           </div>
-          <div className="rounded-lg border border-line/10 p-3">
+          <div className="rounded-lg border border-line/10 p-3"
+               title="Estimated per language from the pipeline it currently uses — how many answers a card needs to graduate, how many extra attempts you typically take, and how long your answers take in that language. Editing a ladder or pathway changes this straight away.">
             <div className="text-lg font-semibold text-warning">{data.remainingNew === 0 ? '0 min' : `~${fmtDuration(data.projNewMs)}`}</div>
             <div className="text-xs text-ink-faint mt-0.5">{data.remainingNew === 0 ? "Today's new-word goals met ✓" : `to learn ${data.remainingNew} new word${data.remainingNew === 1 ? '' : 's'} toward today's goals`}</div>
           </div>
