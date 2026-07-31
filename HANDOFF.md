@@ -6,8 +6,8 @@ implementation notes + error log); this file is the map you read first.
 
 - **Scale**: ~50,300 lines across 222 TS/TSX files, 678 commits, 525 passing tests (41 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`108`, applied BY HAND —
-  **`108_saved_learning_configs.sql` is PENDING at the top level and must be run.**
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`108`, applied BY HAND — **all
+  applied, nothing pending.**
 
 ---
 
@@ -21,9 +21,9 @@ implementation notes + error log); this file is the map you read first.
   commit message** — zsh history expansion fails the commit and leaves files staged-but-uncommitted.
   Quote any `[bracket]` paths.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
-  `001`–`107` are applied and live in `supabase/migrations/archive/`. **Whatever sits at the top
-  level is PENDING** — right now that's **`108_saved_learning_configs.sql`** (named ladders/pathways;
-  without it the preset picker's Save fails). Move it into `archive/` once it's live. Next = **109**.
+  `001`–`108` are all applied and all live in `supabase/migrations/archive/`. **The top level is
+  empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
+  run it, and move it into `archive/` once it's live. Next number = **109**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
   **41 suites / 525 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev

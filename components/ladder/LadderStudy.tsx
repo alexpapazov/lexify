@@ -846,8 +846,10 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     )
   }
 
-  // Progress: the ladder counts rung-steps; a pathway has no fixed length, so it falls back to the
-  // graduated fraction (rungIndex is undefined on a RouteState → contributes 0).
+  // Progress: only a LADDER has a fixed length, so only a ladder gets a progress bar. A pathway can
+  // branch backwards indefinitely — any percentage would be a guess dressed up as a measurement, and
+  // a bar that stalls or slides is worse than no bar. The graduated COUNT is still shown either way,
+  // since that's a fact rather than a projection.
   const ladderLen = Math.max(1, isPathway ? 1 : ladder.rungs.length)
   const stepsDone = graduated * ladderLen + queue.reduce((sum, e) => sum + Math.min((states.get(e.cardId) as ClimbState | undefined)?.rungIndex ?? 0, ladderLen), 0)
   const totalSteps = total * ladderLen
@@ -865,14 +867,18 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     <div className="space-y-8 w-full">
       <div className="relative flex items-center justify-between">
         <a href={back} className="text-base text-ink-muted hover:text-ink">✕ End session</a>
-        <div className="absolute left-1/2 -translate-x-1/2 text-sm text-ink-muted">{pct}% · {graduated}/{total} graduated</div>
+        <div className="absolute left-1/2 -translate-x-1/2 text-sm text-ink-muted">
+          {isPathway ? `${graduated}/${total} graduated` : `${pct}% · ${graduated}/${total} graduated`}
+        </div>
         <div className="text-sm text-ink-muted">
           {isPathway ? `${currentPathState!.name} · ${RUNG_LABEL[presentationRung.type]}` : `Rung ${currentClimb!.rungIndex + 1} · ${RUNG_LABEL[presentationRung.type]}`}
         </div>
       </div>
-      <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden">
-        <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
-      </div>
+      {!isPathway && (
+        <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden">
+          <div className="h-full bg-accent rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
+        </div>
+      )}
       {category && (
         <p className="text-xs text-accent text-center">
           {category === 'new' ? 'Studying unlearned cards.' : 'Studying cards still in the learning pipeline.'}

@@ -2289,7 +2289,7 @@ neither grouped (create), one grouped (join), **both grouped (merge)** — via a
 `autoGroupByGloss` and both split-into-synonyms call sites route through it. This is the fix for the
 bug recorded in `features/Card Connection Agent (proposal).md` §1.
 
-## Named ladders + pathways, and presets (2026-07-31, migration 108)
+## Named ladders + pathways, and presets (2026-07-31, migration 108 — APPLIED)
 
 `saved_learning_configs` (`user_id, kind, name, config jsonb`, unique on user+kind+name) is a
 **library**, deliberately separate from `learning_ladders`/`learning_pathways`, which hold what a pair
@@ -2303,6 +2303,11 @@ Three presets each in `lib/learningPresets.ts` (pure, 15 tests). The pathway one
 cognate graduates in three questions and two minutes; support stages exist only after a failure.
 Success is one Easy or two Goods in a row — not two Easies, which would slow down exactly the words
 it exists to accelerate.
+
+**No progress bar in pathway mode** (`LadderStudy`). Only a ladder has a fixed length; a pathway can
+branch backwards indefinitely, so any percentage is a guess dressed up as a measurement and the bar
+stalls or slides. The graduated COUNT (`1/8 graduated`) still shows in both modes — that's a fact, not
+a projection. The `pct` computation is left intact and simply unused in pathway mode.
 
 **The trap that shaped it: a pathway self-transition RESETS the per-state counters.** `stepPathway`
 runs `enterState` on any taken transition, including one pointing back at the same state — so a
