@@ -100,6 +100,71 @@ export class SupabaseSynonymGroupRepository {
     if (error) throw new Error(error.message)
   }
 
+  /** Every card currently in a group. */
+  private async membersOf(groupId: string): Promise<{ id: string }[]> {
+    const { data, error } = await this.db.from('cards')
+      .select('id').eq('synonym_group_id', groupId).is('deleted_at', null)
+    if (error) throw new Error(error.message)
+    return (data ?? []) as { id: string }[]
+  }
+
+  /**
+   * Folds `fromGroupId` into `intoGroupId` — every member moves, then the emptied group row is
+   * deleted.
+   *
+   * Without this, "A and B are synonyms" could only ever move ONE card, so if each already belonged
+   * to a group the other group's members were stranded and the promised equivalence class never
+   * formed.
+   */
+  async mergeGroups(intoGroupId: string, fromGroupId: string): Promise<void> {
+    if (intoGroupId === fromGroupId) return
+    const { error } = await this.db.from('cards')
+      .update({ synonym_group_id: intoGroupId })
+      .eq('synonym_group_id', fromGroupId)
+    if (error) throw new Error(error.message)
+    await this.db.from('synonym_groups').delete().eq('id', fromGroupId)
+  }
+
+  /**
+   * Declares two cards synonyms of each other. THE entry point for synonym linking — synonymy is an
+   * equivalence relation, so this is inherently two-way and transitive:
+   *
+   *   - neither card grouped   → create a group holding both;
+   *   - one grouped            → the other joins it;
+   *   - both grouped, different groups → **merge**, so A's existing partners and B's end up together.
+   *
+   * `addMember` alone cannot express the last case, which is why linking B to A used to leave A's
+   * other synonyms behind.
+   */
+  async linkAsSynonyms(
+    ownerId: string,
+    cardA: { id: string; back: string; synonymGroupId?: string | null },
+    cardB: { id: string; back: string; synonymGroupId?: string | null },
+    itemLanguage: string,
+    glossLanguage: string,
+  ): Promise<string> {
+    if (cardA.id === cardB.id) throw new Error('a card cannot be its own synonym')
+    const ga = cardA.synonymGroupId ?? null
+    const gb = cardB.synonymGroupId ?? null
+
+    if (ga && gb) {
+      if (ga === gb) return ga
+      // Keep the larger group to minimise writes; ties keep A's.
+      const [bigger, smaller] = (await this.membersOf(ga)).length >= (await this.membersOf(gb)).length
+        ? [ga, gb] : [gb, ga]
+      await this.mergeGroups(bigger, smaller)
+      return bigger
+    }
+    if (ga) { await this.addMember(ga, cardB.id); return ga }
+    if (gb) { await this.addMember(gb, cardA.id); return gb }
+
+    const group = await this.create(
+      { gloss: (cardA.back || cardB.back).trim(), glossLanguage, itemLanguage }, ownerId)
+    await this.addMember(group.id, cardA.id)
+    await this.addMember(group.id, cardB.id)
+    return group.id
+  }
+
   /**
    * Auto-groups newly created cards with any owned card in the same language
    * pair that shares the exact same native gloss (`card.back`, case- and
@@ -153,7 +218,10 @@ export class SupabaseSynonymGroupRepository {
         }
         for (const c of members) {
           if (c.synonymGroupId === groupId) continue
-          await this.addMember(groupId, c.id)
+          // A member that ALREADY belongs to a different group has partners of its own; moving just
+          // this card would strand them. Merge the groups so every synonym ends up together.
+          if (c.synonymGroupId) await this.mergeGroups(groupId, c.synonymGroupId)
+          else await this.addMember(groupId, c.id)
         }
       } catch (err) {
         console.error('autoGroupByGloss: failed to group native text', key, err)

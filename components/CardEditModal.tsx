@@ -987,6 +987,17 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
 
         {showStats && (
           <div className="rounded-card border border-line/5 bg-surface-raised/50 p-4 space-y-4 text-sm">
+          {/* Merge lives here too: it's a card-level maintenance action like the rest of this panel,
+              and the main view's link is easy to miss below the fold on a long card. */}
+          {onMerge && !merging && (
+            <button
+              onClick={openMerge}
+              className="w-full text-left text-xs text-ink-muted hover:text-ink transition-colors"
+            >
+              ⇌ Merge with another card…
+            </button>
+          )}
+
           {/* Audio sources — pick which recording plays for this card */}
           {TTS_SUPPORTED_LANGUAGES.has(sourceLanguage) && (
             <div className="space-y-1.5">

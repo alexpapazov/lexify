@@ -305,13 +305,11 @@ export default function AddCardsPage() {
             const groupCards = created.slice(specIdx, specIdx + it.splitSegments.length).filter(Boolean)
             specIdx += it.splitSegments.length
             if (groupCards.length >= 2) {
-              const group = await synonymRepo.create({
-                gloss:         it.back,
-                glossLanguage: deck.targetLanguage,
-                itemLanguage:  deck.sourceLanguage,
-              }, userId)
-              for (const card of groupCards) {
-                await synonymRepo.addMember(group.id, card.id)
+              // Pairwise through linkAsSynonyms, so a card that already belongs to a group merges
+              // that group in rather than being moved out of it.
+              for (let i = 1; i < groupCards.length; i++) {
+                await synonymRepo.linkAsSynonyms(
+                  userId, groupCards[0]!, groupCards[i]!, deck.sourceLanguage, deck.targetLanguage)
               }
             }
           } else {

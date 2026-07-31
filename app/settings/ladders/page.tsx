@@ -9,6 +9,7 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { LadderEditor } from '@/components/settings/LadderEditor'
 import { PathwayEditor } from '@/components/settings/PathwayEditor'
+import { ConfigLibrary } from '@/components/settings/ConfigLibrary'
 import { ladderToPathway, emptyPathway } from '@/lib/pathway'
 import { DEFAULT_LADDER } from '@/domain'
 import type { Ladder, Pathway, LearningMode } from '@/domain'
@@ -139,6 +140,21 @@ function LaddersInner() {
             : `Applies to any newly added language${mode === 'pathway' ? ' set to pathway mode' : ''}. A language’s own ${mode} overrides it.`}
         </p>
       </div>
+
+      {userId && (
+        <ConfigLibrary
+          kind={mode === 'pathway' ? 'pathway' : 'ladder'}
+          userId={userId}
+          current={mode === 'pathway' ? (pathway ?? emptyPathway()) : ladder}
+          onLoad={config => {
+            // Fill the editor only. `version` remounts it so the loaded shape actually shows;
+            // persisting is still the editor's own Save, so trying a preset is never destructive.
+            if (mode === 'pathway') setPathway(config as Pathway)
+            else setLadder(config as Ladder)
+            setVersion(v => v + 1)
+          }}
+        />
+      )}
 
       {mode === 'pathway'
         ? <PathwayEditor key={version} initial={pathway ?? emptyPathway()} onSave={savePathway} onReset={isPair && pathwayCustom ? resetPathway : undefined} onPersistLayout={persistPathwayLayout} saving={saving} />

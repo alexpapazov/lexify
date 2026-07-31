@@ -232,10 +232,10 @@ export function PathwayEditor({ initial, onSave, onReset, onPersistLayout, savin
                         {(Object.keys(COUNTER_LABEL) as PathwayCounter[]).map(c => <option key={c} value={c}>{COUNTER_LABEL[c]}</option>)}
                       </select>
                       <span className="text-ink-faint">≥</span>
-                      <input type="number" min={1} className="input py-1 w-14" value={pred.gte} onChange={e => patchPredicate(t.id, i, { kind: 'counter', name: pred.name, gte: Math.max(1, Number(e.target.value)) })} />
+                      <input type="number" min={1} className="input py-1 w-20 tabular-nums" value={pred.gte} onChange={e => patchPredicate(t.id, i, { kind: 'counter', name: pred.name, gte: Math.max(1, Number(e.target.value)) })} />
                     </>)}
                     {pred.kind === 'attemptsInState' && (
-                      <input type="number" min={1} className="input py-1 w-14" value={pred.gte} onChange={e => patchPredicate(t.id, i, { kind: 'attemptsInState', gte: Math.max(1, Number(e.target.value)) })} />
+                      <input type="number" min={1} className="input py-1 w-20 tabular-nums" value={pred.gte} onChange={e => patchPredicate(t.id, i, { kind: 'attemptsInState', gte: Math.max(1, Number(e.target.value)) })} />
                     )}
                     <button className="text-ink-faint hover:text-danger px-1" onClick={() => removePredicate(t.id, i)}>✕</button>
                   </div>
@@ -247,10 +247,10 @@ export function PathwayEditor({ initial, onSave, onReset, onPersistLayout, savin
                     {p.states.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
                   </select>
                   <span className="text-ink-faint ml-1">priority</span>
-                  <input type="number" className="input py-1 w-14" value={t.priority} onChange={e => patchTransition(t.id, { priority: Number(e.target.value) })} title="lower = checked first" />
+                  <input type="number" className="input py-1 w-20 tabular-nums" value={t.priority} onChange={e => patchTransition(t.id, { priority: Number(e.target.value) })} title="lower = checked first" />
                   <label className="flex items-center gap-1 ml-1 text-ink-faint">
                     wait
-                    <input type="number" min={0} className="input py-1 w-14" placeholder="—" value={t.waitSecondsOverride != null ? toMin(t.waitSecondsOverride) : ''}
+                    <input type="number" min={0} className="input py-1 w-20 tabular-nums" placeholder="—" value={t.waitSecondsOverride != null ? toMin(t.waitSecondsOverride) : ''}
                       onChange={e => patchTransition(t.id, { waitSecondsOverride: e.target.value === '' ? undefined : fromMin(Number(e.target.value)) })} title="minutes (blank = use the default)" />
                     min
                   </label>

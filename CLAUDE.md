@@ -2265,6 +2265,52 @@ through the normal two-step duplicate check. **No AI anywhere.** Read
 - **`prefetchChoices` and language sync are deliberately NOT run** in batch mode — both are AI, and 198
   cards would be 198 model calls. `autoGroupByGloss` IS kept (deterministic).
 
+## `listOwned` was capped at 1000 rows — THE duplicate-leak root cause (2026-07-31)
+
+`cardRepo.listOwned` was a bare `select('*')` with no paging, so PostgREST silently truncated it at
+**1000 rows**. It backs *every* duplicate check in the app, the merge picker, and `bulkCreate`'s reuse
+backstop — so on any language pair past 1000 cards, duplicate detection was simply **blind to the
+rest of the library**, and the ℹ merge picker reported "No cards found" for words plainly present.
+That, more than the front-vs-back matching, is why a mass import filled the library with duplicates.
+
+Now `fetchAllRows` + `.order('id')` + `cachedRead`, and it selects **BULK_CARD_COLUMNS** rather than
+`*` — it was shipping every card's base64 audio to compare two strings. Same caveat as the other bulk
+reads: **do NOT use a card from `listOwned` to decide whether distractors or audio exist.**
+
+`bulkCreate` now busts `cards:` **again at the end**: its own `listOwned` call repopulates the cache
+mid-method with the pre-insert library, so the up-front invalidation alone left a stale answer behind
+for the very next duplicate check.
+
+## Synonym linking is two-way and transitive (2026-07-31)
+
+`addMember` moves ONE card, so "link B to A" pulled B out of its own group and stranded B's other
+synonyms. New `linkAsSynonyms(a, b)` in `lib/data/synonymGroups.ts` handles all three cases —
+neither grouped (create), one grouped (join), **both grouped (merge)** — via a new `mergeGroups`.
+`autoGroupByGloss` and both split-into-synonyms call sites route through it. This is the fix for the
+bug recorded in `features/Card Connection Agent (proposal).md` §1.
+
+## Named ladders + pathways, and presets (2026-07-31, migration 108)
+
+`saved_learning_configs` (`user_id, kind, name, config jsonb`, unique on user+kind+name) is a
+**library**, deliberately separate from `learning_ladders`/`learning_pathways`, which hold what a pair
+is actively studying — saving a shape can't disturb a language mid-study. Re-using a name updates that
+entry. UI: `components/settings/ConfigLibrary.tsx`, above the editor on the ladders settings page.
+**Loading only fills the editor**; the editor's own Save is what persists, so trying a preset is never
+destructive.
+
+Three presets each in `lib/learningPresets.ts` (pure, 15 tests). The pathway one worth knowing is
+**Adaptive (advanced)**: the diagnostic and the interval-setter are the SAME stage, so a transparent
+cognate graduates in three questions and two minutes; support stages exist only after a failure.
+Success is one Easy or two Goods in a row — not two Easies, which would slow down exactly the words
+it exists to accelerate.
+
+**The trap that shaped it: a pathway self-transition RESETS the per-state counters.** `stepPathway`
+runs `enterState` on any taken transition, including one pointing back at the same state — so a
+"repeat this stage" self-loop wipes `consecutiveGood` and "two Goods in a row" can never be reached.
+Express "repeat" by matching NO transition: the engine keeps the card in place, preserves counters,
+and re-shows after the state's `minReshowSeconds`. Also note `consecutiveAgain` is streak-neutral for
+Hard, so "2 Hard in a row" has no direct expression — `attemptsInState >= 3` covers it.
+
 ## Front-only duplicate detection — the non-AI layer (2026-07-31, no migration)
 
 A mass import leaked duplicates because **nothing in the app matched on the front alone**: `tier1` is

@@ -659,13 +659,11 @@ function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguag
         const allGroupCards = [...reusedCards, ...created]
         if (allGroupCards.length >= 2) {
           try {
-            const group = await synonymRepo.create({
-              gloss:         item.card.back,
-              glossLanguage: targetLanguage,
-              itemLanguage:  sourceLanguage,
-            }, userId)
-            for (const c of allGroupCards) {
-              await synonymRepo.addMember(group.id, c.id)
+            // Chain them pairwise through linkAsSynonyms so a card that ALREADY has synonyms brings
+            // its whole group along, instead of being pulled out of it and stranding its partners.
+            for (let i = 1; i < allGroupCards.length; i++) {
+              await synonymRepo.linkAsSynonyms(
+                userId, allGroupCards[0]!, allGroupCards[i]!, sourceLanguage, targetLanguage)
             }
           } catch (groupErr) {
             console.error('Synonym group linking failed (non-fatal):', groupErr)

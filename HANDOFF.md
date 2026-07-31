@@ -4,10 +4,10 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~50,300 lines across 222 TS/TSX files, 677 commits, 510 passing tests (40 suites).
+- **Scale**: ~50,300 lines across 222 TS/TSX files, 678 commits, 525 passing tests (41 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`107`, applied BY HAND — **all
-  applied, nothing pending.**
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`108`, applied BY HAND —
+  **`108_saved_learning_configs.sql` is PENDING at the top level and must be run.**
 
 ---
 
@@ -21,11 +21,11 @@ implementation notes + error log); this file is the map you read first.
   commit message** — zsh history expansion fails the commit and leaves files staged-but-uncommitted.
   Quote any `[bracket]` paths.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
-  `001`–`107` are all applied and all live in `supabase/migrations/archive/`. **The top level is
-  empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
-  run it, and move it into `archive/` once it's live. Next number = **108**.
+  `001`–`107` are applied and live in `supabase/migrations/archive/`. **Whatever sits at the top
+  level is PENDING** — right now that's **`108_saved_learning_configs.sql`** (named ladders/pathways;
+  without it the preset picker's Save fails). Move it into `archive/` once it's live. Next = **109**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **40 suites / 510 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **41 suites / 525 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -308,7 +308,9 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
   LadderStudy and `lib/analyticsData.ts` have core-columns fallbacks. **`PresentSnapshot` now uses
   the shared hardened fetch; `ReviewCalendar` is the last unhardened profile read.**
 - **The 1000-row cap.** PostgREST caps at 1000 and a client `.limit()` does NOT lift it — it
-  truncates silently. Use `fetchAllRows` with a deterministic `.order()`, and chunk `.in()` lists
+  truncates silently. **This bit hard on 2026-07-31**: `cardRepo.listOwned` had no paging, so every
+  duplicate check and the merge picker were blind past the first 1000 cards of a pair — the real
+  reason a mass import leaked duplicates. Assume any unpaged `select` is a latent version of this. Use `fetchAllRows` with a deterministic `.order()`, and chunk `.in()` lists
   (~400 ids).
 - **`getToday(tz, turnoverHour)` owns "what day is it."** Both it and `localDateWithTurnover` default
   to UTC in their signatures — every caller must pass `timezone || deviceTimeZone()`, never

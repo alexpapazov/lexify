@@ -223,14 +223,32 @@ export class SupabaseCardRepository implements CardRepository {
     return (data ?? []).map(r => ({ id: r.id as string, front: r.front as string, sourceLanguage: r.source_language as string }))
   }
 
+  /**
+   * Every card the user owns in one language direction. Backs every duplicate check in the app, the
+   * merge picker, and `bulkCreate`'s reuse backstop.
+   *
+   * **PAGED, and it must stay paged.** This used to be a bare `select('*')`, which PostgREST silently
+   * capped at 1000 rows — so on any library past 1000 cards every duplicate check was blind to the
+   * rest, and the merge picker reported "No cards found" for words that plainly existed. That is the
+   * bug that let a mass import fill the library with duplicates. See the 1000-row-cap note in
+   * CLAUDE.md.
+   *
+   * Uses BULK_CARD_COLUMNS: no audio blobs, no `choices` — shipping a whole library's base64 MP3s to
+   * compare two strings was pure waste. **Do NOT use a card from here to decide whether distractors
+   * or audio exist**, same rule as the other bulk reads.
+   */
   async listOwned(ownerId: UserId, sourceLanguage: string, targetLanguage: string): Promise<Card[]> {
-    const { data, error } = await this.db.from('cards').select('*')
-      .eq('owner_id', ownerId)
-      .eq('source_language', sourceLanguage)
-      .eq('target_language', targetLanguage)
-      .is('deleted_at', null)
-    if (error) throw new Error(error.message)
-    return (data ?? []).map(rowToCard)
+    return cachedRead(`cards:owned:${ownerId}:${sourceLanguage}:${targetLanguage}`, async () => {
+      const rows = await fetchAllRows<Record<string, unknown>>((f, t) => this.db.from('cards')
+        .select(BULK_CARD_COLUMNS)
+        .eq('owner_id', ownerId)
+        .eq('source_language', sourceLanguage)
+        .eq('target_language', targetLanguage)
+        .is('deleted_at', null)
+        .order('id').range(f, t) as unknown as
+        PromiseLike<{ data: Record<string, unknown>[] | null; error: unknown }>)
+      return rows.map(rowToCard)
+    })
   }
 
   async listDeckNamesForCards(cardIds: CardId[]): Promise<Record<string, string[]>> {
@@ -297,6 +315,11 @@ export class SupabaseCardRepository implements CardRepository {
     const { error: linkError } = await this.db.from('deck_cards')
       .upsert(linkRows, { onConflict: 'deck_id,card_id', ignoreDuplicates: true })
     if (linkError) throw new Error(linkError.message)
+
+    // Bust AGAIN, at the end: the `listOwned` above repopulated the cache mid-call with the
+    // pre-insert library, so the up-front invalidation alone would leave a stale answer behind for
+    // the next duplicate check — exactly the read that must never be stale.
+    invalidateReads('cards:')
 
     return results
   }
