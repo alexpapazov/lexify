@@ -5,8 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import { gatherScopedCards, analyzeBatch, applyProposal, undoEdit, chunk, findDuplicates } from '@/lib/agents/cardEditor'
-import type { ScopedCard, EditProposal, AgentSides, DedupeMode } from '@/lib/agents/cardEditor'
+import { gatherScopedCards, analyzeBatch, applyProposal, undoApplied, chunk, findDuplicates } from '@/lib/agents/cardEditor'
+import type { ScopedCard, EditProposal, AgentSides, DedupeMode, AppliedUndo } from '@/lib/agents/cardEditor'
 import type { Deck, Folder, CardState, Grant } from '@/domain'
 import { langFlag } from '@/lib/languages'
 
@@ -70,11 +70,14 @@ export default function AgentsPage() {
   const [total, setTotal] = useState(0)
   const [approved, setApproved] = useState(0)
   const [denied, setDenied] = useState(0)
-  const [lastApplied, setLastApplied] = useState<EditProposal | null>(null)  // last approved text edit (Cmd+Z undoable)
+  /** The last approval, with everything needed to reverse it (including deleted cards' review
+   *  history). Cleared once undone, or when a new approval supersedes it. */
+  const [lastApplied, setLastApplied] = useState<AppliedUndo | null>(null)
   /** Which side of each card the agent may SEE — and therefore edit. The review UI always shows both. */
   const [sides, setSides] = useState<AgentSides>('both')
   /** Which copy of a duplicate group survives. Keyed by proposal id so queue shuffling can't misapply it. */
   const [keepChoice, setKeepChoice] = useState<Record<string, string>>({})
+  const [confirmAcceptAll, setConfirmAcceptAll] = useState(false)
 
   const batchesRef = useRef<ScopedCard[][]>([])
   const nextBatchRef = useRef(0)
@@ -257,6 +260,8 @@ export default function AgentsPage() {
   }
 
   function advance() {
+    // Any pending "apply all" confirmation is about the queue as it was; dismiss it on every move.
+    setConfirmAcceptAll(false)
     const next = queue.slice(1)
     if (next.length > 0) { setQueue(next); prefetch() }   // keep buffering the next batch while reviewing
     else loadNext()
@@ -270,9 +275,11 @@ export default function AgentsPage() {
     const toApply = current.action === 'dedupe' && chosen ? { ...current, keepCardId: chosen } : current
     const cardsAffected = current.action === 'dedupe' ? Math.max(0, (current.group?.length ?? 1) - 1) : 1
     try {
-      await applyProposal(userId, toApply)
+      const undo = await applyProposal(userId, toApply)
       setApproved(a => a + cardsAffected)
-      setLastApplied(current.action === 'edit' ? current : null)
+      // Deletes are undoable now too — `applyProposal` snapshots the review history before removing
+      // a card, so an undo restores the card AND its schedule.
+      setLastApplied(undo)
     } catch (e) {
       // Keep the proposal on screen — advancing here would bury a half-applied group.
       setError(e instanceof Error ? e.message : String(e))
@@ -281,6 +288,61 @@ export default function AgentsPage() {
     }
     setBusy(false)
     advance()
+  }
+
+  /** Whether batches remain that haven't been analyzed yet — so the "N left" count isn't the total. */
+  const moreToScan = nextBatchRef.current < batchesRef.current.length || bufferRef.current.length > 0
+
+  /**
+   * Applies every proposal currently queued, in order, without stopping to ask.
+   *
+   * Each one still goes through `applyProposal`, so the liveness guard runs per group and a card that
+   * has since been deleted is skipped rather than double-deleted. Failures are counted and reported
+   * instead of aborting — one bad group shouldn't strand the other forty.
+   *
+   * Deliberately NOT undoable as a unit: `lastApplied` holds one proposal, and pretending a bulk
+   * apply can be reversed with one press would be a lie. That's why it's behind a confirmation.
+   */
+  async function acceptAll() {
+    if (!userId || busy || queue.length === 0) return
+    setConfirmAcceptAll(false)
+    setBusy(true)
+    setError(null)
+    let applied = 0
+    let failed = 0
+    for (const p of queue) {
+      const chosen = p.id ? keepChoice[p.id] : undefined
+      const toApply = p.action === 'dedupe' && chosen ? { ...p, keepCardId: chosen } : p
+      try {
+        await applyProposal(userId, toApply)
+        applied += p.action === 'dedupe' ? Math.max(0, (p.group?.length ?? 1) - 1) : 1
+      } catch { failed++ }
+    }
+    setApproved(a => a + applied)
+    setLastApplied(null)   // a bulk apply has no single-press undo
+    if (failed > 0) setError(`${failed} change${failed === 1 ? '' : 's'} could not be applied and ${failed === 1 ? 'was' : 'were'} skipped.`)
+    setQueue([])
+    setBusy(false)
+    await loadNext()
+  }
+
+  /** Reverses the last approval and puts the proposal back at the head of the queue to decide again. */
+  async function undoLast() {
+    const undo = lastApplied
+    if (!undo || !userId || busy) return
+    setBusy(true)
+    try {
+      await undoApplied(userId, undo)
+      const p = undo.proposal
+      const cards = p.action === 'dedupe' ? Math.max(0, (p.group?.length ?? 1) - 1) : 1
+      setApproved(a => Math.max(0, a - cards))
+      setLastApplied(null)
+      setQueue(q => [p, ...q])
+      setPhase('review')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+    setBusy(false)
   }
   function deny() {
     // Count CARDS, not proposals, so the tally matches `approved` (a denied group skips every copy).
@@ -292,28 +354,20 @@ export default function AgentsPage() {
 
   function exit() {
     setPhase('setup'); setQueue([]); bufferRef.current = []; setLastApplied(null)
+    setConfirmAcceptAll(false); setKeepChoice({})
   }
 
-  // Cmd/Ctrl+Z undoes the last approved TEXT edit and re-shows it to decide again.
+  // Cmd/Ctrl+Z is a shortcut for the same Undo the button runs — one code path, no drift.
   useEffect(() => {
-    async function onKey(e: KeyboardEvent) {
+    function onKey(e: KeyboardEvent) {
       if (!((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z')) return
-      const p = lastApplied
-      if (!p || p.action !== 'edit' || !userId || busy) return
+      if (!lastApplied || !userId || busy) return
       e.preventDefault()
-      setBusy(true)
-      try {
-        await undoEdit(userId, p)
-        setApproved(a => Math.max(0, a - 1))
-        setLastApplied(null)
-        setQueue(q => [p, ...q])
-        setPhase('review')
-      } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
-      setBusy(false)
+      void undoLast()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [lastApplied, userId, busy])
+  }, [lastApplied, userId, busy])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const current = queue[0]
 
@@ -444,7 +498,15 @@ export default function AgentsPage() {
             keepId={current.id ? keepChoice[current.id] : undefined}
             onKeep={cardId => { if (current.id) setKeepChoice(prev => ({ ...prev, [current.id!]: cardId })) }}
           />
-          <p className="text-xs text-ink-faint">{current.reason}</p>
+          <div className="flex items-baseline justify-between gap-3">
+            <p className="text-xs text-ink-faint">{current.reason}</p>
+            {/* How many decisions are still waiting. `+ more to scan` because on the AI path later
+                batches haven't been analyzed yet, so the true total isn't known — better to say so
+                than to show a number that keeps growing. */}
+            <p className="text-xs text-ink-faint whitespace-nowrap">
+              {`${queue.length} left${moreToScan ? ' + more to scan' : ''}`}
+            </p>
+          </div>
           <div className="flex gap-3">
             <button className="btn-ghost flex-1" disabled={busy} onClick={deny}>Deny</button>
             <button className="btn-primary flex-1" disabled={busy} onClick={approve}>
@@ -453,7 +515,41 @@ export default function AgentsPage() {
                 : 'Approve'}
             </button>
           </div>
-          {lastApplied && <p className="text-[10px] text-ink-faint text-center">Last approval can be undone — press ⌘Z / Ctrl+Z</p>}
+
+          {queue.length > 1 && !confirmAcceptAll && (
+            <button className="btn-ghost w-full text-xs" disabled={busy} onClick={() => setConfirmAcceptAll(true)}>
+              {`Accept all ${queue.length} remaining`}
+            </button>
+          )}
+          {confirmAcceptAll && (
+            <div className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5 space-y-2">
+              <p className="text-xs text-ink">
+                {`Apply all ${queue.length} remaining change${queue.length === 1 ? '' : 's'} without reviewing them?`}
+              </p>
+              <p className="text-[11px] text-ink-muted">
+                {queue.some(p => p.action === 'dedupe')
+                  ? 'Duplicate groups keep whichever copy is currently marked Keep — the default is the copy with the most review progress. This cannot be undone in one press.'
+                  : 'This cannot be undone in one press — Undo only reverses a single change.'}
+              </p>
+              <div className="flex gap-2">
+                <button className="btn-ghost text-xs px-3 py-1.5 flex-1" disabled={busy} onClick={() => setConfirmAcceptAll(false)}>Cancel</button>
+                <button className="btn-primary text-xs px-3 py-1.5 flex-1" disabled={busy} onClick={() => void acceptAll()}>
+                  {busy ? 'Applying…' : 'Apply all'}
+                </button>
+              </div>
+            </div>
+          )}
+          {lastApplied && (
+            <button
+              className="btn-ghost w-full text-xs"
+              disabled={busy}
+              onClick={() => void undoLast()}
+            >
+              {lastApplied.proposal.action === 'dedupe'
+                ? `↩ Undo — restore ${lastApplied.deleted?.length ?? 0} deleted card${(lastApplied.deleted?.length ?? 0) === 1 ? '' : 's'} (⌘Z)`
+                : '↩ Undo last approval (⌘Z)'}
+            </button>
+          )}
         </div>
       )}
 

@@ -2370,8 +2370,25 @@ word means two competing schedules — that's a duplicate whatever the glosses s
 - A group can **span decks**, so each delete gets a grant for its own deck; a partial failure throws
   and the proposal stays on screen instead of being advanced past half-applied. `approved`/`denied`
   count CARDS, not proposals.
-- **Deletes are still not Cmd+Z-undoable** (that path is edit-only, pre-existing). Soft-delete means
-  recovery is a SQL `deleted_at` reset.
+- **Undo now covers deletes too** (2026-07-31). A visible **Undo** button (⌘Z still works, one shared
+  code path) reverses the last approval and re-queues the proposal. `applyProposal` returns an
+  `AppliedUndo`; for a dedupe it **snapshots each doomed card's `card_states` BEFORE deleting**,
+  because `soft_delete_card` DELETES those rows — un-deleting alone would resurrect the card stripped
+  of every review (reps, lapses, difficulty, stability, due dates). Typed-answer overrides are not
+  restored (the RPC drops them; not worth a snapshot).
+- **`planDedupeDeletions` is the never-delete-the-last-copy guard** — pure, 6 tests. A group is built
+  from a scan that may be minutes old, so at APPLY time each member's liveness is re-checked
+  (`deps.getCard` returns null for a soft-deleted card) and the plan **refuses** if the chosen keeper
+  is already gone or fewer than two copies remain. Without it, approving two groups that overlap — or
+  re-approving after an undo — could delete every copy of a word. The pure split exists because the
+  old test asserted through `applyProposal`, which can't construct a Supabase client under jest and
+  was therefore only ever testing that it threw *something*.
+- **"Accept all N remaining"** applies the whole queue behind a confirmation. Each proposal still goes
+  through `applyProposal`, so the liveness guard runs per group. Failures are counted and reported
+  rather than aborting the run. Deliberately **not** undoable as a unit — `lastApplied` holds one
+  proposal, and pretending otherwise would be a lie; that's what the confirmation is for.
+- The review panel shows **`N left`** (`+ more to scan` when batches remain unanalyzed, since on the
+  AI path the true total isn't known until they're scanned).
 
 ## JSX whitespace: a space after `{expr}` is eaten on a wrapped line
 

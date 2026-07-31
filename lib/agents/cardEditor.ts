@@ -5,11 +5,13 @@
  * the analysis is a server call (`/api/agents/card-editor`), one batch at a time.
  */
 
-import type { Grant, GatewayContext, UserId } from '@/domain'
+import type { CardState, Grant, GatewayContext, UserId } from '@/domain'
 import { apiUrl } from '@/lib/apiBase'
 import { createSupabaseGatewayDeps } from './deps'
 import * as gw from './gateway'
 import { normalizeFrontKey } from '@/lib/duplicates'
+import { SupabaseCardRepository } from '@/lib/data/cards'
+import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import type { AgentSides } from '@/app/api/agents/card-editor/route'
 
 export type { AgentSides }
@@ -50,6 +52,31 @@ export interface EditProposal extends ScopedCard {
 
 /** How de-dupe decides two cards are the same card. */
 export type DedupeMode = 'front' | 'front-back'
+
+/**
+ * Decides which copies of a duplicate group may actually be deleted, given which are still alive.
+ *
+ * Pure, and separated from `applyProposal` precisely because this is the rule that prevents the worst
+ * possible outcome — deleting the last surviving copy of a word. A group is built from a scan that
+ * may be minutes old; by the time it's approved a card could have been removed by an earlier
+ * proposal, another tab, or the card editor.
+ *
+ * Throws rather than silently narrowing, so the UI keeps the proposal on screen and the learner
+ * decides again with accurate information.
+ */
+export function planDedupeDeletions(
+  group: ScopedCard[],
+  keepCardId: string | undefined,
+  isAlive: (cardId: string) => boolean,
+): { keep: ScopedCard; doomed: ScopedCard[] } {
+  const live = group.filter(c => isAlive(c.cardId))
+  if (live.length < 2) throw new Error('Only one copy is still there — nothing left to de-duplicate.')
+  const keep = live.find(c => c.cardId === keepCardId)
+  if (!keep) throw new Error('The copy you chose to keep has already been deleted. Pick another to keep.')
+  const doomed = live.filter(c => c.cardId !== keep.cardId)
+  if (doomed.length === 0) throw new Error('nothing to delete in this duplicate group')
+  return { keep, doomed }
+}
 
 const editGrant = (deckIds: string[]): Grant =>
   ({ operations: ['edit', 'create', 'delete'], languages: [], folderIds: [], deckIds, dryRunOnly: false })
@@ -181,22 +208,69 @@ export async function undoEdit(userId: UserId, p: EditProposal): Promise<void> {
   await gw.editCardText(ctx, deps, { deckId: p.deckId, cardId: p.cardId, front: p.front, back: p.back, reason: 'undo' })
 }
 
-/** Applies one approved proposal to the library through the gateway (audited). */
-export async function applyProposal(userId: UserId, p: EditProposal): Promise<void> {
+/**
+ * What an applied proposal needs in order to be undone.
+ *
+ * For a dedupe, that includes the deleted cards' `card_states` rows: `soft_delete_card` DELETES them
+ * (along with typed-answer overrides), so simply un-deleting the card would bring it back stripped of
+ * every review — reps, lapses, difficulty, stability, due dates. Capturing them first is what makes
+ * Undo a real undo rather than a resurrection.
+ */
+export interface AppliedUndo {
+  proposal:      EditProposal
+  /** Cards deleted by a dedupe, with the states they had at deletion time. */
+  deleted?:      { cardId: string; states: CardState[] }[]
+}
+
+/** Restores whatever `applyProposal` did. Text edits revert; deleted duplicates come back with their
+ *  review history. Typed-answer overrides are NOT restored — the delete RPC drops them and they
+ *  aren't worth a snapshot. */
+export async function undoApplied(userId: UserId, undo: AppliedUndo): Promise<void> {
+  const p = undo.proposal
+  if (p.action === 'edit') return undoEdit(userId, p)
+  if (p.action !== 'dedupe' || !undo.deleted?.length) return
+
+  const cardRepo  = new SupabaseCardRepository()
+  const stateRepo = new SupabaseCardStateRepository()
+  for (const { cardId, states } of undo.deleted) {
+    await cardRepo.undelete(cardId)
+    if (states.length > 0) await stateRepo.upsertBatch(states)
+  }
+}
+
+/** Applies one approved proposal to the library through the gateway (audited). Returns what's needed
+ *  to undo it. */
+export async function applyProposal(userId: UserId, p: EditProposal): Promise<AppliedUndo> {
   const deps = createSupabaseGatewayDeps()
 
   if (p.action === 'dedupe') {
     const group = p.group ?? []
     const keepId = p.keepCardId ?? group[0]?.cardId
-    const doomed = group.filter(c => c.cardId !== keepId)
-    if (!keepId || doomed.length === 0) throw new Error('nothing to delete in this duplicate group')
+    if (!keepId) throw new Error('nothing to delete in this duplicate group')
+
+    // LIVENESS RE-CHECK, at apply time — `deps.getCard` returns null for a soft-deleted card. The
+    // decision itself lives in the pure `planDedupeDeletions` above.
+    const aliveIds = new Set((await Promise.all(
+      group.map(async c => ((await deps.getCard(c.cardId)) != null ? c.cardId : null)),
+    )).filter((id): id is string => id != null))
+    const { doomed } = planDedupeDeletions(group, keepId, id => aliveIds.has(id))
+
+    const stateRepo = new SupabaseCardStateRepository()
     // A group can span decks, so each delete needs a grant for ITS OWN deck — one shared grant built
     // from the proposal's deckId would be refused as out of scope for the others.
     const failed: string[] = []
+    const deleted: { cardId: string; states: CardState[] }[] = []
     for (const c of doomed) {
       const cctx: GatewayContext = { userId, grant: editGrant([c.deckId]), actor: 'card-editor' }
       try {
+        // Snapshot BEFORE deleting — `soft_delete_card` drops the card_states rows outright, so this
+        // is the only moment the review history still exists.
+        const states = (await Promise.all([
+          stateRepo.get(userId, c.cardId, 'forward'),
+          stateRepo.get(userId, c.cardId, 'reverse'),
+        ])).filter((s): s is CardState => s != null)
         await gw.deleteCard(cctx, deps, { deckId: c.deckId, cardId: c.cardId, reason: p.reason })
+        deleted.push({ cardId: c.cardId, states })
       } catch {
         failed.push(c.front)
       }
@@ -204,7 +278,7 @@ export async function applyProposal(userId: UserId, p: EditProposal): Promise<vo
     // Surface a partial failure so the caller can keep the proposal on screen rather than advancing
     // past a half-applied group.
     if (failed.length > 0) throw new Error(`${failed.length} of ${doomed.length} copies could not be deleted`)
-    return
+    return { proposal: p, deleted }
   }
 
   const ctx: GatewayContext = { userId, grant: editGrant([p.deckId]), actor: 'card-editor' }
@@ -218,4 +292,5 @@ export async function applyProposal(userId: UserId, p: EditProposal): Promise<vo
   } else {
     await gw.editCardText(ctx, deps, { deckId: p.deckId, cardId: p.cardId, front: p.newFront, back: p.newBack, reason: p.reason })
   }
+  return { proposal: p }
 }

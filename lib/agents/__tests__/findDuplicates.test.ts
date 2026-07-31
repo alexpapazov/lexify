@@ -1,4 +1,4 @@
-import { findDuplicates, applyProposal } from '@/lib/agents/cardEditor'
+import { findDuplicates, planDedupeDeletions } from '@/lib/agents/cardEditor'
 
 const c = (cardId: string, front: string, back: string, deckId = 'd1') =>
   ({ cardId, deckId, front, back, sourceLanguage: 'es' })
@@ -80,10 +80,43 @@ describe('findDuplicates — keeper selection', () => {
   })
 })
 
-describe('applyProposal — dedupe groups', () => {
-  it('refuses a group with nothing to delete rather than silently doing nothing', async () => {
-    await expect(applyProposal('u1', {
-      ...c('1', 'gato', 'cat'), action: 'dedupe', group: [c('1', 'gato', 'cat')], keepCardId: '1', reason: 'x',
-    })).rejects.toThrow(/nothing to delete/)
+describe('planDedupeDeletions — the never-delete-the-last-copy guard', () => {
+  const group = [c('a', 'gato', 'cat'), c('b', 'gato', 'cat'), c('x', 'gato', 'cat')]
+  const allAlive = () => true
+
+  it('deletes every live copy except the keeper', () => {
+    const { keep, doomed } = planDedupeDeletions(group, 'b', allAlive)
+    expect(keep.cardId).toBe('b')
+    expect(doomed.map(d => d.cardId)).toEqual(['a', 'x'])
+  })
+
+  it('ignores copies that have already been deleted', () => {
+    const { doomed } = planDedupeDeletions(group, 'b', id => id !== 'x')
+    expect(doomed.map(d => d.cardId)).toEqual(['a'])
+  })
+
+  it('REFUSES when the chosen keeper is already gone — otherwise the word vanishes entirely', () => {
+    expect(() => planDedupeDeletions(group, 'b', id => id !== 'b'))
+      .toThrow(/copy you chose to keep has already been deleted/)
+  })
+
+  it('REFUSES when fewer than two copies remain alive', () => {
+    expect(() => planDedupeDeletions(group, 'a', id => id === 'a'))
+      .toThrow(/Only one copy is still there/)
+    expect(() => planDedupeDeletions(group, 'a', () => false))
+      .toThrow(/Only one copy is still there/)
+  })
+
+  it('REFUSES a group of one', () => {
+    expect(() => planDedupeDeletions([c('a', 'gato', 'cat')], 'a', allAlive))
+      .toThrow(/Only one copy is still there/)
+  })
+
+  it('never returns the keeper among the doomed, whatever the liveness map says', () => {
+    for (const keepId of ['a', 'b', 'x']) {
+      const { keep, doomed } = planDedupeDeletions(group, keepId, allAlive)
+      expect(doomed.map(d => d.cardId)).not.toContain(keep.cardId)
+      expect(doomed).toHaveLength(2)
+    }
   })
 })
