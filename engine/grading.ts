@@ -12,7 +12,6 @@
 
 import type {
   GradingSettings, GradingResult, GradingIssueType, GradingStatus,
-  MultiFieldGradingResult, SynonymAnswerField,
   TypedStrictness, TypedStrictnessLevel, TypedPenalty, TypedErrorCategory,
 } from '@/domain'
 import { TYPED_PENALTY_WEIGHTS } from '@/domain'
@@ -526,83 +525,6 @@ export function resolveTypedPenalty(
   return { weight: 1, category: issueTypeToCategory(result.issueType), accepted: false, requiresRetype: true }
 }
 
-// ─── Multi-field synonym grading ───────────────────────────────────────────────
-
-/**
- * Grade a multi-field synonym production prompt.
- * Only grades 'due_blank' fields; 'prefilled' fields are skipped.
- * The user's typed answers (one per blank field) are matched against due
- * expected answers in any order.
- */
-export function gradeMultiField(
-  fields:   SynonymAnswerField[],
-  settings: GradingSettings,
-): MultiFieldGradingResult {
-  const dueFields  = fields.filter(f => f.dueState === 'due')
-  const userInputs = fields.filter(f => f.status === 'due_blank').map(f => f.value)
-
-  // Match typed answers against due expected answers (best-fit, any order).
-  const usedInputIdxs = new Set<number>()
-  const fieldResults: MultiFieldGradingResult['fieldResults'] = []
-
-  for (const field of dueFields) {
-    let bestResult: GradingResult | null = null
-    let bestIdx = -1
-
-    for (let i = 0; i < userInputs.length; i++) {
-      if (usedInputIdxs.has(i)) continue
-      const r = gradeTyping(userInputs[i]!, field.expectedAnswer, settings)
-      if (!bestResult || r.status < bestResult.status) {
-        bestResult = r
-        bestIdx = i
-      }
-    }
-
-    if (!bestResult || bestIdx === -1) {
-      fieldResults.push({
-        lexicalItemId: field.lexicalItemId, expectedAnswer: field.expectedAnswer,
-        status: 'missing', issueType: 'missing_required_part',
-        reason: 'No answer was provided for this item.',
-      })
-      continue
-    }
-
-    usedInputIdxs.add(bestIdx)
-
-    // Check if the matched input is actually a NOT-due synonym (wrong synonym case)
-    const isWrongSynonym = bestResult.status === 'incorrect' &&
-      fields.some(f =>
-        f.dueState !== 'due' &&
-        gradeTyping(userInputs[bestIdx]!, f.expectedAnswer, settings).status === 'correct'
-      )
-
-    if (isWrongSynonym) {
-      fieldResults.push({
-        lexicalItemId: field.lexicalItemId, expectedAnswer: field.expectedAnswer,
-        typedAnswer: userInputs[bestIdx],
-        status: 'incorrect', issueType: 'wrong_synonym',
-        reason: `"${userInputs[bestIdx]}" is a valid translation but is not the item being tested here.`,
-      })
-    } else {
-      fieldResults.push({
-        lexicalItemId: field.lexicalItemId, expectedAnswer: field.expectedAnswer,
-        typedAnswer: userInputs[bestIdx],
-        status: bestResult.status as 'correct' | 'almost' | 'incorrect',
-        issueType: bestResult.issueType,
-        reason: bestResult.reason,
-      })
-    }
-  }
-
-  const statuses = fieldResults.map(r => r.status)
-  const overallStatus: GradingStatus =
-    statuses.every(s => s === 'correct') ? 'correct' :
-    statuses.some(s => s === 'correct' || s === 'almost') ? 'almost' :
-    'incorrect'
-
-  return { overallStatus, fieldResults }
-}
-
 // ─── Severity scoring (for scheduler interval scaling) ─────────────────────────
 
 /**
@@ -654,24 +576,4 @@ export function isDifferentWordMistake(
   const normalizedUser = normalizeAnswer(userAnswer, settings)
   if (normalizedUser.length === 0) return false
   return classifyWrongAnswer(userAnswer, expected, settings) >= 1.0
-}
-
-// ─── Adaptive strictness scaffold ──────────────────────────────────────────────
-
-/**
- * Scaffold for future adaptive strictness.
- *
- * When fully implemented, this will inspect the card's ErrorStats and
- * temporarily tighten grading for issues the learner makes repeatedly:
- *   - ≥3 accent mistakes → ignoreAccents forced to false for this card
- *   - After 2 consecutive correct: revert to deck setting
- *
- * Currently returns the deck's settings unchanged.
- */
-export function resolveAdaptiveSettings(
-  settings:   GradingSettings,
-  // errorStats: ErrorStats,   // TODO: pass in when adaptive strictness is wired up
-): GradingSettings {
-  // TODO: implement adaptive strictness based on per-card ErrorStats.
-  return settings
 }

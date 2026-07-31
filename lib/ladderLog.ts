@@ -4,7 +4,7 @@
  */
 import type { LadderEvent } from '@/lib/data/ladderEvents'
 
-export interface CardStat {
+interface CardStat {
   cardId:    string
   label:     string
   attempts:  number

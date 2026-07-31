@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/client'
 
-export interface PendingSynonymLink {
+interface PendingSynonymLink {
   id:             string
   userId:         string
   sourceWord:     string

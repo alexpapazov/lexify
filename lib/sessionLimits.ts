@@ -15,12 +15,12 @@
  *   refills the freed slots — learning first, then unlearned — until the deck
  *   is exhausted.
  */
-export interface LimitCard {
+interface LimitCard {
   id:       string
   position: number
 }
 
-export interface LimitState {
+interface LimitState {
   graduated:      boolean
   introducedDate: string | null
 }
@@ -113,7 +113,7 @@ export interface EnabledTracks { typed: boolean; recall: boolean; reverse: boole
  * the pair's threshold (still building the memory), then flips to self-graded once
  * it's comfortably past it. Dropping back below the threshold (a lapse) resumes typing.
  */
-export function smartProductionMode(smartIntervalDays: number | null, thresholdDays: number): 'typed' | 'self-graded' {
+function smartProductionMode(smartIntervalDays: number | null, thresholdDays: number): 'typed' | 'self-graded' {
   return smartIntervalDays != null && smartIntervalDays < thresholdDays ? 'typed' : 'self-graded'
 }
 
@@ -189,16 +189,6 @@ export function buildCalibrationMap(rows: CalibrationRow[]): Map<string, number>
   const map = new Map<string, number>()
   for (const r of rows) map.set(`${r.sourceLanguage}|${r.targetLanguage}:${r.answerField}`, r.retentionCalibration ?? 1)
   return map
-}
-
-/** Which answer_field a live review track schedules against. Legacy typed → forward_typed. */
-export function reviewTrackField(
-  reviewTrack: 'typed' | 'recall' | 'legacy' | 'smart' | undefined, isReverse: boolean,
-): 'forward_typed' | 'forward_smart' | 'forward_recall' | 'reverse_recall' {
-  if (isReverse) return 'reverse_recall'
-  if (reviewTrack === 'smart')  return 'forward_smart'
-  if (reviewTrack === 'recall') return 'forward_recall'
-  return 'forward_typed'
 }
 
 /** The interval-calibration multiplier for a given pair + answer_field (1 when unknown). */

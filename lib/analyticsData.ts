@@ -23,7 +23,7 @@ import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { cachedRead } from '@/lib/readCache'
 
-export type AnalyticsRow = Record<string, unknown>
+type AnalyticsRow = Record<string, unknown>
 
 const DAY_MS = 86_400_000
 
@@ -32,7 +32,7 @@ const DAY_MS = 86_400_000
  * day so every caller produces the same cache key. Widening the window by up to 24h is immaterial
  * for a 30-day trend and makes the day buckets whole.
  */
-export function windowStartIso(days: number): string {
+function windowStartIso(days: number): string {
   const midnightToday = Math.floor(Date.now() / DAY_MS) * DAY_MS
   return new Date(midnightToday - days * DAY_MS).toISOString()
 }

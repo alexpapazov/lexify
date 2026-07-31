@@ -31,7 +31,7 @@ function isHangulSyllable(ch: string): boolean {
   return c >= HANGUL_BASE && c <= HANGUL_END
 }
 
-export interface HintPlan {
+interface HintPlan {
   /** Highest hint level available: 0 (no hint possible), 1, or 2. */
   maxLevel: number
   /**

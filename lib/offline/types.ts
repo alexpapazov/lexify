@@ -5,7 +5,7 @@
 import type { Card, CardState, Deck, Folder } from '@/domain'
 
 // ── Scope of a download ──────────────────────────────────────────────────────
-export type OfflineScopeKind = 'deck' | 'folder' | 'language' | 'library'
+type OfflineScopeKind = 'deck' | 'folder' | 'language' | 'library'
 export interface OfflineScope {
   kind:     OfflineScopeKind
   deckId?:  string

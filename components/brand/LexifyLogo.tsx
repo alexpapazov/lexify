@@ -25,7 +25,7 @@ const BODY_OFFSET = 10 / 52
 const TEXT_OFFSET = 4 / 52
 
 /** Just the bubble mark, no wordmark. `size` is the full SVG box (the bubble body is ~73% of it). */
-export function LexifyMark({ size = 26, className = '', align = false }: { size?: number; className?: string; align?: boolean }) {
+function LexifyMark({ size = 26, className = '', align = false }: { size?: number; className?: string; align?: boolean }) {
   return (
     <svg
       width={size} height={size} viewBox="0 0 52 52" fill="none" className={className} aria-hidden="true"

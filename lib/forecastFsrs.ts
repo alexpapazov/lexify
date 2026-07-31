@@ -17,7 +17,7 @@ export function stabilityForInterval(intervalDays: number, retention: number): n
   return Math.max(0.1, (intervalDays > 0 ? intervalDays : 1) / (perUnit || 1))
 }
 
-export interface ReviewStep {
+interface ReviewStep {
   /** Day offset (from now) this review lands on. */
   day: number
   /** The interval (days) that led to this review — used to route smart-typing typed vs self-graded. */
@@ -123,8 +123,6 @@ export function fsrsScheduleMix(opts: {
 // ─── Shared seeding + language-model helpers (used by the analytics chart and
 //     the dashboard "Coming up" bars, so both project workload identically) ────
 
-/** Fallback initial post-graduation interval (days) when a language has no sample. */
-export const DEFAULT_I0 = 3
 /** Fallback FSRS difficulty when a card/language has none measured. */
 export const DEFAULT_DIFFICULTY = 5
 
@@ -148,7 +146,7 @@ export function seedDifficulty(difficulty: number | null | undefined): number {
 }
 
 /** Minimal per-card shape needed to measure a language's rating behaviour. */
-export interface RatingSampleState {
+interface RatingSampleState {
   reviewDirection?: string
   graduated:        boolean
   lastRating:       Rating | null
@@ -178,7 +176,7 @@ export function measureRatingMix(states: RatingSampleState[]): RatingMix {
 // gentle (near-flat) curve rather than noise.
 
 /** One maturity bucket: the rating mix for cards that have been reviewed at least `minReps` times. */
-export interface RatingBucket { minReps: number; mix: RatingMix; n: number }
+interface RatingBucket { minReps: number; mix: RatingMix; n: number }
 /** A language's rating behaviour as a function of maturity — buckets sorted ascending by minReps. */
 export type RatingModel = RatingBucket[]
 

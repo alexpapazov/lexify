@@ -4,9 +4,9 @@
  * the runner needs are modelled.
  */
 
-export interface TextBlock { type: 'text'; text: string }
-export interface ToolUseBlock { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-export type ContentBlock = TextBlock | ToolUseBlock
+interface TextBlock { type: 'text'; text: string }
+interface ToolUseBlock { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+type ContentBlock = TextBlock | ToolUseBlock
 
 export interface ToolResultBlock {
   type: 'tool_result'
@@ -15,8 +15,8 @@ export interface ToolResultBlock {
   is_error?: boolean
 }
 
-export interface AssistantMessage { role: 'assistant'; content: ContentBlock[] }
-export interface UserMessage { role: 'user'; content: string | ToolResultBlock[] }
+interface AssistantMessage { role: 'assistant'; content: ContentBlock[] }
+interface UserMessage { role: 'user'; content: string | ToolResultBlock[] }
 export type Message = AssistantMessage | UserMessage
 
 export interface ModelResponse {
@@ -26,10 +26,3 @@ export interface ModelResponse {
 
 /** A function that runs one Anthropic turn — injected so the runner is transport-agnostic and testable. */
 export type CallModel = (messages: Message[]) => Promise<ModelResponse>
-
-/** Anthropic tool schema (from our SDK-agnostic ToolDef). */
-export interface AnthropicTool {
-  name: string
-  description: string
-  input_schema: Record<string, unknown>
-}

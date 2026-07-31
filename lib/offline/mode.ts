@@ -6,7 +6,7 @@
  * This module must stay free of React imports — it's pulled into server bundles via the repo layer
  * (e.g. the agents API route). The reactive `useOfflineMode` hook lives in `./useOfflineMode`.
  */
-export const OFFLINE_KEY = 'lexify-offline-mode'
+const OFFLINE_KEY = 'lexify-offline-mode'
 export const OFFLINE_EVENT = 'lexify:offline-mode'
 
 /** True when offline mode is engaged (client-only). Safe to call anywhere — false on the server. */

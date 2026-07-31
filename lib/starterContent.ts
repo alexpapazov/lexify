@@ -26,11 +26,11 @@ const WORDS: Record<Concept, Record<string, string>> = {
 }
 
 /** Languages we have a full starter set for (present in every concept above). */
-export function hasStarterContent(code: string): boolean {
+function hasStarterContent(code: string): boolean {
   return code in WORDS.hello
 }
 
-export interface StarterFolder {
+interface StarterFolder {
   name: string
   cards: { front: string; back: string }[]  // front = learned, back = native
 }

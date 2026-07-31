@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/client'
 import type { UserId, CardId, CardSide, TypedErrorCategory } from '@/domain'
 
-export interface TypingErrorMark {
+interface TypingErrorMark {
   userId:         UserId
   cardId:         CardId
   answerSide:     CardSide
@@ -27,8 +27,8 @@ function rowToMark(row: Record<string, unknown>): TypingErrorMark {
 
 /**
  * Records accent / article / spelling slips per card + side, for future
- * "spelling practice" and "gender/article assign" modes. Not re-exported from
- * lib/data/index.ts — import directly (same convention as cardConfusions).
+ * "spelling practice" and "gender/article assign" modes. There is no `lib/data`
+ * barrel — import this repo directly (same convention as cardConfusions).
  */
 export class SupabaseTypingErrorMarkRepository {
   private get db() { return createClient() }

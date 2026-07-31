@@ -59,7 +59,7 @@ async function mutualDistractor(cardId: string, word: string): Promise<void> {
  *   • INTER-language (different languages) → just store the link (kind='inter'), no penalty, returns null.
  * Never throws.
  */
-export interface ConfusionDrillTarget { cardBId: string; cardBFront: string }
+interface ConfusionDrillTarget { cardBId: string; cardBFront: string }
 
 export async function respondToProductionConfusion(args: {
   userId: string; cardAId: string; sourceLanguageA: string; typed: string; expectedFront: string

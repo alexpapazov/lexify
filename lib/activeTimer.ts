@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 
 /** Idle stretches longer than this aren't counted as study time (you paused / walked away). */
-export const IDLE_CAP_MS = 40_000
+const IDLE_CAP_MS = 40_000
 
 /**
  * Accumulates "active" time for a single review: real elapsed time MINUS any idle gap beyond
@@ -9,7 +9,7 @@ export const IDLE_CAP_MS = 40_000
  * submitted. A 3-second answer counts as 3s; a 5-minute walk-away counts as 40s and then stops until
  * you interact again.
  */
-export class ActiveTimer {
+class ActiveTimer {
   private active = 0
   private last = 0
   constructor(private capMs: number = IDLE_CAP_MS) {}

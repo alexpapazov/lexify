@@ -23,7 +23,7 @@ function predText(p: PathwayPredicate): string {
     case 'attemptsInState': return `≥${p.gte} tries`
   }
 }
-export function conditionText(when: PathwayCondition): string {
+function conditionText(when: PathwayCondition): string {
   return when.length === 0 ? 'always' : when.map(predText).join(' & ')
 }
 

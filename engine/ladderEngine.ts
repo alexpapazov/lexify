@@ -49,7 +49,7 @@ export interface ClimbState {
 /** When to show the card again if it stays on the same rung. */
 export type ReshowHint = 'soon' | 'short' | 'medium' | 'advanced'
 
-export interface RungResult {
+interface RungResult {
   state:         ClimbState
   reshow:        ReshowHint
   advanced:      boolean        // moved to a different rung (up or back)
@@ -65,7 +65,7 @@ export function initialClimbState(): ClimbState {
  * `totalMessUps` existed, so an in-flight card still gets a sane (if undercounted) interval.
  * Fractional — see `outcomeErrorWeight`.
  */
-export function climbTotalMessUps(s: ClimbState): number {
+function climbTotalMessUps(s: ClimbState): number {
   return s.totalMessUps ?? s.messUps
 }
 

@@ -38,12 +38,12 @@ const LEADING_ARTICLES: Record<string, string[]> = {
 }
 
 /** Tier 1: trim whitespace only (collapse internal runs of whitespace to a single space). No case changes. */
-export function normalizeTier1(s: string): string {
+function normalizeTier1(s: string): string {
   return s.trim().replace(/\s+/g, ' ')
 }
 
 /** Tier 2: Tier-1 normalization plus stripping one leading article/determiner for the given language. */
-export function normalizeTier2(s: string, langCode: string): string {
+function normalizeTier2(s: string, langCode: string): string {
   const trimmed  = normalizeTier1(s)
   const articles = LEADING_ARTICLES[langCode] ?? []
 
@@ -66,7 +66,7 @@ function escapeRegExp(s: string): string {
 
 // ─── Matching ────────────────────────────────────────────────────────────────
 
-export interface FrontBack { front: string; back: string }
+interface FrontBack { front: string; back: string }
 
 /** Tier 1: exact match (whitespace-normalized) on both sides. */
 export function tier1Match(a: FrontBack, b: FrontBack): boolean {
@@ -87,7 +87,7 @@ export function tier2Match(a: FrontBack, b: FrontBack, sourceLanguage: string, t
 
 // ─── Duplicate analysis ──────────────────────────────────────────────────────
 
-export type DuplicateTier = 'exact' | 'near' | 'none'
+type DuplicateTier = 'exact' | 'near' | 'none'
 
 export interface DuplicateAnalysis {
   tier:         DuplicateTier
@@ -122,7 +122,7 @@ export function analyzeDuplicate(
 
 // ─── Pre-flight card-count estimate ─────────────────────────────────────────
 
-export type IntakeMode = 'wordlist' | 'extraction'
+type IntakeMode = 'wordlist' | 'extraction'
 
 function wordCount(text: string): number {
   const trimmed = text.trim()

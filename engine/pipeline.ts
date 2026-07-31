@@ -369,7 +369,3 @@ export function progressAfterReview(
 
   return { ...state, correctInStep: newCorrectInStep, typingMistakeStreak, typingFailCycles, lastRating: rating, lastReviewedAt: now }
 }
-
-export function ratingToWasCorrect(rating: Rating): boolean {
-  return rating === 'good' || rating === 'easy'
-}

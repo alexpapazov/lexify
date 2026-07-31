@@ -41,6 +41,3 @@ export const routes = {
   /** An agent change-set review. */
   agentsReview:  (changeSetId: string, extra: Query = {}) => withQuery('/agents/review', { cs: changeSetId, ...extra }),
 }
-
-/** The query-param key each screen reads its id from (used by the pages via useSearchParams). */
-export const ROUTE_ID_KEY = { deck: 'deck', folder: 'folder', changeSet: 'cs' } as const

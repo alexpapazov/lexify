@@ -39,7 +39,7 @@ export function capGoal(goal: number, baseGoal: number): number {
   return Math.min(goal, Math.max(0, Math.floor(Math.max(0, baseGoal) * MAX_GOAL_MULTIPLE)))
 }
 
-export type GoalCarryover = {
+type GoalCarryover = {
   /** The goal to show and measure against today. Never negative. */
   goal: number
   /** Signed adjustment applied to the base goal: +n carried debt, -n carried credit, 0 none. */

@@ -16,7 +16,7 @@ import type { Rating } from '@/domain'
 export interface FsrsState { difficulty: number; stability: number }
 
 /** FSRS-5 published default weights (open-spaced-repetition). Indices used below. */
-export const DEFAULT_FSRS_WEIGHTS = [
+const DEFAULT_FSRS_WEIGHTS = [
   0.40255, 1.18385, 3.173, 15.69105, 7.1949, 0.5345, 1.4604, 0.0046, 1.54575,
   0.1192, 1.01925, 1.9395, 0.11, 0.29605, 2.2698, 0.2315, 2.9898, 0.51655, 0.6621,
 ] as const
@@ -50,7 +50,7 @@ export const BASE_DIFFICULTY = 5
  * times you rate it Good ("difficulty hell"). The gentle pull lets a run of Goods walk a
  * maxed-out card back down, while Again still climbs and Easy still drops fast.
  */
-export const DIFFICULTY_REVERSION = 0.1
+const DIFFICULTY_REVERSION = 0.1
 
 /**
  * Anki-style interval fuzz: given a scheduled interval (days), returns the
@@ -130,7 +130,7 @@ export function stabilityAfterLapse(state: FsrsState, elapsedDays: number, cfg: 
 
 // ─── One review (convenience) ────────────────────────────────────────────────
 
-export interface FsrsReview { difficulty: number; stability: number; intervalDays: number }
+interface FsrsReview { difficulty: number; stability: number; intervalDays: number }
 
 /** Applies one review: updates difficulty, then stability, then the next interval. */
 export function reviewCard(state: FsrsState, grade: Rating, elapsedDays: number, cfg: FsrsConfig = DEFAULT_FSRS_CONFIG): FsrsReview {

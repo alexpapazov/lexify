@@ -148,7 +148,6 @@ function AllDueSessionInner() {
    *  passes (resurfaced this session) or their batch-size window lapses (rolled to a later session). */
   const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
   const reviewCountRef = useRef(0)                    // monotonic count of answers given this session
-  const batchSizeRef   = useRef(ALL_ELECTIVE_LIMIT)   // resurface window = the session's batch size
   const indexRef       = useRef(0)                    // current queue index (for async drill insertion)
   const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
@@ -428,7 +427,6 @@ function AllDueSessionInner() {
         const stateMap = forwardStateMap(forwardStates)
         const cardsPerSession   = prefs?.cardsPerSession   ?? null
         const learningBatchMode = prefs?.learningBatchMode ?? false
-        batchSizeRef.current = cardsPerSession && cardsPerSession > 0 ? cardsPerSession : ALL_ELECTIVE_LIMIT
 
         // When a per-session limit is set, cap BOTH new intros and the
         // in-pipeline backlog to the active learning set; otherwise use the

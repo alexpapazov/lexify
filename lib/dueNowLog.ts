@@ -4,7 +4,7 @@
  * caller tags each event with its local `day` (tz + turnover aware) and fills in `label`, `intervalDays`
  * and `dormant` from separate queries.
  */
-export interface DueReview { rating: string; at: number; direction: 'forward' | 'reverse' }
+interface DueReview { rating: string; at: number; direction: 'forward' | 'reverse' }
 export interface DueCard {
   cardId:       string
   label:        string   // front (target word)

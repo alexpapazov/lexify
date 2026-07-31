@@ -141,7 +141,6 @@ function FolderSessionInner() {
   /** Graduated cards in the 10-minute relearn loop — held out of the main queue until their dueAt passes (or the queue runs out). */
   const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
   const reviewCountRef = useRef(0)                       // monotonic count of answers given this session
-  const batchSizeRef   = useRef(FOLDER_ELECTIVE_LIMIT)   // resurface window = the session's batch size
   const indexRef       = useRef(0)                       // current queue index (for async drill insertion)
   const [showIPA,  setShowIPA]  = useState(() => typeof window !== 'undefined' && localStorage.getItem('lexify_ipa') === '1')
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
@@ -395,7 +394,6 @@ function FolderSessionInner() {
         const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
         const stateMap = forwardStateMap(forwardStates)
         const cardsPerSession   = prefs?.cardsPerSession   ?? null
-        batchSizeRef.current = cardsPerSession && cardsPerSession > 0 ? cardsPerSession : FOLDER_ELECTIVE_LIMIT
         const learningBatchMode = prefs?.learningBatchMode ?? false
 
         // When a per-session limit is set, cap BOTH new intros and the

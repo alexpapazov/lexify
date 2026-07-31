@@ -12,7 +12,7 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import type { LanguagePair } from '@/domain'
 
-export interface SyncInfra {
+interface SyncInfra {
   deckId: string
 }
 

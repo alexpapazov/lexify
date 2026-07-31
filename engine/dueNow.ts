@@ -25,12 +25,12 @@ export interface DueNowState extends FsrsState {
   againStreak: number
 }
 
-export type DueNowAction =
+type DueNowAction =
   | { kind: 'schedule'; intervalDays: number }  // committed to long-term review
   | { kind: 'relearn'; minutes: number }        // stay in the short loop, re-show soon
   | { kind: 'sendToLadder' }                     // 3 Agains in a row → un-graduate
 
-export interface DueNowResult { state: DueNowState; action: DueNowAction }
+interface DueNowResult { state: DueNowState; action: DueNowAction }
 
 /** The interval (days) a clean scheduled review earns: FSRS's stability→interval, times the per-track
  *  retention calibration (measured-vs-target correction), floored at 1 day. Floor: a scheduled review
@@ -53,7 +53,7 @@ function scheduled(difficulty: number, stability: number, cfg: FsrsConfig): DueN
  *  `softLapse` marks an Again that came from a typed *near-miss*
  *  ("almost") rather than a full wrong answer — it still relearns, but must not count toward the
  *  3-in-a-row → back-to-ladder un-graduation (only full wrong answers should). */
-export interface ReviewOpts { softLapse?: boolean; hintGrowthFactor?: number }
+interface ReviewOpts { softLapse?: boolean; hintGrowthFactor?: number }
 
 /**
  * Processes one Due Now review. `elapsedDays` = days since the card was last seen.
@@ -107,7 +107,7 @@ export function seedDifficulty(lapses: number): number { return clampD(5 + 0.7 *
 /** Seed stability for an existing graduated card from its current interval. */
 export function seedStability(currentIntervalDays: number): number { return Math.max(0.5, currentIntervalDays || 1) }
 
-export interface GraduatedFsrsInput {
+interface GraduatedFsrsInput {
   difficulty: number | null
   stability: number | null
   /** Current interval (days) for the track being reviewed — used to seed stability if null. */
@@ -120,7 +120,7 @@ export interface GraduatedFsrsInput {
   elapsedDays: number
 }
 
-export interface GraduatedFsrsOutput {
+interface GraduatedFsrsOutput {
   difficulty: number
   stability: number
   relearning: boolean

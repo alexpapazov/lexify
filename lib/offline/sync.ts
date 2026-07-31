@@ -40,7 +40,7 @@ export interface CardStateConflict {
 
 export type ConflictChoice = 'device' | 'cloud'
 export interface SyncProgress { phase: string; done: number; total: number }
-export interface SyncResult { pushed: number; conflicts: CardStateConflict[] }
+interface SyncResult { pushed: number; conflicts: CardStateConflict[] }
 
 const supa = () => createClient()
 

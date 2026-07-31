@@ -26,15 +26,15 @@ import { langName }          from '@/lib/languages'
 import { fastTrackCardState } from '@/engine/pipeline'
 import { getToday }           from '@/lib/dates'
 
-export const FILL_BATCH      = 5
-export const SYNC_FOLDER_NAME = 'SYNCED VOCABULARY'
+const FILL_BATCH      = 5
+const SYNC_FOLDER_NAME = 'SYNCED VOCABULARY'
 
 const DEFAULT_PIPELINE_ID = '00000000-0000-0000-0000-000000000001'
 const ANTHROPIC_MODEL     = 'claude-haiku-4-5-20251001'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface SimpleCard {
+interface SimpleCard {
   id:    string
   front: string
   back:  string

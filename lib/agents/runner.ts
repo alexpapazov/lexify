@@ -16,7 +16,7 @@ import { TOOLS } from './tools'
 
 const MAX_TURNS = 20
 
-export interface AgentRunResult {
+interface AgentRunResult {
   proposals: ChangeProposal[]
   summary:   string
   turns:     number

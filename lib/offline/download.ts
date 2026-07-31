@@ -118,13 +118,13 @@ export function selectOfflineCardIds(
 }
 
 /** Rough byte size of a bundle (JSON length ≈ IndexedDB footprint). */
-export function estimateBundleBytes(bundle: DownloadBundle): number {
+function estimateBundleBytes(bundle: DownloadBundle): number {
   return JSON.stringify(bundle).length
 }
 
 // ── Orchestration (online → local store) ─────────────────────────────────────
 
-export interface DownloadOptions {
+interface DownloadOptions {
   /** One or more scopes to download — the union of their decks is bundled (multi-select). */
   scopes:        OfflineScope[]
   dueWindowDays: number

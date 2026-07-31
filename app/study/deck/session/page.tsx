@@ -178,7 +178,6 @@ export default function SessionPage() {
   /** Graduated cards in the 10-minute relearn loop — held out of the main queue until their dueAt passes (or the queue runs out). */
   const [relearnPool,     setRelearnPool]     = useState<SessionCard[]>([])
   const reviewCountRef = useRef(0)                    // monotonic count of answers given this session
-  const batchSizeRef   = useRef(20)                   // resurface window = the session's batch size
   /** Synonym groups for all cards in this session (loaded at session start). */
   const [synonymGroups,           setSynonymGroups]           = useState<Map<string, SynonymGroup>>(new Map())
   /** The "today" date key used for synonym pre-fill localStorage (accounts for day turnover hour). */
@@ -598,7 +597,6 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       }
 
       const cardsPerSession   = prefs?.cardsPerSession   ?? null
-      batchSizeRef.current = cardsPerSession && cardsPerSession > 0 ? cardsPerSession : 20
       const learningBatchMode = prefs?.learningBatchMode ?? false
       setAudioPlaybackRate(prefs?.audioSpeed ?? 1)
       setAudioVolume(prefs?.audioVolume ?? 1)

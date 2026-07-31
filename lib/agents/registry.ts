@@ -6,7 +6,7 @@
 
 import type { ToolName } from './tools'
 
-export interface AgentConfig {
+interface AgentConfig {
   id:           string
   label:        string
   model:        string
@@ -42,7 +42,7 @@ Rules:
 - You are in DRY-RUN mode: your tool calls only PROPOSE changes; a human reviews
   and approves them. Be precise — every proposal will be shown as a diff.`
 
-export const AGENTS: Record<string, AgentConfig> = {
+const AGENTS: Record<string, AgentConfig> = {
   'card-editor': {
     id:           'card-editor',
     label:        'Card editor',

@@ -9,7 +9,7 @@
  * These endpoints are AI features (card gen, distractors, TTS, IPA, sync, agents) — online-only. Offline
  * mode already gates them; this just points them at the right host when the native app IS online.
  */
-export const API_ORIGIN = process.env.NEXT_PUBLIC_API_ORIGIN ?? ''
+const API_ORIGIN = process.env.NEXT_PUBLIC_API_ORIGIN ?? ''
 
 /** Absolute-or-relative URL for one of our /api routes. */
 export function apiUrl(path: string): string {

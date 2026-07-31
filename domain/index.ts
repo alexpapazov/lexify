@@ -8,12 +8,12 @@
 export type UserId        = string
 export type DeckId        = string
 export type CardId        = string
-export type PipelineId    = string
-export type PipelineStepOrder = number
+type PipelineId    = string
+type PipelineStepOrder = number
 
 // ─── Pipeline ─────────────────────────────────────────────────────────────────
 
-export type StepType = 'recognition' | 'typing'
+type StepType = 'recognition' | 'typing'
 export type CardSide = 'front' | 'back'
 
 export interface PipelineStep {
@@ -35,7 +35,7 @@ export interface Pipeline {
 
 // ─── Grading settings ─────────────────────────────────────────────────────────
 
-export type GradingMode = 'strict' | 'flexible' | 'smart_ai'
+type GradingMode = 'strict' | 'flexible' | 'smart_ai'
 
 /**
  * 'strict'   — match after trim/spaces/case only; no accent/article/typo leniency.
@@ -169,7 +169,7 @@ export interface GatewayContext {
   actor:  string
 }
 
-export type ChangeField = 'front' | 'back' | 'synonyms' | 'create' | 'delete'
+type ChangeField = 'front' | 'back' | 'synonyms' | 'create' | 'delete'
 
 /** One proposed change; a change set is `ChangeProposal[]`. */
 export interface ChangeProposal {
@@ -450,18 +450,6 @@ export const DEFAULT_SCHEDULER_PARAMS: SchedulerParams = {
   retentionCalibration: 1.0,
 }
 
-/** Defaults when converting an existing deck to flexible mode. */
-export const DEFAULT_FLEXIBLE_SETTINGS: Omit<GradingSettings, 'gradingMode'> = {
-  ignoreAccents:               false,
-  ignoreCapitalization:        true,
-  ignoreMinorTypos:            false,
-  ignoreDefiniteArticles:      false,
-  requireParentheticalContent: true,
-  slashAlternativesMode:       'accept_any',
-  commaAlternativesMode:       'split_into_cards',
-  autoPlayAudio:               true,
-}
-
 // ─── Folder ───────────────────────────────────────────────────────────────────
 
 export type FolderId = string
@@ -606,8 +594,8 @@ export interface SynonymGroup {
   updatedAt:     string
 }
 
-export type SynonymFieldStatus = 'prefilled' | 'due_blank' | 'completed'
-export type SynonymDueState    = 'due' | 'not_due' | 'already_completed_this_session'
+type SynonymFieldStatus = 'prefilled' | 'due_blank' | 'completed'
+type SynonymDueState    = 'due' | 'not_due' | 'already_completed_this_session'
 
 export interface SynonymAnswerField {
   lexicalItemId: string
@@ -625,7 +613,7 @@ export interface SynonymProductionPrompt {
   fields: SynonymAnswerField[]
 }
 
-export type GradingFieldStatus = 'correct' | 'almost' | 'incorrect' | 'missing'
+type GradingFieldStatus = 'correct' | 'almost' | 'incorrect' | 'missing'
 
 export interface MultiFieldGradingResult {
   overallStatus: GradingStatus
@@ -637,15 +625,6 @@ export interface MultiFieldGradingResult {
     issueType:       GradingIssueType
     reason:          string
   }[]
-}
-
-// ─── DeckCard (join table) ─────────────────────────────────────────────────────
-
-/** A card's membership in a deck — the same card may belong to multiple decks. */
-export interface DeckCard {
-  deckId:   DeckId
-  cardId:   CardId
-  position: number
 }
 
 // ─── DismissedPair ──────────────────────────────────────────────────────────────
@@ -1073,9 +1052,9 @@ export interface ReviewInput {
 
 // ─── Language Syncing ─────────────────────────────────────────────────────────
 
-export type SyncMode    = 'review_first' | 'auto'
-export type SyncTrigger = 'on_card_created' | 'on_card_graduated' | 'manual_only'
-export type SyncedCardStatus = 'pending' | 'active' | 'dismissed' | 'manually_edited'
+type SyncMode    = 'review_first' | 'auto'
+type SyncTrigger = 'on_card_created' | 'on_card_graduated' | 'manual_only'
+type SyncedCardStatus = 'pending' | 'active' | 'dismissed' | 'manually_edited'
 
 /** A rule that syncs vocab from one language pair into another. */
 export interface LanguageSyncRule {
@@ -1110,18 +1089,6 @@ export interface SyncedCardLink {
   confidence:        number | null
   warning:           string | null
   status:            SyncedCardStatus
-  createdAt:         string
-  updatedAt:         string
-}
-
-/** Stable folder/deck infrastructure for a (user, source pair, dest pair) combination. */
-export interface LanguageSyncState {
-  userId:            UserId
-  sourcePairId:      string
-  destinationPairId: string
-  rootFolderId:      string
-  subFolderId:       string
-  deckId:            string
   createdAt:         string
   updatedAt:         string
 }

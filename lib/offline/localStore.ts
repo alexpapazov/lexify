@@ -164,7 +164,6 @@ export class LocalStore {
   allSchedulerParams(): Promise<StoredParam[]> { return this.db.schedulerParams.toArray() }
   allDecks(): Promise<Deck[]> { return this.db.decks.toArray() }
   allFolders(): Promise<Folder[]> { return this.db.folders.toArray() }
-  allConfusionLinks(): Promise<StoredLink[]> { return this.db.confusionLinks.toArray() }
   allOverrides(): Promise<StoredOverride[]> { return this.db.overrides.toArray() }
 
   // ── Outbox ──

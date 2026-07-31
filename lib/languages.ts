@@ -65,20 +65,6 @@ export const LANG_COLOR_PALETTE = [
   '#7C4EF8', '#A8E04C', '#50E0CC', '#C9B8FF', '#6ABBFF', '#72DC7C',
 ]
 
-/** A stable default color for a language, derived deterministically from its code
- *  so the same language always gets the same color until the user overrides it. */
-export function defaultLanguageColor(code: string): string {
-  let h = 0
-  for (let i = 0; i < code.length; i++) h = (h * 31 + code.charCodeAt(i)) >>> 0
-  return LANG_COLOR_PALETTE[h % LANG_COLOR_PALETTE.length]!
-}
-
-/** The color for a language: the user's chosen override (a #rrggbb hex) if valid, else the default. */
-export function languageColor(code: string, overrides?: Record<string, string> | null): string {
-  const o = overrides?.[code]
-  return o && /^#[0-9a-fA-F]{6}$/.test(o) ? o : defaultLanguageColor(code)
-}
-
 const isHex = (s?: string): s is string => !!s && /^#[0-9a-fA-F]{6}$/.test(s)
 
 /**

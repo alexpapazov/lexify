@@ -45,9 +45,6 @@ export async function localClimbForCards(cardIds: string[]): Promise<Map<string,
 export async function localLadderForPair(source: string, target: string): Promise<Ladder | null> {
   return ((await getLocalStore().getLadder(ladderKey(source, target)))?.ladder as Ladder) ?? null
 }
-export async function localLadderDefault(): Promise<Ladder | null> {
-  return ((await getLocalStore().getLadder('default'))?.ladder as Ladder) ?? null
-}
 /** Every saved ladder (pairs + the default), for the "which pairs are customized" list offline. */
 export async function localAllLadders(): Promise<{ source: string; target: string; ladder: Ladder }[]> {
   return (await getLocalStore().allLadders()).map(l => ({ source: l.source ?? '', target: l.target ?? '', ladder: l.ladder as Ladder }))
@@ -85,9 +82,6 @@ export async function localLanguagePairs(userId: string): Promise<LanguagePair[]
     })
   }
   return [...seen.values()]
-}
-export async function localConfusionLinksForUser(): Promise<Record<string, unknown>[]> {
-  return getLocalStore().allConfusionLinks()
 }
 
 // ── Writes (local store + outbox) ──────────────────────────────────────────────

@@ -39,7 +39,7 @@ export interface GatewayDeps {
 export class GatewayScopeError extends Error {
   constructor(message: string) { super(message); this.name = 'GatewayScopeError' }
 }
-export class GatewayNotFoundError extends Error {
+class GatewayNotFoundError extends Error {
   constructor(message: string) { super(message); this.name = 'GatewayNotFoundError' }
 }
 

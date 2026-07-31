@@ -45,7 +45,7 @@ export interface PathwayEvent {
   errorTypes: ErrorType[]
 }
 
-export interface PathwayStep {
+interface PathwayStep {
   route:         RouteState
   moved:         boolean       // did a transition fire (state changed OR a self-loop reset)?
   graduated:     boolean

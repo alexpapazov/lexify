@@ -9,7 +9,8 @@
 > agent; add an agent = one entry); `lib/agents/runner.ts` (generic, transport-
 > agnostic tool-use loop, unit-tested with a fake model); `lib/agents/anthropic.ts`
 > (Messages API tool-use typings); `lib/agents/runClient.ts` (browser
-> orchestration: `runAgentAndSave` + `applyProposal`); `app/api/agents/claude`
+> orchestration: `applyProposal` — its sibling `runAgentAndSave` was deleted in the
+> 2026-07-30 dead-code cleanup, having never had a caller); `app/api/agents/claude`
 > (auth-light proxy that injects the registry's system prompt + tools server-side,
 > keeps the key off the client — model call runs in the browser loop via this
 > proxy); change-set persistence (`domain` `ChangeSet`/`ChangeSetItem`,

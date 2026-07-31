@@ -148,7 +148,8 @@ vocabulary pipeline, but the domain model is language-pair-generic.
   (`cards.ts`, `cardStates.ts`, `cardConfusions.ts`, `pipelines.ts`,
   `decks.ts`, `folders.ts`, `deckPreferences.ts`, `languagePairs.ts`,
   `dismissedPairs.ts`, `reviewEvents.ts`), plus `interfaces.ts` defining the
-  repository contracts and `index.ts` re-exporting them.
+  repository contracts. **Always import the concrete repo module** — the
+  `index.ts` barrel was deleted in the 2026-07-30 cleanup because nothing used it.
 - `app/` — pages (App Router):
   - `study/[deckId]/session/page.tsx`, `study/all/session/page.tsx`,
     `study/folder/[folderId]/session/page.tsx` — the three study-session
@@ -161,8 +162,10 @@ vocabulary pipeline, but the domain model is language-pair-generic.
     `study/page.tsx` (dashboard with due-forecast chart).
 - `components/session/` — `FlashcardMode.tsx`, `MultipleChoiceMode.tsx`,
   `TypingMode.tsx`, `RatingButtons.tsx` — the per-step UI renderers.
-- `components/library/Library.tsx`, `components/nav/Navbar.tsx`,
-  `components/LanguageCombobox.tsx`.
+- `components/nav/Navbar.tsx`, `components/LanguageCombobox.tsx`.
+  (The library UI lives inline in `app/library/page.tsx` as
+  `LibraryPageInner` / `LibraryPageBody`; the old standalone
+  `components/library/Library.tsx` was deleted in the 2026-07-30 cleanup.)
 - `supabase/migrations/` — sequential SQL migrations (see below).
 
 ## Domain conventions (important — easy to get backwards)
@@ -268,8 +271,9 @@ per-card, not per-step, so it applies whether the learner is typing Spanish
 `typed_answer_overrides` table (one row per `user_id, card_id, answer_side,
 answer_text`, `answer_text` stored as `gradeTyping()`'s `normalizedUser`) +
 `lib/data/typedAnswerOverrides.ts: SupabaseTypedAnswerOverrideRepository`
-(`listForUser`/`add`/`remove`, imported directly — not re-exported from
-`lib/data/index.ts`, same as `cardConfusions`).
+(`listForUser`/`add`/`remove`, imported directly from its own module, same as
+`cardConfusions` — this is now the only import style, since the `lib/data/index.ts`
+barrel was deleted in the 2026-07-30 cleanup).
 
 - All 3 session pages load every override for the user once at session start
   into a `Map<string, Set<string>>` keyed by `` `${cardId}:${answerSide}` ``,
@@ -1356,8 +1360,11 @@ page also guards `showElectivePicker`):
   to the end** (regardless of clock) instead of ending — the session doesn't finish with unresolved
   relearns.
 
-`lib/relearnPool.ts: partitionRelearnPool` and `batchSizeRef` are unused (the batch-size "roll over
-after N cards" window was removed); left in place but dead. `SessionCard.relearnLapsedAt` is NO LONGER
+`lib/relearnPool.ts` and the `batchSizeRef` in the three session pages were both DELETED in the
+2026-07-30 dead-code cleanup (the batch-size "roll over after N cards" window had been removed long
+before, leaving them unreferenced). Note the local `relearnPool` **useState variable** in the three
+session pages is a different thing entirely and is very much live — it holds the in-session relearn
+queue described above. `SessionCard.relearnLapsedAt` is NO LONGER
 dead (2026-07-27): it's set at every relearn-pool add site and nowhere else, and `handleUndo` now reads
 it as the marker identifying spliced relearn copies to remove — keep setting it on any new pool-add.
 

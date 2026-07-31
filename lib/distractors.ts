@@ -42,36 +42,10 @@ function norm(s: string): string {
 }
 
 /**
- * Returns the answer-side values of every other card in `deckCards` that has
- * the same prompt-side value as `card`. Used to accept deck siblings as
- * correct typed answers — e.g. if "el camarón" and "la gamba" both have
- * back="shrimp", typing either should be accepted when reviewing the other.
- */
-export function deckSiblingAnswers(
-  card:      Card,
-  answerSide: CardSide,
-  deckCards: Card[],
-): string[] {
-  if (answerSide === 'front') {
-    // The user is typing the source-language word.
-    // Accept any other card whose back (native meaning) matches this card's back.
-    const target = norm(card.back)
-    return deckCards
-      .filter(c => c.id !== card.id && norm(c.back) === target)
-      .map(c => c.front)
-  } else {
-    // The user is typing the native-language word.
-    // Accept any other card whose front (source word) matches this card's front.
-    const target = norm(card.front)
-    return deckCards
-      .filter(c => c.id !== card.id && norm(c.front) === target)
-      .map(c => c.back)
-  }
-}
-
-/**
- * Like deckSiblingAnswers but returns {id, answer} pairs so the session can
- * credit the sibling card as well as requiring the canonical answer.
+ * Returns the {id, answer} pairs of every other card in `deckCards` that has
+ * the same prompt-side value as `card` — e.g. if "el camarón" and "la gamba"
+ * both have back="shrimp", each is a sibling of the other. The id lets the
+ * session credit the sibling card as well as requiring the canonical answer.
  */
 export function deckSiblings(
   card:      Card,
@@ -91,7 +65,7 @@ export function deckSiblings(
   }
 }
 
-export function dedupeAgainst(correct: string, pool: string[]): string[] {
+function dedupeAgainst(correct: string, pool: string[]): string[] {
   const seen = new Set([norm(correct)])
   const out: string[] = []
   for (const item of pool) {
@@ -308,7 +282,7 @@ export async function regenerateChoicesExcluding(
  * (see `CardConfusion.count`/`isWordMixup`) before that word gets promoted
  * into the card's cached multiple-choice distractors.
  */
-export const CONFUSION_PROMOTION_THRESHOLD = 3
+const CONFUSION_PROMOTION_THRESHOLD = 3
 
 /**
  * If the learner has repeatedly (>= CONFUSION_PROMOTION_THRESHOLD times)
@@ -404,7 +378,7 @@ export async function promoteConfusionDistractors(
   }
 }
 
-export interface AudioPrefetchItem {
+interface AudioPrefetchItem {
   card:           Card
   sourceLanguage: string
 }

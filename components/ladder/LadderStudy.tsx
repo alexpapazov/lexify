@@ -65,7 +65,7 @@ function stateAsRung(s: PathwayState): Rung {
 
 /** What set of cards this ladder session covers. Decks in a folder / pair share a
  *  language pair, so they share one ladder — only the per-card deck varies. */
-export type LadderScope =
+type LadderScope =
   | { kind: 'deck';   deckId: string }
   | { kind: 'folder'; folderId: string }
   | { kind: 'all';    source: string; target: string }

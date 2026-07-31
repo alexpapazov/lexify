@@ -66,7 +66,7 @@ export function folderMatchesPair(
 }
 
 /** The whole library preloaded once, so per-folder count computation needs no queries at all. */
-export interface LibraryBulk {
+interface LibraryBulk {
   cardsByDeck:  Map<string, Card[]>
   statesByCard: Map<string, CardState[]>
   climb:        Map<string, { rungIndex: number; graduated: boolean }>

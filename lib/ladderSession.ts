@@ -8,7 +8,7 @@ import type { Rung, Rating } from '@/domain'
 import type { RungAttemptOutcome, IntervalRange, ReshowHint } from '@/engine/ladderEngine'
 
 /** Which existing study screen renders a given rung. */
-export type RungUI = 'mcq' | 'typing' | 'flashcard' | 'dictation'
+type RungUI = 'mcq' | 'typing' | 'flashcard' | 'dictation'
 
 export function rungUI(rung: Rung): RungUI {
   if (rung.type === 'mcq') return 'mcq'
@@ -61,7 +61,7 @@ export interface QueueItem { cardId: string; readyAt: number; ratedAt: number }
 
 /** Wait after advancing to the next rung, so a card spaces out between rungs
  *  instead of climbing back-to-back. Same soft-timer mechanism as Again/Hard/Good. */
-export const BETWEEN_RUNG_DELAY_MS = 180_000  // 3 min
+const BETWEEN_RUNG_DELAY_MS = 180_000  // 3 min
 
 /**
  * How long a card should be held before reappearing. When it STAYED on a rung we

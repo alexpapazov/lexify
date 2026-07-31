@@ -56,8 +56,8 @@ export function editRatio(a: string, b: string): number {
 }
 
 /** ≥ this edit ratio ⇒ tagged 'phonetic' (an orthographic proxy — a true IPA/phonetic tagger is future). */
-export const PHONETIC_SIMILARITY_THRESHOLD = 0.6
-export const TEMPORAL_WINDOW_DAYS = 2
+const PHONETIC_SIMILARITY_THRESHOLD = 0.6
+const TEMPORAL_WINDOW_DAYS = 2
 
 /**
  * Best-effort similarity tags for an INTRA-language confusion. Computes the deterministic ones now:
@@ -132,7 +132,7 @@ export function interleaveConfusablePairs<T extends { card: { id: string } }>(
 // Recognition-track FSRS penalty for a confusion — cut stability (comes back sooner), bump difficulty
 // (grows slower). Persistent, unlike a raw interval cut which the next review would recompute away.
 export const CONFUSION_STABILITY_FACTOR = 0.5
-export const CONFUSION_DIFFICULTY_DELTA = 1.0
+const CONFUSION_DIFFICULTY_DELTA = 1.0
 
 /**
  * Penalized difficulty/stability + the resulting recognition interval (days) for a confused card's

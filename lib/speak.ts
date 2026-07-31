@@ -60,7 +60,7 @@ if (typeof window !== 'undefined' && window.speechSynthesis) {
  * (es-MX over es-ES when asked for es-MX), then on-device voices — which on Apple platforms are
  * exactly the downloaded Enhanced/Premium ones, and also work offline. Null → let the browser decide.
  */
-export function bestVoiceFor(lang: string): SpeechSynthesisVoice | null {
+function bestVoiceFor(lang: string): SpeechSynthesisVoice | null {
   const base = lang.split('-')[0]!.toLowerCase()
   const candidates = allVoices().filter(v => v.lang?.toLowerCase().replace('_', '-').startsWith(base))
   if (candidates.length === 0) return null
@@ -83,7 +83,7 @@ export function voiceNameFor(langCode: string): string | null {
 // Audio source config (profile-level). Global default + per-language overrides. 'browser' (robotic,
 // the default) generates no audio — playback uses the on-device speech synth. 'elevenlabs'/'forvo'
 // pre-generate & play real clips (forvo auto-falls back to ElevenLabs). Per-card choices still win.
-export type AudioSourceDefault = 'browser' | 'elevenlabs' | 'forvo' | 'standard'
+type AudioSourceDefault = 'browser' | 'elevenlabs' | 'forvo' | 'standard'
 const isSource = (s: unknown): s is AudioSourceDefault => s === 'browser' || s === 'elevenlabs' || s === 'forvo' || s === 'standard'
 let audioSourceDefault: AudioSourceDefault = 'browser'
 let audioSourceByLanguage: Record<string, AudioSourceDefault> = {}
