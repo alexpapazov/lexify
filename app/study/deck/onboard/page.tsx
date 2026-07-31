@@ -34,6 +34,7 @@ import { ONBOARD_BANDS, BAND_LABELS, bandGraduates, bandWindow, onboardMemorySta
 import { getToday } from '@/lib/dates'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { displayText } from '@/lib/cardText'
+import { EditableAnswerText } from '@/components/session/EditableAnswerText'
 import { langNativeName } from '@/lib/languages'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
@@ -228,6 +229,54 @@ function OnboardInner() {
   }, [queue, index, busy, buildStates])
 
   /**
+   * Deletes the card outright — "this shouldn't be in my deck at all".
+   *
+   * The card already exists in the database by this point (the create flow writes them before rating
+   * starts), so this soft-deletes it AND removes the queue row. The row has to go explicitly:
+   * `softDelete` only sets `deleted_at`, so the FK cascade never fires and the deck would keep
+   * offering "Finish onboarding" for a card that can never appear again.
+   *
+   * Removes the item rather than advancing past it, so the counter's total shrinks — a deleted card
+   * was never part of the work.
+   */
+  const deleteCard = useCallback(async () => {
+    const item = queue[index]
+    if (!item || busy) return
+    setBusy(true)
+    try {
+      await new SupabaseCardRepository().softDelete(item.card.id)
+      await new SupabaseCardOnboardingRepository().remove(userIdRef.current, item.card.id)
+      setQueue(q => q.filter((_, i) => i !== index))
+      setLastRated(null)   // undo can't reach past a deletion
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete that card.')
+    } finally {
+      setBusy(false)
+    }
+  }, [queue, index, busy])
+
+  /**
+   * Double-click-to-edit on either side, same affordance (and same persistence rules) as the ladder's
+   * `onCardEdit`: changing the FRONT invalidates the generated audio and distractors, changing the
+   * back only the distractors. An empty submission means "delete", matching EditableAnswerText's
+   * contract everywhere else in the app.
+   */
+  const editCard = useCallback(async (side: 'front' | 'back', newText: string) => {
+    const item = queue[index]
+    if (!item) return
+    if (!newText) { void deleteCard(); return }
+    if (newText === (side === 'front' ? item.card.front : item.card.back)) return
+    try {
+      const updated = await new SupabaseCardRepository().update(item.card.id, side === 'front'
+        ? { front: newText, audioGenerated: false as const, audioData: null, choices: null }
+        : { back: newText, choices: null })
+      setQueue(q => q.map((it, i) => i === index ? { card: updated } : it))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save that edit.')
+    }
+  }, [queue, index, deleteCard])
+
+  /**
    * Undoes the previous rating: clears any schedule it wrote and re-queues it.
    *
    * The day it claimed is deliberately NOT returned to the load map — the map only has to stop cards
@@ -301,7 +350,7 @@ function OnboardInner() {
   const card = queue[index]!.card
 
   return (
-    <div className="space-y-8 pb-12">
+    <div className="space-y-8 pb-12 max-w-2xl mx-auto">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold text-ink">How well do you know this?</h1>
@@ -318,9 +367,36 @@ function OnboardInner() {
         <div className="h-full bg-accent transition-all" style={{ width: `${total > 0 ? (done / total) * 100 : 0}%` }} />
       </div>
 
-      <div className="panel py-10 text-center space-y-3">
-        <p className="text-3xl font-semibold text-ink break-words">{displayText(card.front)}</p>
-        <p className="text-lg text-ink-muted break-words">{displayText(card.back)}</p>
+      <div className="panel relative py-10 text-center space-y-3">
+        <button
+          onClick={() => void deleteCard()}
+          disabled={busy}
+          title="Delete this card — it won't be added to the deck"
+          className="absolute top-3 right-3 p-2 rounded-lg text-ink-faint hover:text-danger hover:bg-danger/5 transition-colors disabled:opacity-50"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18" />
+            <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+            <path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" />
+            <path d="M10 11v6M14 11v6" />
+          </svg>
+        </button>
+
+        {/* Double-click either side to correct the card in place — same affordance as the ladder. */}
+        <div className="px-12">
+          <EditableAnswerText
+            text={displayText(card.front)}
+            onEdit={t => void editCard('front', t)}
+            className="text-3xl font-semibold text-ink break-words"
+          />
+        </div>
+        <div className="px-12">
+          <EditableAnswerText
+            text={displayText(card.back)}
+            onEdit={t => void editCard('back', t)}
+            className="text-lg text-ink-muted break-words"
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -86,6 +86,20 @@ export class SupabaseCardOnboardingRepository {
     if (error) throw new Error(error.message)
   }
 
+  /**
+   * Drops a card from the queue entirely — used when it's deleted during rating.
+   *
+   * Needed as an explicit call because `cardRepo.softDelete` only sets `deleted_at`; the row still
+   * exists, so the FK's ON DELETE CASCADE never fires and the deck would keep advertising
+   * "Finish onboarding" for a card that no longer shows up.
+   */
+  async remove(userId: UserId, cardId: CardId): Promise<void> {
+    invalidateReads('onboarding:')
+    const { error } = await this.db.from('card_onboarding')
+      .delete().eq('user_id', userId).eq('card_id', cardId)
+    if (error) throw new Error(error.message)
+  }
+
   /** Puts a card back in the queue — the undo path on the rating screen. */
   async unrate(userId: UserId, cardId: CardId): Promise<void> {
     invalidateReads('onboarding:')

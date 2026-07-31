@@ -63,7 +63,19 @@ new deck — the deck contains only what was actually onboarded.
 
 `app/study/deck/onboard/page.tsx`. One card at a time, **both sides visible** — this isn't a test, the
 learner is reporting what they already know. Keys **1–4** rate, **U** undoes the last one. Cards are
-served in deck list order.
+served in deck list order, in a centred `max-w-2xl` column.
+
+Two card-level actions, both the same affordances the ladder already has:
+
+- **Trash button** (card's top-right corner) — soft-deletes the card and removes its queue row, so it
+  never reaches the deck. The queue row must be deleted explicitly: `softDelete` only sets
+  `deleted_at`, so the FK cascade never fires and the deck would keep offering "Finish onboarding" for
+  a card that can't appear. Removing (rather than skipping) the item shrinks the counter's total — a
+  deleted card was never part of the work. **No confirmation and no undo.**
+- **Double-click either side to edit** (`EditableAnswerText`). Persistence matches `LadderStudy`'s
+  `onCardEdit`: editing the FRONT clears `audioGenerated`/`audioData`/`choices`, editing the back
+  clears `choices`. Submitting an empty string deletes, per that component's contract. Note the
+  editor is an `<input>`, so the 1–4/U key handler ignores keystrokes while it's open.
 
 ---
 
@@ -174,6 +186,10 @@ directly with a large input truncates without an error.
 - **Undo doesn't return the claimed day to the load map.** Undoing a rating deletes its card states but
   leaves the day marked as taken, so the next card is nudged away from a slot that's actually free.
   A rounding error across a session; tracking claims per card wasn't worth the complexity.
+- **The trash button has no confirmation and no undo** — deliberate, to keep a 1000-card sitting fast.
+  The card is soft-deleted, so it's recoverable in the database but not through any UI.
+- **Editing a front doesn't re-run the duplicate check**, so it's possible to hand-edit a word into one
+  that already exists in the library. The create-flow drop only ran on the original text.
 - **The forward self-graded recall track (`recall_due_at` on the FORWARD row) isn't seeded**, matching
   `LadderStudy.graduate()`. A pair using that track gets it on the card's first production review.
 - **No offline support** (§5).

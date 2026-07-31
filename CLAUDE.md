@@ -2214,6 +2214,12 @@ vocabulary" (beside *Preview deck*). Highlights and the things easy to get wrong
   card. `band IS NULL` = still queued; it's the only way a half-finished session can be resumed
   ("Finish onboarding" on the deck page). Don't try to infer the queue from missing states.
 - **Online only** — `OfflineUnavailable`, no local-store path, nothing enqueues to the outbox.
+- **Rating screen card actions**: a **trash** button (top-right of the card) soft-deletes the card AND
+  calls `cardOnboarding.remove` — the row must go explicitly, because `softDelete` only sets
+  `deleted_at` so the FK cascade never fires and the deck would keep offering "Finish onboarding".
+  No confirm, no undo. **Double-click either side** to edit (`EditableAnswerText`), persisted with the
+  same rules as `LadderStudy`'s `onCardEdit` (front edit clears audio + choices, back edit clears
+  choices; empty submission deletes).
 
 ### `INPUT_WORD_CAP` 1000 → 5000, and why generation is now chunked
 
