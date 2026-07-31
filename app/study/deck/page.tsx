@@ -1816,8 +1816,10 @@ export default function DeckDetailPage() {
       {pendingOnboarding > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm">
           <span className="text-ink">
-            <span className="font-medium">{pendingOnboarding} word{pendingOnboarding !== 1 ? 's' : ''}</span>
-            {' '}in this deck haven&apos;t been rated yet — they won&apos;t be scheduled until you do.
+            <span className="font-medium">{`${pendingOnboarding} word${pendingOnboarding !== 1 ? 's' : ''}`}</span>
+            {pendingOnboarding !== 1
+              ? ' in this deck haven’t been rated yet — they won’t be scheduled until you do.'
+              : ' in this deck hasn’t been rated yet — it won’t be scheduled until you do.'}
           </span>
           <Link href={routes.deckOnboard(deckId)} className="btn-primary text-xs px-3 py-1.5">
             Finish onboarding

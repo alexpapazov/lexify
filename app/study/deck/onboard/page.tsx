@@ -334,8 +334,7 @@ function OnboardInner() {
       <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
         <h1 className="text-2xl font-semibold text-ink">Onboarding complete</h1>
         <p className="text-ink-muted text-sm">
-          {total} word{total !== 1 ? 's' : ''} rated. The ones you didn&apos;t know are waiting in the
-          learning pipeline; the rest are scheduled.
+          {`${total} word${total !== 1 ? 's' : ''} rated. The ones you didn’t know are waiting in the learning pipeline; the rest are scheduled.`}
         </p>
         <div className="flex justify-center gap-3">
           <Link href={routes.deck(deckId)} className="btn-primary">Go to deck</Link>

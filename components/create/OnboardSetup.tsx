@@ -176,9 +176,7 @@ export function OnboardSetup({
         <Header deckName={deckName} count={cards.length} />
 
         <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
-          {flagged.length} card{flagged.length !== 1 ? 's' : ''} may be wrong. Fix or remove
-          {flagged.length !== 1 ? ' them' : ' it'} before rating — an onboarded card can be scheduled
-          months out, so a bad translation would go unnoticed for a long time.
+          {`${flagged.length} card${flagged.length !== 1 ? 's' : ''} may be wrong. Fix or remove ${flagged.length !== 1 ? 'them' : 'it'} before rating — an onboarded card can be scheduled months out, so a bad translation would go unnoticed for a long time.`}
         </div>
 
         {suggestable > 0 && (
@@ -279,19 +277,18 @@ export function OnboardSetup({
       )}
       {unchecked > 0 && (
         <div className="border border-warning/30 bg-warning/5 rounded-lg px-4 py-3 text-sm text-ink-muted">
-          {unchecked} card{unchecked !== 1 ? 's' : ''} couldn&apos;t be checked for accuracy — they&apos;ll be onboarded as written.
+          {`${unchecked} card${unchecked !== 1 ? 's' : ''} couldn’t be checked for accuracy — ${unchecked !== 1 ? 'they’ll' : 'it’ll'} be onboarded as written.`}
         </div>
       )}
 
       <div className="panel space-y-2">
         <p className="text-sm text-ink">
-          <span className="font-medium">{fresh.length}</span> word{fresh.length !== 1 ? 's' : ''} to rate.
+          <span className="font-medium">{fresh.length}</span>{` word${fresh.length !== 1 ? 's' : ''} to rate.`}
         </p>
         {skipped.length > 0 && (
           <>
             <p className="text-sm text-ink-muted">
-              {skipped.length} skipped — already in your {langName(sourceLanguage)} library, so they keep the
-              schedule they already have.
+              {`${skipped.length} skipped — already in your ${langName(sourceLanguage)} library, so they keep the schedule they already have.`}
             </p>
             <button className="text-xs text-accent hover:text-accent-soft transition-colors"
               onClick={() => setShowSkipped(v => !v)}>
@@ -373,7 +370,7 @@ function Header({ deckName, count }: { deckName: string; count: number }) {
     <div>
       <h1 className="text-2xl font-semibold text-ink">Onboard vocabulary</h1>
       <p className="text-ink-muted mt-1">
-        {deckName || 'Untitled deck'} — {count} word{count !== 1 ? 's' : ''} submitted
+        {`${deckName || 'Untitled deck'} — ${count} word${count !== 1 ? 's' : ''} submitted`}
       </p>
     </div>
   )
