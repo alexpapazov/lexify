@@ -147,6 +147,28 @@ export function stripLeadingArticle(s: string, lang?: string): string {
   return s
 }
 
+/**
+ * The leading article actually present on a string, or '' — the exact counterpart of
+ * `stripLeadingArticle`, recognising the same two forms.
+ *
+ * Must stay in step with that function. Naively taking `split(/\s+/)[0]` and testing it against the
+ * article set works for "il cane" but silently fails for an ELIDED article: "l'attrezzo" has no space,
+ * so the first "word" is the whole thing, no article is ever detected, and a plain misspelling inside
+ * such a word gets reported as an article error.
+ */
+export function leadingArticle(s: string, lang?: string): string {
+  const articles = getArticleSet(lang)
+  const parts = s.split(/\s+/)
+  const first = parts[0] ?? ''
+  if (parts.length > 1 && articles.has(first.toLowerCase())) return first.toLowerCase()
+  const elided = first.match(/^(\p{L}+['’])(\p{L}.*)$/u)
+  if (elided) {
+    const art = elided[1]!.replace(/['’]/g, "'").toLowerCase()
+    if (articles.has(art)) return art
+  }
+  return ''
+}
+
 // ─── Normalization ─────────────────────────────────────────────────────────────
 
 /**
@@ -157,6 +179,23 @@ export function stripLeadingArticle(s: string, lang?: string): string {
  */
 function unifyApostrophes(s: string): string {
   return s.replace(/[‘’ʼ´`′]/g, "'")
+}
+
+/**
+ * Whether two strings are the SAME WORDING, ignoring only differences that carry no meaning:
+ * apostrophe style (straight vs curly), Unicode composition, and spacing.
+ *
+ * Used to decide whether to show the learner "Card says: …" after a correct answer. That note exists
+ * to reveal a genuinely different wording the card prefers — not to nag about a typographic variant.
+ * Typing `l'agnello` against a card storing `l’agnello` is the same answer, and the grader already
+ * agrees; comparing the raw strings made it look like a mismatch on every elided Italian article.
+ *
+ * Case is deliberately NOT folded: a capitalisation difference is a real difference in wording for
+ * languages where it carries information (German nouns), so it stays worth surfacing.
+ */
+export function sameWording(a: string, b: string): boolean {
+  const canon = (s: string) => unifyApostrophes(s).normalize('NFC').replace(/\s+/g, ' ').trim()
+  return canon(a) === canon(b)
 }
 
 /** Flexible-mode normalization — applies only the enabled toggles. */
@@ -313,9 +352,7 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
     const lang = settings.answerLanguage
     const userNoArticle = stripLeadingArticle(normUser, lang)
     const candidatesNoArticle = candidates.map(c => stripLeadingArticle(c, lang))
-    const articles = getArticleSet(lang)
-    const userLeadingWord = normUser.split(/\s+/)[0]!.toLowerCase()
-    const userArticle = articles.has(userLeadingWord) ? userLeadingWord : ''
+    const userArticle = leadingArticle(normUser, lang)
 
     // Pure article match — stems are identical, only article differs
     if (candidatesNoArticle.some(c => c === userNoArticle)) {
@@ -331,7 +368,7 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
     const dUser = expand(userNoArticle)
     for (let i = 0; i < candidates.length; i++) {
       if (candidatesNoArticle[i] === candidates[i]) continue  // no article was stripped; skip
-      const expectedArticle = candidates[i]!.split(/\s+/)[0]!.toLowerCase()
+      const expectedArticle = leadingArticle(candidates[i]!, lang)
       // If user has the same article as expected, the stem is just a typo — not an article error
       if (userArticle === expectedArticle) continue
       const dExp  = expand(candidatesNoArticle[i]!)

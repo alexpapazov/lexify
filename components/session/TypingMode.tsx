@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { hintPlan, hintGrowthFactor } from '@/lib/hints'
 import type { Card, GradingSettings, GradingIssueType, GradingStatus, Rating, TypedStrictness, TypedErrorCategory } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
-import { gradeTyping, normalizeAnswer, resolveTypedPenalty } from '@/engine/grading'
+import { gradeTyping, normalizeAnswer, resolveTypedPenalty, sameWording } from '@/engine/grading'
 import { speakCard } from '@/lib/speak'
 import { langNativeName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
@@ -736,8 +736,11 @@ export function TypingMode({
                       The original term is: <span className="font-mono text-ink">{result.expected}</span>
                     </p>
                   )}
+                  {/* Only when the card genuinely words it differently. Comparing raw strings meant an
+                      apostrophe-style difference — l'agnello vs l’agnello — read as a mismatch, so this
+                      fired on essentially every elided Italian article. */}
                   {!result.viaSynonym &&
-                    (synonymPhase ? canonInput : input).trim() !== displayExpected.trim() && (
+                    !sameWording(synonymPhase ? canonInput : input, displayExpected) && (
                     <p className="text-xs text-ink-muted">
                       Card says: <EditableAnswerText text={displayExpected} onEdit={t => onAnswerEdit?.(t)} />
                     </p>

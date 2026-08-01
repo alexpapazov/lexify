@@ -1,4 +1,4 @@
-import { gradeTyping, normalizeAnswer, isDifferentWordMistake } from '../grading'
+import { gradeTyping, normalizeAnswer, isDifferentWordMistake, leadingArticle, stripLeadingArticle, sameWording } from '../grading'
 import type { GradingSettings } from '@/domain'
 
 // A minimal strict-mode base (no leniency)
@@ -146,5 +146,93 @@ describe('isDifferentWordMistake', () => {
   })
   it('is true for a totally different word', () => {
     expect(isDifferentWordMistake('pillow', 'mattress', s)).toBe(true)
+  })
+})
+
+describe('elided articles are not mistaken for article errors', () => {
+  // FLEX_BASE has every leniency OFF, so a near-miss surfaces as 'almost' with its issueType rather
+  // than being silently accepted — which is what these assertions are about.
+  const italian: GradingSettings = { ...FLEX_BASE, answerLanguage: 'it' }
+
+  it('a misspelling inside an elided-article word is a SPELLING error, not an article one', () => {
+    // The reported bug: "l'attezzo" (missing r) vs "l'attrezzo (m)" was blamed on the article,
+    // because whitespace splitting never saw the elided "l'" and so the "same article ⇒ just a
+    // typo" guard could not fire.
+    const r = gradeTyping("l'attezzo", "l'attrezzo (m)", italian)
+    expect(r.status).toBe('almost')
+    expect(r.issueType).not.toBe('article')
+    expect(r.issueType).toBe('typo')
+  })
+
+  it('still calls it an article error when the article really differs', () => {
+    const r = gradeTyping('lo attrezzo', "l'attrezzo", italian)
+    expect(r.issueType).toBe('article')
+  })
+
+  it('still calls it an article error when the article is missing entirely', () => {
+    const r = gradeTyping('attrezzo', "l'attrezzo", italian)
+    expect(r.issueType).toBe('article')
+  })
+
+  it('an exact match with the elided article is simply correct', () => {
+    expect(gradeTyping("l'attrezzo", "l'attrezzo (m)", italian).status).toBe('correct')
+  })
+
+  it('same behaviour in French', () => {
+    const fr = { ...italian, answerLanguage: 'fr' }
+    expect(gradeTyping("l'eua", "l'eeau", fr).issueType).toBe('typo')
+    expect(gradeTyping("le eau", "l'eau", fr).issueType).toBe('article')
+  })
+
+  it('space-separated articles are unaffected', () => {
+    const es = { ...italian, answerLanguage: 'es' }
+    expect(gradeTyping('el pingüno', 'el pingüino', es).issueType).toBe('typo')
+    expect(gradeTyping('la pingüino', 'el pingüino', es).issueType).toBe('article')
+    expect(gradeTyping('pengüino', 'el pingüino', es).issueType).toBe('article')
+  })
+})
+
+describe('leadingArticle', () => {
+  it('finds a space-separated article', () => {
+    expect(leadingArticle('el pan', 'es')).toBe('el')
+  })
+  it('finds an elided article, straight or curly', () => {
+    expect(leadingArticle("l'attrezzo", 'it')).toBe("l'")
+    expect(leadingArticle('l’attrezzo', 'it')).toBe("l'")
+  })
+  it("is '' when there is no article", () => {
+    expect(leadingArticle('attrezzo', 'it')).toBe('')
+    expect(leadingArticle('pan', 'es')).toBe('')
+  })
+  it("is '' for a lone article with nothing after it", () => {
+    expect(leadingArticle('el', 'es')).toBe('')
+  })
+  it('agrees with stripLeadingArticle about whether an article was there', () => {
+    for (const [s, lang] of [["l'attrezzo", 'it'], ['el pan', 'es'], ['attrezzo', 'it'], ['pan', 'es']] as const) {
+      const stripped = stripLeadingArticle(s, lang)
+      expect(leadingArticle(s, lang) !== '').toBe(stripped !== s)
+    }
+  })
+})
+
+describe('sameWording — gates the "Card says" note', () => {
+  it('treats apostrophe styles as the same wording', () => {
+    expect(sameWording("l'agnello", 'l’agnello')).toBe(true)
+    expect(sameWording('l’agnello', "l'agnello")).toBe(true)
+    expect(sameWording("d'accordo", 'd´accordo')).toBe(true)
+  })
+
+  it('ignores unicode composition and spacing', () => {
+    expect(sameWording('más', 'más')).toBe(true)
+    expect(sameWording('  el   pan ', 'el pan')).toBe(true)
+  })
+
+  it('still reports a genuinely different wording', () => {
+    expect(sameWording("l'agnello", 'agnello')).toBe(false)
+    expect(sameWording('el pan', 'la barra de pan')).toBe(false)
+  })
+
+  it('keeps capitalisation significant — it carries meaning in some languages', () => {
+    expect(sameWording('hund', 'Hund')).toBe(false)
   })
 })

@@ -2295,7 +2295,27 @@ time per new word = minimum answers to graduate   (STRUCTURE — read from the l
   for pairs actually in pathway mode — there's no list API, so it's one read per such pair).
 - Falls back to the old measured per-word figure only when the pipeline can't be read at all.
 
-## Per-language full-debt reset (2026-07-31, migration 109 — MUST APPLY)
+## Elided articles: two apostrophe bugs (2026-07-31, no migration)
+
+Both surfaced on Italian `l'…` and affect every language with an elided article (fr `l'`, it `l'`/`un'`).
+
+**1. A misspelling was reported as an ARTICLE error.** `l'attezzo` vs `l'attrezzo` said "missing or has
+a different definite article". `gradeTyping`'s article branch extracted the article with
+`split(/\s+/)[0]` and tested it against the article set — which works for `il cane` but never for an
+elided article, since there's no space. So `userArticle` was always `''`, the "same article ⇒ it's just
+a typo" guard at the top of the loop could never fire, and any 1-char slip inside such a word fell into
+the article branch. Fixed with **`leadingArticle(s, lang)`**, the exact counterpart of
+`stripLeadingArticle` (it recognises the same two forms, space-separated and elided). **Keep the two in
+step** — that mismatch was the whole bug.
+
+**2. "Card says: …" appeared on a correct answer.** Typing `l'agnello` against a card storing
+`l’agnello` (curly) is graded correct — `unifyApostrophes` handles it — but `TypingMode` gated the note
+on a RAW string comparison, so it fired on essentially every elided article. Now gated on
+**`sameWording(a, b)`**, which ignores apostrophe style, Unicode composition and spacing. Case is
+deliberately still significant (it carries meaning for German nouns), so a capitalisation difference
+still shows the note.
+
+## Per-language full-debt reset (2026-07-31, migration 109 — APPLIED)
 
 Settings → Daily goals → Full debt now has **Reset all** plus one button per language, which put that
 language's goal straight back to the configured number.
