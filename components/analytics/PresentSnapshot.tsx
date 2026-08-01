@@ -27,7 +27,7 @@ import { resolveEffectivePathway } from '@/lib/pathway'
 import { minAnswersForPipeline, struggleFactor, newCardMs, DEFAULT_MS_PER_ANSWER } from '@/lib/pipelineCost'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding, effectiveDebtSince } from '@/lib/goalCarryover'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
@@ -162,6 +162,7 @@ export function PresentSnapshot() {
         const carrySurplus = (profile?.goal_carry_surplus as boolean | null) ?? false
         const fullDebtOn = (profile?.goal_full_debt as boolean | null) ?? false
         const fullDebtSince = (profile?.goal_full_debt_since as string | null) ?? null
+        const fullDebtResets = (profile?.goal_full_debt_resets as Record<string, string> | null) ?? {}
         const skipShortfallDays = (profile?.full_debt_skip_shortfall_days as string[] | null) ?? []
         const skipSurplusDays   = (profile?.full_debt_skip_surplus_days   as string[] | null) ?? []
         const exemptDaySet = new Set([...skipShortfallDays, ...skipSurplusDays])
@@ -323,8 +324,10 @@ export function PresentSnapshot() {
             if (!r.graduated_at || !r.cards) continue
             if (isAutoGraduated(r.accelerated_mode)) continue
             const day = localDateWithTurnover(r.graduated_at, tz, turnover)
-            if (day >= fullDebtSince && day < today) {
-              const key = `${r.cards.source_language}|${r.cards.target_language}`
+            const key = `${r.cards.source_language}|${r.cards.target_language}`
+            // Each language counts from its own start, so a per-language reset really clears it.
+            const pairSince = effectiveDebtSince(fullDebtSince, fullDebtResets, key) ?? fullDebtSince
+            if (day >= pairSince && day < today) {
               gradSince.set(key, (gradSince.get(key) ?? 0) + 1)
               if (exemptDaySet.has(day)) exemptDayGrads.set(`${key}|${day}`, (exemptDayGrads.get(`${key}|${day}`) ?? 0) + 1)
             }
@@ -340,15 +343,16 @@ export function PresentSnapshot() {
             const baseGoal = owed(today)  // deferral-adjusted "owed today"
             // Apply goal carryover so "words needed today" matches the Study page.
             let goal: number, delta: number
-            if (fullDebtOn && fullDebtSince) {
+            const pairSince = effectiveDebtSince(fullDebtSince, fullDebtResets, key)
+            if (fullDebtOn && pairSince) {
               ;({ goal, delta } = fullDebtGoal({
                 baseGoal,
-                plannedThroughYesterday: plannedGoalSum(owed, fullDebtSince, yesterday),
+                plannedThroughYesterday: plannedGoalSum(owed, pairSince, yesterday),
                 gradsThroughYesterday: gradSince.get(key) ?? 0,
                 exemptionAdjustment: fullDebtExemptionAdjustment({
                   skipShortfallDays, skipSurplusDays,
                   goalForDay: owed, gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
-                  since: fullDebtSince, through: yesterday,
+                  since: pairSince, through: yesterday,
                 }),
               }))
             } else {
@@ -384,7 +388,8 @@ export function PresentSnapshot() {
               // to 2.5x base, and reading the balance off that would forgive the withheld remainder
               // that is supposed to roll forward.
               const owed = (d: string) => owedGoalForDate(d, configuredForWeekday, isDeferred)
-              const planned = plannedGoalSum(owed, fullDebtSince, yesterday)
+              const pairSince = effectiveDebtSince(fullDebtSince, fullDebtResets, key) ?? fullDebtSince
+              const planned = plannedGoalSum(owed, pairSince, yesterday)
               const todayGoal = owed(today)
               if (planned <= 0 && todayGoal <= 0 && (gradSince.get(key) ?? 0) === 0) return []
               const standing = goalStanding({
@@ -395,7 +400,7 @@ export function PresentSnapshot() {
                 exemptionAdjustment: fullDebtExemptionAdjustment({
                   skipShortfallDays, skipSurplusDays,
                   goalForDay: owed, gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
-                  since: fullDebtSince, through: yesterday,
+                  since: pairSince, through: yesterday,
                 }),
               })
               return [{ key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, standing }]

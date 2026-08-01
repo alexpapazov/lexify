@@ -389,6 +389,8 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [goalCarrySurplus,    setGoalCarrySurplus]    = useState(false)
   const [goalFullDebt,        setGoalFullDebt]        = useState(false)
   const [goalFullDebtSince,   setGoalFullDebtSince]   = useState<string | null>(null)
+  /** Per-language debt resets (migration 109): `${src}|${tgt}` → the date to start counting from. */
+  const [goalFullDebtResets,  setGoalFullDebtResets]  = useState<Record<string, string>>({})
   // Study-days waived from full-debt carryover. "Checked" = today is in the list, so each box
   // auto-unchecks once the day turns over, while past waivers stay honoured in the running total.
   const [skipShortfallDays,   setSkipShortfallDays]   = useState<string[]>([])
@@ -466,7 +468,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -484,6 +486,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         setGoalCarrySurplus((profile.goal_carry_surplus as boolean | null) ?? false)
         setGoalFullDebt((profile.goal_full_debt as boolean | null) ?? false)
         setGoalFullDebtSince((profile.goal_full_debt_since as string | null) ?? null)
+        setGoalFullDebtResets((profile.goal_full_debt_resets as Record<string, string> | null) ?? {})
         setSkipShortfallDays((profile.full_debt_skip_shortfall_days as string[] | null) ?? [])
         setSkipSurplusDays((profile.full_debt_skip_surplus_days as string[] | null) ?? [])
         setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo' | 'standard')
@@ -530,6 +533,9 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       // Stamp the enable date the first time it's turned on; clear it when turned off so a later
       // re-enable starts a fresh debt from that day (never retroactively counts old history).
       goal_full_debt_since:      goalFullDebt ? (goalFullDebtSince ?? getToday(timezone || deviceTimeZone(), turnoverHour)) : null,
+      // Turning full debt OFF clears the per-language resets too — they only mean anything relative
+      // to a running balance, and a stale one would silently re-apply if it were switched back on.
+      goal_full_debt_resets:     goalFullDebt ? goalFullDebtResets : {},
       // Kept even when full debt is off — a day already waived must stay waived if it's turned back on.
       full_debt_skip_shortfall_days: skipShortfallDays,
       full_debt_skip_surplus_days:   skipSurplusDays,
@@ -1081,6 +1087,58 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
                       <p className="text-xs text-ink-faint pl-6">
                         Extra cards done today don&apos;t bank credit against future days. Resets tomorrow — re-check it each day you want it.
                       </p>
+                    </div>
+
+                    {/* ── Wipe the accumulated balance ──────────────────────────────────
+                        The debt is derived from history, not stored, so "reset" means "start
+                        counting from today": today's goal drops straight back to the number set
+                        above. Saved as a date per language (migration 109) rather than a cleared
+                        counter, which keeps the whole model stateless. */}
+                    <div className="space-y-2 pt-1">
+                      <p className="text-sm text-ink">Reset the running balance</p>
+                      <p className="text-xs text-ink-faint">
+                        Clears everything owed or banked so far and puts today&apos;s goal back to the
+                        number you set above. Takes effect on save.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setGoalFullDebtResets(Object.fromEntries(
+                            langPairs.map(p => [`${p.sourceLanguage}|${p.targetLanguage}`, todayStr]),
+                          ))}
+                          className="text-xs px-3 py-1.5 rounded-full border border-danger/30 text-ink hover:bg-danger/10 transition-colors"
+                        >
+                          Reset all
+                        </button>
+                        {langPairs.map(p => {
+                          const key = `${p.sourceLanguage}|${p.targetLanguage}`
+                          const isReset = goalFullDebtResets[key] === todayStr
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => setGoalFullDebtResets(prev => {
+                                const next = { ...prev }
+                                // Clicking again un-does a reset you haven't saved yet.
+                                if (next[key] === todayStr) delete next[key]
+                                else next[key] = todayStr
+                                return next
+                              })}
+                              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                                isReset
+                                  ? 'border-danger bg-danger/15 text-ink'
+                                  : 'border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40'}`}
+                            >
+                              {isReset ? '✓ ' : ''}{langName(p.sourceLanguage)}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {Object.values(goalFullDebtResets).includes(todayStr) && (
+                        <p className="text-xs text-warning">
+                          {`${Object.values(goalFullDebtResets).filter(d => d === todayStr).length} language${Object.values(goalFullDebtResets).filter(d => d === todayStr).length === 1 ? '' : 's'} will be reset when you save. This can't be undone afterwards.`}
+                        </p>
+                      )}
                     </div>
                   </div>
                 )

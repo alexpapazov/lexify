@@ -4,10 +4,10 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~50,300 lines across 222 TS/TSX files, 681 commits, 568 passing tests (42 suites).
+- **Scale**: ~50,300 lines across 222 TS/TSX files, 682 commits, 574 passing tests (42 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`108`, applied BY HAND — **all
-  applied, nothing pending.**
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`109`, applied BY HAND —
+  **`109_full_debt_resets.sql` is PENDING at the top level and must be run.**
 
 ---
 
@@ -21,11 +21,12 @@ implementation notes + error log); this file is the map you read first.
   commit message** — zsh history expansion fails the commit and leaves files staged-but-uncommitted.
   Quote any `[bracket]` paths.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
-  `001`–`108` are all applied and all live in `supabase/migrations/archive/`. **The top level is
-  empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
-  run it, and move it into `archive/` once it's live. Next number = **109**.
+  `001`–`108` are applied and live in `supabase/migrations/archive/`. **Whatever sits at the top
+  level is PENDING** — right now that's **`109_full_debt_resets.sql`** (per-language debt reset;
+  without it saving Settings errors on the unknown column). Move it into `archive/` once it's live.
+  Next number = **110**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **42 suites / 568 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **42 suites / 574 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app

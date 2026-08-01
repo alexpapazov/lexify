@@ -80,7 +80,7 @@ export function fetchGraduationsSince(userId: string, sinceIso: string): Promise
 
 const PROFILE_CORE = 'timezone, day_turnover_hour, language_colors'
 const PROFILE_GOALS =
-  'goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, ' +
+  'goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, ' +
   'full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals'
 
 /**

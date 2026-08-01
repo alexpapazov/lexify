@@ -27,7 +27,7 @@ import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, effectiveDebtSince } from '@/lib/goalCarryover'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
@@ -220,7 +220,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       // errors the full select — the same hardening the study dashboard has (see CLAUDE.md landmine).
       const PROFILE_CORE = 'audio_source_default, audio_source_by_language, timezone, day_turnover_hour'
       const profileP = offline ? Promise.resolve(null) : (async () => {
-        const full = await createClient().from('profiles').select(`${PROFILE_CORE}, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals`).eq('user_id', uid).maybeSingle()
+        const full = await createClient().from('profiles').select(`${PROFILE_CORE}, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals`).eq('user_id', uid).maybeSingle()
         if (full.data) return full.data as Record<string, unknown>
         const core = await createClient().from('profiles').select(PROFILE_CORE).eq('user_id', uid).maybeSingle()
         return (core.data as Record<string, unknown> | null) ?? null
@@ -386,7 +386,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         // also hardens the stop-at-goal cap against the not-yet-migrated-column landmine.
         const profRes = { data: profileRow as {
           goal_carry_shortfall?: boolean; goal_carry_surplus?: boolean
-          goal_full_debt?: boolean; goal_full_debt_since?: string | null
+          goal_full_debt?: boolean; goal_full_debt_since?: string | null; goal_full_debt_resets?: Record<string, string> | null
           full_debt_skip_shortfall_days?: string[] | null; full_debt_skip_surplus_days?: string[] | null
           goal_deferrals?: string[] | null
         } | null }
@@ -415,7 +415,12 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           else if (d === yesterdayStr) gradYestPair++
         }
         const fullDebtOn = profRes.data?.goal_full_debt ?? false
-        const fullDebtSince = (profRes.data?.goal_full_debt_since as string | null) ?? null
+        // This scope is a single language pair, so its own reset date (if any) is the one that counts.
+        const fullDebtSince = effectiveDebtSince(
+          (profRes.data?.goal_full_debt_since as string | null) ?? null,
+          (profRes.data?.goal_full_debt_resets as Record<string, string> | null) ?? {},
+          `${src}|${tgt}`,
+        )
         let goalToday: number
         if (fullDebtOn && fullDebtSince) {
           // Unbounded: the whole running deficit/surplus since the enable date lands on today's goal.

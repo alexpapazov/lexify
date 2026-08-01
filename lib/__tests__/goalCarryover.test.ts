@@ -1,4 +1,4 @@
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, capGoal, MAX_GOAL_MULTIPLE, goalStanding } from '../goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, capGoal, MAX_GOAL_MULTIPLE, goalStanding, effectiveDebtSince } from '../goalCarryover'
 
 const base = { baseGoal: 20, yesterdayGoal: 20, yesterdayCount: 20, carryShortfall: false, carrySurplus: false }
 
@@ -272,5 +272,41 @@ describe('goalStanding — the running balance since full debt was enabled', () 
     // Behind on both readings; the goal is raised (capped), the standing is negative.
     expect(standing).toBeLessThan(0)
     expect(goal).toBeGreaterThan(baseGoal)
+  })
+})
+
+describe('effectiveDebtSince', () => {
+  it('is the global date when the language has no reset', () => {
+    expect(effectiveDebtSince('2026-07-01', {}, 'es|en')).toBe('2026-07-01')
+    expect(effectiveDebtSince('2026-07-01', null, 'es|en')).toBe('2026-07-01')
+    expect(effectiveDebtSince('2026-07-01', undefined, 'es|en')).toBe('2026-07-01')
+  })
+
+  it('uses a later per-language reset', () => {
+    expect(effectiveDebtSince('2026-07-01', { 'es|en': '2026-07-20' }, 'es|en')).toBe('2026-07-20')
+  })
+
+  it('ignores a per-language reset older than the global enable date', () => {
+    // A global "reset all" must not be undone by a stale per-pair entry from before it.
+    expect(effectiveDebtSince('2026-07-25', { 'es|en': '2026-07-10' }, 'es|en')).toBe('2026-07-25')
+  })
+
+  it('only affects the language it names', () => {
+    const resets = { 'es|en': '2026-07-20' }
+    expect(effectiveDebtSince('2026-07-01', resets, 'ko|en')).toBe('2026-07-01')
+  })
+
+  it('is null when full debt was never enabled, whatever the resets say', () => {
+    expect(effectiveDebtSince(null, { 'es|en': '2026-07-20' }, 'es|en')).toBeNull()
+  })
+
+  it('a reset dated today zeroes the balance — planned and grads both sum to nothing', () => {
+    const today = '2026-07-31'
+    const since = effectiveDebtSince('2026-07-01', { 'es|en': today }, 'es|en')!
+    const yesterday = '2026-07-30'
+    // plannedGoalSum over [today .. yesterday] is an empty range.
+    expect(plannedGoalSum(() => 8, since, yesterday)).toBe(0)
+    // …so today's goal falls back to base, which is the whole point of the reset button.
+    expect(fullDebtGoal({ baseGoal: 8, plannedThroughYesterday: 0, gradsThroughYesterday: 0 }).goal).toBe(8)
   })
 })

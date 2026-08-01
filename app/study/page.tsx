@@ -18,7 +18,7 @@ import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
-import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate } from '@/lib/goalCarryover'
+import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, effectiveDebtSince } from '@/lib/goalCarryover'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
@@ -299,6 +299,8 @@ export default function StudyPage() {
   const [carrySurplus,      setCarrySurplus]      = useState(false)
   const [fullDebt,          setFullDebt]          = useState(false)
   const [fullDebtSince,     setFullDebtSince]     = useState<string | null>(null)
+  /** Per-language "reset my debt" dates (migration 109); the effective start is the later of the two. */
+  const [fullDebtResets,    setFullDebtResets]    = useState<Record<string, string>>({})
   // Full-debt: cumulative graduations per pair from the enable date THROUGH YESTERDAY (today excluded).
   const [sinceGradCounts,   setSinceGradCounts]   = useState<Map<string, number>>(new Map())
   // Study-days waived from full-debt carryover, and per-`${pairKey}|${day}` grads for just those days
@@ -335,7 +337,7 @@ export default function StudyPage() {
     // single pixel rendered, on top of the paged reads. Only the deck→card grouping and the
     // full-debt scan genuinely need an earlier result; those are still awaited in order below.
     const decksP   = deckRepo.list(uid)
-    const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).single())
+    const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).single())
     const paramsP  = new SupabaseUserSchedulerParamsRepository().listForUser(uid)
     const cardsP   = cardRepo.listAllForUser(uid)
     const statesP  = stateRepo.listAllForUser(uid)
@@ -368,6 +370,8 @@ export default function StudyPage() {
     const fullDebtSinceVal = (profileRes.data?.goal_full_debt_since as string | null) ?? null
     setFullDebt(fullDebtOn)
     setFullDebtSince(fullDebtSinceVal)
+    const fullDebtResetsVal = (profileRes.data?.goal_full_debt_resets as Record<string, string> | null) ?? {}
+    setFullDebtResets(fullDebtResetsVal)
     const skipShort = (profileRes.data?.full_debt_skip_shortfall_days as string[] | null) ?? []
     const skipSurp  = (profileRes.data?.full_debt_skip_surplus_days   as string[] | null) ?? []
     setSkipShortfallDays(skipShort)
@@ -544,8 +548,11 @@ export default function StudyPage() {
         if (!r.graduated_at || !r.cards) continue
         if (isAutoGraduated(r.accelerated_mode)) continue
         const day = localDateWithTurnover(r.graduated_at, tz, turnoverHour)
-        if (day >= fullDebtSinceVal && day < todayStr) {
-          const key = `${r.cards.source_language}|${r.cards.target_language}`
+        const key = `${r.cards.source_language}|${r.cards.target_language}`
+        // Each language counts from ITS OWN start — a per-language reset must not be undone by
+        // graduations that predate it still being tallied here.
+        const pairSince = effectiveDebtSince(fullDebtSinceVal, fullDebtResetsVal, key) ?? fullDebtSinceVal
+        if (day >= pairSince && day < todayStr) {
           since.set(key, (since.get(key) ?? 0) + 1)
           // Only waived days need a per-day tally — that's all the exemption maths reads.
           if (exemptDaySet.has(day)) perExemptDay.set(`${key}|${day}`, (perExemptDay.get(`${key}|${day}`) ?? 0) + 1)
@@ -887,13 +894,14 @@ export default function StudyPage() {
       // Nothing owed today (no assignment, or deferred away with no carry-in) → not on the list.
       if (configuredForWeekday(todayWeekday) <= 0 && baseOwed <= 0) return []
       let goal: number, delta: number
-      if (fullDebt && fullDebtSince) {
+      const pairSince = effectiveDebtSince(fullDebtSince, fullDebtResets, key)
+      if (fullDebt && pairSince) {
         const throughYesterday = addDays(todayStr, -1)
-        const planned = plannedGoalSum(owed, fullDebtSince, throughYesterday)
+        const planned = plannedGoalSum(owed, pairSince, throughYesterday)
         const exemptionAdjustment = fullDebtExemptionAdjustment({
           skipShortfallDays, skipSurplusDays,
           goalForDay: owed, gradsForDay: (d) => exemptDayGrads.get(`${key}|${d}`) ?? 0,
-          since: fullDebtSince, through: throughYesterday,
+          since: pairSince, through: throughYesterday,
         })
         ;({ goal, delta } = fullDebtGoal({ baseGoal: baseOwed, plannedThroughYesterday: planned, gradsThroughYesterday: sinceGradCounts.get(key) ?? 0, exemptionAdjustment }))
       } else {
@@ -907,7 +915,7 @@ export default function StudyPage() {
       }
       return [{ pair: p, key, goal, delta }]
     })
-  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals])
+  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, fullDebtResets, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals])
 
   // "Move today's load to tomorrow" for one language: record today's study-day as deferred for that pair.
   // owedGoalForDate then zeroes it today and adds it to tomorrow; the row drops off the list immediately.

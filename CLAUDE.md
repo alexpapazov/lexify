@@ -2295,6 +2295,27 @@ time per new word = minimum answers to graduate   (STRUCTURE — read from the l
   for pairs actually in pathway mode — there's no list API, so it's one read per such pair).
 - Falls back to the old measured per-word figure only when the pipeline can't be read at all.
 
+## Per-language full-debt reset (2026-07-31, migration 109 — MUST APPLY)
+
+Settings → Daily goals → Full debt now has **Reset all** plus one button per language, which put that
+language's goal straight back to the configured number.
+
+**There is no stored counter to zero.** The debt is derived — `grads − planned` summed since the
+enable date — so a reset can only mean "start the sum from today". Migration 109 adds
+`profiles.goal_full_debt_resets` (JSONB, `{"es|en": "2026-07-31"}`); the effective start for a pair is
+`effectiveDebtSince(globalSince, resets, key)` = **the LATER of the two**, so a global reset overrides
+a stale per-pair entry and neither can resurrect a balance the other cleared. Keeping it stateless is
+load-bearing — see the 2.5x cap note, which only works because the total is recomputed each day.
+
+**Every consumer must use the per-pair date**, not the global one: `app/study/page.tsx` (goal + the
+graduation bucketing loop), `components/analytics/PresentSnapshot.tsx` (goals, standings, and its own
+bucketing loop), and `LadderStudy`'s stop-at-goal cap. Missing one means a language shows a reset goal
+on one surface and the old debt on another. The graduation queries already fetch from the GLOBAL since
+date, which is a superset of any per-pair date, so no query changed — only the per-row day filter.
+
+Turning full debt off clears the resets: they only mean something relative to a running balance, and a
+stale one would silently re-apply if it were switched back on.
+
 ## "Current standing" — the running full-debt balance (2026-07-31, no migration)
 
 A panel in **Analytics → Present** (`components/analytics/PresentSnapshot.tsx`, below Today's goals),

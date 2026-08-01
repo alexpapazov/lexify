@@ -135,6 +135,26 @@ export function fullDebtGoal(args: {
 }
 
 /**
+ * Where a language's full-debt sum should start, given the profile-wide enable date and any
+ * per-language reset (migration 109).
+ *
+ * The LATER of the two wins. The debt is derived from history rather than stored, so "reset this
+ * language" can only mean "start counting from today" — and taking the max means a global reset still
+ * overrides a stale per-pair entry, and neither can resurrect a balance the other cleared.
+ *
+ * Returns null when full debt was never enabled, which callers treat as "not in full-debt mode".
+ */
+export function effectiveDebtSince(
+  globalSince: string | null,
+  resets: Record<string, string> | null | undefined,
+  pairKey: string,
+): string | null {
+  if (!globalSince) return null
+  const perPair = resets?.[pairKey]
+  return perPair && perPair > globalSince ? perPair : globalSince
+}
+
+/**
  * The running balance since full debt was switched on: how far ahead or behind you are RIGHT NOW,
  * counting today.
  *
