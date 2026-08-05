@@ -2109,6 +2109,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         // First-Undo re-rate view: the card shown answered (FlashcardMode revealed) so a different
         // rating can be picked. Re-rating runs handleAnswer from the reverted state with the stored answer.
         <FlashcardMode key={`rerate-${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
+          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           resumeAnswered autoPlayAudio={false}
           onRate={rating => handleAnswer(rating, reRate.selfGraded ? rating !== 'again' : reRate.wasCorrect, reRate.userAnswer)}
           onAlmost={reRate.selfGraded && state.graduated ? handleAlmost : undefined}
@@ -2192,6 +2193,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
+          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
+          autoPlayAudio={gradingSettings?.autoPlayAudio ?? true}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
           onAlmost={state.graduated ? handleAlmost : undefined}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}

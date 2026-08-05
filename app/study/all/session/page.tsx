@@ -1698,6 +1698,7 @@ function AllDueSessionInner() {
         // Rendered via FlashcardMode's revealed state regardless of the original mode (typed or
         // self-graded). Re-rating runs handleAnswer from the reverted state with the stored answer.
         <FlashcardMode key={`rerate-${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
+          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           resumeAnswered autoPlayAudio={false}
           onRate={rating => handleAnswer(rating, reRate.selfGraded ? rating !== 'again' : reRate.wasCorrect, reRate.userAnswer)}
           onAlmost={reRate.selfGraded && state.graduated ? handleAlmost : undefined}
@@ -1743,6 +1744,8 @@ function AllDueSessionInner() {
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
+          promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
+          autoPlayAudio={studyModeAutoplay && (gradingSettings.autoPlayAudio ?? true)}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
           onAlmost={state.graduated ? handleAlmost : undefined}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
