@@ -1,10 +1,10 @@
-# Lexify — engineering handoff (2026-07-30)
+# Lexify — engineering handoff (2026-07-31)
 
 The **broad** orientation document: what the app is, how each feature actually works, what's dead, and
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~50,300 lines across 222 TS/TSX files, 683 commits, 589 passing tests (42 suites).
+- **Scale**: ~53,000 lines across 232 TS/TSX files, 689 commits, 589 passing tests (42 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`109`, applied BY HAND — **all
   applied, nothing pending.**
@@ -106,6 +106,15 @@ direction (produce target vs produce native). Configured per language pair in Se
   stop-at-goal) limit *how many* cards enter, always taking them off the top of the list.
 - **Ladder state** lives in `ladder_climb.state` as opaque JSONB — so adding fields to `ClimbState`
   needs no migration.
+- **Presets + a saved library (2026-07-31, migration 108):** the ladders settings page has three
+  built-in presets per mode (`lib/learningPresets.ts` — the pathway one to know is
+  **Adaptive (advanced)**: diagnostic and interval-setter are the same stage, so a known word
+  graduates in three questions) and save/load-by-name via `saved_learning_configs`
+  (`lib/data/savedLearningConfigs.ts`, `components/settings/ConfigLibrary.tsx`). Loading only fills
+  the editor; the editor's own Save persists. **Trap:** a pathway self-transition RESETS per-state
+  counters — express "repeat this stage" by matching NO transition (see CLAUDE.md).
+- **No progress bar in pathway mode** — a pathway has no fixed length, so only the ladder shows one;
+  both modes keep the `N/M graduated` count.
 
 ### 3.2 Due Now (post-graduation)
 
@@ -154,6 +163,17 @@ deferring it.
 Also here: **"move today's load to tomorrow"** deferrals, and the rule that **auto-graduated cards
 never count toward goals**.
 
+**Current standing (2026-07-31):** Analytics → Present shows the running full-debt balance per
+language (red = owed, signed; green = ahead; blue = level), computed by `goalStanding` — counting
+TODAY on both sides, from CONFIGURED goals (never the 2.5×-capped displayed ones).
+
+**Per-language reset (2026-07-31, migration 109):** Settings → Full debt has **Reset all** + one
+button per language. Since the debt is derived, a reset is a per-pair *date* in
+`profiles.goal_full_debt_resets`; a pair's effective start is `effectiveDebtSince` = the LATER of the
+global enable date and its own reset. **All four consumers must use the per-pair date** (dashboard,
+PresentSnapshot ×2 loops, LadderStudy stop-at-goal) — miss one and surfaces disagree. Turning full
+debt off clears the resets.
+
 ### 3.5 Confusion handling
 
 Typing a *different real word* on a production review is a discrimination failure, not a typo.
@@ -169,7 +189,11 @@ Intra-language only (same learned language); cross-language pairs are logged but
 quoted literals. Per-category **strictness** (spelling / accents / articles) decides whether a
 near-miss is a penalty or just a retype. Grammatical gender/number tags (`(f)`, `(pl)`) are stripped
 from both sides and never graded. Language-aware article stripping via `ARTICLES_BY_LANG`
-(es/fr/it/pt/de/**el**).
+(es/fr/it/pt/de/**el**). **Elided articles (2026-07-31):** article detection goes through
+`leadingArticle` — the counterpart of `stripLeadingArticle` — because whitespace-splitting can't see
+`l'attrezzo`'s article, which had every spelling slip in such words misreported as an article error.
+And the "Card says: …" note is gated on `sameWording` (apostrophe-style/NFC/spacing-insensitive), so a
+straight-vs-curly apostrophe no longer triggers it. Keep `leadingArticle`/`stripLeadingArticle` in step.
 
 ### 3.7 Offline + PWA + native
 
@@ -200,6 +224,13 @@ makes it the keeper. The default keeper is **the copy with the most review progr
 can't silently discard months of study for a fresh import. **A scope must be selected**; it no longer
 falls back to the whole library.
 
+**Review safety (2026-07-31):** a visible **Undo** (⌘Z shares the path) reverses the last approval —
+for a dedupe it restores the deleted cards WITH their review history, snapshotted before deletion
+because `soft_delete_card` drops the `card_states` rows. `planDedupeDeletions` re-checks every group
+member's liveness at APPLY time and refuses if the keeper is gone or <2 copies remain — the
+never-delete-the-last-copy guard. **Accept all N remaining** applies the queue behind a confirmation
+(not undoable as a unit); the panel shows `N left (+ more to scan)`.
+
 ### 3.10 Vocabulary onboarding (new 2026-07-30)
 
 Bulk intake for words you already know — paste a frequency list, rate confidence, skip the ladder.
@@ -208,6 +239,9 @@ Bulk intake for words you already know — paste a frequency list, rate confiden
 (windows 3–11 / 15–45 / 126–234, spread against existing load); band 1 leaves the card untouched for
 the ladder. Writes both direction rows as `bulk_known` (excluded from goals). Resumable — the deck
 page shows "Finish onboarding" while `card_onboarding` rows remain unrated.
+
+Also reachable for an EXISTING deck: Deck settings → "Vocabulary onboarding" queues the deck's
+never-studied cards (studied ones are excluded so rating can't wipe real history).
 
 Full detail in `features/Vocabulary Onboarding.md`. Migration 107 applied 2026-07-30.
 
@@ -249,6 +283,15 @@ The app got slow three separate ways, each with a different fix. All are documen
    `setLoading(false)` behind a `setTimeout(0)` yield.
 6. **`lib/dates.ts` caches its `Intl.DateTimeFormat` instances.** Building one per row across ~14k
    rows cost hundreds of ms.
+7. **`cardRepo.listOwned` is paged + BULK_CARD_COLUMNS (2026-07-31).** It was a bare `select('*')`,
+   silently capped at 1000 rows — every duplicate check and the merge picker were blind past the
+   first 1000 cards of a pair, which is the real reason a mass import leaked duplicates. Assume any
+   unpaged select is a latent version of this.
+8. **The "~N min to learn M words" estimate is pipeline-aware (2026-07-31).** `lib/pipelineCost.ts`:
+   structural minimum answers (read from the LIVE ladder/pathway — BFS shortest path for pathways)
+   × pooled struggle factor × per-language ms-per-answer. Editing a pipeline moves the estimate
+   immediately; the struggle factor is pooled across languages ON PURPOSE (per-language would be
+   circular and pipeline edits would change nothing).
 
 ---
 
@@ -365,10 +408,15 @@ applied, so any of these is a clean start.
 8. **Scheduling "Stage B"** (learned per-feature interval model) — designed, explicitly **DEFERRED**.
    Do not start without the user reopening it.
 9. **Card connection agent** — designed and PAUSED mid-conversation; see
-   `features/Card Connection Agent (proposal).md`. Its infrastructure audit found a **real bug worth
-   fixing on its own**: `synonymGroups.addMember` cannot merge two groups, so declaring A≡B when each
-   already belongs to a group strands the other group's members instead of forming one equivalence
-   class. Confusion links were audited and are already correct.
+   `features/Card Connection Agent (proposal).md`. The group-merge bug its audit found was FIXED
+   2026-07-31 (`linkAsSynonyms`/`mergeGroups` in `lib/data/synonymGroups.ts` — synonym linking is now
+   two-way and transitive, with group MERGE when both cards already belong to groups). Confusion
+   links were audited and are already correct. The agent itself remains unbuilt; resume from the
+   proposal doc's open questions.
+10. **This session's features are unexercised against a real account** beyond onboarding/batch import
+   (thread 0): the agent group de-dupe + undo + accept-all, side visibility, presets/saved configs,
+   the adaptive pathway (needs a real study run), per-language debt resets, and the current-standing
+   panel. All build/test-verified only.
 
 ---
 
