@@ -1269,6 +1269,9 @@ export default function DeckDetailPage() {
   const [enabledTracks,    setEnabledTracks]    = useState<EnabledTracks | undefined>(undefined)
   /** Words queued by vocabulary onboarding that were never rated (migration 107). */
   const [pendingOnboarding, setPendingOnboarding] = useState(0)
+  /** Every card with an onboarding row, rated or not — band 1 ("don't know") writes no card state,
+   *  so without this set an idk-rated card would look onboardable again. */
+  const [onboardedIds, setOnboardedIds] = useState<Set<string>>(new Set())
   const [loading,          setLoading]          = useState(true)
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
   const [bulkGraduating,      setBulkGraduating]      = useState(false)
@@ -1326,8 +1329,12 @@ export default function DeckDetailPage() {
     // Ladder climb progress (drives the Learning status for cards on the ladder).
     new SupabaseLadderClimbRepository().listForCards(uid, c.map(x => x.id)).then(setClimb).catch(() => {})
     // Any words left un-rated from a vocabulary-onboarding session — surfaced as "Finish onboarding".
-    new SupabaseCardOnboardingRepository().pendingCountsByDeck(uid)
-      .then(m => setPendingOnboarding(m.get(deckId) ?? 0)).catch(() => {})
+    // The full row list (not just pending counts) also identifies already-onboarded cards.
+    new SupabaseCardOnboardingRepository().listForDeck(uid, deckId)
+      .then(rows => {
+        setPendingOnboarding(rows.filter(r => r.band === null).length)
+        setOnboardedIds(new Set(rows.map(r => r.cardId)))
+      }).catch(() => {})
     if (!d.syncingComplete) triggerSyncFill()
 
     if (d.folderId) {
@@ -1819,7 +1826,7 @@ export default function DeckDetailPage() {
           // Only never-studied cards may be onboarded: rating one writes a fresh graduated state, which
           // would wipe the real review history (reps, lapses, tuned difficulty/stability) of a card
           // that has actually been studied.
-          onboardableIds={cards.filter(c => !stateMap.get(c.id)).map(c => c.id)}
+          onboardableIds={cards.filter(c => !stateMap.get(c.id) && !onboardedIds.has(c.id)).map(c => c.id)}
           pendingOnboarding={pendingOnboarding}
           onClose={() => { setShowGear(false); loadAll(userId) }}
         />

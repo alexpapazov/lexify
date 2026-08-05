@@ -83,24 +83,6 @@ export class SupabaseCardOnboardingRepository {
     })
   }
 
-  /**
-   * deckId → how many cards are still waiting to be rated. Drives the deck page's
-   * "Finish onboarding (N left)" button. One query for the whole account.
-   */
-  async pendingCountsByDeck(userId: UserId): Promise<Map<string, number>> {
-    return cachedRead(`onboarding:pending:${userId}`, async () => {
-      const { data, error } = await this.db.from('card_onboarding')
-        .select('deck_id').eq('user_id', userId).is('band', null)
-      if (error) throw new Error(error.message)
-      const out = new Map<string, number>()
-      for (const row of data ?? []) {
-        const id = row.deck_id as string
-        out.set(id, (out.get(id) ?? 0) + 1)
-      }
-      return out
-    })
-  }
-
   /** Records a rating. Re-rating an already-rated card (undo, then a different button) just overwrites. */
   async rate(userId: UserId, cardId: CardId, band: OnboardingBand): Promise<void> {
     invalidateReads('onboarding:')

@@ -146,6 +146,9 @@ function FolderPageInner() {
   const [queueingOnboard, setQueueingOnboard] = useState(false)
   const [onboardError,    setOnboardError]    = useState<string | null>(null)
   const [pendingOnboard,  setPendingOnboard]  = useState(0)
+  /** Every card with an onboarding row, rated or not — band 1 ("don't know") writes no card state,
+   *  so without this set an idk-rated card would look onboardable again. */
+  const [onboardedIds,    setOnboardedIds]    = useState<Set<string>>(new Set())
   const [counts,       setCounts]       = useState<FolderCounts | null>(null)
   const [subfolderCounts, setSubfolderCounts] = useState<Record<string, FolderCounts>>({})
   const [deckCounts,      setDeckCounts]      = useState<Record<string, FolderCounts>>({})
@@ -220,14 +223,17 @@ function FolderPageInner() {
 
     // Due-now context: enabled tracks per pair + tz + turnover-adjusted today, so the count matches
     // the dashboard/session via the shared helper (lib/dueStatus.ts). Small extra fetches; cheap.
-    const [profileRow, paramRows, pendingByDeck] = await Promise.all([
+    const [profileRow, paramRows, onboardRows] = await Promise.all([
       Promise.resolve(supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single())
         .then(r => r.data).catch(() => null),
       new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id).catch(() => []),
-      new SupabaseCardOnboardingRepository().pendingCountsByDeck(session.user.id).catch(() => new Map<string, number>()),
+      new SupabaseCardOnboardingRepository().listForDecks(session.user.id, relevantDecks.map(d => d.id)).catch(() => []),
     ])
-    // Un-rated onboarding rows across this folder's decks — drives "Continue onboarding (N left)".
-    setPendingOnboard(relevantDecks.reduce((n, d) => n + (pendingByDeck.get(d.id) ?? 0), 0))
+    // Onboarding rows across this folder's decks: un-rated ones drive "Continue onboarding (N left)",
+    // and the full card-id set keeps already-rated cards (incl. band-1 "don't know") out of the
+    // onboardable count.
+    setPendingOnboard(onboardRows.filter(r => r.band === null).length)
+    setOnboardedIds(new Set(onboardRows.map(r => r.cardId)))
     const dTz = (profileRow?.timezone as string | null) ?? deviceTimeZone()
     const dToday = getToday(dTz, (profileRow?.day_turnover_hour as number | null) ?? 0)
     const enabledByPair = buildEnabledTracksMap(paramRows)
@@ -577,11 +583,13 @@ function FolderPageInner() {
 
   const { subfolders: visibleSubfolders, decks: visibleDecks } = getVisibleItems()
 
-  // Never-studied cards across the folder — what a fresh onboarding run would queue. Derived from the
-  // stats we already load; 0 until they arrive (counts === null doubles as the "still loading" flag).
+  // Never-studied, never-onboarded cards across the folder — what a fresh onboarding run would queue.
+  // Derived from the stats we already load; 0 until they arrive (counts === null doubles as the
+  // "still loading" flag). Excluding onboarded ids keeps band-1 ("don't know") ratings from being
+  // offered again — they write no card state, so "never studied" alone would re-count them.
   const onboardableCount = deckStats.reduce((n, { cards, states }) => {
     const fwd = new Set(states.filter(s => s.reviewDirection !== 'reverse').map(s => s.cardId))
-    return n + cards.filter(c => !fwd.has(c.id)).length
+    return n + cards.filter(c => !fwd.has(c.id) && !onboardedIds.has(c.id)).length
   }, 0)
 
   const folderSearchQuery = searchQuery.trim().toLowerCase()

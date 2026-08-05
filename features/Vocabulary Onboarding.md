@@ -182,6 +182,12 @@ already carry an onboarding row — so it can never reset an existing rating —
 scope. The bulk row read is `SupabaseCardOnboardingRepository.listForDecks`, chunked on deck ids and
 paged with `fetchAllRows` (a folder queue can exceed the 1000-row cap).
 
+**Band-1 cards stay "onboarded" (2026-08-05).** A "don't know" rating writes no card state, so
+"never studied" alone would count it as onboardable forever. Both entry points therefore load the full
+onboarding row list (not just pending counts) and exclude every card with a row — rated or not — from
+the onboardable count as well as from the queue. `pendingCountsByDeck` was removed with this change;
+the deck page's "Finish onboarding (N left)" now derives from `listForDeck`.
+
 ## 6. Knock-on change: the AI-format path is now chunked
 
 `INPUT_WORD_CAP` went **1000 → 5000** so a whole frequency list can be pasted. That exposed a latent
