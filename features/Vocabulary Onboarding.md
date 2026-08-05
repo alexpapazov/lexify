@@ -7,7 +7,10 @@ glossary), rate your confidence on each one, and the ones you know are scheduled
 instead of climbing the ladder. The point is to get Lexify's model of your memory to match reality
 without studying vocabulary you've known for years.
 
-Entry point: **Create → "Onboard vocabulary"**, the button beside *Preview deck*.
+Entry points: **Create → "Onboard vocabulary"** (the button beside *Preview deck*); for an existing
+deck, **Deck settings → Vocabulary onboarding**; and for a whole folder (2026-08-05), the **folder
+page's gear menu → "Onboard N unlearned cards"**, which queues every never-studied card across the
+folder's decks (subfolders included) and rates them in one sitting.
 
 ---
 
@@ -160,6 +163,24 @@ every write busts it.
 
 **Online only.** The AI check needs the network, and the rating screen shows `OfflineUnavailable`
 offline. There is no local-store path and nothing enqueues to the outbox.
+
+## 5b. Folder scope (2026-08-05)
+
+The rating screen (`app/study/deck/onboard/page.tsx`) also accepts **`?folder=`** (built via
+`routes.folderOnboard`; `source`/`target` keep it to the language pair the folder was viewed in).
+Folder mode queues the pending rows of **every deck under the folder** — decks in library order, cards
+in deck list order — and the per-card header shows which deck the card belongs to.
+
+Because a folder can span decks with different pairs and pipelines, the scheduling context is now
+**per deck** (`DeckCtx`: pipeline id, active production track, per-pair retention) instead of three
+page-level refs. The load map stays shared across the whole queue, so spreading levels against
+everything, not per deck.
+
+The folder page's gear menu action (`startFolderOnboarding` in `app/library/folder/page.tsx`) mirrors
+the deck-level contract: it queues never-studied cards (no forward `card_states` row) that don't
+already carry an onboarding row — so it can never reset an existing rating — then routes to the folder
+scope. The bulk row read is `SupabaseCardOnboardingRepository.listForDecks`, chunked on deck ids and
+paged with `fetchAllRows` (a folder queue can exceed the 1000-row cap).
 
 ## 6. Knock-on change: the AI-format path is now chunked
 

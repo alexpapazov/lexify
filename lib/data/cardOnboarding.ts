@@ -12,6 +12,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { cachedRead, invalidateReads } from '@/lib/readCache'
+import { fetchAllRows } from '@/lib/supabasePaged'
 import type { CardOnboarding, OnboardingBand, UserId, CardId, DeckId } from '@/domain'
 
 function rowToOnboarding(row: Record<string, unknown>): CardOnboarding {
@@ -56,6 +57,29 @@ export class SupabaseCardOnboardingRepository {
         .select('*').eq('user_id', userId).eq('deck_id', deckId).order('created_at').order('card_id')
       if (error) throw new Error(error.message)
       return (data ?? []).map(rowToOnboarding)
+    })
+  }
+
+  /**
+   * Every onboarding row across several decks — the folder-level queue. Paged (a folder's queue can
+   * exceed the 1000-row PostgREST cap) and chunked on the id list. Ordered per deck like listForDeck;
+   * callers regroup by deck.
+   */
+  async listForDecks(userId: UserId, deckIds: DeckId[]): Promise<CardOnboarding[]> {
+    if (deckIds.length === 0) return []
+    return cachedRead(`onboarding:decks:${userId}:${[...deckIds].sort().join(',')}`, async () => {
+      const out: CardOnboarding[] = []
+      const CHUNK = 400
+      for (let i = 0; i < deckIds.length; i += CHUNK) {
+        const ids = deckIds.slice(i, i + CHUNK)
+        const rows = await fetchAllRows<Record<string, unknown>>((from, to) =>
+          this.db.from('card_onboarding')
+            .select('*').eq('user_id', userId).in('deck_id', ids)
+            .order('deck_id').order('created_at').order('card_id')
+            .range(from, to))
+        out.push(...rows.map(rowToOnboarding))
+      }
+      return out
     })
   }
 

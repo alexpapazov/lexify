@@ -10,6 +10,7 @@ import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { SupabaseCardOnboardingRepository } from '@/lib/data/cardOnboarding'
 import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
@@ -140,6 +141,11 @@ function FolderPageInner() {
   const [newName,        setNewName]        = useState('')
   const [renaming,     setRenaming]     = useState(false)
   const [renameValue,  setRenameValue]  = useState('')
+  // Folder settings gear (header) + folder-level vocabulary onboarding
+  const [settingsOpen,    setSettingsOpen]    = useState(false)
+  const [queueingOnboard, setQueueingOnboard] = useState(false)
+  const [onboardError,    setOnboardError]    = useState<string | null>(null)
+  const [pendingOnboard,  setPendingOnboard]  = useState(0)
   const [counts,       setCounts]       = useState<FolderCounts | null>(null)
   const [subfolderCounts, setSubfolderCounts] = useState<Record<string, FolderCounts>>({})
   const [deckCounts,      setDeckCounts]      = useState<Record<string, FolderCounts>>({})
@@ -214,11 +220,14 @@ function FolderPageInner() {
 
     // Due-now context: enabled tracks per pair + tz + turnover-adjusted today, so the count matches
     // the dashboard/session via the shared helper (lib/dueStatus.ts). Small extra fetches; cheap.
-    const [profileRow, paramRows] = await Promise.all([
+    const [profileRow, paramRows, pendingByDeck] = await Promise.all([
       Promise.resolve(supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', session.user.id).single())
         .then(r => r.data).catch(() => null),
       new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id).catch(() => []),
+      new SupabaseCardOnboardingRepository().pendingCountsByDeck(session.user.id).catch(() => new Map<string, number>()),
     ])
+    // Un-rated onboarding rows across this folder's decks — drives "Continue onboarding (N left)".
+    setPendingOnboard(relevantDecks.reduce((n, d) => n + (pendingByDeck.get(d.id) ?? 0), 0))
     const dTz = (profileRow?.timezone as string | null) ?? deviceTimeZone()
     const dToday = getToday(dTz, (profileRow?.day_turnover_hour as number | null) ?? 0)
     const enabledByPair = buildEnabledTracksMap(paramRows)
@@ -521,6 +530,33 @@ function FolderPageInner() {
     router.push(parentId ? routes.library(parentId, { source: pairSource, target: pairTarget }) : '/library' + qs)
   }
 
+  /**
+   * Queues every never-studied card across this folder's decks (subfolders included; kept to the
+   * active language pair when there is one) for confidence rating, then opens the rating screen in
+   * folder scope — so onboarding a whole frequency-list tree doesn't mean visiting each deck.
+   *
+   * Cards that already carry an onboarding row are left alone, so this can't reset ratings you
+   * already gave — same contract as the deck-level entry in DeckSettingsPanel.
+   */
+  async function startFolderOnboarding() {
+    if (queueingOnboard) return
+    setQueueingOnboard(true)
+    setOnboardError(null)
+    try {
+      const repo = new SupabaseCardOnboardingRepository()
+      const already = new Set((await repo.listForDecks(userId, deckStats.map(s => s.deck.id))).map(r => r.cardId))
+      for (const { deck, cards, states } of deckStats) {
+        const fwd = new Set(states.filter(s => s.reviewDirection !== 'reverse').map(s => s.cardId))
+        const fresh = cards.filter(c => !fwd.has(c.id) && !already.has(c.id)).map(c => c.id)
+        if (fresh.length > 0) await repo.createPending(userId, deck.id, fresh)
+      }
+      router.push(routes.folderOnboard(folderId, { source: pairSource, target: pairTarget }))
+    } catch (err) {
+      setOnboardError(err instanceof Error ? err.message : 'Could not start onboarding.')
+      setQueueingOnboard(false)
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
@@ -540,6 +576,13 @@ function FolderPageInner() {
   )
 
   const { subfolders: visibleSubfolders, decks: visibleDecks } = getVisibleItems()
+
+  // Never-studied cards across the folder — what a fresh onboarding run would queue. Derived from the
+  // stats we already load; 0 until they arrive (counts === null doubles as the "still loading" flag).
+  const onboardableCount = deckStats.reduce((n, { cards, states }) => {
+    const fwd = new Set(states.filter(s => s.reviewDirection !== 'reverse').map(s => s.cardId))
+    return n + cards.filter(c => !fwd.has(c.id)).length
+  }, 0)
 
   const folderSearchQuery = searchQuery.trim().toLowerCase()
   // Card search across all decks in this folder (and subfolders)
@@ -633,25 +676,55 @@ function FolderPageInner() {
             {folder.name}
           </h1>
         )}
-        <div className="flex items-center gap-4 shrink-0">
-          {!folder.isSynced && (
-            <button
-              onClick={() => { setAddingFolder(true); setNewName('') }}
-              className="text-sm text-accent hover:text-accent-soft transition-colors"
-            >
-              + New folder
-            </button>
-          )}
-          {!folder.isSynced && (
-            <button
-              onClick={handleDeleteCurrentFolder}
-              className="text-sm text-ink-faint hover:text-danger transition-colors"
-            >
-              Delete folder
-            </button>
+        {/* Folder settings gear — new subfolder / vocabulary onboarding / delete live in here. */}
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setSettingsOpen(v => !v)}
+            title="Folder settings"
+            className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-surface-raised transition-colors"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+          {settingsOpen && (
+            <div className="absolute right-0 top-full mt-1 z-20 bg-surface-raised border border-line/10 rounded-lg py-1 w-64 shadow-xl">
+              {!folder.isSynced && (
+                <button
+                  onClick={() => { setSettingsOpen(false); setAddingFolder(true); setNewName('') }}
+                  className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-line/5 transition-colors"
+                >
+                  + New subfolder
+                </button>
+              )}
+              <button
+                disabled={queueingOnboard || (pendingOnboard === 0 && onboardableCount === 0)}
+                onClick={() => void startFolderOnboarding()}
+                title="Rate how well you already know each never-studied card in this folder — no need to open each deck"
+                className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-line/5 transition-colors disabled:opacity-50"
+              >
+                {queueingOnboard
+                  ? 'Opening…'
+                  : pendingOnboard > 0
+                    ? `Continue onboarding (${pendingOnboard} left)`
+                    : onboardableCount > 0
+                      ? `Onboard ${onboardableCount} unlearned card${onboardableCount !== 1 ? 's' : ''}`
+                      : counts === null ? 'Onboard vocabulary…' : 'Nothing to onboard'}
+              </button>
+              {!folder.isSynced && (
+                <button
+                  onClick={() => { setSettingsOpen(false); void handleDeleteCurrentFolder() }}
+                  className="w-full text-left px-4 py-2 text-sm text-danger/80 hover:bg-line/5 transition-colors"
+                >
+                  Delete folder
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
+      {onboardError && <p className="text-danger text-xs text-right">{onboardError}</p>}
 
       {/* Stats + Study button for this folder (including subfolders) */}
       {counts && (counts.unlearned + counts.learning + counts.graduated) > 0 && (

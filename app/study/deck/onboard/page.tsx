@@ -22,6 +22,8 @@ import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { routes } from '@/lib/routes'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
+import { SupabaseFolderRepository } from '@/lib/data/folders'
+import { descendantDeckIds } from '@/lib/folderStats'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabasePipelineRepository } from '@/lib/data/pipelines'
@@ -53,7 +55,18 @@ const BAND_STYLE: Record<OnboardingBand, string> = {
   4: 'border-success/40 hover:border-success hover:bg-success/5',
 }
 
-interface QueueItem { card: Card }
+interface QueueItem { card: Card; deck: Deck }
+
+/**
+ * Per-deck scheduling context. A folder-scoped queue can span decks with different language pairs
+ * (different enabled tracks and retention targets) and different pipelines, so none of this can live
+ * in a single ref the way it did when the page was deck-only.
+ */
+interface DeckCtx {
+  pipelineId: string
+  prodTrack:  'smart' | 'typed'
+  retention:  { production: number; reverse: number }
+}
 
 export default function OnboardPage() {
   const offline = useOfflineMode()
@@ -66,11 +79,16 @@ export default function OnboardPage() {
 }
 
 function OnboardInner() {
-  const deckId = useSearchParams().get('deck') ?? ''
+  const params   = useSearchParams()
+  const deckId   = params.get('deck') ?? ''
+  // Folder mode: rate the pending queue across every deck under the folder. When the folder was being
+  // viewed in a language-pair context, `source`/`target` keep the queue to that pair's decks.
+  const folderId   = params.get('folder') ?? ''
+  const pairSource = params.get('source')
+  const pairTarget = params.get('target')
 
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState<string | null>(null)
-  const [deck,    setDeck]    = useState<Deck | null>(null)
   const [queue,   setQueue]   = useState<QueueItem[]>([])
   const [index,   setIndex]   = useState(0)
   /** Cards rated before this sitting — so the counter reads against the whole queue, not this visit. */
@@ -82,13 +100,11 @@ function OnboardInner() {
   const userIdRef     = useRef<string>('')
   const loadRef       = useRef<Map<number, number>>(new Map())
   const startRef      = useRef<Date>(new Date())
-  const pipelineRef   = useRef<string>('')
-  const retentionRef  = useRef<{ production: number; reverse: number }>({ production: 0.9, reverse: 0.9 })
-  const prodTrackRef  = useRef<'smart' | 'typed'>('typed')
+  const ctxRef        = useRef<Map<string, DeckCtx>>(new Map())
   const todayRef      = useRef<string>('')
 
   useEffect(() => {
-    if (!deckId) { setError('No deck specified.'); setLoading(false); return }
+    if (!deckId && !folderId) { setError('No deck specified.'); setLoading(false); return }
     let cancelled = false
 
     void (async () => {
@@ -110,39 +126,77 @@ function OnboardInner() {
           } catch { return null }   // never block onboarding on the profile read; device tz is fine
         }
 
-        const [deckRow, rows, paramRows, pipeline, profile] = await Promise.all([
-          new SupabaseDeckRepository().get(deckId),
-          new SupabaseCardOnboardingRepository().listForDeck(uid, deckId),
+        // The decks in scope: the single deck, or every deck under the folder (kept to the pair the
+        // folder was being viewed in, when there is one). Library order, so the queue reads top-down.
+        const loadScopeDecks = async (): Promise<Deck[]> => {
+          if (!folderId) {
+            const deckRow = await new SupabaseDeckRepository().get(deckId)
+            return deckRow ? [deckRow] : []
+          }
+          const [folders, decks] = await Promise.all([
+            new SupabaseFolderRepository().list(uid),
+            new SupabaseDeckRepository().list(uid),
+          ])
+          const inScope = new Set(descendantDeckIds(folderId, folders, decks))
+          return decks.filter(d => inScope.has(d.id) &&
+            (!pairSource || !pairTarget || (d.sourceLanguage === pairSource && d.targetLanguage === pairTarget)))
+        }
+
+        const [scopeDecks, paramRows, pipeline, profile] = await Promise.all([
+          loadScopeDecks(),
           new SupabaseUserSchedulerParamsRepository().listForUser(uid),
           new SupabasePipelineRepository().getDefault(),
           loadProfile(),
         ])
         if (cancelled) return
-        if (!deckRow) { setError('Deck not found.'); setLoading(false); return }
-
-        const pending = rows.filter(r => r.band === null)
-        const cardsByDeck = await new SupabaseCardRepository().listForDecks([deckId])
-        if (cancelled) return
-        const byId = new Map((cardsByDeck.get(deckId) ?? []).map(c => [c.id, c]))
-
-        // Deck list order, not the order the rows were written — matches how the ladder feeds cards.
-        const items: QueueItem[] = pending
-          .map(r => byId.get(r.cardId))
-          .filter((c): c is Card => c != null)
-          .map(card => ({ card }))
-
-        const tracks    = buildEnabledTracksMap(paramRows).get(`${deckRow.sourceLanguage}|${deckRow.targetLanguage}`)
-        const retention = buildRetentionMap(paramRows)
-        // Which production column the card's due date belongs in. Neither track enabled → write the
-        // typed lane, matching ladder graduation; the card is ghosted until a track is turned on.
-        const prodTrack = activeProductionTrack(tracks) ?? 'typed'
-        prodTrackRef.current = prodTrack
-        retentionRef.current = {
-          production: retentionFor(retention, deckRow.sourceLanguage, deckRow.targetLanguage,
-            prodTrack === 'smart' ? 'forward_smart' : 'forward_typed'),
-          reverse: retentionFor(retention, deckRow.sourceLanguage, deckRow.targetLanguage, 'reverse_recall'),
+        if (scopeDecks.length === 0) {
+          setError(folderId ? 'Folder not found (or it has no decks).' : 'Deck not found.')
+          setLoading(false)
+          return
         }
-        pipelineRef.current = deckRow.pipelineId || pipeline.id
+
+        const deckIds = scopeDecks.map(d => d.id)
+        const [rows, cardsByDeck] = await Promise.all([
+          new SupabaseCardOnboardingRepository().listForDecks(uid, deckIds),
+          new SupabaseCardRepository().listForDecks(deckIds),
+        ])
+        if (cancelled) return
+
+        // Deck list order within each deck, decks in library order — matches how the ladder feeds
+        // cards (not the order the queue rows were written).
+        const pendingByDeck = new Map<string, Set<string>>()
+        for (const r of rows) {
+          if (r.band !== null) continue
+          let set = pendingByDeck.get(r.deckId)
+          if (!set) { set = new Set(); pendingByDeck.set(r.deckId, set) }
+          set.add(r.cardId)
+        }
+        const items: QueueItem[] = scopeDecks.flatMap(deck => {
+          const pending = pendingByDeck.get(deck.id)
+          if (!pending) return []
+          return (cardsByDeck.get(deck.id) ?? [])
+            .filter(c => pending.has(c.id))
+            .map(card => ({ card, deck }))
+        })
+
+        const tracksByPair = buildEnabledTracksMap(paramRows)
+        const retention    = buildRetentionMap(paramRows)
+        const ctx = new Map<string, DeckCtx>()
+        for (const d of scopeDecks) {
+          // Which production column the card's due date belongs in. Neither track enabled → write the
+          // typed lane, matching ladder graduation; the card is ghosted until a track is turned on.
+          const prodTrack = activeProductionTrack(tracksByPair.get(`${d.sourceLanguage}|${d.targetLanguage}`)) ?? 'typed'
+          ctx.set(d.id, {
+            pipelineId: d.pipelineId || pipeline.id,
+            prodTrack,
+            retention: {
+              production: retentionFor(retention, d.sourceLanguage, d.targetLanguage,
+                prodTrack === 'smart' ? 'forward_smart' : 'forward_typed'),
+              reverse: retentionFor(retention, d.sourceLanguage, d.targetLanguage, 'reverse_recall'),
+            },
+          })
+        }
+        ctxRef.current = ctx
 
         // Never fall back to UTC — see the "getToday owns what day it is" trap in CLAUDE.md.
         const tz = profile?.timezone || deviceTimeZone()
@@ -152,9 +206,8 @@ function OnboardInner() {
         loadRef.current = await seedOnboardLoad(uid, startRef.current, LOAD_HORIZON_DAYS, stateRepo)
         if (cancelled) return
 
-        setDeck(deckRow)
         setQueue(items)
-        setAlreadyRated(rows.length - pending.length)
+        setAlreadyRated(rows.length - rows.filter(r => r.band === null).length)
         setLoading(false)
       } catch (err) {
         if (cancelled) return
@@ -164,14 +217,15 @@ function OnboardInner() {
     })()
 
     return () => { cancelled = true }
-  }, [deckId])
+  }, [deckId, folderId, pairSource, pairTarget])
 
   /**
    * Builds the two card_states rows a known card graduates with — production and recognition,
    * mirroring how the ladder graduates a card (`LadderStudy.graduate`). Each direction claims its own
    * day from the shared load map, so a card's two reviews don't land together.
    */
-  const buildStates = useCallback((cardId: string, band: Exclude<OnboardingBand, 1>): CardState[] => {
+  const buildStates = useCallback((deckId: string, cardId: string, band: Exclude<OnboardingBand, 1>): CardState[] => {
+    const ctx    = ctxRef.current.get(deckId)!   // every queue item's deck was given a ctx at load
     const now    = new Date()
     const nowIso = now.toISOString()
     const window = { ...bandWindow(band), center: ONBOARD_BANDS[band].center }
@@ -179,9 +233,9 @@ function OnboardInner() {
     const make = (direction: 'forward' | 'reverse'): CardState => {
       const offset    = claimSpreadDay(loadRef.current, window)
       const dueAt     = onboardDueIso(startRef.current, offset)
-      const retention = direction === 'forward' ? retentionRef.current.production : retentionRef.current.reverse
+      const retention = direction === 'forward' ? ctx.retention.production : ctx.retention.reverse
       const { difficulty, stability } = onboardMemoryState(band, offset, retention)
-      const base = initialCardState(userIdRef.current, cardId, pipelineRef.current)
+      const base = initialCardState(userIdRef.current, cardId, ctx.pipelineId)
       return {
         ...base,
         reviewDirection: direction,
@@ -197,7 +251,7 @@ function OnboardInner() {
         scheduledIntervalDays: offset,
         dueAt,
         ...(direction === 'forward'
-          ? (prodTrackRef.current === 'smart'
+          ? (ctx.prodTrack === 'smart'
               ? { smartIntervalDays: offset, smartDueAt: dueAt }
               : { typedIntervalDays: offset, typedDueAt: dueAt })
           : { recallIntervalDays: offset, recallDueAt: dueAt }),
@@ -216,7 +270,7 @@ function OnboardInner() {
     setBusy(true)
     try {
       if (bandGraduates(band)) {
-        await new SupabaseCardStateRepository().upsertBatch(buildStates(item.card.id, band))
+        await new SupabaseCardStateRepository().upsertBatch(buildStates(item.deck.id, item.card.id, band))
       }
       await new SupabaseCardOnboardingRepository().rate(userIdRef.current, item.card.id, band)
       setLastRated({ cardId: item.card.id, band })
@@ -270,7 +324,7 @@ function OnboardInner() {
       const updated = await new SupabaseCardRepository().update(item.card.id, side === 'front'
         ? { front: newText, audioGenerated: false as const, audioData: null, choices: null }
         : { back: newText, choices: null })
-      setQueue(q => q.map((it, i) => i === index ? { card: updated } : it))
+      setQueue(q => q.map((it, i) => i === index ? { card: updated, deck: it.deck } : it))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save that edit.')
     }
@@ -317,11 +371,17 @@ function OnboardInner() {
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
 
+  // Where "done" / "finish later" / errors lead back to: the folder in folder mode, else the deck.
+  const backHref = folderId
+    ? routes.library(folderId, { source: pairSource, target: pairTarget })
+    : deckId ? routes.deck(deckId) : '/study'
+  const backNoun = folderId ? 'folder' : 'deck'
+
   if (error) {
     return (
       <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
         <p className="text-danger text-sm">{error}</p>
-        <Link href={deckId ? routes.deck(deckId) : '/study'} className="btn-ghost inline-block">Back to deck</Link>
+        <Link href={backHref} className="btn-ghost inline-block">Back to {backNoun}</Link>
       </div>
     )
   }
@@ -337,7 +397,7 @@ function OnboardInner() {
           {`${total} word${total !== 1 ? 's' : ''} rated. The ones you didn’t know are waiting in the learning pipeline; the rest are scheduled.`}
         </p>
         <div className="flex justify-center gap-3">
-          <Link href={routes.deck(deckId)} className="btn-primary">Go to deck</Link>
+          <Link href={backHref} className="btn-primary">Go to {backNoun}</Link>
           {lastRated && (
             <button className="btn-ghost" disabled={busy} onClick={() => void undo()}>Undo last</button>
           )}
@@ -346,18 +406,16 @@ function OnboardInner() {
     )
   }
 
-  const card = queue[index]!.card
+  const { card, deck } = queue[index]!
 
   return (
     <div className="space-y-8 pb-12 max-w-2xl mx-auto">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold text-ink">How well do you know this?</h1>
-          {deck && (
-            <p className="text-xs text-ink-faint mt-0.5">
-              {langNativeName(deck.sourceLanguage)}: {deck.name}
-            </p>
-          )}
+          <p className="text-xs text-ink-faint mt-0.5">
+            {langNativeName(deck.sourceLanguage)}: {deck.name}
+          </p>
         </div>
         <span className="text-sm text-ink-muted tabular-nums">{done} / {total}</span>
       </div>
@@ -423,7 +481,7 @@ function OnboardInner() {
             Undo last
           </button>
         )}
-        <Link href={routes.deck(deckId)} className="ml-auto hover:text-ink transition-colors">
+        <Link href={backHref} className="ml-auto hover:text-ink transition-colors">
           Finish later
         </Link>
       </div>

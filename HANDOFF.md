@@ -241,7 +241,11 @@ the ladder. Writes both direction rows as `bulk_known` (excluded from goals). Re
 page shows "Finish onboarding" while `card_onboarding` rows remain unrated.
 
 Also reachable for an EXISTING deck: Deck settings → "Vocabulary onboarding" queues the deck's
-never-studied cards (studied ones are excluded so rating can't wipe real history).
+never-studied cards (studied ones are excluded so rating can't wipe real history). And for a whole
+FOLDER (2026-08-05): the folder page's header gear menu (which also now houses "+ New subfolder" and
+"Delete folder") has an onboarding action that queues never-studied cards across all the folder's
+decks and rates them in one queue — the onboard page takes `?folder=` with per-deck scheduling
+context (`routes.folderOnboard`; `cardOnboarding.listForDecks` is the paged bulk read).
 
 Full detail in `features/Vocabulary Onboarding.md`. Migration 107 applied 2026-07-30.
 
