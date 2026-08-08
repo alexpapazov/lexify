@@ -40,6 +40,13 @@ export interface PreparedExercise {
   flagged:  { text: string; gloss: string }[]
   /** True when a repair call actually improved this sentence. */
   repaired: boolean
+  /**
+   * Native meaning of the word that belongs in the blank — shown INSIDE the blank, so the exercise
+   * is "produce this meaning, correctly inflected" rather than "guess which word is missing".
+   * Prefers the generator's in-context gloss for the exact surface form; falls back to the card's
+   * own gloss, which is the wording the learner already studies.
+   */
+  targetGloss: string
 }
 
 export interface PracticeRun {
@@ -135,11 +142,15 @@ export async function generatePracticeExercises(opts: GenerateOptions): Promise<
       repaired = true
     }
 
+    // The blank's prompt: what the learner is being asked to produce.
+    const answerToken = current.tokens.find(t => t.text === current.answer)
+    const targetCard  = targets.find(t => t.lemma.trim().toLowerCase() === current.targetLemma)
     const result: PreparedExercise = {
       exercise: current,
       score,
       flagged: flaggedWords(current, score.offenders),
       repaired,
+      targetGloss: (answerToken?.gloss || targetCard?.back || '').trim(),
     }
     return result
   })

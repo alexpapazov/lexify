@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { routes } from '@/lib/routes'
+import { StarFilterButton } from '@/components/StarFilterButton'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -1338,17 +1339,12 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     return [...map.values()]
   })()
 
-  const pairStarredCount = pairDeckStats.reduce((n, { cards }) => n + cards.filter(c => c.starred).length, 0)
-
   const PAIR_COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: pairCounts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: pairCounts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
     { key: 'dormant'   as FilterKey, label: 'Dormant',   value: pairCounts.dormant,   color: 'text-ink',         border: 'border-line/70',  desc: 'Paused — manual'  },
-    // Starred is a card flag rather than a study state, so it's counted here instead of in
-    // the shared FolderCounts helper.
-    { key: 'starred'   as FilterKey, label: 'Starred',   value: pairStarredCount,     color: 'text-warning',     border: 'border-warning/70', desc: 'Marked by you' },
   ]
 
   return (
@@ -1377,17 +1373,21 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         </div>
       </div>
 
-      {/* Search bar */}
-      <div className="relative">
-        <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-        </svg>
-        <input
-          className="input pl-9 py-2 text-sm w-full"
-          placeholder="Search cards…"
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-        />
+      {/* Search bar + the starred filter (a card flag, not a study state — so not a counter box) */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input
+            className="input pl-9 py-2 text-sm w-full"
+            placeholder="Search cards…"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+        </div>
+        <StarFilterButton active={activeFilter === 'starred'}
+          onToggle={() => setActiveFilter(activeFilter === 'starred' ? null : 'starred')} />
       </div>
 
       {/* Pairing-wide stat counters */}
@@ -1414,7 +1414,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
-              {PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {groupedCards.length} card{groupedCards.length !== 1 ? 's' : ''}
+              {activeFilter === 'starred' ? 'Starred' : PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {groupedCards.length} card{groupedCards.length !== 1 ? 's' : ''}
             </h2>
             <button onClick={() => setActiveFilter(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
               Show all ✕

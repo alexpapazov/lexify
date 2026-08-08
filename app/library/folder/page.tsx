@@ -17,6 +17,7 @@ import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { isCardStateDueNow } from '@/lib/dueStatus'
 import { getToday } from '@/lib/dates'
 import { langName } from '@/lib/languages'
+import { StarFilterButton } from '@/components/StarFilterButton'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
@@ -333,17 +334,12 @@ function FolderPageInner() {
       })
   }) : []
 
-  const starredCount = deckStats.reduce((n, { cards }) => n + cards.filter(c => c.starred).length, 0)
-
   const COUNTER_CONFIG = counts ? [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: counts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: counts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: counts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: counts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
     { key: 'dormant'   as FilterKey, label: 'Dormant',   value: counts.dormant,   color: 'text-ink',         border: 'border-line/70',  desc: 'Paused — manual'  },
-    // Starred is counted here rather than in FolderCounts: it's a card flag, not a study
-    // state, so it doesn't belong in the shared stats helper.
-    { key: 'starred'   as FilterKey, label: 'Starred',   value: starredCount,     color: 'text-warning',     border: 'border-warning/70', desc: 'Marked by you' },
   ] : []
 
   // ── Drop onto row ─────────────────────────────────────────────────────────
@@ -766,7 +762,7 @@ function FolderPageInner() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
-                  {COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {filteredCards.length} card{filteredCards.length !== 1 ? 's' : ''}
+                  {activeFilter === 'starred' ? 'Starred' : COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {filteredCards.length} card{filteredCards.length !== 1 ? 's' : ''}
                 </h2>
                 <button onClick={() => setActiveFilter(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
                   Show all ✕
@@ -823,7 +819,8 @@ function FolderPageInner() {
 
       {/* Search bar */}
       {(visibleSubfolders.length > 0 || visibleDecks.length > 0 || searchQuery) && (
-        <div className="relative">
+        <div className="flex items-center gap-2">
+        <div className="relative flex-1">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
           </svg>
@@ -833,6 +830,9 @@ function FolderPageInner() {
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
           />
+          </div>
+          <StarFilterButton active={activeFilter === 'starred'}
+            onToggle={() => setActiveFilter(activeFilter === 'starred' ? null : 'starred')} />
         </div>
       )}
 

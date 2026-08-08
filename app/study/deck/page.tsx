@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
+import { StarFilterButton } from '@/components/StarFilterButton'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -1278,6 +1279,7 @@ export default function DeckDetailPage() {
   const [bulkGraduateError,   setBulkGraduateError]   = useState<string | null>(null)
   const [bulkAccelerated,     setBulkAccelerated]     = useState(false)
   const [bulkMovingToLearning,setBulkMovingToLearning]= useState(false)
+  const [bulkStarring,      setBulkStarring]      = useState(false)
   const [bulkDeleting,        setBulkDeleting]        = useState(false)
   const [bulkDeleteConfirm,setBulkDeleteConfirm]= useState(false)
   const [bulkResetting,    setBulkResetting]    = useState<string | null>(null)
@@ -1523,6 +1525,28 @@ export default function DeckDetailPage() {
     setRenamingDeck(false)
   }
 
+  /**
+   * Star or unstar every selected card. Chunked writes rather than one call per card, and the flag
+   * is chosen from the selection: if any selected card is unstarred, the action stars them all —
+   * otherwise it clears them. That makes one button do both without a mode toggle.
+   */
+  async function handleBulkStar() {
+    if (selectedCardIds.size === 0 || bulkStarring) return
+    const ids = [...selectedCardIds]
+    const next = cards.some(c => selectedCardIds.has(c.id) && !c.starred)
+    setBulkStarring(true)
+    try {
+      const repo = new SupabaseCardRepository()
+      for (const id of ids) await repo.setStarred(id, next)
+      setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, starred: next } : c))
+      setSelectedCardIds(new Set())
+    } catch (err) {
+      console.error('Bulk star failed:', err)
+    } finally {
+      setBulkStarring(false)
+    }
+  }
+
   async function handleBulkMoveToLearning() {
     if (selectedCardIds.size === 0 || bulkMovingToLearning) return
     setBulkMovingToLearning(true)
@@ -1701,7 +1725,6 @@ export default function DeckDetailPage() {
   const learning  = cards.filter(c => statusOf(c.id) === 'learning').length
   const graduated = cards.filter(c => statusOf(c.id) === 'graduated').length
   const dormant   = cards.filter(c => statusOf(c.id) === 'dormant').length
-  const starred   = cards.filter(c => c.starred).length
   // Due Now via the shared helper (same definition as the dashboard/session): date-level, real
   // per-track columns (smart→typed→due_at, recall_due_at), track-filtered, dormancy + reverse aware.
   // Previously this read only `s.dueAt` with no track filter, so it over-counted vs everywhere else.
@@ -1933,8 +1956,6 @@ export default function DeckDetailPage() {
           { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', desc: 'Long-term review' },
           { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'  },
           { label: 'Dormant',   value: dormant,   color: 'text-ink',         border: 'border-line/70',  filter: 'dormant',   desc: 'Paused — manual'  },
-          // A card flag, not a study state — counted straight off the cards.
-          { label: 'Starred',   value: starred,   color: 'text-warning',     border: 'border-warning/70', filter: 'starred',   desc: 'Marked by you'    },
         ].map(({ label, value, color, border, filter, desc }) => {
           const isActive = activeFilter === filter
           return (
@@ -1953,13 +1974,21 @@ export default function DeckDetailPage() {
       </div>
 
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Cards</h2>
-          {activeFilter && (
-            <Link href={routes.deck(deckId)} className="text-xs text-accent hover:text-accent-soft transition-colors">
-              Show all ✕
-            </Link>
-          )}
+          <div className="flex items-center gap-2">
+            {activeFilter && (
+              <Link href={routes.deck(deckId)} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                Show all ✕
+              </Link>
+            )}
+            {/* Starred is a card flag, not a graduation state, so it filters from here rather than
+                sitting in the stat-box row alongside the states that partition the deck. */}
+            <StarFilterButton active={activeFilter === 'starred'}
+              onToggle={() => router.push(activeFilter === 'starred'
+                ? routes.deck(deckId)
+                : routes.deck(deckId, { filter: 'starred' }))} />
+          </div>
         </div>
 
         {activeFilter && (() => {
@@ -2036,6 +2065,15 @@ export default function DeckDetailPage() {
                       </div>
                     )}
                   </div>
+                  <button
+                    onClick={handleBulkStar}
+                    disabled={bulkStarring}
+                    className="text-xs px-3 py-1 rounded border border-warning/30 text-warning hover:bg-warning/10 transition-colors disabled:opacity-40"
+                  >
+                    {bulkStarring
+                      ? 'Starring…'
+                      : cards.some(c => selectedCardIds.has(c.id) && !c.starred) ? '★ Star' : '★ Unstar'}
+                  </button>
                   <button
                     onClick={handleBulkMoveToLearning}
                     disabled={bulkMovingToLearning}

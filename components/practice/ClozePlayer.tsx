@@ -35,13 +35,15 @@ function practiceGrading(answerLanguage: string): GradingSettings {
 
 /** The sentence, blank and all, with unknown words marked. */
 function SentenceLine({
-  before, after, flagged, filled,
+  before, after, flagged, filled, gloss,
 }: {
   before: string
   after:  string
   flagged: { text: string; gloss: string }[]
   /** The revealed answer, or null while the blank is still blank. */
   filled: string | null
+  /** Native meaning of the missing word, shown inside the blank as the prompt. */
+  gloss:  string
 }) {
   const render = (text: string) => segmentFlagged(text, flagged).map((seg, i) =>
     seg.flagged
@@ -59,7 +61,15 @@ function SentenceLine({
       {render(before)}
       {filled !== null
         ? <span className="text-accent font-medium">{filled}</span>
-        : <span className="inline-block align-baseline border-b-2 border-accent/60 min-w-[6ch] mx-1" aria-label="blank" />}
+        // The blank carries the meaning to produce. Without it the learner is guessing which word
+        // was removed; with it, the exercise is recall + inflection, which is the point.
+        : gloss
+          ? (
+            <span className="inline-block align-baseline border-b-2 border-accent/60 px-2 mx-1 text-base text-accent-soft italic">
+              {gloss}
+            </span>
+          )
+          : <span className="inline-block align-baseline border-b-2 border-accent/60 min-w-[6ch] mx-1" aria-label="blank" />}
       {render(after)}
     </p>
   )
@@ -126,7 +136,7 @@ export function ClozePlayer({ items, answerLanguage, onExit }: {
       <div className="panel py-10 space-y-5">
         {split
           ? <SentenceLine before={split.before} after={split.after} flagged={flagged}
-              filled={revealed ? exercise.answer : null} />
+              filled={revealed ? exercise.answer : null} gloss={current.targetGloss} />
           // Belt and braces: the parser rejects an answer that isn't in the sentence, so this
           // should be unreachable — but never render a broken exercise as a blank screen.
           : <p className="text-xl text-ink text-center">{exercise.sentence}</p>}

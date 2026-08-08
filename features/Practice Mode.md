@@ -189,7 +189,10 @@ before this deploys** (`language_pairs` SELECTs name the new column).
 - **`components/practice/ClozePlayer.tsx`** — blank, type, check, continue. Two deliberate
   departures from a study session: it **writes nothing** (no `card_states`, no review events, no
   due dates — practice is exposure, not assessment, and mixing it into FSRS would double-count),
-  and grading is **flexible with capitalization ignored regardless of the pair's strictness**,
+  **the blank carries the target word's native gloss** (`targetGloss` — the generator's in-context
+  gloss for that surface form, falling back to the card's own back), so the exercise is "produce this
+  meaning, correctly inflected" rather than "guess which word was removed";
+  grading is **flexible with capitalization ignored regardless of the pair's strictness**,
   because the sentence around the answer is machine-generated and failing someone on an accent in a
   word they weren't drilling is noise. Translation is behind a Hint button so the default is recall,
   not transcription.
@@ -269,4 +272,5 @@ deliberately, which is a different thing and is wanted.
 
 | Date | Error | Fix |
 |------|-------|-----|
+| 2026-08-08 | The Decks & folders picker showed every deck at the ROOT with its parent folders reporting 0. `buildScopeTree` filtered folders by `f.sourceLanguage === source`, but **`Folder.sourceLanguage` is nullable** — it's set only on folders pinned to one pair's view, so ordinary subfolders carry null and were dropped. Their decks then failed the `pfIds.has(d.folderId)` test and were promoted to root. Present in the card-editor agent's scope picker too, since that's where the builder came from | Build the hierarchy from ALL folders, hang the pair's decks off it, then prune folders containing none of those decks — the same rule the library uses (`folderMatchesPair`), which judges by descendant decks rather than the folder's own fields. Fixes both pickers. 9 tests in `lib/__tests__/scopeTree.test.ts`, including the null-language nesting case |
 | 2026-08-07 | Practice reported "You have no graduated words in this language yet" for a pair with plenty of graduated cards. Not a scoring bug — the cards were graduated but **unlabeled**, and an unlabeled card has no lemma, so `buildLibraryIndex` correctly excluded it from the vocabulary. The message conflated "no graduated words" with "no *labeled* graduated words", and the narrow-vocabulary warning fired above the labeling prompt, burying the actual cause | Added `LibraryIndex.graduatedUnlabeledCount`; the practice page now leads with the labeling prompt when it's non-zero (naming that count) and **suppresses** the coverage warning until labeling is done — coverage can't be judged from an unlabeled library. Note for future surfaces: any "your library is empty" message must check the unlabeled count first |

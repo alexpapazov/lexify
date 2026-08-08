@@ -39,15 +39,27 @@ multi-deck sessions (`all`, `folder`) keep a card on its queue item **and again*
 
 ## Filters
 
+**Not a stat box.** The counter row (unlearned / learning / graduated / dormant) holds *graduation
+states*, which partition the library — every card is exactly one of them. Starring cuts across that:
+a card can be starred **and** graduated. Putting it in that row implied a mutual exclusivity that
+doesn't exist, so it's a `StarFilterButton` (`components/StarFilterButton.tsx`) instead — a small ★
+toggle that filters the card list.
+
 | Surface | How |
 |---|---|
-| Deck page | Sixth stat box, `?filter=starred` |
-| Library (pair view) and folder page | Sixth counter box, same `FilterKey` union |
+| Deck page | ★ toggle beside the "Cards" heading; drives `?filter=starred` via the router |
+| Library (pair view) and folder page | ★ toggle beside the search box; sets the local `activeFilter` |
 | Practice | `{ type: 'starred' }` target source + its own tab. Never capped — starring is explicit — but still passes the drillable gate, so a starred phrase is reported as dropped rather than silently missing |
 
-Starred counts are computed **in the page** from the loaded cards rather than added to
-`FolderCounts`: it's a card flag, not a study state, and the shared stats helper is about the
-learning pipeline.
+`'starred'` is part of each page's `FilterKey` union but has no counter entry, so the filtered-list
+heading falls back to a literal `'Starred'` label rather than a config lookup.
+
+## Bulk starring
+
+The deck page's selection toolbar has a **★ Star / ★ Unstar** action beside Delete and Graduate.
+One button does both: if any selected card is unstarred it stars the whole selection, otherwise it
+clears them — so there's no mode toggle to get wrong. Writes are per card (there's no bulk RPC for
+this yet); fine for a hand-made selection, worth revisiting if it's ever pointed at thousands.
 
 ---
 
@@ -61,7 +73,7 @@ learning pipeline.
   entry, so starring while offline fails silently (the star reverts). Every other mid-session write
   has the same shape, so this matches — but it's the first thing to fix if starring becomes
   load-bearing offline.
-- **No bulk star/unstar.** Stars are set one card at a time from a study session; there's no "star
-  everything in this filter" action in the library.
+- **Bulk starring is deck-page only.** The library and folder views have no multi-select, so there's
+  no "star everything in this filter" there.
 - **Not exposed to the card-editor agent**, so an agent can't star cards it thinks are worth
   revisiting.
