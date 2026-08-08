@@ -31,7 +31,7 @@ import { localCardsByDeck, localGetCard, localUpdateCard } from '@/lib/offline/l
 const BULK_CARD_COLUMNS =
   'id, owner_id, source_language, target_language, front, back, position, ' +
   'created_at, updated_at, deleted_at, synonym_group_id, register, region, ' +
-  'audio_generated, audio_source, ipa'
+  'audio_generated, audio_source, ipa, pos, lemma'
 
 /**
  * Columns for STUDY-SESSION reads: everything a session needs to grade and render — `choices`
@@ -45,7 +45,7 @@ const SESSION_CARD_COLUMNS =
   'id, owner_id, source_language, target_language, front, back, hints, choices, position, ' +
   'created_at, updated_at, deleted_at, synonym_group_id, register, region, ' +
   'accepted_front_alternatives, accepted_back_alternatives, synced_from_languages, synced_from_language, ' +
-  'origin_words, origin_word, audio_generated, audio_source, ipa'
+  'origin_words, origin_word, audio_generated, audio_source, ipa, pos, lemma'
 
 function rowToCard(row: Record<string, unknown>): Card {
   return {
@@ -81,6 +81,8 @@ function rowToCard(row: Record<string, unknown>): Card {
     audioSource:    (row.audio_source as import('@/domain').AudioSource | null) ?? null,
     audioSources:   (row.audio_sources as Partial<Record<import('@/domain').AudioSource, string>> | null) ?? null,
     ipa:            (row.ipa as string | null) ?? null,
+    pos:            (row.pos as Card['pos']) ?? null,
+    lemma:          (row.lemma as string | null) ?? null,
   }
 }
 
@@ -266,6 +268,24 @@ export class SupabaseCardRepository implements CardRepository {
       names.push(row.decks.name)
     }
     return result
+  }
+
+  /**
+   * Writes pos/lemma labels in bulk via the `set_card_labels` RPC (migration 110) — one round trip
+   * per chunk instead of one UPDATE per card; a first labeling backfill can be thousands of cards.
+   * The RPC only touches rows owned by the caller. ONLINE ONLY — labeling needs the AI route anyway,
+   * so there is no local-store path.
+   */
+  async setLabels(labels: { id: CardId; pos: string; lemma: string | null }[]): Promise<void> {
+    if (labels.length === 0) return
+    invalidateReads('cards:')
+    const CHUNK = 400
+    for (let i = 0; i < labels.length; i += CHUNK) {
+      const { error } = await this.db.rpc('set_card_labels', {
+        p_labels: labels.slice(i, i + CHUNK),
+      })
+      if (error) throw new Error(error.message)
+    }
   }
 
   async bulkCreate(deckId: DeckId, ownerId: UserId, sourceLanguage: string, targetLanguage: string, inputs: CreateCardInput[]): Promise<Card[]> {

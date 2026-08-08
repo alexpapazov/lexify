@@ -19,6 +19,8 @@ import { OfflinePanel } from '@/components/settings/OfflinePanel'
 import { startTour } from '@/components/Tour'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { voiceNameFor } from '@/lib/speak'
+import { SupabaseCardRepository } from '@/lib/data/cards'
+import { labelCards, type LabelableCard } from '@/lib/labelCards'
 
 // ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
 function hslToHex(h: number, s: number, l: number): string {
@@ -131,6 +133,80 @@ const TRIGGER_LABELS: Record<string, string> = {
 
 function pairLabel(p: LanguagePair): string {
   return `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`
+}
+
+/**
+ * Vocabulary labels (practice-mode groundwork, migration 110): part-of-speech + lemma for every
+ * card's front. Idempotent — each run labels only cards without a label, so new cards are picked up
+ * by simply running it again. Labels persist batch-by-batch (lib/labelCards.ts), so navigating away
+ * mid-run loses nothing.
+ */
+function VocabularyLabelsPanel({ userId }: { userId: string }) {
+  const [unlabeled, setUnlabeled] = useState<LabelableCard[] | null>(null)
+  const [running,   setRunning]   = useState(false)
+  const [progress,  setProgress]  = useState<{ done: number; total: number } | null>(null)
+  const [message,   setMessage]   = useState<string | null>(null)
+
+  async function loadUnlabeled(): Promise<void> {
+    try {
+      const cards = await new SupabaseCardRepository().listAllForUser(userId)
+      setUnlabeled(cards.filter(c => !c.pos).map(c => ({
+        id: c.id, front: c.front, back: c.back,
+        sourceLanguage: c.sourceLanguage, targetLanguage: c.targetLanguage,
+      })))
+    } catch {
+      setUnlabeled([])
+    }
+  }
+
+  useEffect(() => { void loadUnlabeled() }, [userId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function run() {
+    if (!unlabeled || unlabeled.length === 0 || running) return
+    setRunning(true)
+    setMessage(null)
+    setProgress({ done: 0, total: unlabeled.length })
+    try {
+      const result = await labelCards(unlabeled, (done, total) => setProgress({ done, total }))
+      setMessage(result.failedCount === 0
+        ? `Labeled ${result.labeledCount} card${result.labeledCount !== 1 ? 's' : ''}.`
+        : `Labeled ${result.labeledCount}; ${result.failedCount} couldn't be labeled — run again to retry.`)
+      await loadUnlabeled()
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Labeling failed. Please try again.')
+    } finally {
+      setRunning(false)
+      setProgress(null)
+    }
+  }
+
+  const count = unlabeled?.length ?? 0
+  return (
+    <div className="panel space-y-3">
+      <div>
+        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Vocabulary labels</h2>
+        <p className="text-xs text-ink-faint mt-1">
+          Tags every card with its word class (noun, verb, …) and dictionary form — the groundwork for
+          practice exercises that build sentences from your vocabulary. Safe to re-run any time: only
+          unlabeled cards are sent.
+        </p>
+      </div>
+      {message && <p className="text-xs text-success">{message}</p>}
+      <button
+        onClick={() => void run()}
+        disabled={running || unlabeled === null || count === 0}
+        className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+      >
+        {running && progress
+          ? `Labeling… ${progress.done} / ${progress.total}`
+          : unlabeled === null
+            ? 'Loading…'
+            : count === 0
+              ? 'All cards labeled'
+              : `Label ${count} card${count !== 1 ? 's' : ''}`}
+      </button>
+    </div>
+  )
 }
 
 function LanguageSyncPanel({ userId }: { userId: string }) {
@@ -1161,6 +1237,9 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
           <LanguageSyncPanel userId={userId} />
         </div>
       )}
+
+      {/* Vocabulary labels (practice-mode groundwork) — online only */}
+      {!offline && userId && <VocabularyLabelsPanel userId={userId} />}
 
       {/* Global redistribute — online only */}
       {!offline && userId && (

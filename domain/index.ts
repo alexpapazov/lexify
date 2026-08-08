@@ -532,6 +532,16 @@ export type Register = 'neutral' | 'informal' | 'formal' | 'regional' | 'vulgar'
 /** Where a card's audio comes from. 'browser' = on-device Web Speech (robotic). */
 export type AudioSource = 'elevenlabs' | 'forvo' | 'browser' | 'standard'
 
+/**
+ * Word class of a card's front, for practice-mode text generation (migration 110).
+ * 'phrase' is the catch-all for multi-word fronts that aren't a single classifiable unit
+ * (whole sentences, idioms); easily-sorted compounds ("se précipiter", "el pan") get the
+ * head word's class instead. 'other' covers particles and anything genuinely unclassifiable.
+ */
+export type PartOfSpeech =
+  | 'noun' | 'verb' | 'adjective' | 'adverb' | 'pronoun' | 'preposition'
+  | 'conjunction' | 'determiner' | 'interjection' | 'numeral' | 'phrase' | 'other'
+
 export interface Card {
   id:             CardId
   /** Cards are owned by a user (within a target/native language direction), not by a deck. */
@@ -575,6 +585,11 @@ export interface Card {
   audioSources?:   Partial<Record<AudioSource, string>> | null
   /** IPA transcription for card.front (source language). Null until generated. */
   ipa?:            string | null
+  // ── Vocabulary labels (migration 110, practice-mode groundwork) ───────────
+  /** Word class of card.front. Null until the labeling pass has run on this card. */
+  pos?:            PartOfSpeech | null
+  /** Dictionary citation form of card.front (no leading article, lowercase unless proper noun). */
+  lemma?:          string | null
 }
 
 // ─── Synonym groups ───────────────────────────────────────────────────────────

@@ -253,6 +253,18 @@ Side effect worth knowing: `INPUT_WORD_CAP` is now **5000**, and *all* AI card g
 `lib/generateCards.ts`, which chunks. Calling `/api/cards/generate` directly with a big input
 truncates at 150 cards with no error.
 
+### 3.10b Vocabulary labels / Practice Mode groundwork (new 2026-08-07)
+
+Every card can carry `pos` (noun/verb/…/`phrase`/`other`) + `lemma` for its front — the foundation
+for the planned Practice Mode (exercise generation from the learner's own vocabulary). Migration
+**110** (`cards.pos`, `cards.lemma`, `set_card_labels` RPC — **apply BEFORE deploying: the card
+SELECT lists name the new columns, so an unapplied migration breaks every card query**). Labeling
+runs from Settings → "Vocabulary labels": Haiku-backed batch route (`app/api/cards/label`),
+client orchestration in `lib/labelCards.ts` (per-pair batches, persists incrementally), idempotent
+over unlabeled cards. The full practice-mode design (validator/repair loop, graduated-% slider,
+flagged fallback words, deferred embeddings) is recorded in `features/Practice Mode.md` — read it
+before building generation.
+
 ### 3.11 Batch deck import (new 2026-07-30)
 
 Create has a **"Single deck / Batch of decks"** toggle. Batch mode reads a `.docx` **locally — no AI,
