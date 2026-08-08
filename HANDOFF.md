@@ -218,6 +218,12 @@ and a deterministic (non-AI) **de-dupe** action. Also exposed as a standalone MC
 both — so it isn't swayed by the side you don't care about. A blinded agent **may not edit that side**
 (it can't know the current text), and `split` needs backs. The review UI always shows the whole card.
 
+**Label vocabulary (2026-08-08):** a third "common task" chip that tags every unlabeled card in the
+selected scope with part of speech + lemma (shares `lib/labelCards.ts` with the Settings and
+Practice entry points). Like de-dupe it needs a scope; UNLIKE every other agent action it **bypasses
+the change-set review queue entirely** — labels are derived metadata, not content, so per-item review
+would just teach "accept all" on thousands of rows. Idempotent: only `pos IS NULL` cards are sent.
+
 **De-dupe (2026-07-31):** one proposal per duplicate GROUP, in two modes (*same word* / *exact
 copies*). Every copy is rendered in full — keeper in normal ink, doomed ones red — and clicking a card
 makes it the keeper. The default keeper is **the copy with the most review progress**, so approving

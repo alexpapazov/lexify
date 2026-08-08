@@ -73,8 +73,21 @@ Every card gets `pos` + `lemma` for its FRONT:
 | Client | `lib/labelCards.ts` — groups by language pair (one prompt names one pair), chunks of 60, 4 in flight, **persists each batch as it lands** so an interrupted backfill keeps its progress |
 | UI | Settings → "Vocabulary labels" panel — shows the unlabeled count, one idempotent button (only `pos === null` cards are sent), progress in cards, failed count surfaced with "run again to retry" |
 
-New cards are NOT auto-labeled at creation (too many intake paths to hook); the Settings button is
-the top-up, and practice mode should itself top up unlabeled cards when it starts.
+New cards are NOT auto-labeled at creation (too many intake paths to hook). Three places top up:
+
+| Where | Scope | Use when |
+|---|---|---|
+| Settings → Vocabulary labels | Whole library | Blanket catch-up |
+| Practice page prompt | The current language pair | You're about to practise |
+| **Agents → 🏷 Label vocabulary** (2026-08-08) | The scope tree (pair / folder / decks) | Big backfills you want to do in controlled chunks |
+
+**The agent action is deliberately NOT a change-set flow.** The review queue exists because editing
+a card's front or back destroys content the user wrote, so a human should see each proposal. A label
+is derived metadata — a wrong `pos` costs one odd practice sentence and is fixed by re-running.
+Queueing thousands of label proposals would only train the habit of hitting "accept all" unread,
+which is worse than no review at all. So it applies directly, like the deterministic de-dupe scan:
+scoped, immediate, reportable. All three entry points share `lib/labelCards.ts`, are idempotent
+(only `pos IS NULL` cards are sent), and persist batch by batch.
 
 ### ⚠️ Deployment order
 

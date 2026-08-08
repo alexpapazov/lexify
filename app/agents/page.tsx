@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { SupabaseCardRepository } from '@/lib/data/cards'
+import { labelCards } from '@/lib/labelCards'
 import { gatherScopedCards, analyzeBatch, applyProposal, undoApplied, chunk, findDuplicates } from '@/lib/agents/cardEditor'
 import type { ScopedCard, EditProposal, AgentSides, DedupeMode, AppliedUndo } from '@/lib/agents/cardEditor'
 import type { Deck, Folder, CardState, Grant } from '@/domain'
@@ -78,6 +80,10 @@ export default function AgentsPage() {
   /** Which copy of a duplicate group survives. Keyed by proposal id so queue shuffling can't misapply it. */
   const [keepChoice, setKeepChoice] = useState<Record<string, string>>({})
   const [confirmAcceptAll, setConfirmAcceptAll] = useState(false)
+  /** Vocabulary labeling runs outside the review queue — see `runLabeling`. */
+  const [labelBusy, setLabelBusy] = useState(false)
+  const [labelProgress, setLabelProgress] = useState<{ done: number; total: number } | null>(null)
+  const [labelMsg, setLabelMsg] = useState<string | null>(null)
 
   const batchesRef = useRef<ScopedCard[][]>([])
   const nextBatchRef = useRef(0)
@@ -235,6 +241,55 @@ export default function AgentsPage() {
       else { setQueue(dups); setPhase('review') }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e)); setPhase('setup')
+    }
+  }
+
+  /**
+   * Vocabulary labeling over the selected scope — part of speech + dictionary lemma for every
+   * unlabeled card (see `features/Practice Mode.md`).
+   *
+   * Deliberately NOT a change-set flow. The review queue exists because an edit to a card's front or
+   * back destroys content you wrote, so a human should see each one. A label is derived metadata:
+   * getting one wrong costs a slightly odd practice sentence and is fixed by re-running. Queueing
+   * thousands of label proposals would only train the habit of hitting "accept all" unread, which is
+   * worse than no review at all. So this runs like de-dupe's scan: scoped, immediate, reportable.
+   *
+   * Idempotent — only cards with no label are sent, so re-running is always safe and never re-pays
+   * for work already done. Labels persist batch by batch, so navigating away keeps what landed.
+   */
+  async function runLabeling() {
+    if (!userId || labelBusy) return
+    const deckIds = scopedDeckIds()
+    if (deckIds.length === 0) { setError('Pick a language, folder or deck first.'); return }
+    setLabelBusy(true); setError(null); setLabelMsg(null); setLabelProgress(null)
+    try {
+      const grant: Grant = { operations: ['edit'], languages: [], folderIds: [], deckIds, dryRunOnly: false }
+      const scoped = await gatherScopedCards(userId, grant)
+      const inScope = new Set(scoped.map(c => c.cardId))
+
+      // ScopedCard carries neither `pos` nor the target language, so cross-reference the real cards
+      // to find what still needs labeling.
+      const all = await new SupabaseCardRepository().listAllForUser(userId)
+      const unlabeled = all
+        .filter(c => inScope.has(c.id) && !c.pos)
+        .map(c => ({
+          id: c.id, front: c.front, back: c.back,
+          sourceLanguage: c.sourceLanguage, targetLanguage: c.targetLanguage,
+        }))
+
+      if (unlabeled.length === 0) {
+        setLabelMsg('Every card in this scope is already labeled.')
+        return
+      }
+      setLabelProgress({ done: 0, total: unlabeled.length })
+      const result = await labelCards(unlabeled, (done, total) => setLabelProgress({ done, total }))
+      setLabelMsg(result.failedCount === 0
+        ? `Labeled ${result.labeledCount} card${result.labeledCount !== 1 ? 's' : ''}.`
+        : `Labeled ${result.labeledCount}; ${result.failedCount} couldn’t be labeled — run again to retry.`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLabelBusy(false); setLabelProgress(null)
     }
   }
 
@@ -403,11 +458,21 @@ export default function AgentsPage() {
                 className="text-xs px-3 py-1.5 rounded-full border border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
                 Add noun gender
               </button>
+              <button type="button" onClick={() => void runLabeling()} disabled={!userId || labelBusy || busy || selected.size === 0}
+                title="Tag each card with its part of speech and dictionary form, so Practice can build sentences from it"
+                className="text-xs px-3 py-1.5 rounded-full border border-accent/30 text-ink hover:bg-accent/10 disabled:opacity-40 transition-colors">
+                {labelBusy && labelProgress
+                  ? `🏷 Labeling… ${labelProgress.done} / ${labelProgress.total}`
+                  : labelBusy ? '🏷 Labeling…' : '🏷 Label vocabulary'}
+              </button>
             </div>
+            {labelMsg && <p className="text-[11px] text-success">{labelMsg}</p>}
             <p className="text-[10px] text-ink-faint">
               De-dupe runs instantly, with no AI, on the scope you select below — pick a language, folder
               or deck first. Each duplicate group is shown in full so you can choose which copy survives;
-              by default it keeps the one with the most review progress. The other buttons fill the box
+              by default it keeps the one with the most review progress. Label vocabulary applies
+              directly, with no review step — labels are derived metadata, not content, and only
+              unlabeled cards are sent, so it&apos;s safe to re-run. The other buttons fill the box
               above; pick a scope, then Start scanning.
             </p>
           </div>
