@@ -685,7 +685,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       const key = `${d.sourceLanguage}|${d.targetLanguage}`
       if (!seen.has(key)) {
         seen.add(key)
-        result.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, flag: null, instructions: null, createdAt: '', goals: null, learningMode: 'ladder' })
+        result.push({ id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage, position: Number.MAX_SAFE_INTEGER, flag: null, instructions: null, createdAt: '', goals: null, learningMode: 'ladder', practiceGraduatedPct: null })
       }
     }
     if (pairOrder) {

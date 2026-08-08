@@ -14,6 +14,7 @@ import { setOfflineMode } from '@/lib/offline/mode'
 
 const NAV_LINKS = [
   { href: '/study',     label: 'Study'    },
+  { href: '/practice',  label: 'Practice' },
   { href: '/library',   label: 'Library'  },
   { href: '/browse',    label: 'Browse'   },
   { href: '/create',    label: 'Create'   },
@@ -66,7 +67,7 @@ export function Navbar() {
   const offline = useOfflineMode()
   // Offline: hide destinations that need a connection (AI agent, community browse, full analytics).
   // Upload stays — it offers a manual, no-AI entry mode offline. Study/Library/Settings remain.
-  const OFFLINE_HIDDEN = new Set(['/agents', '/browse', '/progress'])
+  const OFFLINE_HIDDEN = new Set(['/agents', '/browse', '/progress', '/practice'])
   const navLinks = offline ? NAV_LINKS.filter(l => !OFFLINE_HIDDEN.has(l.href)) : NAV_LINKS
 
   return (

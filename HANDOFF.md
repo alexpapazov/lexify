@@ -253,6 +253,20 @@ Side effect worth knowing: `INPUT_WORD_CAP` is now **5000**, and *all* AI card g
 `lib/generateCards.ts`, which chunks. Calling `/api/cards/generate` directly with a big input
 truncates at 150 cards with no error.
 
+### 3.10c Practice Mode (new 2026-08-07, v1 playable)
+
+Generate fill-in-the-blank sentences from your own vocabulary. `/practice` → pick target words by
+hand, set the "% from graduated vocabulary" slider (per pair, **migration 111 — apply before
+deploying**), generate. **Practice writes nothing** — no `card_states`, no review events, no due
+dates; it is exposure, not assessment.
+
+The load-bearing idea is **the model proposes, code decides**: `/api/practice/generate` returns
+sentences with per-word lemma annotations, and `engine/practice.ts` (pure, 29 tests) scores them
+against the real library — so the slider is a *score*, not a constraint the model has to nail.
+Unknown words get one `/api/practice/repair` attempt; survivors stay in the sentence rendered red
+with their translation. Narrow libraries are detected locally before any API call.
+Full design + phase list in `features/Practice Mode.md`; Phase 4 (sentence-bank caching) is next.
+
 ### 3.10b Vocabulary labels / Practice Mode groundwork (new 2026-08-07)
 
 Every card can carry `pos` (noun/verb/…/`phrase`/`other`) + `lemma` for its front — the foundation

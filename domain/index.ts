@@ -491,6 +491,12 @@ export interface LanguagePair {
   goals:          Record<string, number | null> | null
   /** Whether this pair learns via the linear ladder or a branched pathway. Default 'ladder'. */
   learningMode:   LearningMode
+  /**
+   * Practice Mode: minimum share (0–100) of a generated sentence's content words that should come
+   * from this pair's GRADUATED vocabulary. Null = never set; the UI supplies the default.
+   * A scoring target, not a guarantee — see `engine/practice.ts`.
+   */
+  practiceGraduatedPct: number | null
 }
 
 export type LearningMode = 'ladder' | 'pathway'

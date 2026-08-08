@@ -1,9 +1,11 @@
 # Practice Mode
 
-**Status (2026-08-07): Phases 0–2 DONE** — migration 110 applied and labels backfilled;
-`engine/practice.ts` (scoring); generation + repair routes and their orchestration. **Never yet run
-against the real API** — no practice UI exists, so Phase 3 is both the first playable version and
-the first time real French comes back. Expect prompt tuning then.
+**Status (2026-08-07): Phases 0–3 DONE — v1 is playable.** Migration 110 applied and labels
+backfilled; `engine/practice.ts` (scoring); generate + repair routes and orchestration; `/practice`
+page with the cloze player. **Migration `111_practice_slider.sql` is PENDING — apply it before
+deploying.** The generate/repair round trip has still never run against the real API (everything
+is verified by build, unit tests with mocked fetch, and a 200 on the route), so expect prompt
+tuning on the first real session. Phase 4 (sentence bank) is next.
 
 A planned mode where the learner picks from exercise types (cloze, translate-the-sentence, use the
 word in a sentence, …) generated from their own vocabulary. This doc records the agreed design so a
@@ -152,13 +154,36 @@ in CI).
   **Subtlety worth keeping:** only a sentence's OWN target is exempt from scoring; the session's
   other target words are ordinary vocabulary when they turn up in someone else's sentence.
 
-**Phase 3 — V1 session UI (first playable).**
-- Migration 111: `language_pairs.practice_graduated_pct` (the slider).
-- `/practice` page (routes.ts helper + nav entry): word picker (reuse `cardMatchesSearch`),
-  slider, exercise count; coverage warning from Phase 1 shown before generating.
-- Cloze player: `gradeTyping` grading with the pair's grading settings, target word highlighted,
-  flagged words red with parenthesized translations. Online only (`OfflineUnavailable`).
-  NO card_states writes of any kind.
+**Phase 3 — V1 session UI (first playable). ✅ BUILT 2026-08-07** — 11 tests in
+`lib/__tests__/practiceRender.test.ts`. **Migration `111_practice_slider.sql` must be applied
+before this deploys** (`language_pairs` SELECTs name the new column).
+
+- **Migration 111** — `language_pairs.practice_graduated_pct`, NULL = never set so the UI owns the
+  default (70) rather than the schema. Repo: `updatePracticeGraduatedPct`, clamped 0–100.
+- **`app/practice/page.tsx`** — setup then play. All the deterministic work happens **before** any
+  API call: the library index and coverage check run locally, so "you have 400 nouns and two verbs"
+  is free and a doomed generation is never paid for. Also surfaces unlabeled cards with an inline
+  "Label now" button (calls `labelCards`), since an unlabeled card can't appear in a sentence.
+  Target words are hand-picked from a searchable list; function-word classes (determiner, pronoun,
+  conjunction, preposition) are excluded from the picker — "guess the missing *the*" is not an
+  exercise. Slider persists per pair on session start, fire-and-forget so a write failure can't
+  block practice.
+- **`components/practice/ClozePlayer.tsx`** — blank, type, check, continue. Two deliberate
+  departures from a study session: it **writes nothing** (no `card_states`, no review events, no
+  due dates — practice is exposure, not assessment, and mixing it into FSRS would double-count),
+  and grading is **flexible with capitalization ignored regardless of the pair's strictness**,
+  because the sentence around the answer is machine-generated and failing someone on an accent in a
+  word they weren't drilling is noise. Translation is behind a Hint button so the default is recall,
+  not transcription.
+- **`lib/practiceRender.ts`** — pure: `splitForBlank` (sentence around the cloze gap) and
+  `segmentFlagged` (word-level, case-insensitive, punctuation-preserving runs so unknown words
+  render red with their gloss without mangling the sentence).
+- Nav entry added and hidden offline; the page itself renders `OfflineUnavailable`.
+
+**Verified so far:** build, 46 suites / 652 tests, and `GET /practice` → 200 with no console
+errors. **Not yet verified: anything past the auth wall** — the real generate/repair round trip has
+still never run. First real session is where prompt tuning happens (annotation quality, lemma
+agreement with the labels).
 
 **Phase 4 — Sentence bank (cost + latency).**
 - Migration 112: `practice_sentences` (user, pair, target lemma, annotated-sentence JSONB,

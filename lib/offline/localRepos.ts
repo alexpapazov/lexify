@@ -79,6 +79,7 @@ export async function localLanguagePairs(userId: string): Promise<LanguagePair[]
     seen.set(key, {
       id: key, ownerId: userId, sourceLanguage: d.sourceLanguage, targetLanguage: d.targetLanguage,
       position: pos++, flag: null, instructions: null, createdAt: '', goals: null, learningMode: 'ladder',
+      practiceGraduatedPct: null,
     })
   }
   return [...seen.values()]

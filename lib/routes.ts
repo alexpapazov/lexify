@@ -40,6 +40,8 @@ export const routes = {
   ladderDeck:    (deckId: string, extra: Query = {}) => withQuery('/study/ladder/deck',   { deck: deckId,   ...extra }),
   /** Learning ladder scoped to a folder. */
   ladderFolder:  (folderId: string, extra: Query = {}) => withQuery('/study/ladder/folder', { folder: folderId, ...extra }),
+  /** Practice Mode (exercise generation from your own vocabulary). */
+  practice:      (extra: Query = {}) => withQuery('/practice', { ...extra }),
   /** A folder's contents in the library. */
   library:       (folderId: string, extra: Query = {}) => withQuery('/library/folder',   { folder: folderId, ...extra }),
   /** An agent change-set review. */
