@@ -1,12 +1,12 @@
-# Lexify — engineering handoff (2026-07-31)
+# Lexify — engineering handoff (2026-08-08)
 
 The **broad** orientation document: what the app is, how each feature actually works, what's dead, and
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~53,000 lines across 232 TS/TSX files, 689 commits, 589 passing tests (42 suites).
+- **Scale**: ~58,700 lines across 260 TS/TSX files, 706 commits, 731 passing tests (49 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`109`, applied BY HAND — **all
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`113`, applied BY HAND — **all
   applied, nothing pending.**
 
 ---
@@ -21,11 +21,11 @@ implementation notes + error log); this file is the map you read first.
   commit message** — zsh history expansion fails the commit and leaves files staged-but-uncommitted.
   Quote any `[bracket]` paths.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
-  `001`–`109` are all applied and all live in `supabase/migrations/archive/`. **The top level is
+  `001`–`113` are all applied and all live in `supabase/migrations/archive/`. **The top level is
   empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
-  run it, and move it into `archive/` once it's live. Next number = **110**.
+  run it, and move it into `archive/` once it's live. Next number = **114**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **42 suites / 589 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **49 suites / 731 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -261,19 +261,24 @@ truncates at 150 cards with no error.
 
 ### 3.10d Starred cards (new 2026-08-08)
 
-A manual "come back to this" flag set from a ★ in the **top-left** of every study card (mirroring
-the ℹ on the right) — wired through all five session modes plus the ladder. **Migration 112 —
-apply before deploying.** Filterable as a stat box on the deck page, the library pair view and the
-folder page, and available as a Practice target source. Deliberately NOT derived from review
-history: difficulty/lapses already answer "what's hard", a star answers "what I care about".
+A manual "come back to this" flag (migration 112, `cards.starred`) set from a ★ in the **top-left**
+of every study card, mirroring the ℹ on the right — wired through all five session modes plus the
+ladder. Deliberately NOT derived from review history: difficulty/lapses already answer "what's
+hard", a star answers "what I care about".
+
+Filtering is a small **★ toggle**, NOT a stat box — the counter row holds graduation states that
+partition the library, and a card can be starred *and* graduated, so a sixth box implied an
+exclusivity that doesn't exist. Available on the deck page, the library pair view, the folder page,
+and as a Practice target source; the deck page's selection toolbar also does bulk ★ Star/Unstar.
 Optimistic write with silent revert; no offline path. See `features/Starred Cards.md`.
 
-### 3.10c Practice Mode (new 2026-08-07, v1 playable)
+### 3.10c Practice Mode (new 2026-08-07/08, phases 0–5 shipped)
 
 Generate fill-in-the-blank sentences from your own vocabulary. `/practice` → choose target words,
-set the "% from graduated vocabulary" slider (per pair, **migration 111 — apply before deploying**),
-generate. **Practice writes nothing** — no `card_states`, no review events, no due dates; it is
-exposure, not assessment.
+pick how many sentences, generate. **Practice writes nothing** — no `card_states`, no review events,
+no due dates; it is exposure, not assessment. Answers can be overridden ("actually, mark correct"),
+**session-local only**: a practice answer is an inflected form inside one generated sentence, so
+filing it in `typed_answer_overrides` would teach a REAL review to accept a wrong answer.
 
 Target selection is **composable** sources (`engine/practiceSelect.ts`): hand-picked words, decks
 and folders (a navigable mini-library via the shared `lib/scopeTree.ts`), starred cards,
@@ -282,28 +287,51 @@ pasted list. They union into one deduped set, all passing the single `targetReje
 every source reports what it dropped (unlabeled / undrillable / unmatched / capped) rather than
 shrinking silently.
 
-The load-bearing idea is **the model proposes, code decides**: `/api/practice/generate` returns
-sentences with per-word lemma annotations, and `engine/practice.ts` (pure, 29 tests) scores them
-against the real library — so the slider is a *score*, not a constraint the model has to nail.
-Unknown words get one `/api/practice/repair` attempt; survivors stay in the sentence rendered red
-with their translation. Narrow libraries are detected locally before any API call.
-Generated sentences are cached in `practice_sentences` (**migration 113**) keyed by target lemma
-and **re-scored against the current library on every read** — the verdict is never stored,
-because usability depends on a library that grows and a slider the user moves. Session size is
-either N total or N per word. Full design + phase list in `features/Practice Mode.md`; Phase 6
-(more exercise modes) needs a grading conversation first.
+**⚠️ The vocabulary restriction is OPT-IN, and that is the single most important thing to know
+here.** Forcing the generator to build from the learner's word list is exactly what produced
+unusable sentences ("La batida exitosa buscaba la llave desde la mañana" — grammatical, meaningless).
+Unchecked (the default), Haiku writes natural sentences and the learner just fills the blank: no
+scoring, no repair calls, nothing flagged. Checked, the known-word list is passed as a *preference
+that never outranks sounding real*, and the graduated-% slider appears (per pair, migration 111).
+`restrictVocabulary` gates the repair loop, the flagged words, and the bank's re-scoring — do not
+re-enable any of them unconditionally.
 
-### 3.10b Vocabulary labels / Practice Mode groundwork (new 2026-08-07)
+When the restriction IS on, the design is **the model proposes, code decides**:
+`/api/practice/generate` returns per-word lemma annotations, `engine/practice.ts` (pure) scores them
+against the real library, unknown words get one `/api/practice/repair` attempt, and survivors stay
+in the sentence rendered red with their translation.
+
+Two more gates worth knowing:
+- **Quality**: every freshly generated sentence is judged by `/api/practice/verify` on
+  **`claude-sonnet-5` — deliberately stronger than the Haiku that wrote it**, since a model can't
+  catch its own errors and judging is the cheap half. Rejects are never shown or banked. **Fails
+  open**: no judge means everything passes.
+- **Cache**: sentences are banked in `practice_sentences` (migration 113) by target lemma and
+  **re-scored on every read** — the verdict is never stored, because usability depends on a library
+  that grows and a slider the user moves. Bank sentences are not re-judged; they passed when written.
+
+Sentence modes: a full target-language sentence, or **native cloze** (the sentence is in English and
+only the blank is the target language — usable on day one). Session size is N total or N per word.
+Full design + phase list in `features/Practice Mode.md`; Phase 6 (more exercise modes) needs a
+grading conversation first.
+
+### 3.10b Vocabulary labels (new 2026-08-07, migration 110)
 
 Every card can carry `pos` (noun/verb/…/`phrase`/`other`) + `lemma` for its front — the foundation
-for the planned Practice Mode (exercise generation from the learner's own vocabulary). Migration
-**110** (`cards.pos`, `cards.lemma`, `set_card_labels` RPC — **apply BEFORE deploying: the card
-SELECT lists name the new columns, so an unapplied migration breaks every card query**). Labeling
-runs from Settings → "Vocabulary labels": Haiku-backed batch route (`app/api/cards/label`),
-client orchestration in `lib/labelCards.ts` (per-pair batches, persists incrementally), idempotent
-over unlabeled cards. The full practice-mode design (validator/repair loop, graduated-% slider,
-flagged fallback words, deferred embeddings) is recorded in `features/Practice Mode.md` — read it
-before building generation.
+Practice Mode is built on (`cards.pos`, `cards.lemma`, `set_card_labels` RPC). Labeling is a
+Haiku-backed batch route (`app/api/cards/label`) with client orchestration in `lib/labelCards.ts`
+(per-pair batches, persists incrementally), **idempotent** — only `pos IS NULL` cards are sent, so
+re-running is always safe.
+
+Three entry points, all sharing that one pipeline: **Settings → Vocabulary labels** (whole library),
+the **Practice page prompt** (current pair), and **Agents → 🏷 Label vocabulary** (any scope from the
+tree). The agent action deliberately **bypasses the change-set review queue** — labels are derived
+metadata, and queueing thousands of them would only train "accept all" unread.
+
+⚠️ **An unlabeled card is invisible to Practice**, and a graduated-but-unlabeled card makes a full
+library look empty. `LibraryIndex.graduatedUnlabeledCount` exists so surfaces can say "label these"
+instead of "you know nothing" — see the error log in `features/Practice Mode.md`. New cards are NOT
+auto-labeled at creation; the three buttons are the top-up.
 
 ### 3.11 Batch deck import (new 2026-07-30)
 
@@ -431,7 +459,40 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 
 ---
 
-## 7. Open threads
+## 7. Where the 2026-08-08 session left off
+
+**Everything is committed-ready, migrations 110–113 are applied, and the tree is clean.** Practice
+Mode phases 0–5 shipped; nothing is half-written.
+
+**Pick up here — in this order:**
+
+1. **Phase 6 (agreed to start next session): more exercise modes + their grading.** Translate
+   target→native, native→target, and free production ("use this word in a sentence"). **STOP AND
+   DISCUSS BEFORE BUILDING** — the user explicitly deferred the grading design, and it is the real
+   decision: cloze reuses `gradeTyping` and is fully cacheable, whereas these modes need AI grading
+   with a **per-answer** cost, which is a different economic shape from everything built so far.
+   The design notes are in `features/Practice Mode.md` → Phase 6.
+
+2. **Watch the quality-gate rejection rate, especially for Bulgarian.** The gate logs every
+   rejection to the console (`[practice] rejected N generated sentence(s):` with reasons). The user
+   reported Haiku writing poor Bulgarian; the gate now filters those out, but *filtering* is a
+   patch. **If a large fraction is being rejected, the answer is generating on a stronger model for
+   that language, not filtering harder** — that decision is open and needs the real numbers first.
+
+3. **The whole practice pipeline is thinly exercised against the real API.** It has been run enough
+   to surface (and fix) the naturalness problem, but coverage is: build, 731 unit tests with mocked
+   fetch, and a handful of live sessions. Bank reuse across sessions, per-word plans, and native
+   cloze have had little or no real-account use.
+
+**Two things a future session must not "tidy":**
+- `restrictVocabulary` defaulting to **off**. It looks like a missing default; it is the fix for the
+  central quality problem (§3.10c).
+- The bank never storing a pass/fail verdict. Re-scoring on read looks redundant; it is what keeps
+  the cache correct as the library grows and the slider moves.
+
+---
+
+## 8. Open threads
 
 Roughly in priority order. Nothing here is half-written — the tree is clean and every migration is
 applied, so any of these is a clean start.
@@ -476,15 +537,21 @@ applied, so any of these is a clean start.
 
 ---
 
-## 8. Feature documentation
+## 9. Feature documentation
 
 `features/` holds deep per-feature docs — **read the relevant one in full before changing that
 feature, and update it afterward.** Each carries its own error log.
 
 `Learning Pipeline.md` · `Due Now.md` · `Typed Grading.md` · `Confusion Handling.md` ·
 `Language Syncing.md` · `Card Data.md` · `Agent Platform.md` · `Vocabulary Onboarding.md` ·
-`Batch Deck Import.md` · `Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
+`Batch Deck Import.md` · **`Practice Mode.md`** · **`Starred Cards.md`** ·
+`Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
 `Configurable Pipeline (proposal).md` · `Card Connection Agent (proposal).md`
+
+**`Practice Mode.md` is the one to read before touching anything under `/practice`,
+`engine/practice*.ts` or `app/api/practice/*`** — it carries the full phase list, the decisions the
+user made explicitly (manual target selection, no scheduling feedback, cloze-only v1), and an error
+log with two bugs that are easy to reintroduce.
 
 ---
 

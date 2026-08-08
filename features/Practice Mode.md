@@ -1,17 +1,15 @@
 # Practice Mode
 
-**Status (2026-08-08): Phases 0–5 DONE.** Migration 110 applied and labels backfilling;
-`engine/practice.ts` (scoring) and `engine/practiceSelect.ts` (composable target sources);
-generate + repair routes and orchestration; `/practice` page with the cloze player.
+**Status (2026-08-08): Phases 0–5 DONE. Phase 6 is next and needs a grading conversation first.**
 
-> ⚠️ **Migrations `111_practice_slider.sql`, `112_card_starred.sql` and
-> `113_practice_sentences.sql` are all PENDING — apply them before deploying.** Card and
-> language-pair SELECTs name the new columns, so pushing the code first breaks those queries
-> app-wide; practice itself needs 113's table.
+Shipped: vocabulary labels; `engine/practice.ts` (scoring), `engine/practiceSelect.ts` (composable
+target sources) and `engine/practiceBank.ts` (session plan + cache reuse); the generate / repair /
+verify routes and their orchestration; `/practice` with the cloze player, overrides, and the
+sentence bank. **Migrations 110–113 are all applied and archived** — next number is 114.
 
-The generate/repair round trip has still never run against the real API (everything is verified by
-build, unit tests with mocked fetch, and a 200 on the route), so expect prompt tuning on the first
-real session. Phase 6 (more exercise modes) needs a grading conversation first.
+Run against the real API enough to surface and fix the naturalness problem (see §"Naturalness, the
+quality gate, and native cloze"). Still thinly exercised: bank reuse across sessions, per-word
+plans, and native cloze.
 
 A planned mode where the learner picks from exercise types (cloze, translate-the-sentence, use the
 word in a sentence, …) generated from their own vocabulary. This doc records the agreed design so a
@@ -27,6 +25,9 @@ future session can build generation without re-deriving it, plus what is already
 - **The "graduated %" slider is a validator SCORE, not a model constraint.** The learner sets a
   minimum share of words that must come from their graduated library; the validator computes the
   actual share and generation retries/repairs until the threshold is met.
+  > ⚠️ **Superseded 2026-08-08:** this whole mechanism is now OPT-IN and off by default, because the
+  > constraint was what made sentences unnatural. See the "Naturalness" section below before
+  > touching it.
 - **Repair loop:** an offending word gets one replacement attempt (model picks a substitute from a
   POS-matched candidate list drawn from the library). If no substitute works after the retry budget,
   the word is KEPT but flagged — rendered in red with the native translation in parentheses after
@@ -43,8 +44,7 @@ future session can build generation without re-deriving it, plus what is already
 - **Phrases:** cards whose front is a whole sentence/free phrase get `pos = 'phrase'`. Generation may
   include them verbatim as optional material but never has to build around them; they don't count as
   single vocabulary words.
-- **Cached sentence bank** (later): per-word generated exercises stored and reused so most practice
-  sessions cost zero API calls — same pattern as `choices`/audio caching.
+- **Cached sentence bank** — built in Phase 5 (migration 113).
 - **Model: Haiku** (`claude-haiku-4-5-20251001`) for generation and labeling — the validator provides
   the reliability, so the cheapest tier suffices. Grading open production ("use the word in a
   sentence") is the one place a stronger model may be warranted; grading design is EXPLICITLY

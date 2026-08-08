@@ -1,7 +1,6 @@
 # Starred Cards
 
-**Status: built 2026-08-08. Migration `112_card_starred.sql` — PENDING, apply before deploying
-(card SELECTs name the new column).**
+**Status: built 2026-08-08. Migration `112_card_starred.sql` applied and archived.**
 
 A manual "come back to this one" flag, set from a star in the **top-left corner** of a study card
 (mirroring the ℹ button on the right). Filterable in the deck view, the library, and as a Practice
