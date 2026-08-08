@@ -287,7 +287,11 @@ sentences with per-word lemma annotations, and `engine/practice.ts` (pure, 29 te
 against the real library — so the slider is a *score*, not a constraint the model has to nail.
 Unknown words get one `/api/practice/repair` attempt; survivors stay in the sentence rendered red
 with their translation. Narrow libraries are detected locally before any API call.
-Full design + phase list in `features/Practice Mode.md`; Phase 4 (sentence-bank caching) is next.
+Generated sentences are cached in `practice_sentences` (**migration 113**) keyed by target lemma
+and **re-scored against the current library on every read** — the verdict is never stored,
+because usability depends on a library that grows and a slider the user moves. Session size is
+either N total or N per word. Full design + phase list in `features/Practice Mode.md`; Phase 6
+(more exercise modes) needs a grading conversation first.
 
 ### 3.10b Vocabulary labels / Practice Mode groundwork (new 2026-08-07)
 

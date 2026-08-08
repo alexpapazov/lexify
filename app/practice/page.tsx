@@ -26,7 +26,9 @@ import {
   resolveTargets, DEFAULT_CAP_PER_SOURCE, MIN_DIFFICULTY, MAX_DIFFICULTY, type TargetSource,
 } from '@/engine/practiceSelect'
 import { buildScopeTree, type TreeNode } from '@/lib/scopeTree'
-import { generatePracticeExercises, type PreparedExercise } from '@/lib/practiceGenerate'
+import { type PreparedExercise } from '@/lib/practiceGenerate'
+import { preparePracticeSession } from '@/lib/practiceBank'
+import { plannedTotal, type SentencePlan } from '@/engine/practiceBank'
 import { labelCards } from '@/lib/labelCards'
 import { normalizeFrontKey } from '@/lib/duplicates'
 import { getToday } from '@/lib/dates'
@@ -40,9 +42,9 @@ import type { Card, CardState, Deck, Folder, LanguagePair } from '@/domain'
 /** Used when a pair has never had its slider set. Reachable for a mid-sized library. */
 const DEFAULT_GRADUATED_PCT = 70
 
-/** Exercise-count choices. Kept small: every exercise is a generated sentence, and a long batch
- *  means a long wait before the first one appears. */
-const COUNT_CHOICES = [3, 5, 8]
+/** Defaults for the sentence plan. Small, because an uncached session generates every sentence. */
+const DEFAULT_TOTAL    = 5
+const DEFAULT_PER_WORD = 2
 
 /** Which picker is open. Every tab feeds the same target set — they compose, they don't replace. */
 type PickerTab = 'words' | 'library' | 'starred' | 'due' | 'hardest' | 'paste'
@@ -169,7 +171,9 @@ function PracticeInner() {
   const [rangeSeed,  setRangeSeed]  = useState(1)
 
   const [pct,       setPct]       = useState(DEFAULT_GRADUATED_PCT)
-  const [count,     setCount]     = useState(COUNT_CHOICES[1]!)
+  const [planMode,  setPlanMode]  = useState<'total' | 'perWord'>('total')
+  const [totalCount,setTotalCount]= useState(DEFAULT_TOTAL)
+  const [perWord,   setPerWord]   = useState(DEFAULT_PER_WORD)
 
   const [generating, setGenerating] = useState(false)
   const [labeling,   setLabeling]   = useState(false)
@@ -259,6 +263,10 @@ function PracticeInner() {
     return out
   }, [selected, deckSel, starredOn, dueDays, hardest, rangeOn, range, rangeLimit, rangeSeed, pasted])
 
+  const plan: SentencePlan = planMode === 'total'
+    ? { mode: 'total', count: totalCount }
+    : { mode: 'perWord', perWord }
+
   const selection = useMemo(() => resolveTargets(sources, selectionCtx), [sources, selectionCtx])
   const chosen: PracticeTarget[] = selection.targets
 
@@ -346,22 +354,27 @@ function PracticeInner() {
           .updatePracticeGraduatedPct(pair.sourceLanguage, pair.targetLanguage, pct)
           .catch(() => {})
       }
-      const run = await generatePracticeExercises({
+      const asked = plannedTotal(plan, chosen.length)
+      const run = await preparePracticeSession({
+        userId,
         targets: chosen,
         index,
         sourceLanguage: pair.sourceLanguage,
         targetLanguage: pair.targetLanguage,
-        count,
+        plan,
         minGraduatedPct: pct,
         // Varies which known words the generator sees, so a repeat run isn't the same sentences.
-        helperSeed: chosen.length + count,
+        helperSeed: chosen.length + asked,
       })
       if (run.exercises.length === 0) {
         setError('The generator didn’t return any usable sentences. Try again, or pick different words.')
         return
       }
+      const reusedNote = run.fromBank > 0 ? ` ${run.fromBank} reused from earlier sessions.` : ''
       if (run.missingCount > 0) {
-        setNotice(`Generated ${run.exercises.length} of ${count} — the rest didn’t come back usable.`)
+        setNotice(`Prepared ${run.exercises.length} of ${asked} — the rest didn’t come back usable.${reusedNote}`)
+      } else if (reusedNote) {
+        setNotice(reusedNote.trim())
       }
       setSession(run.exercises)
     } catch (err) {
@@ -733,16 +746,34 @@ function PracticeInner() {
 
         <div className="space-y-2">
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Sentences</label>
-          <div className="flex gap-2">
-            {COUNT_CHOICES.map(n => (
-              <button key={n} onClick={() => setCount(n)}
-                className={`px-4 py-1.5 rounded-lg text-sm border transition-colors ${
-                  count === n ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
-                }`}>
-                {n}
-              </button>
-            ))}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex gap-1.5">
+              {([['total', 'In total'], ['perWord', 'Per word']] as const).map(([mode, label]) => (
+                <button key={mode} onClick={() => setPlanMode(mode)}
+                  className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                    planMode === mode ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {planMode === 'total' ? (
+              <input type="number" min={1} max={60} className="input w-24" value={totalCount}
+                onChange={e => setTotalCount(Math.max(1, Math.min(60, parseInt(e.target.value) || 1)))} />
+            ) : (
+              <input type="number" min={1} max={10} className="input w-24" value={perWord}
+                onChange={e => setPerWord(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))} />
+            )}
           </div>
+          <p className="text-xs text-ink-faint">
+            {chosen.length === 0
+              ? 'Pick some words to see how many sentences that is.'
+              : planMode === 'total'
+                ? `${totalCount} sentence${totalCount !== 1 ? 's' : ''} spread across your ${chosen.length} word${chosen.length !== 1 ? 's' : ''}.`
+                : `${perWord} each for ${chosen.length} word${chosen.length !== 1 ? 's' : ''} — ${plannedTotal(plan, chosen.length)} sentences.`}
+            {' '}Sentences you&apos;ve seen before are reused from earlier sessions, so only the new
+            ones cost anything.
+          </p>
         </div>
       </div>
 

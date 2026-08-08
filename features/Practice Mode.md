@@ -1,16 +1,17 @@
 # Practice Mode
 
-**Status (2026-08-08): Phases 0–4 DONE.** Migration 110 applied and labels backfilling;
+**Status (2026-08-08): Phases 0–5 DONE.** Migration 110 applied and labels backfilling;
 `engine/practice.ts` (scoring) and `engine/practiceSelect.ts` (composable target sources);
 generate + repair routes and orchestration; `/practice` page with the cloze player.
 
-> ⚠️ **Migrations `111_practice_slider.sql` and `112_card_starred.sql` are both PENDING — apply
-> both before deploying.** Card and language-pair SELECTs name the new columns, so pushing the code
-> first breaks those queries app-wide.
+> ⚠️ **Migrations `111_practice_slider.sql`, `112_card_starred.sql` and
+> `113_practice_sentences.sql` are all PENDING — apply them before deploying.** Card and
+> language-pair SELECTs name the new columns, so pushing the code first breaks those queries
+> app-wide; practice itself needs 113's table.
 
 The generate/repair round trip has still never run against the real API (everything is verified by
 build, unit tests with mocked fetch, and a 200 on the route), so expect prompt tuning on the first
-real session. Phase 5 (sentence bank) is next.
+real session. Phase 6 (more exercise modes) needs a grading conversation first.
 
 A planned mode where the learner picks from exercise types (cloze, translate-the-sentence, use the
 word in a sentence, …) generated from their own vocabulary. This doc records the agreed design so a
@@ -247,15 +248,40 @@ them into one deduped list in source order, then match order within a source:
   that arrived from a bulk source pins the whole selection down to an explicit list minus that word
   — otherwise the source would just re-add it on the next render.
 
-**Phase 5 — Sentence bank (cost + latency). NEXT.**
-- Migration 112: `practice_sentences` (user, pair, target lemma, annotated-sentence JSONB,
-  created_at, use count). Read the bank first, generate only the gap; background top-up via the
-  existing prefetch idiom. Stored sentences are RE-SCORED against the current library at read time
-  (the library grows; annotations make re-scoring pure) — never store the pass/fail verdict.
-- Matters more after Phase 4: deck- and due-based selection means far larger sessions, so the
-  cache is what keeps a 30-word session from being 30 generation calls.
+**Phase 5 — Sentence bank + sentence plan. ✅ BUILT 2026-08-08** — migration
+`113_practice_sentences.sql` (**PENDING**), `engine/practiceBank.ts` with 22 tests,
+`lib/data/practiceSentences.ts`, `lib/practiceBank.ts`.
 
-**Phase 6 — More modes + grading design (STOP AND DISCUSS FIRST).**
+**The bank.** Every generated sentence is filed under (user, pair, **target lemma**) with its full
+annotations, and reused later — a second session over the same words is usually free. Keyed by lemma
+rather than card id, so it survives a card being deleted and re-imported.
+
+> **Never store the pass/fail verdict.** Whether a sentence is usable is not a property of the
+> sentence: it depends on the library (which grows) and on the "% graduated" slider (which the
+> learner changes). It is re-scored against the current library on every read — which is also why a
+> sentence that was unusable last month can come back once the words in it are learned.
+
+- A stored sentence that no longer scores clean is **skipped, not repaired** — spending an API call
+  to rescue a cached item costs the same as generating a fresh one.
+- Only sentences with nothing flagged are filed; a cached sentence carrying an unknown word would
+  fail re-scoring forever and just be dead weight.
+- Selection round-robins across the chosen words, least-used first (`use_count`), so a session
+  spreads out instead of replaying one word's bank.
+- Bank reads/writes are best-effort: a failed read means everything generates fresh, a failed write
+  costs a later cache hit. Neither can break the session in hand.
+
+**The sentence plan.** "Sentences" is now **N in total** or **N per word** (`SentencePlan`).
+Per-word scales with the selection, so `planGenerationBatches` splits the request into batches the
+route will accept: *total* mode sends all the words to each batch (the model spreads over them),
+*per-word* mode groups words so `group × perWord` fits the cap, because each word needs a
+guaranteed count and a shared batch can't promise that. In per-word mode the shortfall is computed
+**per word**, so a word whose bank already covers its quota costs nothing.
+
+Batches run concurrently. One failed batch costs only its own sentences; if *every* batch fails the
+error is rethrown, so a real problem (no API key) still reaches the user instead of an empty
+session — a regression the tests caught when batching was introduced.
+
+**Phase 6 — More modes + grading design (NEXT — STOP AND DISCUSS FIRST).**
 - Translate target→native, native→target, free production ("use the word"). Grading for these is
   explicitly undesigned — the user wants a conversation before it's built (AI-graded answers have
   a per-answer API cost, unlike the fully-cacheable v1).

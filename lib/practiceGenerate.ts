@@ -21,6 +21,8 @@ import {
   scoreSentence, sampleHelperWords, repairCandidates, vocabularyCoverage,
   type LibraryIndex, type SentenceScore, type ScoredToken, type PracticeTarget,
 } from '@/engine/practice'
+import { planGenerationBatches } from '@/engine/practiceBank'
+import { GENERATE_CAP } from '@/app/api/practice/generate/route'
 import type { PracticeExercise } from '@/lib/practiceSchema'
 
 /** Known words shown to the generator. A sample: long lists cost tokens and worsen compliance. */
@@ -31,6 +33,9 @@ const REPAIR_CANDIDATES = 12
 
 /** Repair calls in flight. Matches the other AI fan-outs in the app. */
 const REPAIR_CONCURRENCY = 4
+
+/** Generation calls in flight when one request needs several batches. */
+const GENERATE_CONCURRENCY = 3
 
 /** A generated exercise once it has been judged (and possibly repaired). */
 export interface PreparedExercise {
@@ -82,6 +87,32 @@ export interface GenerateOptions {
  * unknown words are still flagged, but a sentence isn't rejected for a score it could never reach.
  */
 export async function generatePracticeExercises(opts: GenerateOptions): Promise<PracticeRun> {
+  const { targets, count } = opts
+  if (targets.length === 0 || count <= 0) return { exercises: [], missingCount: 0 }
+
+  // The route takes a bounded number of sentences per call, so a big ask (a per-word plan over many
+  // words) becomes several calls. Batches run concurrently; a failed batch costs its own sentences,
+  // not the session.
+  const batches = planGenerationBatches(targets, { mode: 'total', count }, GENERATE_CAP)
+  const errors: unknown[] = []
+  const runs = await mapLimit(batches, GENERATE_CONCURRENCY, async batch => {
+    try {
+      return await generateOneBatch({ ...opts, targets: batch.targets, count: batch.count })
+    } catch (err) {
+      errors.push(err)      // captured here because mapLimit only reports a failure as `null`
+      return null
+    }
+  })
+
+  const exercises = runs.filter((r): r is PracticeRun => r !== null).flatMap(r => r.exercises)
+  // One bad batch among several just costs its own sentences. But if nothing came back at all, the
+  // caller needs the reason ("no-api-key") rather than a silent empty session.
+  if (exercises.length === 0 && errors.length > 0) throw errors[0]
+  return { exercises, missingCount: Math.max(0, count - exercises.length) }
+}
+
+/** One generation call plus its validation/repair pass. */
+async function generateOneBatch(opts: GenerateOptions): Promise<PracticeRun> {
   const { targets, index, sourceLanguage, targetLanguage, count, minGraduatedPct } = opts
   if (targets.length === 0 || count <= 0) return { exercises: [], missingCount: 0 }
 
