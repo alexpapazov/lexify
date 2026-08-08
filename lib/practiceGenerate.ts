@@ -1,0 +1,204 @@
+/**
+ * lib/practiceGenerate.ts — the generate → validate → repair → flag loop.
+ *
+ * This is where the two halves of Practice Mode meet: the AI routes propose sentences, and
+ * `engine/practice.ts` (pure, tested) decides whether each one is acceptable against the learner's
+ * actual library. Nothing here trusts the model's own claim about which words it used.
+ *
+ * Per exercise:
+ *   1. score it — graduated share, plus any word the learner has never met;
+ *   2. for each unknown word, ONE repair attempt with same-class known words to choose from;
+ *   3. re-score the rewrite, and keep it only if it's actually an improvement;
+ *   4. whatever is still unknown stays in the sentence, flagged with its translation.
+ *
+ * Step 4 is deliberate: a sentence with one red word plus its gloss is more useful than no sentence
+ * at all, and it keeps a narrow library from producing an empty session.
+ */
+
+import { apiUrl } from '@/lib/apiBase'
+import { mapLimit } from '@/lib/mapLimit'
+import {
+  scoreSentence, sampleHelperWords, repairCandidates, vocabularyCoverage,
+  type LibraryIndex, type SentenceScore, type ScoredToken,
+} from '@/engine/practice'
+import type { PracticeExercise } from '@/lib/practiceSchema'
+import type { Card } from '@/domain'
+
+/** Known words shown to the generator. A sample: long lists cost tokens and worsen compliance. */
+const HELPER_SAMPLE = 40
+
+/** Same-class known words offered to the repair pass for one offending word. */
+const REPAIR_CANDIDATES = 12
+
+/** Repair calls in flight. Matches the other AI fan-outs in the app. */
+const REPAIR_CONCURRENCY = 4
+
+/** One target word the learner picked, with everything the generator needs to use it. */
+export interface PracticeTarget {
+  cardId: string
+  front:  string
+  back:   string
+  lemma:  string
+  pos:    string
+}
+
+/** A generated exercise once it has been judged (and possibly repaired). */
+export interface PreparedExercise {
+  exercise: PracticeExercise
+  score:    SentenceScore
+  /** Words still unknown after repair — the UI shows these in red with their gloss. */
+  flagged:  { text: string; gloss: string }[]
+  /** True when a repair call actually improved this sentence. */
+  repaired: boolean
+}
+
+export interface PracticeRun {
+  exercises: PreparedExercise[]
+  /** How many exercises the model failed to produce (asked minus returned). */
+  missingCount: number
+}
+
+/** Cards → the targets the generator wants. Cards without a usable label can't be drilled. */
+export function toPracticeTargets(cards: Card[]): PracticeTarget[] {
+  return cards
+    .filter(c => c.pos && c.pos !== 'phrase' && (c.lemma ?? '').trim())
+    .map(c => ({
+      cardId: c.id,
+      front:  c.front,
+      back:   c.back,
+      lemma:  c.lemma!.trim(),
+      pos:    c.pos!,
+    }))
+}
+
+/** Unknown words of a scored sentence, paired with the gloss the generator supplied. */
+function flaggedWords(exercise: PracticeExercise, offenders: ScoredToken[]): { text: string; gloss: string }[] {
+  return offenders.map(o => ({
+    text:  o.text,
+    gloss: exercise.tokens.find(t => t.text === o.text)?.gloss ?? '',
+  }))
+}
+
+export interface GenerateOptions {
+  targets:         PracticeTarget[]
+  index:           LibraryIndex
+  sourceLanguage:  string
+  targetLanguage:  string
+  count:           number
+  minGraduatedPct: number
+  /** Rotates which known words the generator is shown, so repeat runs vary. */
+  helperSeed?:     number
+}
+
+/**
+ * Generates and validates a batch of cloze exercises.
+ *
+ * When the library is too narrow to build from (`vocabularyCoverage`), the generator is told it may
+ * reach outside the library for simple common words, and the percentage bar is dropped for scoring —
+ * unknown words are still flagged, but a sentence isn't rejected for a score it could never reach.
+ */
+export async function generatePracticeExercises(opts: GenerateOptions): Promise<PracticeRun> {
+  const { targets, index, sourceLanguage, targetLanguage, count, minGraduatedPct } = opts
+  if (targets.length === 0 || count <= 0) return { exercises: [], missingCount: 0 }
+
+  const narrow = vocabularyCoverage(index).verdict === 'narrow'
+  const helperWords = sampleHelperWords(index, HELPER_SAMPLE, opts.helperSeed ?? 0)
+  // A library that can't supply the words has no percentage to meet; only unknown words matter.
+  const effectivePct = narrow ? 0 : minGraduatedPct
+
+  const res = await fetch(apiUrl('/api/practice/generate'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      targets: targets.map(t => ({ front: t.front, back: t.back, lemma: t.lemma, pos: t.pos })),
+      helperWords,
+      sourceLanguage,
+      targetLanguage,
+      count,
+      narrowVocabulary: narrow,
+    }),
+  })
+  const data = await res.json()
+  if (!data?.ok || !Array.isArray(data.exercises)) {
+    throw new Error(data?.reason ?? 'generate-failed')
+  }
+  const generated = data.exercises as PracticeExercise[]
+
+  const targetLemmas = targets.map(t => t.lemma.trim().toLowerCase())
+
+  const prepared = await mapLimit(generated, REPAIR_CONCURRENCY, async exercise => {
+    // Only the sentence's OWN target is exempt from scoring. Exempting every word the learner
+    // picked for the session would wrongly excuse the other targets when they appear as ordinary
+    // vocabulary in someone else's sentence.
+    const own = targetLemmas.includes(exercise.targetLemma) ? [exercise.targetLemma] : targetLemmas
+
+    let current  = exercise
+    let score    = scoreSentence(current.tokens, index, own, effectivePct)
+    let repaired = false
+
+    // One repair attempt per offending word, always working from the CURRENT sentence — a
+    // successful rewrite changes the offender list, so re-reading it each pass avoids chasing a
+    // word that's already gone. `attempts` bounds the loop even if repairs keep failing.
+    const attemptBudget = score.offenders.length
+    for (let attempt = 0; attempt < attemptBudget && score.offenders.length > 0; attempt++) {
+      const offender  = score.offenders[0]!
+      const rewritten = await repairOnce({
+        exercise: current,
+        offender,
+        candidates: repairCandidates(index, offender.pos, REPAIR_CANDIDATES),
+        sourceLanguage,
+        targetLanguage,
+      })
+      if (!rewritten) break        // repair unavailable — stop paying for calls that aren't landing
+      const nextScore = scoreSentence(rewritten.tokens, index, own, effectivePct)
+      // Guard against a "repair" that just trades one unknown word for another.
+      if (nextScore.offenders.length >= score.offenders.length) break
+      current  = rewritten
+      score    = nextScore
+      repaired = true
+    }
+
+    const result: PreparedExercise = {
+      exercise: current,
+      score,
+      flagged: flaggedWords(current, score.offenders),
+      repaired,
+    }
+    return result
+  })
+
+  const exercises = prepared.filter((p): p is PreparedExercise => p !== null)
+  return { exercises, missingCount: Math.max(0, count - exercises.length) }
+}
+
+/** One repair call. Returns null on any failure — the caller keeps the original sentence. */
+async function repairOnce(args: {
+  exercise:       PracticeExercise
+  offender:       ScoredToken
+  candidates:     string[]
+  sourceLanguage: string
+  targetLanguage: string
+}): Promise<PracticeExercise | null> {
+  const { exercise, offender, candidates, sourceLanguage, targetLanguage } = args
+  try {
+    const res = await fetch(apiUrl('/api/practice/repair'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sentence:      exercise.sentence,
+        offendingWord: offender.text,
+        offendingPos:  offender.pos,
+        candidates,
+        targetLemma:   exercise.targetLemma,
+        targetSurface: exercise.answer,
+        sourceLanguage,
+        targetLanguage,
+      }),
+    })
+    const data = await res.json()
+    if (!data?.ok || !data.exercise) return null
+    return data.exercise as PracticeExercise
+  } catch {
+    return null
+  }
+}

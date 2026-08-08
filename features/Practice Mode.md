@@ -1,7 +1,9 @@
 # Practice Mode
 
-**Status (2026-08-07): Phase 0 DONE (migration 110 applied, labels backfilled) · Phase 1 DONE
-(`engine/practice.ts`). No AI generation and no practice UI yet — Phase 2 is next.**
+**Status (2026-08-07): Phases 0–2 DONE** — migration 110 applied and labels backfilled;
+`engine/practice.ts` (scoring); generation + repair routes and their orchestration. **Never yet run
+against the real API** — no practice UI exists, so Phase 3 is both the first playable version and
+the first time real French comes back. Expect prompt tuning then.
 
 A planned mode where the learner picks from exercise types (cloze, translate-the-sentence, use the
 word in a sentence, …) generated from their own vocabulary. This doc records the agreed design so a
@@ -119,15 +121,36 @@ Vocabulary labels, spot-check French reflexives + homographs. Everything below a
 - `AnnotatedToken` (what the model returns) vs `ScoredToken` (what this engine adds:
   `inLibrary`, `graduated`, `isTarget`, `flagged`). The model annotates; the engine judges.
 
-**Phase 2 — Generation + repair (API + orchestration).**
-- `/api/practice/generate` — Haiku, same fail-soft raw-fetch pattern: takes target words
-  (front/lemma/pos), a POS-balanced SAMPLE of graduated helper words (30–50, not the whole
-  library), pair languages, count → cloze exercises with per-token lemma annotations + blank
-  position + expected answer.
-- `/api/practice/repair` — sentence + offending token + POS-matched candidates → replacement.
-- `lib/practiceGenerate.ts` — generate → validate (Phase 1) → one repair round per offender →
-  keep-and-flag leftovers (red text + native translation in parentheses). Narrow-vocab fallback:
-  validator relaxed + "prefer simple high-frequency words" prompt line.
+**Phase 2 — Generation + repair (API + orchestration). ✅ BUILT 2026-08-07** — 23 tests across
+`lib/__tests__/practiceSchema.test.ts` and `practiceGenerate.test.ts` (fetch mocked; no API calls
+in CI).
+
+- **`lib/practiceSchema.ts`** — the wire shape, plus a parser that drops malformed entries instead
+  of throwing (one fumbled sentence shouldn't lose the other nine). The key split: **`sentence` is
+  the display truth** (a natural string, punctuation and all) while **`tokens` is the analysis**
+  (one entry per vocabulary word, no punctuation). Keeping them separate sidesteps the
+  rejoin-the-tokens problem entirely — no guessing where spaces go around commas or French
+  elisions. Validation rejects an `answer` that doesn't occur in `sentence` (the cloze blank would
+  be unrenderable); an unknown `pos` becomes `other` rather than dropping the word, so it can still
+  be flagged and never becomes silently exempt.
+- **`/api/practice/generate`** — Haiku. Takes targets (front/lemma/pos/gloss — the gloss picks the
+  right sense of a homograph), the POS-balanced helper sample, count, and a `narrowVocabulary`
+  flag. Returns sentence + answer + translation + per-word annotations **including a native gloss
+  per word**, so a word that survives repair already has its translation for the red-flag display —
+  no second call.
+- **`/api/practice/repair`** — returns the **whole rewritten sentence**, not just a replacement
+  word: swapping a word drags agreement, tense and word order with it ("une grande maison" → "un
+  grand jardin"), so the model rewrites and re-annotates, and the result is re-scored rather than
+  trusted.
+- **`lib/practiceGenerate.ts`** — the loop. Scores every sentence, then one repair attempt per
+  offending word, always re-reading the CURRENT offender list (a successful rewrite changes it).
+  Two guards: a rewrite that doesn't reduce the unknown-word count is **rejected** (no trading
+  `tonnerre` for `foudre`), and a failed repair call **stops** the loop rather than paying for more
+  calls that aren't landing. Leftovers stay in the sentence, flagged with their gloss.
+  Narrow-library fallback: the prompt allows simple outside words and the percentage bar drops to 0
+  — unknown words are still flagged, but a sentence isn't failed for a score it could never reach.
+  **Subtlety worth keeping:** only a sentence's OWN target is exempt from scoring; the session's
+  other target words are ordinary vocabulary when they turn up in someone else's sentence.
 
 **Phase 3 — V1 session UI (first playable).**
 - Migration 111: `language_pairs.practice_graduated_pct` (the slider).
