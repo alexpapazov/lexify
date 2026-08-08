@@ -1,7 +1,7 @@
 # Practice Mode
 
-**Status: DESIGN + LABELING GROUNDWORK ONLY (2026-08-07). Migration `110_card_labels.sql` written,
-pending application. No exercise generation, no UI beyond the Settings labeling panel.**
+**Status (2026-08-07): Phase 0 DONE (migration 110 applied, labels backfilled) · Phase 1 DONE
+(`engine/practice.ts`). No AI generation and no practice UI yet — Phase 2 is next.**
 
 A planned mode where the learner picks from exercise types (cloze, translate-the-sentence, use the
 word in a sentence, …) generated from their own vocabulary. This doc records the agreed design so a
@@ -95,14 +95,29 @@ Each phase is shippable on its own; read this doc in full before starting one.
 **Phase 0 — Label backfill (built; needs a real run).** Apply migration 110, run Settings →
 Vocabulary labels, spot-check French reflexives + homographs. Everything below assumes labels exist.
 
-**Phase 1 — Practice engine (pure, no AI, no UI).** `engine/practice.ts` + tests:
-- `buildLibraryIndex(cards, states)` → lemma set / POS histogram, split graduated vs not.
-- `vocabularyCoverage(index)` → 'ok' | 'narrow' (with which POS are missing) — the deterministic
-  pre-flight from §1; thresholds decided here, in code, with tests.
-- `scoreSentence(tokens, index, targetLemmas, minGraduatedPct)` → graduated share, offending
-  tokens, pass/fail. Function words always pass; target lemmas exempt.
-- Shared types: `PracticeExercise`, `AnnotatedToken { text, lemma, pos, isFunctionWord,
-  inLibrary, graduated, flagged }`. The model annotates; this engine only checks.
+**Phase 1 — Practice engine (pure, no AI, no UI). ✅ BUILT 2026-08-07** — `engine/practice.ts`,
+29 tests in `engine/__tests__/practice.test.ts`. The API:
+- `buildLibraryIndex(cards, forwardStates)` → `{ all, graduated, graduatedByPos, graduatedWords,
+  unlabeledCount }`. **Graduation is read from the FORWARD row only** — practice is production, and
+  the reverse row graduates on its own schedule. Phrase cards are excluded from the vocabulary
+  (they're real, just not single words); unlabeled cards are counted, not indexed, so the UI can
+  offer a top-up. A lemma shared by several cards counts once.
+- `vocabularyCoverage(index)` → `'ok' | 'narrow'` + which classes are missing. Thresholds:
+  `ESSENTIAL_POS = [noun, verb, adjective]`, `MIN_POS_COUNT = 5` — deliberately low, so "narrow"
+  means *genuinely can't build a sentence*, not "could be richer". Only graduated cards count.
+- `scoreSentence(tokens, index, targetLemmas, minGraduatedPct)` → `{ tokens (scored), countedCount,
+  graduatedCount, graduatedPct, offenders, passes }`. Three exemptions, and the middle one is the
+  subtle one: **function words** never count (structural, no library has them all); **target words**
+  never count (that's the exercise, and they may be brand new); and a word that's in the library but
+  NOT graduated lowers the percentage yet is **never flagged** — the learner has genuinely met it,
+  so there's nothing to repair. A sentence of only function + target words scores 100 (nothing
+  unknown in it). `passes` requires clearing the slider AND having zero flagged words.
+- `sampleHelperWords(index, limit, seed)` — POS-balanced round-robin sample for the generation
+  prompt (a sample, not the library: big lists cost tokens and *worsen* compliance). Deterministic
+  per seed; the seed rotates so repeat generations vary without a random source.
+- `repairCandidates(index, pos, limit)` — same-class graduated words for the repair pass.
+- `AnnotatedToken` (what the model returns) vs `ScoredToken` (what this engine adds:
+  `inLibrary`, `graduated`, `isTarget`, `flagged`). The model annotates; the engine judges.
 
 **Phase 2 — Generation + repair (API + orchestration).**
 - `/api/practice/generate` — Haiku, same fail-soft raw-fetch pattern: takes target words
