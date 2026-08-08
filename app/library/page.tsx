@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { routes } from '@/lib/routes'
+import { cardMatchesSearch } from '@/lib/cardSearch'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -745,9 +746,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
 
     // Card search results (all decks, lazy-loaded)
     const rootCardResults = q
-      ? allCardsFlat.filter(({ card }) =>
-          card.front.toLowerCase().includes(q) || card.back.toLowerCase().includes(q)
-        )
+      ? allCardsFlat.filter(({ card }) => cardMatchesSearch(q, card.front, card.back))
       : []
 
     const activePairFlag = (p: LanguagePair) => p.flag || langFlag(p.sourceLanguage)
@@ -1292,7 +1291,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   const pairCardResults: { card: Card; deckId: string; deckName: string }[] = pairSearchQuery
     ? pairDeckStats.flatMap(({ deck, cards }) =>
         cards
-          .filter(c => c.front.toLowerCase().includes(pairSearchQuery) || c.back.toLowerCase().includes(pairSearchQuery))
+          .filter(c => cardMatchesSearch(pairSearchQuery, c.front, c.back))
           .map(c => ({ card: c, deckId: deck.id, deckName: deck.name }))
       )
     : []
