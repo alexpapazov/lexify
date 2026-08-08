@@ -22,6 +22,8 @@ import { generatePracticeExercises, type PreparedExercise } from '@/lib/practice
 import { SupabasePracticeSentenceRepository, type StoredSentence } from '@/lib/data/practiceSentences'
 import { GENERATE_CAP } from '@/app/api/practice/generate/route'
 import { mapLimit } from '@/lib/mapLimit'
+import type { ClozeMode } from '@/lib/practiceSchema'
+import { verifySentences } from '@/lib/practiceVerify'
 
 export interface PrepareOptions {
   userId:          string
@@ -32,6 +34,10 @@ export interface PrepareOptions {
   plan:            SentencePlan
   minGraduatedPct: number
   helperSeed?:     number
+  /** Constrain sentences to known words. Off by default — the constraint is what hurts naturalness. */
+  restrictVocabulary?: boolean
+  /** Native-language sentence with only the blank in the target language. */
+  mode?: ClozeMode
 }
 
 export interface PreparedSession {
@@ -40,6 +46,8 @@ export interface PreparedSession {
   fromBank:  number
   /** Sentences the plan asked for that never materialised. */
   missingCount: number
+  /** Generated sentences the quality gate threw out — they were never shown or banked. */
+  rejectedCount: number
 }
 
 /** Rebuilds the display fields the player needs for a sentence that came from the bank. */
@@ -73,12 +81,18 @@ function prepareStored(
 export async function preparePracticeSession(opts: PrepareOptions): Promise<PreparedSession> {
   const { userId, targets, index, sourceLanguage, targetLanguage, plan, minGraduatedPct } = opts
   const wanted = plannedTotal(plan, targets.length)
-  if (targets.length === 0 || wanted <= 0) return { exercises: [], fromBank: 0, missingCount: 0 }
+  if (targets.length === 0 || wanted <= 0) {
+    return { exercises: [], fromBank: 0, missingCount: 0, rejectedCount: 0 }
+  }
 
   // Scoring uses the same relaxation the generator does, so a narrow library doesn't reject its own
   // cached sentences for a percentage it can never reach.
-  const narrow = vocabularyCoverage(index).verdict === 'narrow'
-  const effectivePct = narrow ? 0 : minGraduatedPct
+  const restrict = opts.restrictVocabulary === true
+  const mode     = opts.mode ?? 'target'
+  const narrow   = vocabularyCoverage(index).verdict === 'narrow'
+  // No constraint (or a native-language sentence, whose other words aren't target-language at all)
+  // means there is no bar for a sentence to clear.
+  const effectivePct = restrict && mode === 'target' && !narrow ? minGraduatedPct : 0
 
   const repo = new SupabasePracticeSentenceRepository()
   let stored: StoredSentence[] = []
@@ -91,7 +105,7 @@ export async function preparePracticeSession(opts: PrepareOptions): Promise<Prep
 
   const { reuse, shortfallByLemma } = pickBankExercises(
     stored.map(s => ({ id: s.id, targetLemma: s.targetLemma, tokens: s.exercise.tokens, useCount: s.useCount })),
-    index, targets, effectivePct, plan,
+    index, targets, effectivePct, plan, restrict && mode === 'target',
   )
   const reusedById = new Map(stored.map(s => [s.id, s]))
   const fromBank = reuse
@@ -116,6 +130,7 @@ export async function preparePracticeSession(opts: PrepareOptions): Promise<Prep
       generatePracticeExercises({
         targets: group, index, sourceLanguage, targetLanguage,
         count: missing * group.length, minGraduatedPct, helperSeed: opts.helperSeed,
+        restrictVocabulary: restrict, mode,
       }))
     for (const run of runs) if (run) generated.push(...run.exercises)
   } else {
@@ -124,8 +139,26 @@ export async function preparePracticeSession(opts: PrepareOptions): Promise<Prep
       const run = await generatePracticeExercises({
         targets, index, sourceLanguage, targetLanguage,
         count: missing, minGraduatedPct, helperSeed: opts.helperSeed,
+        restrictVocabulary: restrict, mode,
       })
       generated.push(...run.exercises)
+    }
+  }
+
+  // ── Quality gate ──────────────────────────────────────────────────────────
+  // Only freshly generated sentences are judged. Anything from the bank already passed when it was
+  // written, so re-judging it would pay for the same verdict every session.
+  let verifiedGenerated = generated
+  let rejectedCount = 0
+  if (generated.length > 0) {
+    const outcome = await verifySentences(generated, g => g.exercise, sourceLanguage, targetLanguage)
+    verifiedGenerated = outcome.kept
+    rejectedCount = outcome.rejected.length
+    if (outcome.rejected.length > 0) {
+      // Not surfaced to the learner — they asked for sentences, not a QA report. Logged so a
+      // language with a bad rejection rate is diagnosable.
+      console.info('[practice] rejected %d generated sentence(s):',
+        outcome.rejected.length, outcome.rejected.map(r => r.issue))
     }
   }
 
@@ -134,7 +167,7 @@ export async function preparePracticeSession(opts: PrepareOptions): Promise<Prep
     try {
       // Only file sentences with nothing flagged: a cached sentence carrying an unknown word would
       // be re-scored as unusable on every future read, so it would just be dead weight.
-      const fileable = generated
+      const fileable = verifiedGenerated
         .filter(g => g.flagged.length === 0 && g.exercise.targetLemma)
         .map(g => ({ targetLemma: g.exercise.targetLemma, exercise: g.exercise }))
       await repo.saveMany(userId, sourceLanguage, targetLanguage, fileable)
@@ -142,10 +175,11 @@ export async function preparePracticeSession(opts: PrepareOptions): Promise<Prep
   })()
   void repo.markUsed(fromBank.map((_, i) => reuse[i]!.id)).catch(() => {})
 
-  const exercises = [...fromBank, ...generated]
+  const exercises = [...fromBank, ...verifiedGenerated]
   return {
     exercises,
     fromBank: fromBank.length,
+    rejectedCount,
     missingCount: Math.max(0, wanted - exercises.length),
   }
 }

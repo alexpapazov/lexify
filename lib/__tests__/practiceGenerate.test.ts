@@ -49,6 +49,9 @@ const BASE_OPTS = {
   minGraduatedPct: 80,
 }
 
+/** Opts for the tests that exercise scoring/repair — that path is opt-in now. */
+const RESTRICTED = { ...BASE_OPTS, restrictVocabulary: true }
+
 /** Queues JSON responses for successive fetch calls, and records the request bodies. */
 function mockFetchSequence(responses: unknown[]) {
   const bodies: Record<string, unknown>[] = []
@@ -125,7 +128,7 @@ describe('generatePracticeExercises', () => {
       },
     ])
 
-    const run = await generatePracticeExercises({ ...BASE_OPTS, index: library() })
+    const run = await generatePracticeExercises({ ...RESTRICTED, index: library() })
     const prepared = run.exercises[0]!
     expect(prepared.repaired).toBe(true)
     expect(prepared.exercise.sentence).toBe('Il se précipite vers nom0.')
@@ -151,7 +154,7 @@ describe('generatePracticeExercises', () => {
       { ok: false, reason: 'api-error' },
     ])
 
-    const prepared = (await generatePracticeExercises({ ...BASE_OPTS, index: library() })).exercises[0]!
+    const prepared = (await generatePracticeExercises({ ...RESTRICTED, index: library() })).exercises[0]!
     expect(prepared.repaired).toBe(false)
     expect(prepared.flagged).toEqual([{ text: 'tonnerre', gloss: 'thunder' }])
     // The exercise survives — a red word with a translation beats no sentence at all.
@@ -182,7 +185,7 @@ describe('generatePracticeExercises', () => {
       },
     ])
 
-    const prepared = (await generatePracticeExercises({ ...BASE_OPTS, index: library() })).exercises[0]!
+    const prepared = (await generatePracticeExercises({ ...RESTRICTED, index: library() })).exercises[0]!
     expect(prepared.repaired).toBe(false)
     expect(prepared.exercise.sentence).toContain('tonnerre')   // the original is kept
   })
@@ -215,7 +218,7 @@ describe('generatePracticeExercises', () => {
     }] }])
 
     const prepared = (await generatePracticeExercises({
-      ...BASE_OPTS, index: narrowIndex, minGraduatedPct: 100,
+      ...RESTRICTED, index: narrowIndex, minGraduatedPct: 100,
     })).exercises[0]!
     expect(bodies[0]!.narrowVocabulary).toBe(true)
     expect(prepared.score.passes).toBe(true)
@@ -230,6 +233,33 @@ describe('generatePracticeExercises', () => {
     const run = await generatePracticeExercises({ ...BASE_OPTS, index: library(), count: 3 })
     expect(run.exercises).toHaveLength(1)
     expect(run.missingCount).toBe(2)
+  })
+
+  it('by default does not restrict vocabulary: no repair call, nothing flagged', async () => {
+    // The unrestricted session is the natural one — an unknown word is just a word, so the repair
+    // machinery must not run and nothing may be marked red.
+    mockFetchSequence([{
+      ok: true,
+      exercises: [{
+        targetLemma: 'se précipiter',
+        sentence: 'Il se précipite vers le tonnerre.',
+        answer: 'précipite',
+        translation: 'He rushes toward the thunder.',
+        tokens: [
+          tok('précipite', 'se précipiter', 'verb'),
+          tok('tonnerre', 'tonnerre', 'noun', false, 'thunder'),
+        ],
+      }],
+    }])
+
+    const prepared = (await generatePracticeExercises({ ...BASE_OPTS, index: library() })).exercises[0]!
+    expect(prepared.flagged).toEqual([])
+    expect(prepared.repaired).toBe(false)
+    // `score` stays informational here — an unknown word is still *reported* as an offender, it just
+    // has no consequence when the learner didn't ask for the constraint.
+    expect(prepared.score.offenders.map(o => o.text)).toEqual(['tonnerre'])
+    // One call: generation only, no repair round.
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(1)
   })
 
   it('throws when generation itself fails', async () => {
@@ -263,7 +293,7 @@ describe('generatePracticeExercises', () => {
     ])
 
     const run = await generatePracticeExercises({
-      ...BASE_OPTS,
+      ...RESTRICTED,
       index: library(),
       targets: [
         ...TARGETS,

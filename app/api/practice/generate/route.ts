@@ -19,7 +19,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { langName } from '@/lib/languages'
-import { parseExercises } from '@/lib/practiceSchema'
+import { parseExercises, type ClozeMode } from '@/lib/practiceSchema'
 
 export const runtime = 'nodejs'
 
@@ -46,6 +46,15 @@ interface RequestBody {
   count:          number
   /** True when the learner's library is too narrow to build from (see `vocabularyCoverage`). */
   narrowVocabulary?: boolean
+  /** 'target' (default) = a full target-language sentence. 'native' = only the blank is target. */
+  mode?: ClozeMode
+  /**
+   * Whether to constrain the sentence to the learner's known words. **Off by default, because the
+   * constraint is what makes sentences unnatural** — forced to build from a word list, the model
+   * produces things like "La batida exitosa buscaba la llave desde la mañana". Unrestricted, it
+   * writes ordinary sentences and the learner just fills the blank.
+   */
+  restrictVocabulary?: boolean
 }
 
 function extractJson(text: string): unknown {
@@ -62,13 +71,22 @@ function generatePrompt(body: RequestBody, srcLang: string, tgtLang: string): st
     ? body.helperWords.join(', ')
     : '(none available yet)'
 
-  // The narrow-library path: the learner genuinely can't supply enough words, so allow easy outside
-  // vocabulary rather than producing nothing. `vocabularyCoverage` decided this, not the model.
-  const vocabularyRule = body.narrowVocabulary
-    ? `The learner's known-word list is too small to build from, so you may use other ${srcLang}
-words freely — but keep them among the most common, simplest words in the language.`
-    : `Build the rest of each sentence from the KNOWN WORDS list wherever you can. Where you need a
-word that isn't listed, choose the most common, simplest option available.`
+  // Naturalness first. The vocabulary constraint is OPT-IN because it is exactly what degrades the
+  // output: a model told to build from a word list writes stilted, semantically odd sentences.
+  // Even when the constraint is on, it is framed as a preference that never outranks sounding real.
+  const vocabularySection = !body.restrictVocabulary
+    ? `Use whatever everyday vocabulary makes the most natural sentence. There is no restriction on
+which words you may use.`
+    : body.narrowVocabulary
+      ? `The learner's known-word list is too small to build from, so use whatever words you need —
+but prefer the most common, simplest ones.
+
+KNOWN WORDS (use where they fit naturally): ${helpers}`
+      : `PREFER these words the learner already knows, where they fit naturally:
+${helpers}
+
+This is a preference, NOT a requirement. A natural sentence always wins: if using a listed word
+would make the sentence awkward, forced, or semantically odd, use a better word instead.`
 
   return `You are writing short practice sentences for someone learning ${srcLang}. Their native
 language is ${tgtLang}.
@@ -76,13 +94,14 @@ language is ${tgtLang}.
 TARGET WORDS — each sentence must use exactly one of these, in a natural way:
 ${targets}
 
-KNOWN WORDS — vocabulary the learner already knows well:
-${helpers}
-
-${vocabularyRule}
+${vocabularySection}
 
 Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Requirements:
+- Each sentence must sound like something a native speaker would ACTUALLY say or write. This
+  matters more than every other requirement here.
 - Each sentence is ONE natural, everyday ${srcLang} sentence of roughly 5 to 12 words.
+- Concrete, ordinary situations. No riddles, no abstract word-salad, no sentences that are
+  grammatical but meaningless.
 - Each sentence uses exactly one target word, inflected however the sentence needs.
 - Spread the sentences across the target words rather than reusing one.
 - Grammatical, idiomatic ${srcLang} — correct agreement, tense and word order.
@@ -114,6 +133,55 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
 }`
 }
 
+/**
+ * Native-mode prompt: the sentence is written in the LEARNER'S language, with only the drilled word
+ * left in the language being learned.
+ *
+ * This is the beginner path — it needs no vocabulary at all beyond the word itself, so it works on
+ * day one when there is nothing to build a real sentence from. Nothing here is scored against the
+ * library, because the surrounding words are the learner's own language by construction.
+ */
+function nativePrompt(body: RequestBody, srcLang: string, tgtLang: string): string {
+  const targets = body.targets
+    .map(t => `- ${t.lemma} (${t.pos}, means "${t.back}")`)
+    .join('\n')
+
+  return `You are writing beginner practice sentences for someone learning ${srcLang}. Their native
+language is ${tgtLang}, and they know very little ${srcLang} yet.
+
+TARGET WORDS — each sentence must use exactly one of these:
+${targets}
+
+Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Each one is a natural ${tgtLang}
+sentence, EXCEPT that the target word appears in ${srcLang}, inflected as ${srcLang} grammar
+requires for that slot.
+
+Example shape (for a learner of Spanish whose language is English):
+  "The ${'\u005B'}zipper${'\u005D'} se desprendió while I was running."  →  sentence: "The zipper se desprendió while I was running."
+
+Requirements:
+- The whole sentence reads as ordinary ${tgtLang} apart from the one ${srcLang} word or phrase.
+- Keep it short and everyday: 5 to 12 words.
+- The surrounding ${tgtLang} must make the target word's meaning clear from context.
+- Inflect the ${srcLang} word correctly for how it is used (tense, number, gender, case).
+- Spread the sentences across the target words rather than reusing one.
+- Do NOT translate the target word into ${tgtLang} anywhere in the sentence.
+
+Respond with ONLY a JSON object, no other text, in exactly this shape:
+{
+  "exercises": [
+    {
+      "targetLemma": "<the target word's citation form, copied from the list above>",
+      "mode": "native",
+      "sentence": "<the ${tgtLang} sentence with the ${srcLang} word inside it>",
+      "answer": "<the ${srcLang} word exactly as it appears in that sentence>",
+      "translation": "<the whole sentence in plain ${tgtLang}, target word translated too>",
+      "tokens": []
+    }
+  ]
+}`
+}
+
 export async function POST(req: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return NextResponse.json({ ok: false, reason: 'no-api-key' })
@@ -137,10 +205,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, reason: 'bad-count' }, { status: 400 })
   }
 
-  const prompt = generatePrompt(
-    { ...body, count, helperWords: body.helperWords ?? [] },
-    langName(sourceLanguage), langName(targetLanguage),
-  )
+  const normalized = { ...body, count, helperWords: body.helperWords ?? [] }
+  const prompt = body.mode === 'native'
+    ? nativePrompt(normalized, langName(sourceLanguage), langName(targetLanguage))
+    : generatePrompt(normalized, langName(sourceLanguage), langName(targetLanguage))
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {

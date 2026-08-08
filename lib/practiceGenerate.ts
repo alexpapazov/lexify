@@ -23,7 +23,7 @@ import {
 } from '@/engine/practice'
 import { planGenerationBatches } from '@/engine/practiceBank'
 import { GENERATE_CAP } from '@/app/api/practice/generate/route'
-import type { PracticeExercise } from '@/lib/practiceSchema'
+import type { PracticeExercise, ClozeMode } from '@/lib/practiceSchema'
 
 /** Known words shown to the generator. A sample: long lists cost tokens and worsen compliance. */
 const HELPER_SAMPLE = 40
@@ -77,6 +77,13 @@ export interface GenerateOptions {
   minGraduatedPct: number
   /** Rotates which known words the generator is shown, so repeat runs vary. */
   helperSeed?:     number
+  /**
+   * Constrain sentences to the learner's known words. Off by default: the constraint is what makes
+   * generated sentences unnatural, so it's opt-in and naturalness is the norm.
+   */
+  restrictVocabulary?: boolean
+  /** Native-language sentence with only the blank in the target language. */
+  mode?: ClozeMode
 }
 
 /**
@@ -131,6 +138,8 @@ async function generateOneBatch(opts: GenerateOptions): Promise<PracticeRun> {
       targetLanguage,
       count,
       narrowVocabulary: narrow,
+      restrictVocabulary: opts.restrictVocabulary === true,
+      mode: opts.mode ?? 'target',
     }),
   })
   const data = await res.json()
@@ -140,6 +149,7 @@ async function generateOneBatch(opts: GenerateOptions): Promise<PracticeRun> {
   const generated = data.exercises as PracticeExercise[]
 
   const targetLemmas = targets.map(t => t.lemma.trim().toLowerCase())
+  const restrict = opts.restrictVocabulary === true
 
   const prepared = await mapLimit(generated, REPAIR_CONCURRENCY, async exercise => {
     // Only the sentence's OWN target is exempt from scoring. Exempting every word the learner
@@ -148,13 +158,16 @@ async function generateOneBatch(opts: GenerateOptions): Promise<PracticeRun> {
     const own = targetLemmas.includes(exercise.targetLemma) ? [exercise.targetLemma] : targetLemmas
 
     let current  = exercise
-    let score    = scoreSentence(current.tokens, index, own, effectivePct)
+    // With no vocabulary constraint there is nothing to judge: an unknown word is simply a word,
+    // and flagging or repairing it would be enforcing a rule the learner switched off. Scored at 0
+    // so the shape stays the same, and the repair loop below is skipped entirely.
+    let score    = scoreSentence(current.tokens, index, own, restrict ? effectivePct : 0)
     let repaired = false
 
     // One repair attempt per offending word, always working from the CURRENT sentence — a
     // successful rewrite changes the offender list, so re-reading it each pass avoids chasing a
     // word that's already gone. `attempts` bounds the loop even if repairs keep failing.
-    const attemptBudget = score.offenders.length
+    const attemptBudget = restrict ? score.offenders.length : 0
     for (let attempt = 0; attempt < attemptBudget && score.offenders.length > 0; attempt++) {
       const offender  = score.offenders[0]!
       const rewritten = await repairOnce({
@@ -179,7 +192,7 @@ async function generateOneBatch(opts: GenerateOptions): Promise<PracticeRun> {
     const result: PreparedExercise = {
       exercise: current,
       score,
-      flagged: flaggedWords(current, score.offenders),
+      flagged: restrict ? flaggedWords(current, score.offenders) : [],
       repaired,
       targetGloss: (answerToken?.gloss || targetCard?.back || '').trim(),
     }

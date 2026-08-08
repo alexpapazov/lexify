@@ -23,9 +23,20 @@ export interface PracticeToken extends AnnotatedToken {
   gloss: string
 }
 
+/**
+ * Which language the sentence AROUND the blank is in.
+ *
+ * `target` — a full target-language sentence (the standard cloze).
+ * `native` — the sentence is in the learner's own language and ONLY the blank is target-language,
+ *            so it works from day one, before there's enough vocabulary to build a real sentence.
+ */
+export type ClozeMode = 'target' | 'native'
+
 export interface PracticeExercise {
   /** Lemma of the target word this exercise drills (matches one of the requested targets). */
   targetLemma: string
+  /** Defaults to 'target' — sentences banked before native mode existed have no mode field. */
+  mode?:       ClozeMode
   /** The full sentence, as displayed. */
   sentence:    string
   /** Exact surface form of the target word inside `sentence` — what gets blanked, and the answer. */
@@ -80,10 +91,13 @@ export function parseExercise(raw: unknown): PracticeExercise | null {
   const tokens = Array.isArray(r.tokens)
     ? r.tokens.map(parseToken).filter((t): t is PracticeToken => t !== null)
     : []
-  if (tokens.length === 0) return null
+  // Only target-language sentences need annotations: they're what vocabulary scoring reads. A
+  // native-language sentence has nothing to score, so an empty token list is valid there.
+  if (tokens.length === 0 && r.mode !== 'native') return null
 
   return {
     targetLemma: str(r.targetLemma).toLowerCase(),
+    mode: r.mode === 'native' ? 'native' : 'target',
     sentence,
     answer,
     translation: str(r.translation),

@@ -190,6 +190,7 @@ before this deploys** (`language_pairs` SELECTs name the new column).
 - **`components/practice/ClozePlayer.tsx`** — blank, type, check, continue. Two deliberate
   departures from a study session: it **writes nothing** (no `card_states`, no review events, no
   due dates — practice is exposure, not assessment, and mixing it into FSRS would double-count),
+  **overrides are session-local** — see below;
   **the blank carries the target word's native gloss** (`targetGloss` — the generator's in-context
   gloss for that surface form, falling back to the card's own back), so the exercise is "produce this
   meaning, correctly inflected" rather than "guess which word was removed";
@@ -197,6 +198,16 @@ before this deploys** (`language_pairs` SELECTs name the new column).
   because the sentence around the answer is machine-generated and failing someone on an accent in a
   word they weren't drilling is noise. Translation is behind a Hint button so the default is recall,
   not transcription.
+- **Overrides (2026-08-08).** After checking, "Actually, mark correct" / "Actually, mark incorrect"
+  flips the item's outcome and the session tally. Needed because the sentences are *generated*: the
+  grader is judging an inflected form in a context the model invented, so "the other past tense also
+  works here" is a call only the learner can make.
+
+  > These are **session-local on purpose**, and must stay that way. The app's persistent overrides
+  > (`typed_answer_overrides`) key on a CARD's canonical answer; a practice answer is an inflected
+  > form inside one sentence, so filing it there would teach a REAL review to accept a wrong answer.
+  > The override moves the tally and nothing else — consistent with practice writing nothing.
+
 - **`lib/practiceRender.ts`** — pure: `splitForBlank` (sentence around the cloze gap) and
   `segmentFlagged` (word-level, case-insensitive, punctuation-preserving runs so unknown words
   render red with their gloss without mangling the sentence).
@@ -280,6 +291,41 @@ guaranteed count and a shared batch can't promise that. In per-word mode the sho
 Batches run concurrently. One failed batch costs only its own sentences; if *every* batch fails the
 error is rethrown, so a real problem (no API key) still reaches the user instead of an empty
 session — a regression the tests caught when batching was introduced.
+
+### Naturalness, the quality gate, and native cloze (2026-08-08)
+
+Three changes after the first real sessions, all driven by the same finding: **the vocabulary
+constraint was what made sentences bad.** Forced to build from a word list, the generator produced
+things like *"La batida exitosa buscaba la llave desde la mañana"* — grammatical, meaningless.
+
+1. **The vocabulary restriction is now OPT-IN** ("Prefer words I already know", off by default).
+   Unrestricted, the generator is told to write whatever sounds most natural and the learner just
+   fills the blank — no scoring, no repair calls, nothing flagged. When it IS on, the known-word
+   list is framed as a **preference that never outranks sounding real**, and the graduated-% slider
+   appears under it. The prompt also now says naturalness matters more than every other requirement
+   and bans grammatical-but-meaningless output.
+
+   Consequences worth knowing: `restrictVocabulary` gates the repair loop (`attemptBudget` is 0
+   without it), `flagged` is always empty without it, and the bank's re-scoring is skipped
+   (`requireKnownWords`) — a stored sentence shouldn't be rejected for a rule the learner turned off.
+   `score` is still computed and still reports offenders, but it is **advisory** in an unrestricted
+   session.
+
+2. **A quality gate before anything is shown or banked** (`/api/practice/verify` +
+   `lib/practiceVerify.ts`). Generated sentences are judged for grammaticality, naturalness and
+   translation accuracy; failures are dropped. On a **stronger model than the generator**
+   (`claude-sonnet-5` vs Haiku) — a model can't reliably catch its own errors, and judging is the
+   cheap half. Cost is one-time: only survivors are banked, so a sentence is judged once and reused
+   free. **Fails open** — if the judge is unavailable every sentence passes, because a gate that
+   empties the session is worse than an occasional clumsy sentence. Bank sentences are not
+   re-judged; they passed when written.
+
+3. **Native-language cloze** (`ClozeMode = 'target' | 'native'`). The sentence is in the learner's
+   own language with only the drilled word in the target language — usable on day one, before
+   there's enough vocabulary to build a real sentence. Nothing is scored in this mode by
+   construction (the surrounding words are native), so the restriction UI is hidden for it, and
+   `parseExercise` accepts an empty token list only when `mode === 'native'`. Stored exercises carry
+   their `mode`, defaulting to `'target'` for sentences banked before the mode existed.
 
 **Phase 6 — More modes + grading design (NEXT — STOP AND DISCUSS FIRST).**
 - Translate target→native, native→target, free production ("use the word"). Grading for these is

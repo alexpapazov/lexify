@@ -29,6 +29,7 @@ import { buildScopeTree, type TreeNode } from '@/lib/scopeTree'
 import { type PreparedExercise } from '@/lib/practiceGenerate'
 import { preparePracticeSession } from '@/lib/practiceBank'
 import { plannedTotal, type SentencePlan } from '@/engine/practiceBank'
+import type { ClozeMode } from '@/lib/practiceSchema'
 import { labelCards } from '@/lib/labelCards'
 import { normalizeFrontKey } from '@/lib/duplicates'
 import { getToday } from '@/lib/dates'
@@ -171,6 +172,10 @@ function PracticeInner() {
   const [rangeSeed,  setRangeSeed]  = useState(1)
 
   const [pct,       setPct]       = useState(DEFAULT_GRADUATED_PCT)
+  /** Vocabulary restriction is OPT-IN: forcing the generator to build from a word list is what
+   *  produces stilted sentences, so the natural, unrestricted session is the default. */
+  const [restrict,  setRestrict]  = useState(false)
+  const [clozeMode, setClozeMode] = useState<ClozeMode>('target')
   const [planMode,  setPlanMode]  = useState<'total' | 'perWord'>('total')
   const [totalCount,setTotalCount]= useState(DEFAULT_TOTAL)
   const [perWord,   setPerWord]   = useState(DEFAULT_PER_WORD)
@@ -363,6 +368,8 @@ function PracticeInner() {
         targetLanguage: pair.targetLanguage,
         plan,
         minGraduatedPct: pct,
+        restrictVocabulary: restrict,
+        mode: clozeMode,
         // Varies which known words the generator sees, so a repeat run isn't the same sentences.
         helperSeed: chosen.length + asked,
       })
@@ -729,20 +736,61 @@ function PracticeInner() {
       {/* Session settings */}
       <div className="panel space-y-5">
         <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">
-              Words from your graduated vocabulary
-            </label>
-            <span className="text-sm text-ink tabular-nums">{pct}%</span>
+          <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">
+            Sentence language
+          </label>
+          <div className="flex gap-1.5 flex-wrap">
+            {([
+              ['target', 'Full sentence in the language'],
+              ['native', 'Only the blank in the language'],
+            ] as const).map(([m, label]) => (
+              <button key={m} onClick={() => setClozeMode(m)}
+                className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                  clozeMode === m ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
+                }`}>
+                {label}
+              </button>
+            ))}
           </div>
-          <input type="range" min={0} max={100} step={5} value={pct}
-            onChange={e => setPct(Number(e.target.value))}
-            className="w-full accent-accent" />
           <p className="text-xs text-ink-faint">
-            How much of each sentence should be built from words you&apos;ve already graduated. Higher is
-            easier to read; lower gives the generator more freedom. Remembered per language.
+            {clozeMode === 'target'
+              ? 'The whole sentence is in the language you’re learning.'
+              : 'The sentence is in your own language and only the missing word is in the language you’re learning — usable from day one.'}
           </p>
         </div>
+
+        {/* The restriction is opt-in BY DESIGN: making the generator build from a word list is what
+            produces stilted sentences, so the default session is simply natural. */}
+        {clozeMode === 'target' && (
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={restrict} onChange={e => setRestrict(e.target.checked)}
+                className="accent-accent w-4 h-4" />
+              <span className="text-sm text-ink">Prefer words I already know</span>
+            </label>
+            {restrict ? (
+              <div className="space-y-2 pl-6">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-ink-muted">Target share from graduated vocabulary</span>
+                  <span className="text-sm text-ink tabular-nums">{pct}%</span>
+                </div>
+                <input type="range" min={0} max={100} step={5} value={pct}
+                  onChange={e => setPct(Number(e.target.value))}
+                  className="w-full accent-accent" />
+                <p className="text-xs text-ink-faint">
+                  Sentences are steered towards words you&apos;ve graduated, and a word you don&apos;t know is
+                  swapped out where possible. Naturalness still wins — a higher setting means more
+                  familiar sentences, but can make them read a little stiffly. Remembered per language.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-ink-faint pl-6">
+                Off: sentences are written to sound as natural as possible, using whatever words fit
+                best. You just fill in the missing word.
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="space-y-2">
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Sentences</label>

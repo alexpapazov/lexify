@@ -85,11 +85,16 @@ export function ClozePlayer({ items, answerLanguage, onExit }: {
   const [input,     setInput]     = useState('')
   const [revealed,  setRevealed]  = useState(false)
   const [showHint,  setShowHint]  = useState(false)
-  const [correct,   setCorrect]   = useState(0)
+  /**
+   * Per-item outcome, so an override can flip one after it's been graded and the tally stays
+   * consistent. `overridden` is kept only to label the result — the count reads `correct`.
+   */
+  const [outcomes, setOutcomes] = useState<Record<number, { correct: boolean; overridden: boolean }>>({})
   const inputRef = useRef<HTMLInputElement>(null)
 
   const settings = useMemo(() => practiceGrading(answerLanguage), [answerLanguage])
   const current  = items[index]
+  const correct  = Object.values(outcomes).filter(o => o.correct).length
 
   // New card: clear the form and take focus back, so the whole session is keyboard-only.
   useEffect(() => {
@@ -111,13 +116,31 @@ export function ClozePlayer({ items, answerLanguage, onExit }: {
 
   const { exercise, flagged } = current
   const split = splitForBlank(exercise.sentence, exercise.answer)
-  const result = revealed ? gradeTyping(input, exercise.answer, settings) : null
+  const outcome = outcomes[index]
 
   function check() {
     if (revealed || !input.trim()) return
     const graded = gradeTyping(input, exercise.answer, settings)
-    if (graded.correct) setCorrect(c => c + 1)
+    setOutcomes(o => ({ ...o, [index]: { correct: graded.correct, overridden: false } }))
     setRevealed(true)
+  }
+
+  /**
+   * Flip this item's verdict. Practice sentences are generated, so the grader is judging an
+   * inflected form in a context it invented — "you typed the other past tense, which the sentence
+   * would also accept" is a judgement only the learner can make.
+   *
+   * Session-local ON PURPOSE. The app's persistent overrides (`typed_answer_overrides`) key on a
+   * CARD's canonical answer; storing an inflected form there would teach a real review to accept a
+   * wrong answer. So this moves the tally and nothing else — consistent with practice writing
+   * nothing.
+   */
+  function toggleOverride() {
+    setOutcomes(o => {
+      const at = o[index]
+      if (!at) return o
+      return { ...o, [index]: { correct: !at.correct, overridden: !at.overridden } }
+    })
   }
 
   function next() { setIndex(i => i + 1) }
@@ -168,18 +191,30 @@ export function ClozePlayer({ items, answerLanguage, onExit }: {
         </div>
       ) : (
         <div className="space-y-4">
+          {/* The panel reflects the OUTCOME, not the raw grade, so an override visibly changes it. */}
           <div className={`rounded-card border px-4 py-3 text-center text-sm ${
-            result?.correct
+            outcome?.correct
               ? 'border-success/40 bg-success/5 text-success'
               : 'border-danger/40 bg-danger/5 text-danger'
           }`}>
-            {result?.correct
-              ? 'Correct'
-              : <>Answer: <strong className="text-ink">{exercise.answer}</strong>{input.trim() ? <> — you typed “{input.trim()}”</> : null}</>}
+            {outcome?.correct
+              ? (outcome.overridden
+                  ? <>Marked correct — the answer was <strong className="text-ink">{exercise.answer}</strong></>
+                  : 'Correct')
+              : (outcome?.overridden
+                  ? <>Marked incorrect — the answer was <strong className="text-ink">{exercise.answer}</strong></>
+                  : <>Answer: <strong className="text-ink">{exercise.answer}</strong>{input.trim() ? <> — you typed “{input.trim()}”</> : null}</>)}
           </div>
-          <div className="flex justify-center">
+          <div className="flex flex-col items-center gap-3">
             <button autoFocus onClick={next} className="btn-primary px-10">
               {index + 1 === items.length ? 'Finish' : 'Continue'}
+            </button>
+            <button onClick={toggleOverride}
+              title="These sentences are generated — override the grader when your answer also works"
+              className="text-xs text-ink-faint hover:text-ink transition-colors">
+              {outcome?.overridden
+                ? 'Undo override'
+                : outcome?.correct ? 'Actually, mark incorrect' : 'Actually, mark correct'}
             </button>
           </div>
         </div>

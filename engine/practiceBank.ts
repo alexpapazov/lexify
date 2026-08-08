@@ -110,6 +110,12 @@ export function pickBankExercises<T extends BankCandidate>(
   targets:         PracticeTarget[],
   minGraduatedPct: number,
   plan:            SentencePlan,
+  /**
+   * Whether the session restricts sentences to known words. When false (the default for a natural
+   * session) any stored sentence for the lemma is reusable — there is no bar to clear, so re-scoring
+   * would only reject perfectly good sentences for a constraint the learner switched off.
+   */
+  requireKnownWords = true,
 ): BankSelection<T> {
   const wantPerLemma = plan.mode === 'perWord' ? Math.max(0, Math.floor(plan.perWord)) : Infinity
   const wantTotal    = plannedTotal(plan, targets.length)
@@ -122,8 +128,10 @@ export function pickBankExercises<T extends BankCandidate>(
     const bucket = byLemma.get(lemma)
     if (!bucket) continue                       // not a word this session asked for
     // The whole point: judged against the CURRENT library and slider, never a stored verdict.
-    const score = scoreSentence(candidate.tokens, index, [lemma], minGraduatedPct)
-    if (!score.passes) continue
+    if (requireKnownWords) {
+      const score = scoreSentence(candidate.tokens, index, [lemma], minGraduatedPct)
+      if (!score.passes) continue
+    }
     bucket.push(candidate)
   }
   for (const bucket of byLemma.values()) bucket.sort((a, b) => a.useCount - b.useCount)
