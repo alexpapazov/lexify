@@ -22,7 +22,6 @@ import type { AudioSource } from '@/domain'
 import { classifyReviewMode } from '@/engine/scheduler'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
-import { cardMatchesSearch } from '@/lib/cardSearch'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
 import { batchFastTrackDueDates } from '@/engine/density'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -1221,7 +1220,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                   {allPairCards && (() => {
                     const q = linkQuery.trim()
                     const results = q
-                      ? allPairCards.filter(c => cardMatchesSearch(q, c.front, c.back))
+                      ? allPairCards.filter(c => c.front.toLowerCase().includes(q.toLowerCase()) || c.back.toLowerCase().includes(q.toLowerCase()))
                       : allPairCards
                     return (
                       <>
@@ -1806,7 +1805,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     const results = q
                       ? allPairCards.filter(c =>
                           !confusionLinks.some(l => l.cardAId === c.id || l.cardBId === c.id) &&
-                          cardMatchesSearch(q, c.front, c.back)
+                          (c.front.toLowerCase().includes(q.toLowerCase()) || c.back.toLowerCase().includes(q.toLowerCase()))
                         )
                       : allPairCards.filter(c => !confusionLinks.some(l => l.cardAId === c.id || l.cardBId === c.id))
                     return results.length > 0 ? (
@@ -2033,7 +2032,8 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                 {allPairCards && (() => {
                   const q = mergeQuery.trim().toLowerCase()
                   const results = q
-                    ? allPairCards.filter(c => cardMatchesSearch(q, c.front, c.back))
+                    ? allPairCards.filter(c =>
+                        c.front.toLowerCase().includes(q) || c.back.toLowerCase().includes(q))
                     : allPairCards
                   return results.length === 0 ? (
                     <p className="text-xs text-ink-faint text-center py-3">No cards found.</p>

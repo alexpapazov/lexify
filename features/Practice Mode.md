@@ -78,12 +78,65 @@ the top-up, and practice mode should itself top up unlabeled cards when it start
 code deploys** — otherwise every card query in the app fails (the profiles-SELECT trap from
 CLAUDE.md, but on `cards`, which is load-bearing everywhere). Run the SQL first, then push.
 
-## 3. Not built yet (rough order)
+## 3. Decisions locked 2026-08-07 (asked and answered)
 
-1. Exercise generation (cloze + translate-the-sentence first — both gradeable with existing
-   machinery), with the validator/repair loop and slider from §1.
-2. Sentence bank caching + pre-generation.
-3. Free-production exercises + their grading (grading design deferred — discuss before building).
+- **Target words are MANUALLY SELECTED** each session (search + multi-select over the pair's
+  library). No auto-focus queue; convenience filters (learning / due / recently lapsed) may assist
+  the picker but the user always chooses.
+- **Practice never touches scheduling.** No FSRS writes, no due-date or difficulty changes.
+  (Analytics logging can come later; the memory model stays clean.)
+- **V1 ships CLOZE ONLY** — fill-in-the-blank graded by `gradeTyping`. Other modes follow.
+- **The graduated-% slider is stored PER LANGUAGE PAIR** (column on `language_pairs`).
+
+## 4. Implementation phases
+
+Each phase is shippable on its own; read this doc in full before starting one.
+
+**Phase 0 — Label backfill (built; needs a real run).** Apply migration 110, run Settings →
+Vocabulary labels, spot-check French reflexives + homographs. Everything below assumes labels exist.
+
+**Phase 1 — Practice engine (pure, no AI, no UI).** `engine/practice.ts` + tests:
+- `buildLibraryIndex(cards, states)` → lemma set / POS histogram, split graduated vs not.
+- `vocabularyCoverage(index)` → 'ok' | 'narrow' (with which POS are missing) — the deterministic
+  pre-flight from §1; thresholds decided here, in code, with tests.
+- `scoreSentence(tokens, index, targetLemmas, minGraduatedPct)` → graduated share, offending
+  tokens, pass/fail. Function words always pass; target lemmas exempt.
+- Shared types: `PracticeExercise`, `AnnotatedToken { text, lemma, pos, isFunctionWord,
+  inLibrary, graduated, flagged }`. The model annotates; this engine only checks.
+
+**Phase 2 — Generation + repair (API + orchestration).**
+- `/api/practice/generate` — Haiku, same fail-soft raw-fetch pattern: takes target words
+  (front/lemma/pos), a POS-balanced SAMPLE of graduated helper words (30–50, not the whole
+  library), pair languages, count → cloze exercises with per-token lemma annotations + blank
+  position + expected answer.
+- `/api/practice/repair` — sentence + offending token + POS-matched candidates → replacement.
+- `lib/practiceGenerate.ts` — generate → validate (Phase 1) → one repair round per offender →
+  keep-and-flag leftovers (red text + native translation in parentheses). Narrow-vocab fallback:
+  validator relaxed + "prefer simple high-frequency words" prompt line.
+
+**Phase 3 — V1 session UI (first playable).**
+- Migration 111: `language_pairs.practice_graduated_pct` (the slider).
+- `/practice` page (routes.ts helper + nav entry): word picker (reuse `cardMatchesSearch`),
+  slider, exercise count; coverage warning from Phase 1 shown before generating.
+- Cloze player: `gradeTyping` grading with the pair's grading settings, target word highlighted,
+  flagged words red with parenthesized translations. Online only (`OfflineUnavailable`).
+  NO card_states writes of any kind.
+
+**Phase 4 — Sentence bank (cost + latency).**
+- Migration 112: `practice_sentences` (user, pair, target lemma, annotated-sentence JSONB,
+  created_at, use count). Read the bank first, generate only the gap; background top-up via the
+  existing prefetch idiom. Stored sentences are RE-SCORED against the current library at read time
+  (the library grows; annotations make re-scoring pure) — never store the pass/fail verdict.
+- Practice start also tops up unlabeled cards (calls `labelCards` on the gap).
+
+**Phase 5 — More modes + grading design (STOP AND DISCUSS FIRST).**
+- Translate target→native, native→target, free production ("use the word"). Grading for these is
+  explicitly undesigned — the user wants a conversation before it's built (AI-graded answers have
+  a per-answer API cost, unlike the fully-cacheable v1).
+- Practice analytics (weak-word surfacing), if wanted.
+
+Parked indefinitely: embeddings for replacement candidates (§1), any scheduling feedback (decided
+against), auto-focus target selection (decided against — manual picking).
 
 ---
 

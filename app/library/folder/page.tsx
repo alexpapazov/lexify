@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { routes } from '@/lib/routes'
-import { cardMatchesSearch } from '@/lib/cardSearch'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -598,7 +597,7 @@ function FolderPageInner() {
   const folderCardResults: { card: Card; deckId: string; deckName: string }[] = folderSearchQuery
     ? deckStats.flatMap(({ deck, cards }) =>
         cards
-          .filter(c => cardMatchesSearch(folderSearchQuery, c.front, c.back))
+          .filter(c => c.front.toLowerCase().includes(folderSearchQuery) || c.back.toLowerCase().includes(folderSearchQuery))
           .map(c => ({ card: c, deckId: deck.id, deckName: deck.name }))
       )
     : []
