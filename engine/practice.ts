@@ -65,6 +65,53 @@ export interface SentenceScore {
   passes:         boolean
 }
 
+/** One word the learner has chosen to drill, with everything the generator needs to use it. */
+export interface PracticeTarget {
+  cardId: string
+  front:  string
+  back:   string
+  lemma:  string
+  pos:    PartOfSpeech
+}
+
+/**
+ * Word classes that read badly as a cloze answer — you'd be guessing "the" from context rather than
+ * recalling vocabulary. Excluded from drilling everywhere, whichever way the card was selected.
+ */
+export const UNDRILLABLE_POS: PartOfSpeech[] = ['determiner', 'pronoun', 'conjunction', 'preposition']
+
+/** Why a card can't be drilled, or null when it can. Every selection source reports through this. */
+export type TargetRejection = 'unlabeled' | 'undrillable'
+
+/**
+ * The single gate every selection source passes through, so a card can never be drillable via one
+ * route and not another. A card needs a real label (a phrase has no single citation form) and a
+ * word class worth blanking out.
+ */
+export function targetRejection(card: Card): TargetRejection | null {
+  // ORDER MATTERS. A phrase card IS labeled — the labeler deliberately gives it `lemma: null`
+  // because a free phrase has no citation form. Testing the lemma first would report it as
+  // unlabeled and send the learner off to re-run labeling that would change nothing.
+  if (!card.pos) return 'unlabeled'
+  if (card.pos === 'phrase' || UNDRILLABLE_POS.includes(card.pos)) return 'undrillable'
+  // A content word with no lemma never got a usable label, whatever `pos` claims.
+  if (!(card.lemma ?? '').trim()) return 'unlabeled'
+  return null
+}
+
+/** Cards → drillable targets, dropping anything the gate rejects. */
+export function toPracticeTargets(cards: Card[]): PracticeTarget[] {
+  return cards
+    .filter(c => targetRejection(c) === null)
+    .map(c => ({
+      cardId: c.id,
+      front:  c.front,
+      back:   c.back,
+      lemma:  c.lemma!.trim(),
+      pos:    c.pos!,
+    }))
+}
+
 /** A library digested into the lookups scoring needs. Built once per practice session. */
 export interface LibraryIndex {
   /** Lemmas of every non-phrase card, lowercased. */

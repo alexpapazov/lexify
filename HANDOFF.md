@@ -261,10 +261,15 @@ truncates at 150 cards with no error.
 
 ### 3.10c Practice Mode (new 2026-08-07, v1 playable)
 
-Generate fill-in-the-blank sentences from your own vocabulary. `/practice` → pick target words by
-hand, set the "% from graduated vocabulary" slider (per pair, **migration 111 — apply before
-deploying**), generate. **Practice writes nothing** — no `card_states`, no review events, no due
-dates; it is exposure, not assessment.
+Generate fill-in-the-blank sentences from your own vocabulary. `/practice` → choose target words,
+set the "% from graduated vocabulary" slider (per pair, **migration 111 — apply before deploying**),
+generate. **Practice writes nothing** — no `card_states`, no review events, no due dates; it is
+exposure, not assessment.
+
+Target selection is six **composable** sources (`engine/practiceSelect.ts`): hand-picked words,
+decks, folders, due-within-N-days, hardest-by-FSRS-difficulty, and a pasted list. They union into
+one deduped set, all passing the single `targetRejection` gate, and every source reports what it
+dropped (unlabeled / undrillable / unmatched / capped) rather than shrinking silently.
 
 The load-bearing idea is **the model proposes, code decides**: `/api/practice/generate` returns
 sentences with per-word lemma annotations, and `engine/practice.ts` (pure, 29 tests) scores them

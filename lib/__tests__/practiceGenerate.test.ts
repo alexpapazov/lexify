@@ -1,5 +1,5 @@
-import { generatePracticeExercises, toPracticeTargets } from '@/lib/practiceGenerate'
-import { buildLibraryIndex } from '@/engine/practice'
+import { generatePracticeExercises } from '@/lib/practiceGenerate'
+import { buildLibraryIndex, type PracticeTarget } from '@/engine/practice'
 import type { Card, CardState, PartOfSpeech } from '@/domain'
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -37,7 +37,9 @@ function tok(text: string, lemma: string, pos: PartOfSpeech, isFunctionWord = fa
   return { text, lemma, pos, isFunctionWord, gloss }
 }
 
-const TARGETS = [{ cardId: 'c1', front: 'se précipiter', back: 'to rush', lemma: 'se précipiter', pos: 'verb' }]
+const TARGETS: PracticeTarget[] = [
+  { cardId: 'c1', front: 'se précipiter', back: 'to rush', lemma: 'se précipiter', pos: 'verb' },
+]
 
 const BASE_OPTS = {
   targets: TARGETS,
@@ -64,18 +66,6 @@ function mockFetchSequence(responses: unknown[]) {
 afterEach(() => { jest.restoreAllMocks() })
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
-
-describe('toPracticeTargets', () => {
-  it('keeps labeled single-word cards and drops phrases and unlabeled cards', () => {
-    const targets = toPracticeTargets([
-      card('se précipiter', 'verb', 'se précipiter'),
-      card('il pleut des cordes', 'phrase', null),
-      card('le vent', null, null),
-      card('  ', 'noun', '   '),
-    ])
-    expect(targets.map(t => t.lemma)).toEqual(['se précipiter'])
-  })
-})
 
 describe('generatePracticeExercises', () => {
   it('returns a clean sentence unrepaired, with nothing flagged', async () => {

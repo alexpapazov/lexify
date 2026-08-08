@@ -1,11 +1,12 @@
 # Practice Mode
 
-**Status (2026-08-07): Phases 0–3 DONE — v1 is playable.** Migration 110 applied and labels
-backfilled; `engine/practice.ts` (scoring); generate + repair routes and orchestration; `/practice`
-page with the cloze player. **Migration `111_practice_slider.sql` is PENDING — apply it before
-deploying.** The generate/repair round trip has still never run against the real API (everything
-is verified by build, unit tests with mocked fetch, and a 200 on the route), so expect prompt
-tuning on the first real session. Phase 4 (sentence bank) is next.
+**Status (2026-08-08): Phases 0–4 DONE.** Migration 110 applied and labels backfilling;
+`engine/practice.ts` (scoring) and `engine/practiceSelect.ts` (six composable target sources);
+generate + repair routes and orchestration; `/practice` page with the cloze player.
+**Migration `111_practice_slider.sql` is PENDING — apply it before deploying.** The generate/repair
+round trip has still never run against the real API (everything is verified by build, unit tests
+with mocked fetch, and a 200 on the route), so expect prompt tuning on the first real session.
+Phase 5 (sentence bank) is next.
 
 A planned mode where the learner picks from exercise types (cloze, translate-the-sentence, use the
 word in a sentence, …) generated from their own vocabulary. This doc records the agreed design so a
@@ -198,35 +199,44 @@ errors. **Not yet verified: anything past the auth wall** — the real generate/
 still never run. First real session is where prompt tuning happens (annotation quality, lemma
 agreement with the labels).
 
-**Phase 4 — Flexible target selection (NEXT).** The v1 picker — search-and-click, capped at 60
-rows — is too thin: a real session is "this deck", "everything due this week", "the words I keep
-getting wrong", or a list pasted from elsewhere. Selection becomes its own composable subsystem.
+**Phase 4 — Flexible target selection. ✅ BUILT 2026-08-08** — `engine/practiceSelect.ts`,
+29 tests in `engine/__tests__/practiceSelect.test.ts`. No migration.
 
-*Design constraints that fall out of the earlier phases:* a target must be a **labeled, non-phrase**
-card (unlabeled cards can't be drilled — see the bug log), and function-word classes stay excluded
-(a cloze on "the" isn't an exercise). Every source therefore filters through the same
-`toPracticeTargets` gate, and each source reports what it dropped rather than silently shrinking.
+**The one gate.** `targetRejection` in `engine/practice.ts` is now the single place that decides
+whether a card can be drilled, so a card can never be drillable via one route and not another.
+`PracticeTarget`, `UNDRILLABLE_POS` and `toPracticeTargets` moved from `lib/practiceGenerate.ts`
+into the engine for the same reason.
 
-- `engine/practiceSelect.ts` (pure, tested) — one `TargetSource` union and one resolver per variant,
-  all returning `{ targets, droppedUnlabeled, droppedUndrillable }` so the UI can explain a short
-  list:
-  - `manual` — explicit card ids (today's behaviour, kept).
-  - `deck` / `folder` — multi-select; folder resolution reuses `descendantDeckIds`.
-  - `due` — due within N days, from the same `isCardStateDueNow`/due-date fields the study
-    surfaces use, so "due soon" means the same thing here as everywhere else.
-  - `difficulty` — hardest-first by FSRS **difficulty** on the forward row, with lapses as the
-    tie-break. Exposed as a band ("hardest 20") rather than a raw 1–10 number, which is
-    meaningless to a learner.
-  - `list` — pasted text, matched against the library by the same `normalizeFrontKey` used by
-    duplicate detection (so "el pan" matches "pan"), reporting unmatched lines rather than dropping
-    them silently.
-- Sources **compose**: the picker accumulates into one deduped target set (union), so "this deck +
-  these three pasted words" works. A per-source cap keeps a 400-card deck from becoming a 400-word
-  session; the UI states the cap.
-- UI: source chips/tabs above the existing list, selected targets shown as removable chips, live
-  count. The v1 search list becomes the `manual` tab.
+> ⚠️ **Check order inside `targetRejection` is load-bearing.** A phrase card *is* labeled — the
+> labeler deliberately gives it `lemma: null`, since a free phrase has no citation form. Testing the
+> lemma before the `pos` reports phrases as "unlabeled" and sends the learner off to re-run labeling
+> that would change nothing. `pos` missing → unlabeled; phrase/function word → undrillable; only
+> then a missing lemma → unlabeled.
 
-**Phase 5 — Sentence bank (cost + latency).**
+**Six sources, composing.** `TargetSource` is a union; `resolveTargets(sources, ctx, cap)` unions
+them into one deduped list in source order, then match order within a source:
+
+| Source | Ordering | Notes |
+|---|---|---|
+| `manual` | as clicked | Never capped — the choice was explicit |
+| `decks` / `folders` | deck order | Folders expand via `descendantDeckIds` |
+| `due` | soonest first | Graduated only (unstudied cards aren't review-scheduled); **overdue included**, no lower bound |
+| `difficulty` | hardest first | FSRS difficulty, lapses as tie-break, card id for determinism. Cards with `difficulty: null` are skipped, not treated as easy |
+| `list` | pasted order | Matched via injected `normalizeFrontKey`, so "el pan" finds "pan" |
+
+- **Nothing disappears silently** — the result carries `droppedUnlabeled`, `droppedUndrillable`,
+  `unmatched` (list source) and `capped`, and the UI renders all four. A picker that quietly returns
+  12 words for a 400-card deck is how you end up debugging the wrong thing.
+- **The cap is applied after the gate**, so a deck full of unlabeled cards doesn't burn the
+  allowance on words that were never going to make it. `DEFAULT_CAP_PER_SOURCE = 50`, on the bulk
+  sources only.
+- **Purity:** the engine takes `normalizeKey` as an injected function rather than importing
+  `lib/duplicates`, and `today` as a string rather than reading a clock.
+- UI: six tabs feeding one target set, resolved words shown as removable chips. Removing a word
+  that arrived from a bulk source pins the whole selection down to an explicit list minus that word
+  — otherwise the source would just re-add it on the next render.
+
+**Phase 5 — Sentence bank (cost + latency). NEXT.**
 - Migration 112: `practice_sentences` (user, pair, target lemma, annotated-sentence JSONB,
   created_at, use count). Read the bank first, generate only the gap; background top-up via the
   existing prefetch idiom. Stored sentences are RE-SCORED against the current library at read time

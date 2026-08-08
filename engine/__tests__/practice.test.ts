@@ -1,6 +1,7 @@
 import {
   buildLibraryIndex, vocabularyCoverage, scoreSentence, sampleHelperWords, repairCandidates,
-  ESSENTIAL_POS, MIN_POS_COUNT,
+  toPracticeTargets, targetRejection,
+  ESSENTIAL_POS, MIN_POS_COUNT, UNDRILLABLE_POS,
   type AnnotatedToken,
 } from '../practice'
 import type { Card, CardState, PartOfSpeech } from '@/domain'
@@ -138,6 +139,36 @@ describe('buildLibraryIndex', () => {
     expect(index.all.size).toBe(0)
     expect(index.graduated.size).toBe(0)
     expect(index.unlabeledCount).toBe(0)
+  })
+})
+
+// ─── The drillable-target gate ────────────────────────────────────────────────
+
+describe('targetRejection / toPracticeTargets', () => {
+  it('accepts a labeled content word', () => {
+    expect(targetRejection(card('se précipiter', 'verb', 'se précipiter'))).toBeNull()
+  })
+
+  it('rejects an unlabeled card, or one whose lemma is blank', () => {
+    expect(targetRejection(card('le vent', null, null))).toBe('unlabeled')
+    expect(targetRejection(card('le vent', 'noun', '   '))).toBe('unlabeled')
+  })
+
+  it('rejects phrases and function words as undrillable', () => {
+    expect(targetRejection(card('il pleut des cordes', 'phrase', null))).toBe('undrillable')
+    for (const pos of UNDRILLABLE_POS) {
+      expect(targetRejection(card('mot', pos, 'mot'))).toBe('undrillable')
+    }
+  })
+
+  it('keeps only the drillable cards, trimming lemmas', () => {
+    const targets = toPracticeTargets([
+      card('se précipiter', 'verb', '  se précipiter '),
+      card('il pleut des cordes', 'phrase', null),
+      card('le vent', null, null),
+      card('le', 'determiner', 'le'),
+    ])
+    expect(targets.map(t => t.lemma)).toEqual(['se précipiter'])
   })
 })
 

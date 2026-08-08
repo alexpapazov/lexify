@@ -19,10 +19,9 @@ import { apiUrl } from '@/lib/apiBase'
 import { mapLimit } from '@/lib/mapLimit'
 import {
   scoreSentence, sampleHelperWords, repairCandidates, vocabularyCoverage,
-  type LibraryIndex, type SentenceScore, type ScoredToken,
+  type LibraryIndex, type SentenceScore, type ScoredToken, type PracticeTarget,
 } from '@/engine/practice'
 import type { PracticeExercise } from '@/lib/practiceSchema'
-import type { Card } from '@/domain'
 
 /** Known words shown to the generator. A sample: long lists cost tokens and worsen compliance. */
 const HELPER_SAMPLE = 40
@@ -32,15 +31,6 @@ const REPAIR_CANDIDATES = 12
 
 /** Repair calls in flight. Matches the other AI fan-outs in the app. */
 const REPAIR_CONCURRENCY = 4
-
-/** One target word the learner picked, with everything the generator needs to use it. */
-export interface PracticeTarget {
-  cardId: string
-  front:  string
-  back:   string
-  lemma:  string
-  pos:    string
-}
 
 /** A generated exercise once it has been judged (and possibly repaired). */
 export interface PreparedExercise {
@@ -56,19 +46,6 @@ export interface PracticeRun {
   exercises: PreparedExercise[]
   /** How many exercises the model failed to produce (asked minus returned). */
   missingCount: number
-}
-
-/** Cards → the targets the generator wants. Cards without a usable label can't be drilled. */
-export function toPracticeTargets(cards: Card[]): PracticeTarget[] {
-  return cards
-    .filter(c => c.pos && c.pos !== 'phrase' && (c.lemma ?? '').trim())
-    .map(c => ({
-      cardId: c.id,
-      front:  c.front,
-      back:   c.back,
-      lemma:  c.lemma!.trim(),
-      pos:    c.pos!,
-    }))
 }
 
 /** Unknown words of a scored sentence, paired with the gloss the generator supplied. */
