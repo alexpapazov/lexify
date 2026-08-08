@@ -28,7 +28,7 @@ type DragItem = { type: 'folder'; id: string } | { type: 'deck'; id: string }
 type DropPos  = 'before' | 'into' | 'after'
 type DropTarget = { id: string; pos: DropPos } | null
 
-type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
+type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
 
 interface DeckStats {
   deck:   Deck
@@ -1312,6 +1312,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         if (activeFilter === 'learning')  return s && !s.graduated
         if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
         if (activeFilter === 'dormant')   return !!s?.dormant
+        if (activeFilter === 'starred')   return !!card.starred
         if (activeFilter === 'due')       return cardIsDue(card.id)
         return false
       })
@@ -1337,12 +1338,17 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     return [...map.values()]
   })()
 
+  const pairStarredCount = pairDeckStats.reduce((n, { cards }) => n + cards.filter(c => c.starred).length, 0)
+
   const PAIR_COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: pairCounts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: pairCounts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
     { key: 'dormant'   as FilterKey, label: 'Dormant',   value: pairCounts.dormant,   color: 'text-ink',         border: 'border-line/70',  desc: 'Paused — manual'  },
+    // Starred is a card flag rather than a study state, so it's counted here instead of in
+    // the shared FolderCounts helper.
+    { key: 'starred'   as FilterKey, label: 'Starred',   value: pairStarredCount,     color: 'text-warning',     border: 'border-warning/70', desc: 'Marked by you' },
   ]
 
   return (

@@ -31,7 +31,7 @@ import { localCardsByDeck, localGetCard, localUpdateCard } from '@/lib/offline/l
 const BULK_CARD_COLUMNS =
   'id, owner_id, source_language, target_language, front, back, position, ' +
   'created_at, updated_at, deleted_at, synonym_group_id, register, region, ' +
-  'audio_generated, audio_source, ipa, pos, lemma'
+  'audio_generated, audio_source, ipa, pos, lemma, starred'
 
 /**
  * Columns for STUDY-SESSION reads: everything a session needs to grade and render — `choices`
@@ -45,7 +45,7 @@ const SESSION_CARD_COLUMNS =
   'id, owner_id, source_language, target_language, front, back, hints, choices, position, ' +
   'created_at, updated_at, deleted_at, synonym_group_id, register, region, ' +
   'accepted_front_alternatives, accepted_back_alternatives, synced_from_languages, synced_from_language, ' +
-  'origin_words, origin_word, audio_generated, audio_source, ipa, pos, lemma'
+  'origin_words, origin_word, audio_generated, audio_source, ipa, pos, lemma, starred'
 
 function rowToCard(row: Record<string, unknown>): Card {
   return {
@@ -83,6 +83,7 @@ function rowToCard(row: Record<string, unknown>): Card {
     ipa:            (row.ipa as string | null) ?? null,
     pos:            (row.pos as Card['pos']) ?? null,
     lemma:          (row.lemma as string | null) ?? null,
+    starred:        (row.starred as boolean | null) ?? false,
   }
 }
 
@@ -268,6 +269,17 @@ export class SupabaseCardRepository implements CardRepository {
       names.push(row.decks.name)
     }
     return result
+  }
+
+  /**
+   * Stars or unstars a card (migration 112). Its own method rather than going through `update`
+   * because starring happens MID-SESSION, one tap, and must not drag the rest of a card payload
+   * (or a stale `choices`) along with it.
+   */
+  async setStarred(cardId: CardId, starred: boolean): Promise<void> {
+    invalidateReads('cards:')
+    const { error } = await this.db.from('cards').update({ starred }).eq('id', cardId)
+    if (error) throw new Error(error.message)
   }
 
   /**

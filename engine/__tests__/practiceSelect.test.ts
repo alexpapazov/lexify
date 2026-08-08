@@ -1,5 +1,5 @@
 import {
-  resolveTargets, addDays, splitList, DEFAULT_CAP_PER_SOURCE,
+  resolveTargets, addDays, splitList, seededShuffle, DEFAULT_CAP_PER_SOURCE,
   type SelectionContext, type TargetSource,
 } from '../practiceSelect'
 import type { Card, CardState, PartOfSpeech } from '@/domain'
@@ -32,7 +32,6 @@ function ctx(over: Partial<SelectionContext> & { cards: Card[] }): SelectionCont
   return {
     statesByCard: new Map(),
     cardIdsByDeck: new Map(),
-    deckIdsByFolder: new Map(),
     today: '2026-08-08',
     // Stand-in for normalizeFrontKey: lowercase, strip a leading French article.
     normalizeKey: (t: string) => t.trim().toLowerCase().replace(/^(le|la|les|un|une|l')\s*/, ''),
@@ -98,22 +97,13 @@ describe('manual source', () => {
 
 // ─── decks / folders ──────────────────────────────────────────────────────────
 
-describe('decks and folders sources', () => {
+describe('decks source', () => {
   const a = card('pluie'), b = card('vent'), c = card('orage')
 
   it('collects the cards of the selected decks', () => {
     const result = resolveTargets([{ type: 'decks', deckIds: ['d1'] }], ctx({
       cards: [a, b, c],
       cardIdsByDeck: new Map([['d1', [a.id, b.id]], ['d2', [c.id]]]),
-    }))
-    expect(result.targets.map(t => t.front)).toEqual(['pluie', 'vent'])
-  })
-
-  it('expands a folder to its descendant decks', () => {
-    const result = resolveTargets([{ type: 'folders', folderIds: ['f1'] }], ctx({
-      cards: [a, b, c],
-      cardIdsByDeck: new Map([['d1', [a.id]], ['d2', [b.id]], ['d3', [c.id]]]),
-      deckIdsByFolder: new Map([['f1', ['d1', 'd2']]]),
     }))
     expect(result.targets.map(t => t.front)).toEqual(['pluie', 'vent'])
   })
@@ -214,6 +204,145 @@ describe('difficulty source', () => {
       ]),
     }))
     expect(result.targets.map(t => t.front)).toEqual(['deux', 'un'])
+  })
+})
+
+// ─── difficultyRange (random sample within a band) ────────────────────────────
+
+describe('seededShuffle', () => {
+  const items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+  it('is deterministic for a given seed', () => {
+    expect(seededShuffle(items, 42)).toEqual(seededShuffle(items, 42))
+  })
+
+  it('gives a different order for a different seed', () => {
+    expect(seededShuffle(items, 1)).not.toEqual(seededShuffle(items, 2))
+  })
+
+  it('keeps every element exactly once and does not mutate the input', () => {
+    const copy = [...items]
+    expect(seededShuffle(items, 7).sort((a, b) => a - b)).toEqual(items)
+    expect(items).toEqual(copy)
+  })
+
+  it('copes with an empty list and a zero seed', () => {
+    expect(seededShuffle([], 0)).toEqual([])
+    expect(seededShuffle(items, 0)).toHaveLength(items.length)
+  })
+})
+
+describe('difficultyRange source', () => {
+  /** Ten graduated cards with difficulty 1..10. */
+  function band() {
+    const cards = Array.from({ length: 10 }, (_, i) => card(`mot${i + 1}`))
+    const statesByCard = new Map(
+      cards.map((c, i) => [c.id, state(c.id, { difficulty: i + 1 })]),
+    )
+    return ctx({ cards, statesByCard })
+  }
+
+  it('only draws cards inside the band, inclusive of both ends', () => {
+    const result = resolveTargets(
+      [{ type: 'difficultyRange', min: 4, max: 6, limit: 10, seed: 1 }], band())
+    expect(result.targets.map(t => t.front).sort()).toEqual(['mot4', 'mot5', 'mot6'])
+  })
+
+  it('honours the maximum number of cards', () => {
+    const result = resolveTargets(
+      [{ type: 'difficultyRange', min: 1, max: 10, limit: 3, seed: 1 }], band())
+    expect(result.targets).toHaveLength(3)
+  })
+
+  it('is reproducible for a seed, and re-rolls when the seed changes', () => {
+    const draw = (seed: number) => resolveTargets(
+      [{ type: 'difficultyRange', min: 1, max: 10, limit: 4, seed }], band(),
+    ).targets.map(t => t.front)
+    expect(draw(5)).toEqual(draw(5))
+    // Two different seeds over ten cards choosing four: an identical draw would be a real signal
+    // that the seed isn't reaching the shuffle.
+    expect(draw(5)).not.toEqual(draw(6))
+  })
+
+  it('samples rather than taking the hardest — a wide band does not just return the top', () => {
+    const hardestFirst = resolveTargets(
+      [{ type: 'difficulty', limit: 4 }], band()).targets.map(t => t.front)
+    const sampled = resolveTargets(
+      [{ type: 'difficultyRange', min: 1, max: 10, limit: 4, seed: 3 }], band()).targets.map(t => t.front)
+    expect(sampled).not.toEqual(hardestFirst)
+  })
+
+  it('tolerates a reversed range', () => {
+    const result = resolveTargets(
+      [{ type: 'difficultyRange', min: 6, max: 4, limit: 10, seed: 1 }], band())
+    expect(result.targets.map(t => t.front).sort()).toEqual(['mot4', 'mot5', 'mot6'])
+  })
+
+  it('skips cards with no difficulty and cards that never graduated', () => {
+    const rated = card('note'), unrated = card('inconnu'), learning = card('nouveau')
+    const result = resolveTargets(
+      [{ type: 'difficultyRange', min: 1, max: 10, limit: 10, seed: 1 }],
+      ctx({
+        cards: [rated, unrated, learning],
+        statesByCard: statesOf([
+          [rated.id,    { difficulty: 5 }],
+          [unrated.id,  { difficulty: null }],
+          [learning.id, { difficulty: 5, graduated: false }],
+        ]),
+      }))
+    expect(result.targets.map(t => t.front)).toEqual(['note'])
+  })
+
+  it('returns nothing when no card falls in the band', () => {
+    // The fixture's difficulties are whole numbers, so this window contains none of them.
+    const result = resolveTargets(
+      [{ type: 'difficultyRange', min: 4.2, max: 4.8, limit: 10, seed: 1 }], band())
+    expect(result.targets).toEqual([])
+  })
+
+  it('includes the band’s upper bound', () => {
+    const result = resolveTargets(
+      [{ type: 'difficultyRange', min: 9.5, max: 10, limit: 10, seed: 1 }], band())
+    expect(result.targets.map(t => t.front)).toEqual(['mot10'])
+  })
+})
+
+// ─── starred ──────────────────────────────────────────────────────────────────
+
+describe('starred source', () => {
+  it('returns exactly the starred cards', () => {
+    const a = { ...card('pluie'), starred: true }
+    const b = card('vent')
+    const c = { ...card('orage'), starred: true }
+    const result = resolveTargets([{ type: 'starred' }], ctx({ cards: [a, b, c] }))
+    expect(result.targets.map(t => t.front)).toEqual(['pluie', 'orage'])
+  })
+
+  it('is independent of study state — an unstudied starred card still counts', () => {
+    const fresh = { ...card('pluie'), starred: true }
+    const result = resolveTargets([{ type: 'starred' }], ctx({ cards: [fresh], statesByCard: new Map() }))
+    expect(result.targets).toHaveLength(1)
+  })
+
+  it('still respects the drillable gate', () => {
+    const phrase = { ...card('il pleut des cordes', 'phrase', null), starred: true }
+    const word   = { ...card('pluie'), starred: true }
+    const result = resolveTargets([{ type: 'starred' }], ctx({ cards: [phrase, word] }))
+    expect(result.targets.map(t => t.front)).toEqual(['pluie'])
+    expect(result.droppedUndrillable).toBe(1)
+  })
+
+  it('is never capped — starring is an explicit choice', () => {
+    const many = Array.from({ length: DEFAULT_CAP_PER_SOURCE + 15 },
+      (_, i) => ({ ...card(`mot${i}`), starred: true }))
+    const result = resolveTargets([{ type: 'starred' }], ctx({ cards: many }))
+    expect(result.targets).toHaveLength(many.length)
+    expect(result.capped).toEqual([])
+  })
+
+  it('returns nothing when no card is starred', () => {
+    const result = resolveTargets([{ type: 'starred' }], ctx({ cards: [card('pluie')] }))
+    expect(result.targets).toEqual([])
   })
 })
 

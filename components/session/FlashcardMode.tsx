@@ -10,13 +10,14 @@ import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
 import { EditableAnswerText } from './EditableAnswerText'
 import { CardInfoButton } from './CardInfoButton'
+import { StarButton } from './StarButton'
 
 /**
  * Flip-card recall, used for post-graduation "recognition" reviews
  * (rare — only if a custom pipeline ends on a recognition step).
  * Shows Again/Hard/Good/Easy once the answer is revealed.
  */
-export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRate, onAlmost, onPromptEdit, onAnswerEdit, onInfo, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, resumeAnswered = false }: {
+export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRate, onAlmost, onPromptEdit, onAnswerEdit, onInfo, onToggleStar, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, resumeAnswered = false }: {
   card: Card; promptSide: 'front' | 'back'; deckName?: string; onRate: (r: Rating) => void
   /** Due Now only: orange "Almost" rating for a near-miss recall — light penalty + re-show this
    *  session. Omit (ladder / pre-grad / re-rate views) and the button is absent. */
@@ -30,6 +31,8 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
   /** Edit the answer (other) side of the card from the revealed answer panel. */
   onAnswerEdit?: (newText: string) => void
   onInfo?: () => void
+  /** Stars/unstars this card from the top-left corner. Omit and the star is absent. */
+  onToggleStar?: (next: boolean) => Promise<void>
   /** Whether the "Hint" button is offered (Due Now reviews only). */
   hintable?: boolean
   onHint?: (level: number, growthFactor: number) => void
@@ -83,6 +86,7 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
       )}
       <div className="panel relative min-h-[160px] flex items-center justify-center text-center">
         {onInfo && <CardInfoButton onClick={onInfo} />}
+        {onToggleStar && <StarButton starred={card.starred ?? false} onToggle={onToggleStar} />}
         {onPromptEdit
           ? <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit(t)} />
           : <p className="text-2xl font-medium text-ink">{prompt}</p>}

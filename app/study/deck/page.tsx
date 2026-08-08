@@ -1294,7 +1294,7 @@ export default function DeckDetailPage() {
     typeof window !== 'undefined' && !!localStorage.getItem(`syn_scan_ignored_${deckId}`)
   )
   const searchParams = useSearchParams()
-  const activeFilter = searchParams.get('filter') as 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | null
+  const activeFilter = searchParams.get('filter') as 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred' | null
   const cardParam    = searchParams.get('card')
 
   async function loadAll(uid: string) {
@@ -1701,6 +1701,7 @@ export default function DeckDetailPage() {
   const learning  = cards.filter(c => statusOf(c.id) === 'learning').length
   const graduated = cards.filter(c => statusOf(c.id) === 'graduated').length
   const dormant   = cards.filter(c => statusOf(c.id) === 'dormant').length
+  const starred   = cards.filter(c => c.starred).length
   // Due Now via the shared helper (same definition as the dashboard/session): date-level, real
   // per-track columns (smart→typed→due_at, recall_due_at), track-filtered, dormancy + reverse aware.
   // Previously this read only `s.dueAt` with no track filter, so it over-counted vs everywhere else.
@@ -1717,6 +1718,7 @@ export default function DeckDetailPage() {
     if (activeFilter === 'learning')  return statusOf(card.id) === 'learning'
     if (activeFilter === 'graduated') return statusOf(card.id) === 'graduated'
     if (activeFilter === 'dormant')   return statusOf(card.id) === 'dormant'
+    if (activeFilter === 'starred')   return !!card.starred
     if (activeFilter === 'due')       return dueCardIds.has(card.id)   // forward OR reverse due — matches the count
     return true
   })
@@ -1931,6 +1933,8 @@ export default function DeckDetailPage() {
           { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', desc: 'Long-term review' },
           { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'  },
           { label: 'Dormant',   value: dormant,   color: 'text-ink',         border: 'border-line/70',  filter: 'dormant',   desc: 'Paused — manual'  },
+          // A card flag, not a study state — counted straight off the cards.
+          { label: 'Starred',   value: starred,   color: 'text-warning',     border: 'border-warning/70', filter: 'starred',   desc: 'Marked by you'    },
         ].map(({ label, value, color, border, filter, desc }) => {
           const isActive = activeFilter === filter
           return (

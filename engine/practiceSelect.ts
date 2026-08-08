@@ -24,14 +24,24 @@ import type { Card, CardState } from '@/domain'
 export type TargetSource =
   /** Exactly these cards — the hand-picked list. Never capped; the choice was explicit. */
   | { type: 'manual';     cardIds: string[] }
-  /** Every card in these decks. */
+  /**
+   * Every card in these decks. Folders are selected by checking their decks — the scope tree
+   * (`lib/scopeTree.ts`) already knows every deck beneath a folder, so expanding here too would be
+   * the same logic in two places.
+   */
   | { type: 'decks';      deckIds: string[] }
-  /** Every card in these folders, subfolders included. */
-  | { type: 'folders';    folderIds: string[] }
   /** Graduated cards falling due within `withinDays` (overdue included). */
   | { type: 'due';        withinDays: number }
   /** The `limit` hardest graduated cards, by FSRS difficulty. */
   | { type: 'difficulty'; limit: number }
+  /**
+   * A RANDOM sample of up to `limit` graduated cards whose FSRS difficulty falls in [min, max]
+   * (1–10). Random rather than hardest-first so repeated sessions over the same band don't drill
+   * the same handful of words; `seed` makes each draw reproducible, and bumping it re-rolls.
+   */
+  | { type: 'difficultyRange'; min: number; max: number; limit: number; seed: number }
+  /** Every card the learner starred (migration 112) — an explicit choice, so never capped. */
+  | { type: 'starred' }
   /** Free text — one word per line or comma-separated — matched against the library. */
   | { type: 'list';       text: string }
 
@@ -41,10 +51,8 @@ export interface SelectionContext {
   cards: Card[]
   /** Forward card states by card id — graduation, difficulty, lapses and due date live here. */
   statesByCard: Map<string, CardState>
-  /** Deck id → the card ids in it. Only needed for `decks`/`folders`. */
+  /** Deck id → the card ids in it. Only needed for the `decks` source. */
   cardIdsByDeck: Map<string, string[]>
-  /** Folder id → its descendant deck ids. Only needed for `folders`. */
-  deckIdsByFolder: Map<string, string[]>
   /** Today as `YYYY-MM-DD`, turnover-aware — the caller passes `getToday(tz, turnover)`. */
   today: string
   /**
@@ -89,6 +97,34 @@ export function splitList(text: string): string[] {
   return text.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean)
 }
 
+/** The bounds FSRS keeps difficulty inside (see `clampD` in engine/fsrs.ts). */
+export const MIN_DIFFICULTY = 1
+export const MAX_DIFFICULTY = 10
+
+/**
+ * Deterministic shuffle. The engine has no clock and no `Math.random`, so randomness is SEEDED:
+ * the same seed always yields the same draw, which is what makes the random-sample source testable
+ * and lets the UI offer a "shuffle" button that visibly re-rolls.
+ *
+ * mulberry32 — small, fast, good enough for picking practice words.
+ */
+export function seededShuffle<T>(items: T[], seed: number): T[] {
+  let state = (seed >>> 0) || 1
+  const next = () => {
+    state = (state + 0x6D2B79F5) >>> 0
+    let t = state
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const out = [...items]
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1))
+    ;[out[i], out[j]] = [out[j]!, out[i]!]
+  }
+  return out
+}
+
 // ─── Resolution ───────────────────────────────────────────────────────────────
 
 /** Card ids a single source matches, BEFORE the drillable gate. Order is the session order. */
@@ -106,11 +142,6 @@ function matchedCardIds(source: TargetSource, ctx: SelectionContext, byId: Map<s
         for (const cardId of ctx.cardIdsByDeck.get(deckId) ?? []) ids.push(cardId)
       }
       return { ids, unmatched: [] }
-    }
-
-    case 'folders': {
-      const deckIds = source.folderIds.flatMap(f => ctx.deckIdsByFolder.get(f) ?? [])
-      return matchedCardIds({ type: 'decks', deckIds }, ctx, byId)
     }
 
     case 'due': {
@@ -135,6 +166,24 @@ function matchedCardIds(source: TargetSource, ctx: SelectionContext, byId: Map<s
       return { ids: rows.slice(0, Math.max(0, source.limit)).map(s => s.cardId), unmatched: [] }
     }
 
+    case 'difficultyRange': {
+      const lo = Math.min(source.min, source.max)
+      const hi = Math.max(source.min, source.max)
+      // Sort before shuffling: the seeded draw must not depend on Map iteration order, or the
+      // "same seed, same words" promise quietly breaks when the library is reloaded.
+      const inBand = [...ctx.statesByCard.values()]
+        .filter(s =>
+          s.graduated && s.difficulty != null &&
+          s.difficulty >= lo && s.difficulty <= hi &&
+          byId.has(s.cardId))
+        .sort((a, b) => a.cardId.localeCompare(b.cardId))
+      const drawn = seededShuffle(inBand, source.seed).slice(0, Math.max(0, source.limit))
+      return { ids: drawn.map(s => s.cardId), unmatched: [] }
+    }
+
+    case 'starred':
+      return { ids: ctx.cards.filter(c => c.starred).map(c => c.id), unmatched: [] }
+
     case 'list': {
       // Build the lookup lazily — only this source needs it.
       const byKey = new Map<string, string>()
@@ -154,9 +203,12 @@ function matchedCardIds(source: TargetSource, ctx: SelectionContext, byId: Map<s
   }
 }
 
-/** Sources that a cap applies to — the ones that can balloon. Explicit choices are exempt. */
+/**
+ * Sources a cap applies to — the ones that can balloon. Exempt: `manual` and `list` (explicit
+ * choices), and the two difficulty sources (they carry their own `limit`).
+ */
 function isCapped(type: TargetSource['type']): boolean {
-  return type === 'decks' || type === 'folders' || type === 'due'
+  return type === 'decks' || type === 'due'
 }
 
 /**

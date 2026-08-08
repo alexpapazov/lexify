@@ -596,6 +596,12 @@ export interface Card {
   pos?:            PartOfSpeech | null
   /** Dictionary citation form of card.front (no leading article, lowercase unless proper noun). */
   lemma?:          string | null
+  /**
+   * Manually flagged by the learner from the star on a study card (migration 112). Filterable in
+   * the deck view, the library and practice. Deliberately not derived from review history —
+   * difficulty and lapses already cover "hard"; a star means "I want to come back to this".
+   */
+  starred?:        boolean
 }
 
 // ─── Synonym groups ───────────────────────────────────────────────────────────

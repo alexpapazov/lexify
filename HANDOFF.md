@@ -259,6 +259,15 @@ Side effect worth knowing: `INPUT_WORD_CAP` is now **5000**, and *all* AI card g
 `lib/generateCards.ts`, which chunks. Calling `/api/cards/generate` directly with a big input
 truncates at 150 cards with no error.
 
+### 3.10d Starred cards (new 2026-08-08)
+
+A manual "come back to this" flag set from a ★ in the **top-left** of every study card (mirroring
+the ℹ on the right) — wired through all five session modes plus the ladder. **Migration 112 —
+apply before deploying.** Filterable as a stat box on the deck page, the library pair view and the
+folder page, and available as a Practice target source. Deliberately NOT derived from review
+history: difficulty/lapses already answer "what's hard", a star answers "what I care about".
+Optimistic write with silent revert; no offline path. See `features/Starred Cards.md`.
+
 ### 3.10c Practice Mode (new 2026-08-07, v1 playable)
 
 Generate fill-in-the-blank sentences from your own vocabulary. `/practice` → choose target words,
@@ -266,10 +275,12 @@ set the "% from graduated vocabulary" slider (per pair, **migration 111 — appl
 generate. **Practice writes nothing** — no `card_states`, no review events, no due dates; it is
 exposure, not assessment.
 
-Target selection is six **composable** sources (`engine/practiceSelect.ts`): hand-picked words,
-decks, folders, due-within-N-days, hardest-by-FSRS-difficulty, and a pasted list. They union into
-one deduped set, all passing the single `targetRejection` gate, and every source reports what it
-dropped (unlabeled / undrillable / unmatched / capped) rather than shrinking silently.
+Target selection is **composable** sources (`engine/practiceSelect.ts`): hand-picked words, decks
+and folders (a navigable mini-library via the shared `lib/scopeTree.ts`), starred cards,
+due-within-N-days, hardest-by-FSRS-difficulty, a random sample from a difficulty band, and a
+pasted list. They union into one deduped set, all passing the single `targetRejection` gate, and
+every source reports what it dropped (unlabeled / undrillable / unmatched / capped) rather than
+shrinking silently.
 
 The load-bearing idea is **the model proposes, code decides**: `/api/practice/generate` returns
 sentences with per-word lemma annotations, and `engine/practice.ts` (pure, 29 tests) scores them

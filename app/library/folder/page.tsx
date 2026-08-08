@@ -19,7 +19,7 @@ import { getToday } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
-type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
+type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
 
 interface DeckWithCards {
   deck:   Deck
@@ -323,6 +323,7 @@ function FolderPageInner() {
         if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
         if (activeFilter === 'dormant')   return !!s?.dormant
         if (activeFilter === 'due')       return cardIsDue(card.id)
+        if (activeFilter === 'starred')   return !!card.starred
         return false
       })
       .map(card => {
@@ -332,12 +333,17 @@ function FolderPageInner() {
       })
   }) : []
 
+  const starredCount = deckStats.reduce((n, { cards }) => n + cards.filter(c => c.starred).length, 0)
+
   const COUNTER_CONFIG = counts ? [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: counts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: counts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
     { key: 'graduated' as FilterKey, label: 'Graduated', value: counts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: counts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
     { key: 'dormant'   as FilterKey, label: 'Dormant',   value: counts.dormant,   color: 'text-ink',         border: 'border-line/70',  desc: 'Paused — manual'  },
+    // Starred is counted here rather than in FolderCounts: it's a card flag, not a study
+    // state, so it doesn't belong in the shared stats helper.
+    { key: 'starred'   as FilterKey, label: 'Starred',   value: starredCount,     color: 'text-warning',     border: 'border-warning/70', desc: 'Marked by you' },
   ] : []
 
   // ── Drop onto row ─────────────────────────────────────────────────────────

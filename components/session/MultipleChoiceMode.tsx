@@ -7,6 +7,7 @@ import { speakCard } from '@/lib/speak'
 import { displayText, isQuoted } from '@/lib/cardText'
 import { EditablePromptPanel } from './EditablePromptPanel'
 import { CardInfoButton } from './CardInfoButton'
+import { StarButton } from './StarButton'
 
 /**
  * Multiple-choice recall, used for pre-graduation "recognition" steps.
@@ -20,7 +21,7 @@ import { CardInfoButton } from './CardInfoButton'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, onInfo, overrideAnswers, onOverrideAnswer, autoPlayAudio = true, ipaText, onToggleIPA }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, onInfo, onToggleStar, overrideAnswers, onOverrideAnswer, autoPlayAudio = true, ipaText, onToggleIPA }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -53,6 +54,8 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   onPromptEdit?: (newText: string) => void
   /** Opens the full card info/edit modal from the prompt-card corner. */
   onInfo?: () => void
+  /** Stars/unstars this card from the top-left corner. Omit and the star is absent. */
+  onToggleStar?: (next: boolean) => Promise<void>
   /**
    * Double-click-to-edit on a choice. originalChoice = the current text,
    * newText = edited value ('' means delete distractor), isCorrect = whether it's the right answer.
@@ -217,6 +220,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
       {deckName && <p className="text-xs text-ink-faint text-center uppercase tracking-wider">{deckName}</p>}
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
         {onInfo && <CardInfoButton onClick={onInfo} />}
+        {onToggleStar && <StarButton starred={card.starred ?? false} onToggle={onToggleStar} />}
         <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />
         {promptSide === 'front' && (
           <button

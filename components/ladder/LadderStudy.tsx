@@ -594,6 +594,16 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ipaOn, currentId, queue])
 
+  /** Star / unstar from the card's top-left corner. Writes only the flag; the ladder's own state
+   *  is untouched, so starring never affects a climb. */
+  async function handleToggleStar(cardId: string, next: boolean) {
+    await new SupabaseCardRepository().setStarred(cardId, next)
+    setCardsById(prev => {
+      const c = prev.get(cardId); if (!c) return prev
+      return new Map(prev).set(cardId, { ...c, starred: next })
+    })
+  }
+
   function onChoicesCached(cardId: string, choices: CardChoices) {
     setCardsById(prev => { const c = prev.get(cardId); if (!c) return prev; return new Map(prev).set(cardId, { ...c, choices }) })
   }
@@ -915,6 +925,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         }}
         onRepeat={handleRepeat}
         onOutcome={onOutcome} onChoicesCached={onChoicesCached} onInfo={() => { setInfoOpen(true); void loadInfoState(currentCard.id) }}
+        onToggleStar={next => handleToggleStar(currentCard.id, next)}
         ipaOn={ipaOn} onToggleIpa={() => setIpaOn(v => !v)}
         onIpaFetched={(id, ipa) => setCardsById(prev => { const c = prev.get(id); return c ? new Map(prev).set(id, { ...c, ipa }) : prev })}
       />

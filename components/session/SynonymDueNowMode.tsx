@@ -6,6 +6,7 @@ import { gradeTyping } from '@/engine/grading'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
 import { CardInfoButton } from './CardInfoButton'
+import { StarButton } from './StarButton'
 
 /**
  * Due Now typed-production mode for synonym-group cards.
@@ -30,6 +31,7 @@ export function SynonymDueNowMode({
   onSynonymTyped,
   onPromptEdit,
   onInfo,
+  onToggleStar,
 }: {
   /** The card that is actually due — its state gets updated by onRate. */
   card: Card
@@ -45,6 +47,8 @@ export function SynonymDueNowMode({
   onSynonymTyped: (synonymCardId: string) => void
   onPromptEdit?: (newText: string) => void
   onInfo?: () => void
+  /** Stars/unstars this card from the top-left corner. Omit and the star is absent. */
+  onToggleStar?: (next: boolean) => Promise<void>
 }) {
   const [sessionCompleted, setSessionCompleted] =
     useState<Array<{ card: Card; typed: string }>>([])
@@ -100,6 +104,7 @@ export function SynonymDueNowMode({
       {/* Prompt */}
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
         {onInfo && <CardInfoButton onClick={onInfo} />}
+        {onToggleStar && <StarButton starred={card.starred ?? false} onToggle={onToggleStar} />}
         {onPromptEdit
           ? <EditablePromptPanel text={card.back} onEdit={t => onPromptEdit(t)} />
           : <p className="text-2xl font-medium text-ink">{card.back}</p>}

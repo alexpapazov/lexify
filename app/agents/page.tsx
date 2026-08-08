@@ -7,6 +7,7 @@ import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { labelCards } from '@/lib/labelCards'
+import { buildScopeTree, type TreeNode, type PairNode, type DeckNode, type FolderNode } from '@/lib/scopeTree'
 import { gatherScopedCards, analyzeBatch, applyProposal, undoApplied, chunk, findDuplicates } from '@/lib/agents/cardEditor'
 import type { ScopedCard, EditProposal, AgentSides, DedupeMode, AppliedUndo } from '@/lib/agents/cardEditor'
 import type { Deck, Folder, CardState, Grant } from '@/domain'
@@ -25,34 +26,8 @@ const STATUS_META: { key: CardStatus; label: string; color: string }[] = [
   { key: 'dormant',   label: 'Dormant',   color: '#9aa' },
 ]
 
-type DeckNode = { kind: 'deck'; id: string; name: string; source: string; target: string }
-type FolderNode = { kind: 'folder'; id: string; name: string; children: TreeNode[]; deckIds: string[] }
-type TreeNode = DeckNode | FolderNode
-type PairNode = { kind: 'pair'; key: string; source: string; target: string; children: TreeNode[]; deckIds: string[] }
-
-/** Build the pair→folder→deck tree from the user's folders + decks (mirrors the library). */
-function buildScopeTree(folders: Folder[], decks: Deck[]): PairNode[] {
-  const pairKeys = Array.from(new Set(decks.map(d => `${d.sourceLanguage}|${d.targetLanguage}`)))
-  return pairKeys.map(key => {
-    const [source, target] = key.split('|') as [string, string]
-    const pf = folders.filter(f => f.sourceLanguage === source && f.targetLanguage === target)
-    const pd = decks.filter(d => d.sourceLanguage === source && d.targetLanguage === target)
-    const pfIds = new Set(pf.map(f => f.id))
-    const byPos = <T extends { position?: number; name: string }>(a: T, b: T) => (a.position ?? 0) - (b.position ?? 0) || a.name.localeCompare(b.name)
-    const deckNode = (d: Deck): DeckNode => ({ kind: 'deck', id: d.id, name: d.name, source: d.sourceLanguage, target: d.targetLanguage })
-    const folderNode = (f: Folder): FolderNode => {
-      const childFolders = pf.filter(x => x.parentId === f.id).sort(byPos).map(folderNode)
-      const childDecks = pd.filter(d => d.folderId === f.id).sort(byPos).map(deckNode)
-      const children = [...childFolders, ...childDecks]
-      const deckIds = children.flatMap(c => c.kind === 'folder' ? c.deckIds : [c.id])
-      return { kind: 'folder', id: f.id, name: f.name, children, deckIds }
-    }
-    const rootFolders = pf.filter(f => !f.parentId || !pfIds.has(f.parentId)).sort(byPos).map(folderNode)
-    const rootDecks = pd.filter(d => !d.folderId || !pfIds.has(d.folderId)).sort(byPos).map(deckNode)
-    const children = [...rootFolders, ...rootDecks]
-    return { kind: 'pair', key, source, target, children, deckIds: pd.map(d => d.id) }
-  })
-}
+// The tree builder itself lives in lib/scopeTree.ts — practice mode picks library scope the same
+// way, and two copies of "mirror the library" would drift.
 
 const PLACEHOLDER = 'e.g. "Split any card whose gloss has two distinct meanings", "Remove the leading \'to \' from every verb gloss", "Add the gender in parentheses to noun glosses", "Delete duplicate cards"…'
 

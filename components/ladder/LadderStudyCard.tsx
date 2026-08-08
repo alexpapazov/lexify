@@ -24,7 +24,7 @@ import { displayText } from '@/lib/cardText'
  * is a small custom screen (no existing equivalent). Each screen's result is
  * mapped to a single ladder outcome via `onOutcome`.
  */
-export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onCardEdit, onRepeat, onOutcome, onChoicesCached, onInfo, ipaOn, onToggleIpa, onIpaFetched }: {
+export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onCardEdit, onRepeat, onOutcome, onChoicesCached, onInfo, onToggleStar, ipaOn, onToggleIpa, onIpaFetched }: {
   card:           Card
   rung:           Rung
   deckCards:      Card[]
@@ -42,6 +42,8 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   onOutcome:      (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void
   onChoicesCached?: (cardId: string, choices: CardChoices) => void
   onInfo?:        () => void
+  /** Stars/unstars this card from the top-left corner. Omit and the star is absent. */
+  onToggleStar?:  (next: boolean) => Promise<void>
   /** Session-sticky "show IPA" flag: once on, every card shows IPA until turned off. */
   ipaOn?:         boolean
   onToggleIpa?:   () => void
@@ -93,7 +95,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         card={card} promptSide={promptSide} answerSide={answerSide}
         deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
         autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
-        onChoicesCached={onChoicesCached} onInfo={onInfo}
+        onChoicesCached={onChoicesCached} onInfo={onInfo} onToggleStar={onToggleStar}
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={trackOverride(answerSide)}
         onChoiceEdit={onChoiceEdit ? ((orig, newText, isCorrect) => onChoiceEdit(card.id, answerSide, orig, newText, isCorrect)) : undefined}
@@ -109,7 +111,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
     return (
       <FlashcardMode
         key={`${card.id}-${rung.id}`}
-        card={card} promptSide={promptSide} deckName={deckName} onInfo={onInfo}
+        card={card} promptSide={promptSide} deckName={deckName} onInfo={onInfo} onToggleStar={onToggleStar}
         promptLanguage={promptSide === 'front' ? sourceLanguage : undefined}
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
@@ -130,7 +132,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         gradingSettings={gradingSettings} gradedReview={rung.selfRated}
         autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
-        strictness={rung.strictness ?? DEFAULT_TYPED_STRICTNESS} deckName={deckName} onInfo={onInfo}
+        strictness={rung.strictness ?? DEFAULT_TYPED_STRICTNESS} deckName={deckName} onInfo={onInfo} onToggleStar={onToggleStar}
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={trackOverride(answerSide)}
         onPromptEdit={onCardEdit ? (t => onCardEdit(card.id, promptSide, t)) : undefined}

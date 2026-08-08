@@ -1,12 +1,16 @@
 # Practice Mode
 
 **Status (2026-08-08): Phases 0–4 DONE.** Migration 110 applied and labels backfilling;
-`engine/practice.ts` (scoring) and `engine/practiceSelect.ts` (six composable target sources);
+`engine/practice.ts` (scoring) and `engine/practiceSelect.ts` (composable target sources);
 generate + repair routes and orchestration; `/practice` page with the cloze player.
-**Migration `111_practice_slider.sql` is PENDING — apply it before deploying.** The generate/repair
-round trip has still never run against the real API (everything is verified by build, unit tests
-with mocked fetch, and a 200 on the route), so expect prompt tuning on the first real session.
-Phase 5 (sentence bank) is next.
+
+> ⚠️ **Migrations `111_practice_slider.sql` and `112_card_starred.sql` are both PENDING — apply
+> both before deploying.** Card and language-pair SELECTs name the new columns, so pushing the code
+> first breaks those queries app-wide.
+
+The generate/repair round trip has still never run against the real API (everything is verified by
+build, unit tests with mocked fetch, and a 200 on the route), so expect prompt tuning on the first
+real session. Phase 5 (sentence bank) is next.
 
 A planned mode where the learner picks from exercise types (cloze, translate-the-sentence, use the
 word in a sentence, …) generated from their own vocabulary. This doc records the agreed design so a
@@ -219,9 +223,11 @@ them into one deduped list in source order, then match order within a source:
 | Source | Ordering | Notes |
 |---|---|---|
 | `manual` | as clicked | Never capped — the choice was explicit |
-| `decks` / `folders` | deck order | Folders expand via `descendantDeckIds` |
+| `decks` | deck order | Folders are selected by checking their decks in the mini-library tree (`lib/scopeTree.ts`) — no separate folder source, so "what's inside this folder" lives in one place |
 | `due` | soonest first | Graduated only (unstudied cards aren't review-scheduled); **overdue included**, no lower bound |
 | `difficulty` | hardest first | FSRS difficulty, lapses as tie-break, card id for determinism. Cards with `difficulty: null` are skipped, not treated as easy |
+| `difficultyRange` | random | A band (1–10) sampled at RANDOM up to a max count, so repeat sessions over the same band don't drill the same handful. Seeded — same seed, same draw; the Shuffle button bumps it |
+| `starred` | library order | Cards you starred (migration 112). Declared rather than inferred — the counterpart to `difficulty` |
 | `list` | pasted order | Matched via injected `normalizeFrontKey`, so "el pan" finds "pan" |
 
 - **Nothing disappears silently** — the result carries `droppedUnlabeled`, `droppedUndrillable`,
@@ -232,7 +238,9 @@ them into one deduped list in source order, then match order within a source:
   sources only.
 - **Purity:** the engine takes `normalizeKey` as an injected function rather than importing
   `lib/duplicates`, and `today` as a string rather than reading a clock.
-- UI: six tabs feeding one target set, resolved words shown as removable chips. Removing a word
+- UI: tabs feeding one target set, resolved words shown as removable chips. Decks & folders is a
+  navigable mini-library (shared `lib/scopeTree.ts`, also used by the agent's scope picker) rather
+  than a flat list — two folders called "Литература" are indistinguishable flattened. Removing a word
   that arrived from a bulk source pins the whole selection down to an explicit list minus that word
   — otherwise the source would just re-add it on the next render.
 

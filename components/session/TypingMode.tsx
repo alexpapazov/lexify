@@ -12,6 +12,7 @@ import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
 import { EditableAnswerText } from './EditableAnswerText'
 import { CardInfoButton } from './CardInfoButton'
+import { StarButton } from './StarButton'
 
 /**
  * Type-the-answer recall component.
@@ -27,7 +28,7 @@ import { CardInfoButton } from './CardInfoButton'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, hintable, onHint, onNearMiss, onTypedPenalty, strictness = DEFAULT_TYPED_STRICTNESS, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, onToggleStar, hintable, onHint, onNearMiss, onTypedPenalty, strictness = DEFAULT_TYPED_STRICTNESS, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
@@ -52,6 +53,8 @@ export function TypingMode({
   onResetCard?: () => void
   /** Opens the full card info/edit modal from the prompt-card corner. */
   onInfo?: () => void
+  /** Stars/unstars this card from the top-left corner. Omit and the star is absent. */
+  onToggleStar?: (next: boolean) => Promise<void>
   /** Whether the "Hint" button is offered (Due Now reviews only, not the pipeline). */
   hintable?: boolean
   /** Called when a hint is revealed, with the cumulative level and the interval-growth dampening factor. */
@@ -523,6 +526,7 @@ export function TypingMode({
               </button>
             )}
             {onInfo && <CardInfoButton onClick={onInfo} />}
+        {onToggleStar && <StarButton starred={card.starred ?? false} onToggle={onToggleStar} />}
             {gradedReview && onResetCard && (
               <button
                 onClick={() => setResetConfirm(true)}

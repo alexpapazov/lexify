@@ -925,6 +925,17 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
     }
   }
 
+    /**
+   * Star / unstar the current card. Practice-agnostic: it writes only the flag, never touches
+   * card_states, and updates the in-session copies so the star stays lit as the card re-shows.
+   */
+  const handleToggleStar = useCallback(async (cardId: string, next: boolean) => {
+    await new SupabaseCardRepository().setStarred(cardId, next)
+    setQueue(q => q.map(item => item.card.id === cardId
+      ? { ...item, card: { ...item.card, starred: next } } : item))
+    setAllCards(prev => prev.map(c => c.id === cardId ? { ...c, starred: next } : c))
+  }, [])
+
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '', _issueType?: GradingIssueType, softWrongRecallRating?: Rating) => {
     const current = queue[index]
     if (!current) return
@@ -2004,7 +2015,8 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         <ConfusionDrill card={current.card} otherFront={current.drill.otherFront} deckName={deckName}
           onDone={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(current.card.id, 'back', t)}
-          onInfo={() => setInfoOpen(true)} />
+          onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)} />
         {infoOpen && (
           <CardEditModal
             card={current.card} state={cardStates.get(current.card.id)} userId={userId} deckId={deckId}
@@ -2116,6 +2128,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated && step.stepType === 'recognition' ? (
@@ -2140,6 +2153,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated && step.stepType === 'typing' && synAnswersDistinct ? (
         // ── Pipeline multi-field synonym typing ──────────────────────────────
@@ -2189,6 +2203,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
@@ -2200,6 +2215,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           hintable={hintable} onHint={handleHint}
           answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
@@ -2216,6 +2232,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onSynonymTyped={handleSynonymDueNowTyped}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
         />
       ) : (
         // ── Post-graduation typed recall (no synonym group) ───────────────────
@@ -2236,6 +2253,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           hintable={hintable} onHint={handleHint} onNearMiss={handleNearMiss}
           onTypedPenalty={handleTypedPenalty}
           strictness={{ spelling: schedulerParams.strictSpelling, accents: schedulerParams.strictAccents, articles: schedulerParams.strictArticles }}

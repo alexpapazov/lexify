@@ -630,6 +630,21 @@ function FolderSessionInner() {
     }
   }
 
+    /**
+   * Star / unstar the current card. Practice-agnostic: it writes only the flag, never touches
+   * card_states, and updates the in-session copies so the star stays lit as the card re-shows.
+   */
+  const handleToggleStar = useCallback(async (cardId: string, next: boolean) => {
+    await new SupabaseCardRepository().setStarred(cardId, next)
+    // These sessions carry each card on its queue item (and again inside the item's deckCards pool
+    // used for distractors), so patch both or the star flickers off when the card re-shows.
+    setQueue(q => q.map(item => ({
+      ...item,
+      card: item.card.id === cardId ? { ...item.card, starred: next } : item.card,
+      deckCards: item.deckCards.map(c => c.id === cardId ? { ...c, starred: next } : c),
+    })))
+  }, [])
+
   const handleAnswer = useCallback(async (rating: Rating, wasCorrect: boolean, userAnswer = '', _issueType?: GradingIssueType, softWrongRecallRating?: Rating) => {
     const current = queue[index]
     if (!current) return
@@ -1524,7 +1539,8 @@ function FolderSessionInner() {
         <ConfusionDrill card={current.card} otherFront={current.drill.otherFront} deckName={current.deckName}
           onDone={() => setIndex(i => i + 1)}
           onPromptEdit={t => handlePromptEdit(current.card.id, 'back', t)}
-          onInfo={() => setInfoOpen(true)} />
+          onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)} />
         {infoOpen && (
           <CardEditModal
             card={current.card} state={current.state} userId={userId} deckId={current.deckId}
@@ -1598,6 +1614,7 @@ function FolderSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated && step.stepType === 'recognition' ? (
@@ -1615,6 +1632,7 @@ function FolderSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onChoiceEdit={(orig, newText, isCorrect) => handleChoiceEdit(card.id, step.answerSide, orig, newText, isCorrect)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : !state.graduated ? (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
@@ -1634,6 +1652,7 @@ function FolderSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, step.promptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, step.answerSide, t)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : current.productionMode === 'self-graded' ? (
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
@@ -1644,6 +1663,7 @@ function FolderSessionInner() {
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           hintable={hintable} onHint={handleHint}
           answerLanguage={reviewAnswerSide === 'front' ? sourceLanguage : targetLanguage}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
@@ -1665,6 +1685,7 @@ function FolderSessionInner() {
           onAnswerEdit={t => handlePromptEdit(card.id, reviewAnswerSide, t)}
           onResetCard={handleResetCard}
           onInfo={() => setInfoOpen(true)}
+          onToggleStar={next => handleToggleStar(card.id, next)}
           hintable={hintable} onHint={handleHint} onNearMiss={handleNearMiss}
           onTypedPenalty={handleTypedPenalty}
           strictness={strictnessMap.get(`${sourceLanguage}|${targetLanguage}`) ?? DEFAULT_TYPED_STRICTNESS}

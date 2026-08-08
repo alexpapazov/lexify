@@ -22,11 +22,13 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { buildLibraryIndex, vocabularyCoverage, toPracticeTargets, type PracticeTarget } from '@/engine/practice'
-import { resolveTargets, DEFAULT_CAP_PER_SOURCE, type TargetSource } from '@/engine/practiceSelect'
+import {
+  resolveTargets, DEFAULT_CAP_PER_SOURCE, MIN_DIFFICULTY, MAX_DIFFICULTY, type TargetSource,
+} from '@/engine/practiceSelect'
+import { buildScopeTree, type TreeNode } from '@/lib/scopeTree'
 import { generatePracticeExercises, type PreparedExercise } from '@/lib/practiceGenerate'
 import { labelCards } from '@/lib/labelCards'
 import { normalizeFrontKey } from '@/lib/duplicates'
-import { descendantDeckIds } from '@/lib/folderStats'
 import { getToday } from '@/lib/dates'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { ClozePlayer } from '@/components/practice/ClozePlayer'
@@ -43,12 +45,12 @@ const DEFAULT_GRADUATED_PCT = 70
 const COUNT_CHOICES = [3, 5, 8]
 
 /** Which picker is open. Every tab feeds the same target set — they compose, they don't replace. */
-type PickerTab = 'words' | 'decks' | 'folders' | 'due' | 'hardest' | 'paste'
+type PickerTab = 'words' | 'library' | 'starred' | 'due' | 'hardest' | 'paste'
 
 const TABS: { id: PickerTab; label: string }[] = [
   { id: 'words',   label: 'Words'   },
-  { id: 'decks',   label: 'Decks'   },
-  { id: 'folders', label: 'Folders' },
+  { id: 'library', label: 'Decks & folders' },
+  { id: 'starred', label: '★ Starred' },
   { id: 'due',     label: 'Due soon' },
   { id: 'hardest', label: 'Hardest' },
   { id: 'paste',   label: 'Paste a list' },
@@ -62,13 +64,80 @@ const DUE_WINDOWS = [
   { days: 30, label: 'This month' },
 ]
 
-/** Sizes offered by the "Hardest" tab — a band, not a raw FSRS difficulty number. */
+/** Quick "just give me the worst ones" sizes. */
 const HARDEST_SIZES = [10, 20, 50]
+
+/** Starting band for the difficulty-range sampler — the upper half, i.e. the words that fight back. */
+const DEFAULT_RANGE: [number, number] = [6, 10]
+const DEFAULT_RANGE_LIMIT = 15
 
 export default function PracticePage() {
   const offline = useOfflineMode()
   if (offline) return <OfflineUnavailable feature="Practice" />
   return <PracticeInner />
+}
+
+/**
+ * One row of the mini-library tree: a folder you can expand, or a deck you can check.
+ *
+ * Selection is by DECK id throughout — checking a folder checks every deck beneath it, so the
+ * engine only ever needs a deck list and there's no second copy of "what's inside this folder".
+ * A folder shows as checked only when all its decks are, and half-lit when some are.
+ */
+function ScopeRow({ node, depth, deckSel, expanded, onToggleDecks, onToggleExpanded }: {
+  node:             TreeNode
+  depth:            number
+  deckSel:          Set<string>
+  expanded:         Set<string>
+  onToggleDecks:    (ids: string[]) => void
+  onToggleExpanded: (id: string) => void
+}) {
+  const pad = { paddingLeft: `${depth * 16 + 12}px` }
+
+  if (node.kind === 'deck') {
+    const on = deckSel.has(node.id)
+    return (
+      <button onClick={() => onToggleDecks([node.id])} style={pad}
+        className={`w-full text-left pr-3 py-2 flex items-center gap-2 transition-colors ${
+          on ? 'bg-accent/10' : 'hover:bg-surface-raised/50'
+        }`}>
+        <span className={`w-3.5 h-3.5 rounded border shrink-0 flex items-center justify-center text-[9px] ${
+          on ? 'border-accent bg-accent/20 text-accent' : 'border-line/30'
+        }`}>{on ? '✓' : ''}</span>
+        <span className="text-ink-muted shrink-0">🗂</span>
+        <span className="text-sm text-ink truncate">{node.name}</span>
+      </button>
+    )
+  }
+
+  const all  = node.deckIds.length > 0 && node.deckIds.every(id => deckSel.has(id))
+  const some = !all && node.deckIds.some(id => deckSel.has(id))
+  const open = expanded.has(node.id)
+
+  return (
+    <>
+      <div style={pad} className="w-full pr-3 py-2 flex items-center gap-2 hover:bg-surface-raised/50 transition-colors">
+        <button onClick={() => onToggleDecks(node.deckIds)} title="Select every deck in this folder"
+          className={`w-3.5 h-3.5 rounded border shrink-0 flex items-center justify-center text-[9px] ${
+            all  ? 'border-accent bg-accent/20 text-accent'
+            : some ? 'border-accent/60 bg-accent/10 text-accent'
+            : 'border-line/30'
+          }`}>{all ? '✓' : some ? '–' : ''}</button>
+        <button onClick={() => onToggleExpanded(node.id)}
+          className="flex items-center gap-2 min-w-0 flex-1 text-left">
+          <span className="text-ink-faint text-[10px] w-2 shrink-0">{open ? '▾' : '▸'}</span>
+          <span className="text-ink-muted shrink-0">📁</span>
+          <span className="text-sm text-ink truncate">{node.name}</span>
+          <span className="text-xs text-ink-faint shrink-0">{node.deckIds.length}</span>
+        </button>
+      </div>
+      {open && node.children.map(child => (
+        <ScopeRow key={child.id} node={child} depth={depth + 1}
+          deckSel={deckSel} expanded={expanded}
+          onToggleDecks={onToggleDecks} onToggleExpanded={onToggleExpanded} />
+      ))}
+    </>
+  )
 }
 
 function PracticeInner() {
@@ -87,11 +156,17 @@ function PracticeInner() {
   const [tab,       setTab]       = useState<PickerTab>('words')
   const [search,    setSearch]    = useState('')
   const [selected,  setSelected]  = useState<Set<string>>(new Set())   // manual card ids
-  const [deckSel,   setDeckSel]   = useState<Set<string>>(new Set())
-  const [folderSel, setFolderSel] = useState<Set<string>>(new Set())
+  const [deckSel,   setDeckSel]   = useState<Set<string>>(new Set())   // deck ids (folders check theirs)
+  const [expanded,  setExpanded]  = useState<Set<string>>(new Set())   // open folders in the tree
   const [dueDays,   setDueDays]   = useState<number | null>(null)
   const [hardest,   setHardest]   = useState<number | null>(null)
   const [pasted,    setPasted]    = useState('')
+  const [starredOn, setStarredOn] = useState(false)
+  // Difficulty-range sampler: a band, a ceiling, and a seed you can re-roll.
+  const [rangeOn,    setRangeOn]    = useState(false)
+  const [range,      setRange]      = useState<[number, number]>(DEFAULT_RANGE)
+  const [rangeLimit, setRangeLimit] = useState(DEFAULT_RANGE_LIMIT)
+  const [rangeSeed,  setRangeSeed]  = useState(1)
 
   const [pct,       setPct]       = useState(DEFAULT_GRADUATED_PCT)
   const [count,     setCount]     = useState(COUNT_CHOICES[1]!)
@@ -121,8 +196,8 @@ function PracticeInner() {
     if (!userId || !pair) return
     let cancelled = false
     // Switching language invalidates every selection — the words no longer exist here.
-    setSelected(new Set()); setDeckSel(new Set()); setFolderSel(new Set())
-    setDueDays(null); setHardest(null); setPasted('')
+    setSelected(new Set()); setDeckSel(new Set()); setExpanded(new Set())
+    setDueDays(null); setHardest(null); setPasted(''); setRangeOn(false); setStarredOn(false)
     void (async () => {
       const [pairCards, allStates, allDecks, allFolders] = await Promise.all([
         new SupabaseCardRepository().listOwned(userId, pair.sourceLanguage, pair.targetLanguage),
@@ -159,24 +234,30 @@ function PracticeInner() {
       states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]),
     ),
     cardIdsByDeck,
-    deckIdsByFolder: new Map(
-      folders.map(f => [f.id, descendantDeckIds(f.id, folders, decks)]),
-    ),
     today: getToday(deviceTimeZone()),
     normalizeKey: (text: string) => normalizeFrontKey(text, pair?.sourceLanguage ?? ''),
-  }), [cards, states, cardIdsByDeck, folders, decks, pair?.sourceLanguage])
+  }), [cards, states, cardIdsByDeck, pair?.sourceLanguage])
+
+  /** This pair's slice of the library, as a navigable tree (shared with the agent's scope picker). */
+  const tree = useMemo(() => {
+    const pairs = buildScopeTree(folders, decks)
+    return pairs.find(p => p.key === pairKey)?.children ?? []
+  }, [folders, decks, pairKey])
 
   /** The active sources, in the order they contribute to the session. */
   const sources = useMemo<TargetSource[]>(() => {
     const out: TargetSource[] = []
-    if (selected.size   > 0)  out.push({ type: 'manual',  cardIds: [...selected] })
-    if (deckSel.size    > 0)  out.push({ type: 'decks',   deckIds: [...deckSel] })
-    if (folderSel.size  > 0)  out.push({ type: 'folders', folderIds: [...folderSel] })
-    if (dueDays !== null)     out.push({ type: 'due',     withinDays: dueDays })
-    if (hardest !== null)     out.push({ type: 'difficulty', limit: hardest })
-    if (pasted.trim())        out.push({ type: 'list',    text: pasted })
+    if (selected.size > 0)  out.push({ type: 'manual', cardIds: [...selected] })
+    if (deckSel.size  > 0)  out.push({ type: 'decks',  deckIds: [...deckSel] })
+    if (starredOn)          out.push({ type: 'starred' })
+    if (dueDays !== null)   out.push({ type: 'due',    withinDays: dueDays })
+    if (hardest !== null)   out.push({ type: 'difficulty', limit: hardest })
+    if (rangeOn)            out.push({
+      type: 'difficultyRange', min: range[0], max: range[1], limit: rangeLimit, seed: rangeSeed,
+    })
+    if (pasted.trim())      out.push({ type: 'list',   text: pasted })
     return out
-  }, [selected, deckSel, folderSel, dueDays, hardest, pasted])
+  }, [selected, deckSel, starredOn, dueDays, hardest, rangeOn, range, rangeLimit, rangeSeed, pasted])
 
   const selection = useMemo(() => resolveTargets(sources, selectionCtx), [sources, selectionCtx])
   const chosen: PracticeTarget[] = selection.targets
@@ -200,9 +281,18 @@ function PracticeInner() {
     })
   }
 
-  /** Generic set toggle for the deck and folder checklists. */
-  function toggleIn(setter: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) {
-    setter(prev => {
+  /** Toggle a set of deck ids together — one deck, or every deck under a folder. */
+  function toggleDecks(ids: string[]) {
+    setDeckSel(prev => {
+      const next = new Set(prev)
+      const allOn = ids.every(id => next.has(id))
+      for (const id of ids) { if (allOn) next.delete(id); else next.add(id) }
+      return next
+    })
+  }
+
+  function toggleExpanded(id: string) {
+    setExpanded(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id); else next.add(id)
       return next
@@ -210,8 +300,8 @@ function PracticeInner() {
   }
 
   function clearAllSources() {
-    setSelected(new Set()); setDeckSel(new Set()); setFolderSel(new Set())
-    setDueDays(null); setHardest(null); setPasted('')
+    setSelected(new Set()); setDeckSel(new Set()); setStarredOn(false)
+    setDueDays(null); setHardest(null); setPasted(''); setRangeOn(false)
   }
 
   /** Removes one word from the session — it may have arrived via any source, so the fix depends. */
@@ -220,8 +310,8 @@ function PracticeInner() {
     // It came from a bulk source, which has no per-card handle. Pin the current selection down to
     // the explicit list minus this word, so the removal sticks.
     setSelected(new Set(chosen.filter(t => t.cardId !== cardId).map(t => t.cardId)))
-    setDeckSel(new Set()); setFolderSel(new Set())
-    setDueDays(null); setHardest(null); setPasted('')
+    setDeckSel(new Set()); setStarredOn(false)
+    setDueDays(null); setHardest(null); setPasted(''); setRangeOn(false)
   }
 
   async function runLabeling() {
@@ -438,33 +528,40 @@ function PracticeInner() {
           )
         )}
 
-        {/* ── Decks / Folders: checklists ── */}
-        {(tab === 'decks' || tab === 'folders') && (() => {
-          const isDecks = tab === 'decks'
-          const items = isDecks
-            ? decks.map(d => ({ id: d.id, name: d.name }))
-            // Only folders that actually contain a deck of this pair are worth offering.
-            : folders
-                .filter(f => descendantDeckIds(f.id, folders, decks).length > 0)
-                .map(f => ({ id: f.id, name: f.name }))
-          const sel = isDecks ? deckSel : folderSel
-          const setter = isDecks ? setDeckSel : setFolderSel
-          if (items.length === 0) {
-            return <p className="text-xs text-ink-faint py-3 text-center">
-              No {isDecks ? 'decks' : 'folders'} in this language yet.
-            </p>
-          }
-          return (
-            <div className="rounded-card border border-line/10 divide-y divide-line/5 max-h-64 overflow-y-auto">
-              {items.map(item => (
-                <button key={item.id} onClick={() => toggleIn(setter, item.id)}
-                  className={`w-full text-left px-4 py-2.5 flex items-center justify-between gap-3 transition-colors ${
-                    sel.has(item.id) ? 'bg-accent/10' : 'hover:bg-surface-raised/50'
-                  }`}>
-                  <span className="text-sm text-ink truncate">{item.name}</span>
-                  {sel.has(item.id) && <span className="text-accent text-sm shrink-0">✓</span>}
-                </button>
+        {/* ── Decks & folders: the library as a navigable tree ── */}
+        {tab === 'library' && (
+          tree.length === 0 ? (
+            <p className="text-xs text-ink-faint py-3 text-center">No decks in this language yet.</p>
+          ) : (
+            <div className="rounded-card border border-line/10 max-h-72 overflow-y-auto py-1">
+              {tree.map(node => (
+                <ScopeRow key={node.id} node={node} depth={0}
+                  deckSel={deckSel} expanded={expanded}
+                  onToggleDecks={toggleDecks} onToggleExpanded={toggleExpanded} />
               ))}
+            </div>
+          )
+        )}
+
+        {/* ── Starred ── */}
+        {tab === 'starred' && (() => {
+          const starCount = cards.filter(c => c.starred).length
+          return (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={starredOn} disabled={starCount === 0}
+                  onChange={e => setStarredOn(e.target.checked)}
+                  className="accent-accent w-4 h-4 disabled:opacity-40" />
+                <span className={`text-sm ${starCount === 0 ? 'text-ink-faint' : 'text-ink'}`}>
+                  {starCount === 0
+                    ? 'No starred cards in this language yet'
+                    : `Practice my ${starCount} starred card${starCount !== 1 ? 's' : ''}`}
+                </span>
+              </label>
+              <p className="text-xs text-ink-faint">
+                Star a card from the ★ in its top-left corner while studying. Unlike “Hardest”, this is
+                whatever you marked — not what your review history inferred.
+              </p>
             </div>
           )
         })()}
@@ -488,22 +585,79 @@ function PracticeInner() {
           </div>
         )}
 
-        {/* ── Hardest ── */}
+        {/* ── Hardest: the quick "worst N", plus a difficulty band sampled at random ── */}
         {tab === 'hardest' && (
-          <div className="space-y-2">
-            <div className="flex flex-wrap gap-2">
-              {HARDEST_SIZES.map(n => (
-                <button key={n} onClick={() => setHardest(hardest === n ? null : n)}
-                  className={`px-4 py-1.5 rounded-lg text-sm border transition-colors ${
-                    hardest === n ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
-                  }`}>
-                  Hardest {n}
-                </button>
-              ))}
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                {HARDEST_SIZES.map(n => (
+                  <button key={n} onClick={() => setHardest(hardest === n ? null : n)}
+                    className={`px-4 py-1.5 rounded-lg text-sm border transition-colors ${
+                      hardest === n ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
+                    }`}>
+                    Hardest {n}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-ink-faint">
+                The words your review history says you find hardest, most lapses first among ties.
+              </p>
             </div>
-            <p className="text-xs text-ink-faint">
-              The words your review history says you find hardest, most lapses first among ties.
-            </p>
+
+            <div className="border-t border-line/10 pt-4 space-y-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={rangeOn} onChange={e => setRangeOn(e.target.checked)}
+                  className="accent-accent w-4 h-4" />
+                <span className="text-sm text-ink">Pick from a difficulty range instead</span>
+              </label>
+
+              {rangeOn && (
+                <div className="space-y-3 pl-6">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs text-ink-muted">Easiest included</span>
+                      <span className="text-sm text-ink tabular-nums">{range[0].toFixed(1)}</span>
+                    </div>
+                    <input type="range" min={MIN_DIFFICULTY} max={MAX_DIFFICULTY} step={0.5}
+                      value={range[0]}
+                      // Keep the handles from crossing — a reversed band is confusing even though
+                      // the engine tolerates it.
+                      onChange={e => setRange(([, hi]) => [Math.min(Number(e.target.value), hi), hi])}
+                      className="w-full accent-accent" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs text-ink-muted">Hardest included</span>
+                      <span className="text-sm text-ink tabular-nums">{range[1].toFixed(1)}</span>
+                    </div>
+                    <input type="range" min={MIN_DIFFICULTY} max={MAX_DIFFICULTY} step={0.5}
+                      value={range[1]}
+                      onChange={e => setRange(([lo]) => [lo, Math.max(Number(e.target.value), lo)])}
+                      className="w-full accent-accent" />
+                  </div>
+
+                  <div className="flex items-end gap-3 flex-wrap">
+                    <div className="space-y-1.5">
+                      <label className="text-xs text-ink-muted block">Most cards to take</label>
+                      <input type="number" min={1} max={200} className="input w-28"
+                        value={rangeLimit}
+                        onChange={e => setRangeLimit(Math.max(1, Math.min(200, parseInt(e.target.value) || 1)))} />
+                    </div>
+                    <button onClick={() => setRangeSeed(s => s + 1)}
+                      title="Draw a different random selection from the same range"
+                      className="btn-ghost text-sm py-2 px-3">
+                      ⟳ Shuffle
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-ink-faint">
+                    Difficulty runs 1 (easy) to 10 (hard), from your review history. Cards in the
+                    range are picked <strong className="text-ink-muted">at random</strong>, so
+                    repeating this doesn&apos;t drill the same words — press Shuffle for a new draw.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

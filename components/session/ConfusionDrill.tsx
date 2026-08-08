@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import type { Card } from '@/domain'
 import { displayText } from '@/lib/cardText'
 import { CardInfoButton } from './CardInfoButton'
+import { StarButton } from './StarButton'
 import { EditablePromptPanel } from './EditablePromptPanel'
 
 /**
@@ -11,13 +12,15 @@ import { EditablePromptPanel } from './EditablePromptPanel'
  * (typed B on a card that wanted A). Shows A's meaning and asks them to pick A's word vs B's word —
  * fixing the discrimination while it's fresh. Pure practice: it never reschedules either card.
  */
-export function ConfusionDrill({ card, otherFront, deckName, onDone, onPromptEdit, onInfo }: {
+export function ConfusionDrill({ card, otherFront, deckName, onDone, onPromptEdit, onInfo, onToggleStar }: {
   card: Card            // card A (the one under review)
   otherFront: string    // card B's target word (the word they wrongly typed)
   deckName?: string
   onDone: () => void
   onPromptEdit?: (newText: string) => void   // inline-edit card A's shown meaning (card.back)
   onInfo?: () => void                        // open the full card info/edit modal
+  /** Stars/unstars this card from the top-left corner. Omit and the star is absent. */
+  onToggleStar?: (next: boolean) => Promise<void>
 }) {
   const correct = displayText(card.front)
   const other   = displayText(otherFront)
@@ -33,6 +36,7 @@ export function ConfusionDrill({ card, otherFront, deckName, onDone, onPromptEdi
       <p className="text-xs text-center text-warning uppercase tracking-wider">Discrimination check · which word is this?</p>
       <div className="panel relative min-h-[120px] flex items-center justify-center text-center">
         {onInfo && <CardInfoButton onClick={onInfo} />}
+        {onToggleStar && <StarButton starred={card.starred ?? false} onToggle={onToggleStar} />}
         {onPromptEdit
           ? <EditablePromptPanel text={prompt} onEdit={onPromptEdit} />
           : <p className="text-2xl font-medium text-ink">{prompt}</p>}
