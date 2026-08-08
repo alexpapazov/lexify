@@ -4,10 +4,10 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~58,700 lines across 260 TS/TSX files, 706 commits, 731 passing tests (49 suites).
+- **Scale**: ~60,500 lines across 266 TS/TSX files, 706 commits, 783 passing tests (50 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`113`, applied BY HAND — **all
-  applied, nothing pending.**
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`114`, applied BY HAND. **`114` is
+  PENDING at the top level — the Goal Scheduler does not work until it is run.**
 
 ---
 
@@ -21,11 +21,12 @@ implementation notes + error log); this file is the map you read first.
   commit message** — zsh history expansion fails the commit and leaves files staged-but-uncommitted.
   Quote any `[bracket]` paths.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
-  `001`–`113` are all applied and all live in `supabase/migrations/archive/`. **The top level is
-  empty, which is the signal that nothing is pending** — put a new migration there, tell the user to
-  run it, and move it into `archive/` once it's live. Next number = **114**.
+  `001`–`113` are all applied and all live in `supabase/migrations/archive/`. **An empty top level
+  is the signal that nothing is pending** — put a new migration there, tell the user to run it, and
+  move it into `archive/` once it's live. **`114_goal_schedules.sql` is sitting there now and needs
+  running.** Next number = **115**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **49 suites / 731 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **50 suites / 783 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -147,11 +148,19 @@ flag, so you can pause one and keep the other. "Make dormant now" and auto-dorma
 
 ### 3.4 Goals and carryover
 
-Per-language, per-weekday goals (`language_pairs.goals`). Three escalating modes:
+Per-language, per-weekday goals (`language_pairs.goals`). Three escalating carryover modes:
 
 1. **Plain** — today's configured goal.
 2. **Yesterday carryover** — two toggles: carry shortfall / carry surplus. Bounded to one day.
 3. **Full debt** — unbounded cumulative deficit since the enable date, with per-day waivers.
+
+**And a fourth, separate mode: the Goal Scheduler (2026-08-08, migration 114 — PENDING).** Settings →
+Daily Goals → **Schedule** per language: set "200 new words by Dec 1", per-day limits and days off,
+a ceiling, and checkpoints; the daily number is DERIVED from what's left. **A live schedule
+SUPERSEDES that pair's weekday goals AND its carryover mode** — the re-derived goal has already
+absorbed a missed day, so stacking full debt on top would charge for it twice. **Pass 1 only: the
+engine + editor are built, but none of the four goal consumers read it yet.** Read
+`features/Goal Scheduler.md` before touching it.
 
 **The debt is DERIVED, not stored**: `plannedGoalSum` sums the *configured* goals and the deficit is
 recomputed as `grads − planned` each day. That statelessness is load-bearing — it's why the **2.5×
@@ -461,12 +470,22 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 
 ## 7. Where the 2026-08-08 session left off
 
-**Everything is committed-ready, migrations 110–113 are applied, and the tree is clean.** Practice
-Mode phases 0–5 shipped; nothing is half-written.
+**Migrations 110–113 are applied. `114_goal_schedules.sql` is PENDING — run it first.** Practice
+Mode phases 0–5 shipped. The **Goal Scheduler is half-built ON PURPOSE** (agreed split, see below);
+nothing else is half-written.
 
 **Pick up here — in this order:**
 
-1. **Phase 6 (agreed to start next session): more exercise modes + their grading.** Translate
+0. **Goal Scheduler Pass 2 — wire the derived goal into the four goal consumers.** Pass 1 (migration,
+   `lib/goalSchedule.ts` + 52 tests, repo, Settings editor) is done and green, but **nothing outside
+   the editor reads a schedule yet**, so a scheduled pair still shows its old weekday number on the
+   dashboard, PresentSnapshot, ReviewCalendar and the ladder's stop-at-goal cap. The full checklist —
+   including the one that is NOT `scheduleStatus` (ReviewCalendar must use `plannedForDate`, because
+   a past day's goal is a historical record) — is in `features/Goal Scheduler.md` §5. **The seam:**
+   `plannedGoalSum`/`owedGoalForDate` already take a per-DATE `goalForDay(dateStr)` function, so a
+   schedule is just another source of it — keep this additive.
+
+1. **Phase 6: more exercise modes + their grading.** Translate
    target→native, native→target, and free production ("use this word in a sentence"). **STOP AND
    DISCUSS BEFORE BUILDING** — the user explicitly deferred the grading design, and it is the real
    decision: cloze reuses `gradeTyping` and is fully cacheable, whereas these modes need AI grading
@@ -480,7 +499,7 @@ Mode phases 0–5 shipped; nothing is half-written.
    that language, not filtering harder** — that decision is open and needs the real numbers first.
 
 3. **The whole practice pipeline is thinly exercised against the real API.** It has been run enough
-   to surface (and fix) the naturalness problem, but coverage is: build, 731 unit tests with mocked
+   to surface (and fix) the naturalness problem, but coverage is: build, unit tests with mocked
    fetch, and a handful of live sessions. Bank reuse across sessions, per-word plans, and native
    cloze have had little or no real-account use.
 
@@ -497,7 +516,10 @@ Mode phases 0–5 shipped; nothing is half-written.
 Roughly in priority order. Nothing here is half-written — the tree is clean and every migration is
 applied, so any of these is a clean start.
 
-0. **Vocabulary onboarding + batch deck import are unexercised against a real account.** Both are
+0. **The Goal Scheduler has never run against a real account** — it is behind auth and needs
+   migration 114. The engine is 52-test verified, but the save/update/retire round-trip, the two
+   progress queries, and the live preview against real graduation data are all unexercised.
+   Also: **vocabulary onboarding + batch deck import are unexercised against a real account.** Both are
    code-complete, build/test-verified, and their migrations are live, but neither was clicked through
    (the flows are behind auth). First run to watch for onboarding: rate a handful of words, then check
    the deck's Due Now counts and the ℹ panel's per-track schedules. For batch import: confirm the
@@ -544,7 +566,7 @@ feature, and update it afterward.** Each carries its own error log.
 
 `Learning Pipeline.md` · `Due Now.md` · `Typed Grading.md` · `Confusion Handling.md` ·
 `Language Syncing.md` · `Card Data.md` · `Agent Platform.md` · `Vocabulary Onboarding.md` ·
-`Batch Deck Import.md` · **`Practice Mode.md`** · **`Starred Cards.md`** ·
+`Batch Deck Import.md` · **`Practice Mode.md`** · **`Starred Cards.md`** · **`Goal Scheduler.md`** ·
 `Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
 `Configurable Pipeline (proposal).md` · `Card Connection Agent (proposal).md`
 

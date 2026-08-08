@@ -21,6 +21,16 @@ import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { voiceNameFor } from '@/lib/speak'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { labelCards, type LabelableCard } from '@/lib/labelCards'
+import { SupabaseGoalScheduleRepository } from '@/lib/data/goalSchedules'
+import { GoalScheduleEditor } from '@/components/settings/GoalScheduleEditor'
+
+/**
+ * How a language's daily goal is set. 'daily'/'weekday' write `language_pairs.goals`; 'schedule' hands
+ * the pair to a deadline-driven `goal_schedules` row, which SUPERSEDES both the weekday goals and the
+ * carryover settings below (the schedule re-derives its own number from what's left, so stacking
+ * carryover on top would charge for a missed day twice).
+ */
+type GoalMode = 'daily' | 'weekday' | 'schedule'
 
 // ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
 function hslToHex(h: number, s: number, l: number): string {
@@ -485,7 +495,9 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [redistributeMsg,   setRedistributeMsg]   = useState<string | null>(null)
   const [langPairs,              setLangPairs]              = useState<LanguagePair[]>([])
   const [goalDrafts,             setGoalDrafts]             = useState<Record<string, Record<string, string>>>({})
-  const [goalModes,              setGoalModes]              = useState<Record<string, 'daily' | 'weekday'>>({})
+  const [goalModes,              setGoalModes]              = useState<Record<string, GoalMode>>({})
+  /** Pair keys with a live schedule — they open in schedule mode and ignore carryover entirely. */
+  const [scheduledPairs,         setScheduledPairs]         = useState<Set<string>>(new Set())
   const [goalSavingKey,          setGoalSavingKey]          = useState<string | null>(null)
   const [confirmDeletePair,      setConfirmDeletePair]      = useState<string | null>(null)  // "src|tgt", first warning
   const [deletingPair,           setDeletingPair]           = useState(false)
@@ -573,8 +585,17 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       }
 
       setLangPairs(pairs)
+      // A live schedule owns the pair's goal, so those pairs must open in schedule mode rather than
+      // showing weekday boxes that aren't being used. Never block settings on this read.
+      const scheduled = new Set<string>(
+        await new SupabaseGoalScheduleRepository().listActive(uid)
+          .then(rows => rows.map(s => `${s.sourceLanguage}|${s.targetLanguage}`))
+          .catch(() => []),
+      )
+      setScheduledPairs(scheduled)
+
       const drafts: Record<string, Record<string, string>> = {}
-      const modes: Record<string, 'daily' | 'weekday'> = {}
+      const modes: Record<string, GoalMode> = {}
       for (const pair of pairs) {
         const key = `${pair.sourceLanguage}|${pair.targetLanguage}`
         drafts[key] = {}
@@ -584,7 +605,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         }
         // Default to "daily" mode when every weekday holds the same value, else "weekday".
         const vals = [0, 1, 2, 3, 4, 5, 6].map(d => drafts[key]![String(d)])
-        modes[key] = vals.every(v => v === vals[0]) ? 'daily' : 'weekday'
+        modes[key] = scheduled.has(key) ? 'schedule' : (vals.every(v => v === vals[0]) ? 'daily' : 'weekday')
       }
       setGoalDrafts(drafts)
       setGoalModes(modes)
@@ -1011,7 +1032,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
             <div>
               <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily Goals</h2>
               <p className="text-xs text-ink-faint mt-1">
-                Target number of words to graduate per language. Choose <span className="text-ink">Daily</span> for one goal every day, or <span className="text-ink">Per weekday</span> to set a different goal for each day. Leave blank for no goal.
+                Target number of words to graduate per language. Choose <span className="text-ink">Daily</span> for one goal every day, <span className="text-ink">Per weekday</span> to set a different goal for each day, or <span className="text-ink">Schedule</span> to work backwards from a deadline — set the words and the date, and the daily number is worked out for you. Leave blank for no goal.
               </p>
             </div>
             <div className="space-y-5">
@@ -1020,7 +1041,9 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
                 const drafts  = goalDrafts[pairKey] ?? {}
                 const mode    = goalModes[pairKey] ?? 'daily'
                 // Switch modes. daily -> collapse every weekday to Monday's value and save.
-                const setMode = (next: 'daily' | 'weekday') => {
+                // schedule -> just reveal the editor; nothing is written until it is saved, and the
+                // weekday goals stay untouched underneath so retiring a schedule restores them.
+                const setMode = (next: GoalMode) => {
                   setGoalModes(prev => ({ ...prev, [pairKey]: next }))
                   if (next === 'daily') {
                     const common = drafts['0'] ?? ''
@@ -1037,19 +1060,35 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
                       <div className="flex items-center gap-2">
                         {goalSavingKey === pairKey && <span className="text-xs text-ink-faint">Saving…</span>}
                         <div className="flex rounded-md overflow-hidden border border-surface-border text-xs">
-                          {(['daily', 'weekday'] as const).map(m => (
+                          {(['daily', 'weekday', 'schedule'] as const).map(m => (
                             <button
                               key={m}
                               onClick={() => setMode(m)}
                               className={`px-2 py-0.5 ${mode === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
                             >
-                              {m === 'daily' ? 'Daily' : 'Per weekday'}
+                              {m === 'daily' ? 'Daily' : m === 'weekday' ? 'Per weekday' : 'Schedule'}
                             </button>
                           ))}
                         </div>
                       </div>
                     </div>
-                    {mode === 'daily' ? (
+                    {mode === 'schedule' ? (
+                      <GoalScheduleEditor
+                        userId={userId}
+                        sourceLanguage={pair.sourceLanguage}
+                        targetLanguage={pair.targetLanguage}
+                        label={pairLabel(pair)}
+                        timezone={timezone || deviceTimeZone()}
+                        turnoverHour={turnoverHour}
+                        onChanged={(has) => setScheduledPairs(prev => {
+                          // Reflect the save/retire immediately so the carryover note below is right
+                          // without waiting for a reload.
+                          const next = new Set(prev)
+                          if (has) next.add(pairKey); else next.delete(pairKey)
+                          return next
+                        })}
+                      />
+                    ) : mode === 'daily' ? (
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-ink-faint select-none w-20">Every day</span>
                         <input
@@ -1096,6 +1135,14 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
                 )
               })}
             </div>
+
+            {/* Scheduled languages derive their own catch-up, so the carryover settings below don't
+                reach them — say so rather than letting the checkboxes imply otherwise. */}
+            {scheduledPairs.size > 0 && (
+              <p className="text-xs text-ink-faint pt-2 border-t border-line/10">
+                {`${[...scheduledPairs].length === 1 ? 'One language is' : `${scheduledPairs.size} languages are`} on a schedule. Carryover below doesn't apply to ${scheduledPairs.size === 1 ? 'it' : 'them'} — a schedule already spreads whatever you miss across the days it has left.`}
+              </p>
+            )}
 
             {/* Carryover — adjusts the goal number only; it does not raise how many new cards
                 you're served. Scoped to yesterday, so time off can't build an unpayable debt. */}

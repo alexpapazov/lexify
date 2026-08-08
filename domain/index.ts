@@ -501,6 +501,65 @@ export interface LanguagePair {
 
 export type LearningMode = 'ladder' | 'pathway'
 
+// ─── Goal schedule ────────────────────────────────────────────────────────────
+
+/**
+ * What a schedule counts toward its target.
+ *
+ * `new_words`   — words learned through the ladder DURING the schedule. Auto-graduated cards
+ *                 (bulk onboarding, fast-tracked imports) are excluded, matching the rule daily
+ *                 goals already apply: you didn't learn them that day.
+ * `total_words` — the pair's whole graduated vocabulary, auto-graduated cards INCLUDED. It measures
+ *                 how much you know, not how hard you worked, so onboarding 500 known words does
+ *                 move it.
+ */
+export type GoalTargetKind = 'new_words' | 'total_words'
+
+/** An intermediate target. `count` is CUMULATIVE, in the schedule's target units. */
+export interface GoalScheduleCheckpoint {
+  /** Local YYYY-MM-DD. */
+  date:  string
+  count: number
+}
+
+/**
+ * A deadline-driven goal for one language pair: "N words by date D". The daily number is DERIVED
+ * from it (see `lib/goalSchedule.ts`), never stored — which is what makes missing a day self-correct.
+ *
+ * At most one non-archived schedule exists per pair; while it's active it SUPERSEDES that pair's
+ * weekday goals and carryover mode. Migration 114.
+ */
+export interface GoalSchedule {
+  id:             string
+  userId:         UserId
+  sourceLanguage: string
+  targetLanguage: string
+  /** Optional label ("Exam prep"). Blank is fine — the UI falls back to the target and deadline. */
+  name:           string | null
+  targetKind:     GoalTargetKind
+  targetCount:    number
+  /** Local YYYY-MM-DD. Days before this have no capacity, so the schedule can't demand back-work. */
+  startDate:      string
+  deadline:       string
+  /**
+   * The measure's value on the day the schedule was created — 0 for `new_words`, the pair's total
+   * graduated count for `total_words`. A snapshot of a historical fact, NOT a running total: it lets
+   * "how far along am I" have a floor without any of the derived numbers being stored.
+   */
+  baselineCount:  number
+  /** Max words on any one day. Null = uncapped. */
+  dailyCeiling:   number | null
+  /** Per-weekday caps, keys "0"–"6" (0 = Sun). 0 means a day off; a missing key means no extra cap. */
+  weekdayLimits:  Record<string, number | null> | null
+  /** Per-date caps (YYYY-MM-DD → words). Overrides BOTH the weekday limit and the ceiling. */
+  dateExceptions: Record<string, number> | null
+  checkpoints:    GoalScheduleCheckpoint[]
+  /** Non-null once retired; the pair falls back to its weekday goals. */
+  archivedAt:     string | null
+  createdAt:      string
+  updatedAt:      string
+}
+
 // ─── Deck ─────────────────────────────────────────────────────────────────────
 
 export interface Deck {

@@ -48,6 +48,9 @@ Current feature files:
 - `features/Card Connection Agent (proposal).md` — PINNED, not built. Contains the
   synonym/confusion infrastructure audit — including a real `addMember` merge bug
   worth fixing independently of the agent.
+- `features/Goal Scheduler.md` — deadline-driven goals ("200 words by Dec 1"): the
+  derived daily number, water-filled day limits, checkpoints, feasibility remedies.
+  **Pass 1 only — migration 114 PENDING and no goal consumer reads it yet.**
 
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
@@ -2496,6 +2499,48 @@ the text node spans more than one line, which is why some strings look fine and 
 alter characters inside a JS template literal, so the whole class of bug disappears rather than being
 patched. To audit: grep for `}` followed by a space and a letter, then check whether that text node
 reaches a closing tag on the same line.
+
+## Goal Scheduler — deadline-driven goals (2026-08-08, migration 114 — PENDING)
+
+A fourth goal mode beside Daily / Per weekday, chosen per language in Settings → Daily Goals.
+Instead of "8 words a day" you say "200 new words by Dec 1" and the daily number is worked out.
+**Read `features/Goal Scheduler.md` in full before touching any of it.**
+
+**The one rule:** today's goal is RE-DERIVED every morning from `words left ÷ capacity left`, never
+stored and never accumulated. 100 in 20 days = 5/day; miss a day and it's 100 in 19 = 6/day. That IS
+the make-up mechanism — there is no debt ledger. Same statelessness `lib/goalCarryover.ts` depends
+on, and load-bearing for the same reason. The user chose this over debt-style catch-up explicitly.
+
+**A live schedule SUPERSEDES that pair's weekday goals AND its carryover mode.** Never stack them:
+the re-derived goal has already absorbed the miss, so full debt on top charges for it twice. The
+weekday goals stay stored underneath and come back when the schedule is retired.
+
+Model (all in the pure, 52-test `lib/goalSchedule.ts`):
+- **`dayCapacity`** — `dateExceptions[date]` (wins outright, INCLUDING over the ceiling) > that
+  weekday's `weekdayLimits` clamped by the ceiling > `dailyCeiling`. `null` ceiling → `Infinity`
+  (not 0 — "unset" must not read as "can't study"). Outside `[start, deadline]` → 0.
+- **`waterFill`** spreads the load; per-day limits are **CAPS, NOT WEIGHTS**. Proportional spreading
+  (`remaining × cap/Σcap`) looks equivalent and isn't — it hands a Friday capped at 3 a proportional
+  share when the even split is only 2. There's a test named after this.
+- **Checkpoints**: `activeSegments` = future checkpoints + the deadline, each its own window;
+  **today's number is the largest demand among them**. Counts are CUMULATIVE, which is what makes a
+  missed checkpoint self-correcting — it drops out and its words stay in the next window's remaining.
+- **`scheduleRemedies`** — raise ceiling / reduce target / move deadline. `minimumCeiling` is a
+  BINARY SEARCH, not `remaining / daysLeft`, because weekday limits also cap each day; it returns
+  **null when no ceiling helps** (the limits are what bind).
+- **`schedulePace`** counts TODAY on both sides (matching `goalStanding`) and measures against
+  capacity consumed, not calendar days, so a scheduled day off isn't "behind". Falls back to equal
+  per-day weights when capacity is Infinity — otherwise it's Infinity/Infinity and always reads 0.
+- **`plannedForDate`** is the stable historical target for a PAST day, deliberately independent of
+  progress. ReviewCalendar must use this, not `scheduleStatus`.
+- `new_words` excludes auto-graduated cards; `total_words` includes them. `baselineCount` is the one
+  stored number and it's a SNAPSHOT (value at creation), not a counter.
+
+**Pass 1 only.** `app/study/page.tsx`, `PresentSnapshot`, `ReviewCalendar` and `LadderStudy`'s
+stop-at-goal cap still read `language_pairs.goals` + carryover — a scheduled pair shows its old
+weekday number everywhere except the Settings preview. The seam for Pass 2 is the per-DATE
+`goalForDay(dateStr)` function that `plannedGoalSum`/`owedGoalForDate` already thread through every
+consumer. Checklist in the feature doc §5.
 
 ## Verifying changes
 
