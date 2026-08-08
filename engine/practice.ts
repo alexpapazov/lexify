@@ -77,6 +77,13 @@ export interface LibraryIndex {
   graduatedWords: Map<PartOfSpeech, { lemma: string; front: string }[]>
   /** Cards that carry no label yet — the caller can offer to top them up before generating. */
   unlabeledCount: number
+  /**
+   * Of those, how many are GRADUATED. This is the number that explains an empty-looking library:
+   * a graduated card with no label has no lemma, so it can't match a word or serve as raw material,
+   * and coverage reads as though the learner knows nothing. Callers should prompt for labeling
+   * before showing a narrow-vocabulary warning, which would otherwise be both alarming and wrong.
+   */
+  graduatedUnlabeledCount: number
 }
 
 // ─── Vocabulary coverage (the narrow-library pre-flight) ──────────────────────
@@ -131,9 +138,14 @@ export function buildLibraryIndex(cards: Card[], forwardStates: CardState[]): Li
   const graduatedByPos = new Map<PartOfSpeech, number>()
   const graduatedWords = new Map<PartOfSpeech, { lemma: string; front: string }[]>()
   let unlabeledCount = 0
+  let graduatedUnlabeledCount = 0
 
   for (const card of cards) {
-    if (!card.pos) { unlabeledCount++; continue }
+    if (!card.pos) {
+      unlabeledCount++
+      if (graduatedCardIds.has(card.id)) graduatedUnlabeledCount++
+      continue
+    }
     const lemma = usableLemma(card)
     if (!lemma) continue        // labeled as a phrase — real, just not a vocabulary word
     all.add(lemma)
@@ -147,7 +159,7 @@ export function buildLibraryIndex(cards: Card[], forwardStates: CardState[]): Li
     graduatedWords.set(card.pos, list)
   }
 
-  return { all, graduated, graduatedByPos, graduatedWords, unlabeledCount }
+  return { all, graduated, graduatedByPos, graduatedWords, unlabeledCount, graduatedUnlabeledCount }
 }
 
 /**

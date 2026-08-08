@@ -236,25 +236,41 @@ function PracticeInner() {
         </div>
       )}
 
-      {/* Coverage + labeling warnings — both computed locally, before any API call */}
-      {coverage.verdict === 'narrow' && (
+      {/* Labeling and coverage, both computed locally before any API call.
+          ORDER MATTERS: unlabeled graduated words make a full library look empty, so when those
+          exist the labeling prompt is the real story and the coverage warning is suppressed —
+          otherwise we'd tell someone with 200 known words that they know none. */}
+      {index.unlabeledCount > 0 ? (
+        <div className={`rounded-card border px-4 py-3 text-sm text-ink-muted flex items-center justify-between gap-3 flex-wrap ${
+          index.graduatedUnlabeledCount > 0 ? 'border-warning/40 bg-warning/5' : 'border-line/20'
+        }`}>
+          <span>
+            {index.graduatedUnlabeledCount > 0 ? (
+              <>
+                <strong className="text-ink">{index.graduatedUnlabeledCount} word
+                {index.graduatedUnlabeledCount !== 1 ? 's you’ve' : ' you’ve'} already learned
+                {index.graduatedUnlabeledCount !== 1 ? ' aren’t' : ' isn’t'} labeled yet.</strong>{' '}
+                Practice builds sentences from labeled words, so label them to use your real
+                vocabulary.
+              </>
+            ) : (
+              <>
+                {index.unlabeledCount} card{index.unlabeledCount !== 1 ? 's aren’t' : ' isn’t'} labeled
+                yet, so {index.unlabeledCount !== 1 ? 'they' : 'it'} can’t appear in sentences.
+              </>
+            )}
+          </span>
+          <button onClick={() => void runLabeling()} disabled={labeling}
+            className="btn-primary text-sm py-1.5 px-3 disabled:opacity-50 shrink-0">
+            {labeling ? 'Labeling…' : `Label ${index.unlabeledCount}`}
+          </button>
+        </div>
+      ) : coverage.verdict === 'narrow' && (
         <div className="rounded-card border border-warning/40 bg-warning/5 px-4 py-3 text-sm text-ink-muted">
           <strong className="text-ink">Narrow vocabulary.</strong>{' '}
           {coverage.graduatedCount === 0
             ? 'You have no graduated words in this language yet, so sentences will be built almost entirely from words outside your library.'
             : `Not enough graduated ${coverage.missing.join('s, ')}s to build sentences from — simple words outside your library will fill the gaps.`}
-        </div>
-      )}
-      {index.unlabeledCount > 0 && (
-        <div className="rounded-card border border-line/20 px-4 py-3 text-sm text-ink-muted flex items-center justify-between gap-3 flex-wrap">
-          <span>
-            {index.unlabeledCount} card{index.unlabeledCount !== 1 ? 's aren’t' : ' isn’t'} labeled yet,
-            so {index.unlabeledCount !== 1 ? 'they' : 'it'} can’t be used in sentences.
-          </span>
-          <button onClick={() => void runLabeling()} disabled={labeling}
-            className="btn-ghost text-sm py-1.5 px-3 disabled:opacity-50">
-            {labeling ? 'Labeling…' : 'Label now'}
-          </button>
         </div>
       )}
 

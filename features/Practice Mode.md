@@ -185,24 +185,57 @@ errors. **Not yet verified: anything past the auth wall** — the real generate/
 still never run. First real session is where prompt tuning happens (annotation quality, lemma
 agreement with the labels).
 
-**Phase 4 — Sentence bank (cost + latency).**
+**Phase 4 — Flexible target selection (NEXT).** The v1 picker — search-and-click, capped at 60
+rows — is too thin: a real session is "this deck", "everything due this week", "the words I keep
+getting wrong", or a list pasted from elsewhere. Selection becomes its own composable subsystem.
+
+*Design constraints that fall out of the earlier phases:* a target must be a **labeled, non-phrase**
+card (unlabeled cards can't be drilled — see the bug log), and function-word classes stay excluded
+(a cloze on "the" isn't an exercise). Every source therefore filters through the same
+`toPracticeTargets` gate, and each source reports what it dropped rather than silently shrinking.
+
+- `engine/practiceSelect.ts` (pure, tested) — one `TargetSource` union and one resolver per variant,
+  all returning `{ targets, droppedUnlabeled, droppedUndrillable }` so the UI can explain a short
+  list:
+  - `manual` — explicit card ids (today's behaviour, kept).
+  - `deck` / `folder` — multi-select; folder resolution reuses `descendantDeckIds`.
+  - `due` — due within N days, from the same `isCardStateDueNow`/due-date fields the study
+    surfaces use, so "due soon" means the same thing here as everywhere else.
+  - `difficulty` — hardest-first by FSRS **difficulty** on the forward row, with lapses as the
+    tie-break. Exposed as a band ("hardest 20") rather than a raw 1–10 number, which is
+    meaningless to a learner.
+  - `list` — pasted text, matched against the library by the same `normalizeFrontKey` used by
+    duplicate detection (so "el pan" matches "pan"), reporting unmatched lines rather than dropping
+    them silently.
+- Sources **compose**: the picker accumulates into one deduped target set (union), so "this deck +
+  these three pasted words" works. A per-source cap keeps a 400-card deck from becoming a 400-word
+  session; the UI states the cap.
+- UI: source chips/tabs above the existing list, selected targets shown as removable chips, live
+  count. The v1 search list becomes the `manual` tab.
+
+**Phase 5 — Sentence bank (cost + latency).**
 - Migration 112: `practice_sentences` (user, pair, target lemma, annotated-sentence JSONB,
   created_at, use count). Read the bank first, generate only the gap; background top-up via the
   existing prefetch idiom. Stored sentences are RE-SCORED against the current library at read time
   (the library grows; annotations make re-scoring pure) — never store the pass/fail verdict.
-- Practice start also tops up unlabeled cards (calls `labelCards` on the gap).
+- Matters more after Phase 4: deck- and due-based selection means far larger sessions, so the
+  cache is what keeps a 30-word session from being 30 generation calls.
 
-**Phase 5 — More modes + grading design (STOP AND DISCUSS FIRST).**
+**Phase 6 — More modes + grading design (STOP AND DISCUSS FIRST).**
 - Translate target→native, native→target, free production ("use the word"). Grading for these is
   explicitly undesigned — the user wants a conversation before it's built (AI-graded answers have
   a per-answer API cost, unlike the fully-cacheable v1).
 - Practice analytics (weak-word surfacing), if wanted.
 
 Parked indefinitely: embeddings for replacement candidates (§1), any scheduling feedback (decided
-against), auto-focus target selection (decided against — manual picking).
+against). **Note:** "auto-focus target selection" was decided against in the sense that the app
+never picks *for* you — but Phase 4's due/difficulty sources are assisted selection you invoke
+deliberately, which is a different thing and is wanted.
 
 ---
 
 ## Error log
 
-*(none yet)*
+| Date | Error | Fix |
+|------|-------|-----|
+| 2026-08-07 | Practice reported "You have no graduated words in this language yet" for a pair with plenty of graduated cards. Not a scoring bug — the cards were graduated but **unlabeled**, and an unlabeled card has no lemma, so `buildLibraryIndex` correctly excluded it from the vocabulary. The message conflated "no graduated words" with "no *labeled* graduated words", and the narrow-vocabulary warning fired above the labeling prompt, burying the actual cause | Added `LibraryIndex.graduatedUnlabeledCount`; the practice page now leads with the labeling prompt when it's non-zero (naming that count) and **suppresses** the coverage warning until labeling is done — coverage can't be judged from an unlabeled library. Note for future surfaces: any "your library is empty" message must check the unlabeled count first |

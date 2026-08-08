@@ -106,6 +106,26 @@ describe('buildLibraryIndex', () => {
     expect(index.all.size).toBe(1)
   })
 
+  it('counts GRADUATED unlabeled cards separately — the "my library looks empty" explanation', () => {
+    // A learner with plenty of graduated words that were never labeled: coverage reads as an empty
+    // library, and the UI must say "label these" rather than "you know nothing".
+    const graduatedUnlabeled = Array.from({ length: 3 }, () => card('дума', null, null))
+    const newUnlabeled       = card('нова', null, null)
+    const index = buildLibraryIndex([...graduatedUnlabeled, newUnlabeled], [
+      ...graduatedUnlabeled.map(c => forwardState(c.id, true)),
+      forwardState(newUnlabeled.id, false),
+    ])
+    expect(index.unlabeledCount).toBe(4)
+    expect(index.graduatedUnlabeledCount).toBe(3)
+    expect(index.graduated.size).toBe(0)          // nothing usable yet — the reported symptom
+  })
+
+  it('reports no graduated-unlabeled cards once everything is labeled', () => {
+    const c = card('la pluie', 'noun', 'pluie')
+    const index = buildLibraryIndex([c], [forwardState(c.id, true)])
+    expect(index.graduatedUnlabeledCount).toBe(0)
+  })
+
   it('counts a duplicated lemma once', () => {
     const index = graduatedLibrary([['la pluie', 'noun', 'pluie'], ['pluie', 'noun', 'pluie']])
     expect(index.graduated.size).toBe(1)
