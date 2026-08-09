@@ -3,7 +3,7 @@
 **Status (2026-08-08): complete and wired.** Data model, engine, calendar editor, its own settings
 page, and all four goal consumers read it. Migration **114 is applied; 115 is PENDING** (it only
 stores the mode toggle — everything else works without it). **Never verified against a real
-account** (§7).
+account** (§7). Migration **116 is PENDING** (pattern schedules + the combined daily ceiling).
 
 A schedule answers the opposite question to a daily goal. `language_pairs.goals` says *"I want to do
 8 words a day"*; a schedule says *"I want 200 words by December 1st"* and works the daily number out
@@ -179,6 +179,42 @@ same colour everywhere. Hovering a day gives exact words and percentages per lan
 
 It shows SAVED schedules, and refreshes when one is saved — an unsaved draft has no business
 colouring a shared view.
+
+### A schedule needs a target OR just numbers (2026-08-08, migration 116)
+
+`targetCount` and `deadline` are **nullable**. A schedule can be stated two ways, and both are
+complete:
+
+| | What it means | What applies |
+|---|---|---|
+| **Target + deadline** | "200 words by Dec 1" | Everything in §3 — re-spreading, pace, feasibility, remedies |
+| **Pattern** (`targetCount === null`) | "8 a day, none on Sundays", open-ended | Days off, per-date caps, the calendar, the combined view. **No** pace/feasibility/re-spread — there's no finish line to measure against |
+
+`isPatternSchedule` / `planEnd` / `ScheduleStatus.isPattern` distinguish them. A pattern schedule's
+goal for a day is simply `dayCapacity` of that day, and it's drawn over a rolling
+`PATTERN_HORIZON_DAYS` (180) window since it has no end. Pattern measures report **neutral** values
+(`feasible: true`, `pace: 0`, `done: false`) rather than zeroes that would read as "no progress".
+
+A schedule stating *nothing* — no target, no ceiling, no weekday numbers — asks for 0 and is a
+validation error. A target with no deadline is also an error: there's nothing to spread it across.
+The DB enforces that last one too (`goal_schedules_target_needs_deadline`).
+
+**This is what fixed the reported bug.** The editor used to gate its whole preview — calendar
+included — behind `targetCount > 0`, so you could not block out travel or add a checkpoint until
+you'd committed to a target. The calendar now appears as soon as the schedule states *anything*
+(`stated` in the editor).
+
+### A ceiling across ALL languages (migration 116)
+
+`profiles.daily_word_ceiling` — the most new words you'll do in a day across every language combined.
+Per-schedule ceilings cannot express this: three languages each capped at 10 still add up to 30, and
+only the combined calendar can see the sum.
+
+Days over it are tinted red on the combined calendar and named in a banner. The banner deliberately
+does **not** offer "raise the ceiling" as a remedy — the limit is the point. It offers **staggering
+with checkpoints**: give one language an early checkpoint so it front-loads and clears its bulk
+first, leaving the other light until then. That's the one remedy that keeps both the target and the
+limit; the alternatives are pushing a deadline back or lowering a target.
 
 ### Three ways to not study, and which is which
 

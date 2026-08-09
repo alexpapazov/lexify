@@ -537,10 +537,17 @@ export interface GoalSchedule {
   /** Optional label ("Exam prep"). Blank is fine — the UI falls back to the target and deadline. */
   name:           string | null
   targetKind:     GoalTargetKind
-  targetCount:    number
+  /**
+   * The finish line, or NULL for a **pattern schedule** — "8 a day, none on Sundays", running on
+   * indefinitely with no total to reach. A pattern schedule still has days off, per-date caps and a
+   * place on the combined calendar; it simply has nothing to be ahead or behind of, so pace,
+   * feasibility and re-spreading don't apply to it.
+   */
+  targetCount:    number | null
   /** Local YYYY-MM-DD. Days before this have no capacity, so the schedule can't demand back-work. */
   startDate:      string
-  deadline:       string
+  /** NULL = open-ended; the pattern just keeps going. Required whenever `targetCount` is set. */
+  deadline:       string | null
   /**
    * The measure's value on the day the schedule was created — 0 for `new_words`, the pair's total
    * graduated count for `total_words`. A snapshot of a historical fact, NOT a running total: it lets

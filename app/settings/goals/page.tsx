@@ -28,7 +28,7 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
 import { GoalScheduleEditor } from '@/components/settings/GoalScheduleEditor'
 import { GoalScheduleOverview, type OverviewLanguage } from '@/components/settings/GoalScheduleOverview'
-import { assignedPlan, schedulePlan } from '@/lib/goalSchedule'
+import { assignedPlan, schedulePlan, planEnd } from '@/lib/goalSchedule'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { getToday } from '@/lib/dates'
 import { langName, assignLanguageColors } from '@/lib/languages'
@@ -59,6 +59,9 @@ export default function GoalsPage() {
 
   const [goalMode,      setGoalMode]      = useState<GoalMode>('daily')
   const [modeSupported, setModeSupported] = useState(true)   // false until migration 115 is applied
+  /** Max new words across ALL languages per day (migration 116). Null = no combined limit. */
+  const [dailyCeiling,      setDailyCeiling]      = useState<string>('')
+  const [ceilingSupported,  setCeilingSupported]  = useState(true)
   const [goalDrafts,    setGoalDrafts]    = useState<Record<string, Record<string, string>>>({})
   const [goalSavingKey, setGoalSavingKey] = useState<string | null>(null)
   /** Pair keys with a live schedule. */
@@ -99,7 +102,13 @@ export default function GoalsPage() {
       // `goal_mode` arrives with migration 115. Selecting a column that doesn't exist yet errors the
       // WHOLE query and would silently reset the timezone and every carryover flag to its default —
       // the landmine documented in CLAUDE.md. So: try the full select, fall back to the core one.
-      let profileRes = await supabase.from('profiles').select(`${PROFILE_CORE}, goal_mode`).eq('user_id', uid).maybeSingle()
+      // Widest select first, narrowing on error. `goal_mode` needs migration 115 and
+      // `daily_word_ceiling` needs 116, and either may be unapplied.
+      let profileRes = await supabase.from('profiles').select(`${PROFILE_CORE}, goal_mode, daily_word_ceiling`).eq('user_id', uid).maybeSingle()
+      if (profileRes.error) {
+        setCeilingSupported(false)
+        profileRes = await supabase.from('profiles').select(`${PROFILE_CORE}, goal_mode`).eq('user_id', uid).maybeSingle()
+      }
       if (profileRes.error) {
         setModeSupported(false)
         profileRes = await supabase.from('profiles').select(PROFILE_CORE).eq('user_id', uid).maybeSingle()
@@ -118,6 +127,8 @@ export default function GoalsPage() {
       setTimezone(tz)
       setTurnoverHour(turnover)
       setLangColors((profile?.language_colors as Record<string, string> | null) ?? {})
+      const ceil = profile?.daily_word_ceiling as number | null | undefined
+      setDailyCeiling(ceil == null ? '' : String(ceil))
       setCarryShortfall((profile?.goal_carry_shortfall as boolean | null) ?? false)
       setCarrySurplus((profile?.goal_carry_surplus as boolean | null) ?? false)
       setFullDebt((profile?.goal_full_debt as boolean | null) ?? false)
@@ -171,7 +182,7 @@ export default function GoalsPage() {
       setOverview(schedules.map(s => {
         const key = `${s.sourceLanguage}|${s.targetLanguage}`
         const plan = new Map<string, number>()
-        for (const [date, words] of assignedPlan(s)) if (date < today) plan.set(date, words)
+        for (const [date, words] of assignedPlan(s, today)) if (date < today) plan.set(date, words)
         for (const day of schedulePlan(s, today, done.get(key) ?? 0)) plan.set(day.date, day.words)
         const pair = langPairs.find(p => `${p.sourceLanguage}|${p.targetLanguage}` === key)
         return {
@@ -181,6 +192,7 @@ export default function GoalsPage() {
           plan,
           startDate: s.startDate,
           deadline: s.deadline,
+          planEnd: planEnd(s, today),
         }
       }))
     } finally { setOverviewBusy(false) }
@@ -222,7 +234,7 @@ export default function GoalsPage() {
       for (const d of dates) {
         // Only touch days the schedule actually covers; a shared range can span schedules that
         // start later or end sooner, and writing outside the span would be dead data.
-        if (d < s.startDate || d > s.deadline) continue
+        if (d < s.startDate || (s.deadline && d > s.deadline)) continue
         if (cap == null) delete next[d]
         else next[d] = Math.max(0, cap)
       }
@@ -309,6 +321,19 @@ export default function GoalsPage() {
     setConfirmLeaveSchedule(null)
     setGoalMode(next)
     void persistMode(next)
+  }
+
+  /** The combined limit as a number, or null when blank / not yet migrated. */
+  const parsedCeiling = ceilingSupported && dailyCeiling.trim() !== ''
+    ? (parseInt(dailyCeiling, 10) || null)
+    : null
+
+  async function saveDailyCeiling() {
+    if (!userId || !ceilingSupported) return
+    await supabase.from('profiles')
+      .update({ daily_word_ceiling: parsedCeiling })
+      .eq('user_id', userId)
+      .then(() => {}, () => {})
   }
 
   /**
@@ -403,13 +428,30 @@ export default function GoalsPage() {
       {/* ── Schedule mode: the combined calendar first, then each language's own editor ── */}
       {goalMode === 'schedule' && langPairs.length > 0 && (
         <div className="panel space-y-3">
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">All languages</h2>
-            {overviewBusy && <span className="text-xs text-ink-faint">Updating…</span>}
+            <div className="flex items-center gap-2">
+              {overviewBusy && <span className="text-xs text-ink-faint">Updating…</span>}
+              {ceilingSupported && (
+                <>
+                  <label className="text-xs text-ink-faint">Never more than</label>
+                  <input
+                    type="number" min={1} max={999}
+                    className="input text-center text-sm px-2 py-1 w-20"
+                    placeholder="—"
+                    value={dailyCeiling}
+                    onChange={e => setDailyCeiling(e.target.value)}
+                    onBlur={saveDailyCeiling}
+                  />
+                  <span className="text-xs text-ink-faint">words a day across everything</span>
+                </>
+              )}
+            </div>
           </div>
           <GoalScheduleOverview
             languages={overview}
             today={todayStr}
+            dailyCeiling={parsedCeiling}
             restDays={restDays}
             onBulkDateCaps={bulkDateCaps}
             onBulkWeekdayOff={bulkWeekdayOff}

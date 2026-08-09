@@ -7,6 +7,14 @@
  * whether it's possible. Nothing is precomputed and stored, so what the preview shows is exactly what
  * the goal surfaces will show tomorrow.
  *
+ * **Two ways to state a schedule**, and both are complete on their own:
+ *   • a TARGET and a deadline — "200 words by Dec 1", spread and re-spread as you go; or
+ *   • just NUMBERS — a ceiling, or a per-weekday row. That's a pattern schedule: it runs
+ *     open-ended, has no finish line, and simply asks for that many words each day.
+ * Either way you get the calendar, days off, per-date caps and a place on the combined view. The
+ * calendar appears as soon as the schedule says ANYTHING — requiring a target first meant you
+ * couldn't block out travel until you'd committed to a number.
+ *
  * The editor deliberately does NOT block an over-ambitious schedule. Wanting 500 words in a fortnight
  * is a legitimate thing to type; the honest response is to show that it doesn't fit and name the three
  * levers (ceiling, target, deadline), not to refuse the input. Only incoherent schedules — a deadline
@@ -55,7 +63,7 @@ function draftFrom(schedule: GoalSchedule | null, today: string): Draft {
   if (!schedule) {
     return {
       name: '', targetKind: 'new_words', targetCount: '',
-      startDate: today, deadline: addScheduleDays(today, 30),
+      startDate: today, deadline: '',
       dailyCeiling: '', weekdayLimits: {}, dateExceptions: {}, checkpoints: {},
     }
   }
@@ -64,9 +72,9 @@ function draftFrom(schedule: GoalSchedule | null, today: string): Draft {
   return {
     name:          schedule.name ?? '',
     targetKind:    schedule.targetKind,
-    targetCount:   String(schedule.targetCount),
+    targetCount:   schedule.targetCount == null ? '' : String(schedule.targetCount),
     startDate:     schedule.startDate,
-    deadline:      schedule.deadline,
+    deadline:      schedule.deadline ?? '',
     dailyCeiling:  schedule.dailyCeiling == null ? '' : String(schedule.dailyCeiling),
     weekdayLimits: limits,
     dateExceptions: { ...(schedule.dateExceptions ?? {}) },
@@ -163,9 +171,9 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
       id: saved?.id ?? 'draft', userId, sourceLanguage, targetLanguage,
       name: draft.name.trim() || null,
       targetKind:  draft.targetKind,
-      targetCount: parseInt(draft.targetCount, 10) || 0,
+      targetCount: draft.targetCount.trim() === '' ? null : (parseInt(draft.targetCount, 10) || null),
       startDate:   draft.startDate,
-      deadline:    draft.deadline,
+      deadline:    draft.deadline.trim() === '' ? null : draft.deadline,
       baselineCount,
       dailyCeiling: draft.dailyCeiling.trim() === '' ? null : Math.max(0, parseInt(draft.dailyCeiling, 10) || 0),
       weekdayLimits:  Object.keys(limits).length ? limits : null,
@@ -176,8 +184,17 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     }
   }, [draft, saved, userId, sourceLanguage, targetLanguage, baselineCount])
 
-  const errors = useMemo(() => (candidate.targetCount > 0 ? validateSchedule(candidate) : []), [candidate])
-  const ready = candidate.targetCount > 0 && errors.length === 0
+  /**
+   * Has the learner actually said anything yet? An untouched form shouldn't shout "set a target" the
+   * moment it renders, but the moment ANY of the three ways to state a schedule has a value, the
+   * schedule is real enough to validate and to draw a calendar for.
+   */
+  const stated = draft.targetCount.trim() !== ''
+    || draft.dailyCeiling.trim() !== ''
+    || Object.values(draft.weekdayLimits).some(v => v.trim() !== '')
+
+  const errors = useMemo(() => (stated ? validateSchedule(candidate) : []), [stated, candidate])
+  const ready = stated && errors.length === 0
   const status = useMemo(
     () => (ready ? scheduleStatus({ schedule: candidate, today, doneSoFar }) : null),
     [ready, candidate, today, doneSoFar],
@@ -254,7 +271,8 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
 
   if (loading) return <p className="text-xs text-ink-faint">Loading schedule…</p>
 
-  const span = daysBetween(draft.startDate, draft.deadline)
+  const span = draft.deadline ? daysBetween(draft.startDate, draft.deadline) : 0
+  const weekAhead = plan.slice(0, 7).reduce((a, d) => a + d.words, 0)
   const checkpointList = Object.entries(draft.checkpoints).sort(([a], [b]) => a.localeCompare(b))
   const timeOffCount = Object.values(draft.dateExceptions).filter(v => v === 0).length
 
@@ -316,7 +334,9 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
         {draft.targetKind === 'total_words'
           ? `Counts your whole ${(label.split('→')[0] ?? label).trim()} vocabulary, including words you onboarded as already known. You have ${baselineCount} now.`
           : 'Counts only words you learn through the ladder during the schedule. Onboarded "already known" words don’t count.'}
-        {span > 0 && ` ${span} day${span === 1 ? '' : 's'} from start to deadline.`}
+        {span > 0
+          ? ` ${span} day${span === 1 ? '' : 's'} from start to deadline.`
+          : ' Leave the target and deadline blank to just set a daily or weekly number that runs on indefinitely.'}
       </p>
 
       {/* ── The usual week ── the calendar below handles one-off days; this is for "every weekend". */}
@@ -354,13 +374,22 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
           <div className="flex flex-wrap gap-6">
             <Stat label="Today" value={status.done ? 'Done' : status.expired ? '—' : `${status.goal}`}
                   hint={status.done ? 'target reached' : status.expired ? 'deadline passed' : 'words'} />
-            <Stat label="Still to go" value={`${status.remaining}`} hint={`over ${status.daysLeft} study day${status.daysLeft === 1 ? '' : 's'}`} />
-            <Stat
-              label="Pace"
-              value={status.pace === 0 ? 'Level' : status.pace > 0 ? `+${status.pace}` : `${status.pace}`}
-              hint={status.pace === 0 ? 'on track' : status.pace > 0 ? 'words ahead' : 'words behind'}
-              tone={status.pace < 0 ? 'danger' : status.pace > 0 ? 'success' : 'muted'}
-            />
+            {status.isPattern ? (
+              <>
+                <Stat label="This week" value={`${weekAhead}`} hint="words over the next 7 days" />
+                <Stat label="Runs" value="Open-ended" hint="no deadline — add a target to set one" />
+              </>
+            ) : (
+              <>
+                <Stat label="Still to go" value={`${status.remaining}`} hint={`over ${status.daysLeft} study day${status.daysLeft === 1 ? '' : 's'}`} />
+                <Stat
+                  label="Pace"
+                  value={status.pace === 0 ? 'Level' : status.pace > 0 ? `+${status.pace}` : `${status.pace}`}
+                  hint={status.pace === 0 ? 'on track' : status.pace > 0 ? 'words ahead' : 'words behind'}
+                  tone={status.pace < 0 ? 'danger' : status.pace > 0 ? 'success' : 'muted'}
+                />
+              </>
+            )}
             {status.binding && !status.binding.isDeadline && (
               <Stat label="Next checkpoint" value={`${status.binding.target}`} hint={`by ${shortDate(status.binding.date)}`} />
             )}

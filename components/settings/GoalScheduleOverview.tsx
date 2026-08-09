@@ -37,7 +37,10 @@ export interface OverviewLanguage {
   plan: Map<string, number>
   /** The schedule's own span, so the overview can mark each language's deadline. */
   startDate: string
-  deadline: string
+  /** Null for an open-ended pattern schedule — nothing to mark. */
+  deadline: string | null
+  /** How far this language's plan was drawn, deadline or rolling horizon. */
+  planEnd: string
 }
 
 const monthLabel = (ym: string) =>
@@ -46,9 +49,11 @@ const monthLabel = (ym: string) =>
 const longDate = (d: string) =>
   new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
 
-export function GoalScheduleOverview({ languages, today, restDays, onBulkDateCaps, onBulkWeekdayOff }: {
+export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling, onBulkDateCaps, onBulkWeekdayOff }: {
   languages: OverviewLanguage[]
   today: string
+  /** Max new words across ALL languages in one day. Null = no combined limit. */
+  dailyCeiling: number | null
   /** Weekdays currently set to 0 on EVERY live schedule — the "rest day everywhere" state. */
   restDays: number[]
   /** Applies a per-date cap (`null` clears it) to every live schedule at once. */
@@ -106,13 +111,32 @@ export function GoalScheduleOverview({ languages, today, restDays, onBulkDateCap
   const span = useMemo(() => {
     if (languages.length === 0) return null
     let start = languages[0]!.startDate
-    let end = languages[0]!.deadline
+    let end = languages[0]!.planEnd
     for (const l of languages) {
       if (l.startDate < start) start = l.startDate
-      if (l.deadline > end) end = l.deadline
+      if (l.planEnd > end) end = l.planEnd
     }
     return { start, end }
   }, [languages])
+
+  /**
+   * Days whose combined demand exceeds the learner's own limit. Per-schedule ceilings cannot express
+   * this: three languages each capped at 10 still add up to 30. Only the combined view can see it, so
+   * only the combined view can warn about it.
+   */
+  const over = useMemo(() => {
+    if (!dailyCeiling || dailyCeiling <= 0) return { days: [] as string[], worst: 0 }
+    const days: string[] = []
+    let worst = 0
+    for (const [date, entry] of byDate) {
+      if (entry.total > dailyCeiling) {
+        days.push(date)
+        worst = Math.max(worst, entry.total - dailyCeiling)
+      }
+    }
+    days.sort()
+    return { days, worst }
+  }, [byDate, dailyCeiling])
 
   const totals = useMemo(() => {
     const out = new Map<string, number>()
@@ -164,6 +188,7 @@ export function GoalScheduleOverview({ languages, today, restDays, onBulkDateCap
                 const entry = byDate.get(date)
                 const isToday = date === today
                 const deadlines = languages.filter(l => l.deadline === date)
+                const overloaded = !!dailyCeiling && !!entry && entry.total > dailyCeiling
 
                 // A conic-gradient is the cheapest correct pie: no SVG, no layout, and it stays crisp
                 // at the ~30px a calendar cell can spare.
@@ -180,7 +205,7 @@ export function GoalScheduleOverview({ languages, today, restDays, onBulkDateCap
                 return (
                   <div
                     key={date}
-                    className={`relative aspect-square flex flex-col items-center justify-center rounded-sm cursor-pointer ${dragRange.has(date) ? 'ring-2 ring-accent' : ''}`}
+                    className={`relative aspect-square flex flex-col items-center justify-center rounded-sm cursor-pointer ${dragRange.has(date) ? 'ring-2 ring-accent' : ''} ${overloaded ? 'bg-danger/15' : ''}`}
                     style={{ touchAction: 'none' }}
                     onMouseEnter={() => setHovered(date)}
                     onMouseLeave={() => setHovered(h => (h === date ? null : h))}
@@ -213,7 +238,9 @@ export function GoalScheduleOverview({ languages, today, restDays, onBulkDateCap
                         <div className="text-[11px] text-ink font-medium">{longDate(date)}</div>
                         {entry && entry.total > 0 ? (
                           <>
-                            <div className="text-[10px] text-ink-faint mb-1">{entry.total} words planned</div>
+                            <div className={`text-[10px] mb-1 ${overloaded ? 'text-danger' : 'text-ink-faint'}`}>
+                              {entry.total} words planned{overloaded ? ` — ${entry.total - dailyCeiling!} over your ${dailyCeiling}/day limit` : ''}
+                            </div>
                             {entry.parts.map(p => (
                               <div key={p.lang.key} className="flex items-center gap-1.5 text-[11px] text-ink-muted">
                                 <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: p.lang.color }} />
@@ -240,6 +267,22 @@ export function GoalScheduleOverview({ languages, today, restDays, onBulkDateCap
           </div>
         ))}
       </div>
+
+      {over.days.length > 0 && (
+        <div className="rounded-md border border-danger/40 bg-danger/5 p-3 space-y-1.5">
+          <p className="text-xs text-danger">
+            {`${over.days.length} day${over.days.length === 1 ? '' : 's'} ask${over.days.length === 1 ? 's' : ''} for more than your ${dailyCeiling}-word daily limit — up to ${over.worst} over on the worst day (${longDate(over.days[0]!)}${over.days.length > 1 ? ' and others' : ''}).`}
+          </p>
+          <p className="text-xs text-ink-faint">
+            Your languages are competing for the same days. Raising a ceiling won&apos;t help — the
+            limit is the whole point. The fix is to <span className="text-ink">stagger them with
+            checkpoints</span>: give one language an early checkpoint so it front-loads and finishes
+            its bulk first, and let the other stay light until then. Set a checkpoint by clicking a
+            single day on that language&apos;s own calendar below. Failing that, push a deadline back
+            or lower a target.
+          </p>
+        </div>
+      )}
 
       {selection.length > 0 && (
         <div className="rounded-md border border-line/10 bg-surface/40 p-3 flex flex-wrap items-center gap-2">

@@ -27,6 +27,10 @@
  *   next window's number automatically, because checkpoint counts are CUMULATIVE.
  * • **`dailyCeiling` bounds the number, so an impossible schedule stays impossible** rather than
  *   quietly printing 40/day. That's the point of `feasible`/`remedies` — see `scheduleRemedies`.
+ * • **A schedule need not have a target at all.** `targetCount === null` is a PATTERN schedule —
+ *   "8 a day, none on Sundays", open-ended. Each day's goal is simply that day's capacity. It keeps
+ *   days off, per-date caps and its place on the combined calendar; what it doesn't have is a finish
+ *   line, so pace, feasibility and re-spreading are all inapplicable and report neutral values.
  */
 
 import type { GoalSchedule, GoalScheduleCheckpoint } from '@/domain'
@@ -61,6 +65,25 @@ export function daysBetween(from: string, to: string): number {
  */
 export const MAX_SCHEDULE_DAYS = 1830   // ~5 years
 
+/**
+ * How far ahead an OPEN-ENDED (deadline-less) pattern schedule is drawn. It has no finish line, so
+ * something has to bound the calendar and the plan; six months is enough to plan around without
+ * rendering a decade of identical weeks.
+ */
+export const PATTERN_HORIZON_DAYS = 180
+
+/** True for a schedule with no finish line — see the header. */
+export function isPatternSchedule(schedule: GoalSchedule): boolean {
+  return schedule.targetCount == null
+}
+
+/** The last date a schedule plans for: its deadline, or a rolling horizon when open-ended. */
+export function planEnd(schedule: GoalSchedule, today: string): string {
+  if (schedule.deadline) return schedule.deadline
+  const from = today > schedule.startDate ? today : schedule.startDate
+  return addScheduleDays(from, PATTERN_HORIZON_DAYS)
+}
+
 /** Every date in [from, to] inclusive, bounded by `MAX_SCHEDULE_DAYS`. */
 export function eachDate(from: string, to: string): string[] {
   const out: string[] = []
@@ -90,7 +113,8 @@ export function eachDate(from: string, to: string): string[] {
  * or after it's over.
  */
 export function dayCapacity(schedule: GoalSchedule, date: string): number {
-  if (date < schedule.startDate || date > schedule.deadline) return 0
+  if (date < schedule.startDate) return 0
+  if (schedule.deadline && date > schedule.deadline) return 0
 
   const exception = schedule.dateExceptions?.[date]
   if (exception != null) return Math.max(0, exception)
@@ -186,10 +210,17 @@ export function distributeIntegers(values: number[], caps: number[]): number[] {
  * binding; `validateSchedule` reports them so they can be fixed rather than silently obeyed.
  */
 export function activeSegments(schedule: GoalSchedule, today: string): GoalScheduleCheckpoint[] {
+  const target = schedule.targetCount
+  const deadline = schedule.deadline
   const checkpoints = (schedule.checkpoints ?? [])
-    .filter(c => c.date >= today && c.date < schedule.deadline && c.count <= schedule.targetCount)
+    .filter(c => c.date >= today
+      && (!deadline || c.date < deadline)
+      && (target == null || c.count <= target))
     .sort((a, b) => a.date.localeCompare(b.date))
-  return [...checkpoints, { date: schedule.deadline, count: schedule.targetCount }]
+  // A pattern schedule has no finish line, so there is no final segment — only whatever checkpoints
+  // the learner hung on it.
+  if (target == null || !deadline) return checkpoints
+  return [...checkpoints, { date: deadline, count: target }]
 }
 
 // ─── Status ───────────────────────────────────────────────────────────────────
@@ -253,6 +284,8 @@ export interface ScheduleStatus {
   pace: number
   /** Only present when `feasible` is false. */
   remedies: ScheduleRemedies | null
+  /** True for a schedule with no finish line — `remaining`/`pace`/`feasible` carry no meaning. */
+  isPattern: boolean
 }
 
 export interface ScheduleStatusArgs {
@@ -273,16 +306,44 @@ export interface ScheduleStatusArgs {
  * schedule is still possible, and what to do about it if not.
  */
 export function scheduleStatus({ schedule, today, doneSoFar }: ScheduleStatusArgs): ScheduleStatus {
+  const end = planEnd(schedule, today)
+  const from = today > schedule.startDate ? today : schedule.startDate
+
+  // ── Pattern schedule: no finish line, so today's goal IS today's capacity ──
+  // Everything downstream of a target (remaining, pace, feasibility, re-spreading) is inapplicable
+  // rather than zero-by-accident, so it reports neutral values instead of pretending to measure.
+  if (schedule.targetCount == null) {
+    const cap = dayCapacity(schedule, today)
+    const window = capacityWindow(schedule, from, end)
+    return {
+      // An uncapped day in a pattern schedule asks for nothing: with no target and no ceiling there
+      // is no number to derive. That's a schedule waiting to be filled in, not an infinite goal.
+      goal: isFinite(cap) ? cap : 0,
+      binding: null,
+      segments: [],
+      remaining: 0,
+      daysLeft: window.caps.filter(c => c > 0).length,
+      capacityLeft: window.total,
+      feasible: true,
+      shortfall: 0,
+      done: false,
+      expired: !!schedule.deadline && today > schedule.deadline,
+      pace: 0,
+      remedies: null,
+      isPattern: true,
+    }
+  }
+
   const remaining = Math.max(0, schedule.targetCount - doneSoFar)
-  const window = capacityWindow(schedule, today > schedule.startDate ? today : schedule.startDate, schedule.deadline)
+  const window = capacityWindow(schedule, from, end)
   const capacityLeft = window.total
   const daysLeft = window.caps.filter(c => c > 0).length
 
   const done = remaining <= 0
-  const expired = !done && today > schedule.deadline
+  const expired = !done && !!schedule.deadline && today > schedule.deadline
 
   const segments: ScheduleSegmentStatus[] = activeSegments(schedule, today).map(seg => {
-    const segWindow = capacityWindow(schedule, today > schedule.startDate ? today : schedule.startDate, seg.date)
+    const segWindow = capacityWindow(schedule, from, seg.date)
     const segRemaining = Math.max(0, seg.count - doneSoFar)
     const { values, shortfall } = waterFill(segRemaining, segWindow.caps)
     // The first entry is today only when today is inside the schedule; before it starts, nothing is
@@ -325,6 +386,7 @@ export function scheduleStatus({ schedule, today, doneSoFar }: ScheduleStatusArg
     expired,
     pace: schedulePace(schedule, today, doneSoFar),
     remedies: feasible ? null : scheduleRemedies(schedule, today, doneSoFar),
+    isPattern: false,
   }
 }
 
@@ -339,6 +401,8 @@ export function scheduleStatus({ schedule, today, doneSoFar }: ScheduleStatusArg
  * flattering number all day and lurching at turnover.
  */
 export function schedulePace(schedule: GoalSchedule, today: string, doneSoFar: number): number {
+  // A pattern schedule has no line to be ahead or behind of.
+  if (schedule.targetCount == null || !schedule.deadline) return 0
   if (today < schedule.startDate) return 0
   const whole = capacityWindow(schedule, schedule.startDate, schedule.deadline)
   const upTo = capacityWindow(schedule, schedule.startDate, today < schedule.deadline ? today : schedule.deadline)
@@ -351,7 +415,7 @@ export function schedulePace(schedule: GoalSchedule, today: string, doneSoFar: n
   const numerator = finite ? upTo.total : upTo.caps.filter(c => c > 0).length
   if (denominator <= 0) return 0
 
-  const span = schedule.targetCount - schedule.baselineCount
+  const span = (schedule.targetCount ?? 0) - schedule.baselineCount
   const expected = schedule.baselineCount + span * (numerator / denominator)
   return Math.round(doneSoFar - expected)
 }
@@ -366,6 +430,11 @@ export function schedulePace(schedule: GoalSchedule, today: string, doneSoFar: n
  */
 export function scheduleRemedies(schedule: GoalSchedule, today: string, doneSoFar: number): ScheduleRemedies {
   const from = today > schedule.startDate ? today : schedule.startDate
+  const deadline = schedule.deadline
+  // Only a schedule with a finish line can be infeasible, so there is nothing to remedy without one.
+  if (schedule.targetCount == null || !deadline) {
+    return { minimumCeiling: null, reducedTarget: doneSoFar, feasibleDeadline: null }
+  }
   const remaining = Math.max(0, schedule.targetCount - doneSoFar)
 
   // ── Raise the ceiling ──
@@ -373,7 +442,7 @@ export function scheduleRemedies(schedule: GoalSchedule, today: string, doneSoFa
   {
     let lo = 1
     let hi = Math.max(1, remaining)
-    const fits = (ceiling: number) => capacityWindow({ ...schedule, dailyCeiling: ceiling }, from, schedule.deadline).total >= remaining
+    const fits = (ceiling: number) => capacityWindow({ ...schedule, dailyCeiling: ceiling }, from, deadline).total >= remaining
     if (fits(hi)) {
       while (lo < hi) {
         const mid = Math.floor((lo + hi) / 2)
@@ -387,14 +456,14 @@ export function scheduleRemedies(schedule: GoalSchedule, today: string, doneSoFa
   }
 
   // ── Want less ──
-  const reachable = capacityWindow(schedule, from, schedule.deadline).total
+  const reachable = capacityWindow(schedule, from, deadline).total
   const reducedTarget = Math.floor(doneSoFar + (isFinite(reachable) ? reachable : remaining))
 
   // ── Allow more time ── walk the deadline forward until the accumulated capacity covers it.
   let feasibleDeadline: string | null = null
   {
-    let accumulated = capacityWindow(schedule, from, schedule.deadline).total
-    let date = schedule.deadline
+    let accumulated = capacityWindow(schedule, from, deadline).total
+    let date = deadline
     for (let i = 0; i < 366 && accumulated < remaining; i++) {
       date = addScheduleDays(date, 1)
       // Capacity past the deadline is what the weekday limits/ceiling would allow, since the
@@ -429,9 +498,24 @@ export interface SchedulePlanDay {
  */
 export function schedulePlan(schedule: GoalSchedule, today: string, doneSoFar: number): SchedulePlanDay[] {
   const from = today > schedule.startDate ? today : schedule.startDate
-  if (from > schedule.deadline) return []
+  const end = planEnd(schedule, today)
+  if (from > end) return []
 
-  const { dates, caps } = capacityWindow(schedule, from, schedule.deadline)
+  const { dates, caps } = capacityWindow(schedule, from, end)
+
+  // No finish line: each day simply carries what it can hold. An uncapped day contributes nothing,
+  // since there is no number to derive from a schedule that states neither a total nor a limit.
+  if (schedule.targetCount == null) {
+    let running = doneSoFar
+    const milestones = new Map(activeSegments(schedule, today).map(c => [c.date, c]))
+    return dates.map((date, i) => {
+      const cap = caps[i] ?? 0
+      const words = isFinite(cap) ? cap : 0
+      running += words
+      return { date, words, cumulative: running, capacity: cap, milestone: milestones.get(date) ?? null }
+    })
+  }
+
   const words = new Array(dates.length).fill(0)
   const indexOf = new Map(dates.map((d, i) => [d, i]))
 
@@ -471,8 +555,16 @@ export function schedulePlan(schedule: GoalSchedule, today: string, doneSoFar: n
  * `plannedForDate`: that recomputes the whole water-fill per date, which is O(n²) across a grid and
  * visibly freezes a multi-year schedule on every keystroke.
  */
-export function assignedPlan(schedule: GoalSchedule): Map<string, number> {
-  const { dates, caps } = capacityWindow(schedule, schedule.startDate, schedule.deadline)
+export function assignedPlan(schedule: GoalSchedule, today?: string): Map<string, number> {
+  const end = schedule.deadline ?? planEnd(schedule, today ?? schedule.startDate)
+  const { dates, caps } = capacityWindow(schedule, schedule.startDate, end)
+  // Pattern schedule: the assignment was always just "whatever that day holds".
+  if (schedule.targetCount == null) {
+    return new Map(dates.map((d, i) => {
+      const cap = caps[i] ?? 0
+      return [d, isFinite(cap) ? cap : 0]
+    }))
+  }
   const { values } = waterFill(Math.max(0, schedule.targetCount - schedule.baselineCount), caps)
   const whole = distributeIntegers(values, caps)
   return new Map(dates.map((d, i) => [d, whole[i] ?? 0]))
@@ -480,8 +572,9 @@ export function assignedPlan(schedule: GoalSchedule): Map<string, number> {
 
 /** One date's assigned target. For more than a couple of dates, use `assignedPlan` instead. */
 export function plannedForDate(schedule: GoalSchedule, date: string): number {
-  if (date < schedule.startDate || date > schedule.deadline) return 0
-  return assignedPlan(schedule).get(date) ?? 0
+  if (date < schedule.startDate) return 0
+  if (schedule.deadline && date > schedule.deadline) return 0
+  return assignedPlan(schedule, date).get(date) ?? 0
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -494,32 +587,44 @@ export function plannedForDate(schedule: GoalSchedule, date: string): number {
 export function validateSchedule(schedule: GoalSchedule): string[] {
   const errors: string[] = []
 
-  if (!schedule.startDate || !schedule.deadline) errors.push('Set a start date and a deadline.')
-  else {
-    if (schedule.deadline < schedule.startDate) errors.push('The deadline is before the start date.')
-    else if (daysBetween(schedule.startDate, schedule.deadline) > MAX_SCHEDULE_DAYS) {
+  const target = schedule.targetCount
+  const deadline = schedule.deadline
+
+  if (!schedule.startDate) errors.push('Set a start date.')
+  if (deadline) {
+    if (deadline < schedule.startDate) errors.push('The deadline is before the start date.')
+    else if (daysBetween(schedule.startDate, deadline) > MAX_SCHEDULE_DAYS) {
       errors.push(`A schedule can span at most ${Math.floor(MAX_SCHEDULE_DAYS / 365)} years.`)
     }
   }
 
-  if (!Number.isFinite(schedule.targetCount) || schedule.targetCount <= 0) errors.push('Set a target of at least 1 word.')
-  if (schedule.targetKind === 'total_words' && schedule.targetCount <= schedule.baselineCount) {
-    errors.push(`You already know ${schedule.baselineCount} words in this language — set a total above that.`)
+  // A pattern schedule (no target) is perfectly valid — but a target with nowhere to land is not.
+  if (target != null) {
+    if (!Number.isFinite(target) || target <= 0) errors.push('Set a target of at least 1 word.')
+    if (!deadline) errors.push('A target needs a deadline to spread it across.')
+    if (schedule.targetKind === 'total_words' && target <= schedule.baselineCount) {
+      errors.push(`You already know ${schedule.baselineCount} words in this language — set a total above that.`)
+    }
   }
   if (schedule.dailyCeiling != null && schedule.dailyCeiling <= 0) errors.push('A daily ceiling of 0 leaves no room to study. Leave it blank for no ceiling.')
 
-  if (schedule.startDate && schedule.deadline && daysBetween(schedule.startDate, schedule.deadline) <= MAX_SCHEDULE_DAYS) {
-    if (capacityWindow(schedule, schedule.startDate, schedule.deadline).total <= 0) {
+  const end = deadline ?? addScheduleDays(schedule.startDate, PATTERN_HORIZON_DAYS)
+  if (schedule.startDate && daysBetween(schedule.startDate, end) <= MAX_SCHEDULE_DAYS) {
+    if (capacityWindow(schedule, schedule.startDate, end).total <= 0) {
       errors.push('Every day is set to 0 — there is nowhere to put any words.')
     }
   }
+  // Without a target OR a ceiling OR any weekday number, a pattern schedule states nothing at all.
+  if (target == null && schedule.dailyCeiling == null && !schedule.weekdayLimits) {
+    errors.push('Set a target and deadline, or a daily number, or per-weekday numbers.')
+  }
 
   for (const c of schedule.checkpoints ?? []) {
-    if (c.date < schedule.startDate || c.date > schedule.deadline) {
+    if (c.date < schedule.startDate || (deadline && c.date > deadline)) {
       errors.push(`Checkpoint ${c.date} is outside the schedule.`)
     }
-    if (c.count > schedule.targetCount) {
-      errors.push(`Checkpoint ${c.date} asks for more words (${c.count}) than the final target (${schedule.targetCount}).`)
+    if (target != null && c.count > target) {
+      errors.push(`Checkpoint ${c.date} asks for more words (${c.count}) than the final target (${target}).`)
     }
     if (c.count <= 0) errors.push(`Checkpoint ${c.date} needs a target above 0.`)
   }

@@ -2,6 +2,7 @@ import {
   addScheduleDays, weekdayOfDate, daysBetween, eachDate, MAX_SCHEDULE_DAYS,
   dayCapacity, capacityWindow, waterFill, distributeIntegers, activeSegments,
   scheduleStatus, schedulePace, scheduleRemedies, schedulePlan, plannedForDate, assignedPlan, validateSchedule,
+  isPatternSchedule, planEnd, PATTERN_HORIZON_DAYS,
 } from '../goalSchedule'
 import type { GoalSchedule } from '@/domain'
 
@@ -390,9 +391,80 @@ describe('assignedPlan', () => {
   })
 })
 
+describe('pattern schedules (no finish line)', () => {
+  /** "8 a day, none at the weekend", running on indefinitely. */
+  const pattern = () => makeSchedule({
+    targetCount: null, deadline: null, dailyCeiling: 8, weekdayLimits: { '0': 0, '6': 0 },
+  })
+
+  it('is recognised as a pattern', () => {
+    expect(isPatternSchedule(pattern())).toBe(true)
+    expect(isPatternSchedule(makeSchedule())).toBe(false)
+  })
+
+  it("today's goal is simply today's capacity", () => {
+    const s = pattern()
+    expect(scheduleStatus({ schedule: s, today: '2026-09-07', doneSoFar: 0 }).goal).toBe(8)  // Monday
+    expect(scheduleStatus({ schedule: s, today: '2026-09-12', doneSoFar: 0 }).goal).toBe(0)  // Saturday
+  })
+
+  it('reports the measures that need a finish line as neutral, not as zero progress', () => {
+    const st = scheduleStatus({ schedule: pattern(), today: '2026-09-07', doneSoFar: 40 })
+    expect(st.isPattern).toBe(true)
+    expect(st.feasible).toBe(true)     // nothing to be infeasible against
+    expect(st.pace).toBe(0)            // nothing to be behind
+    expect(st.done).toBe(false)        // never "finished"
+    expect(st.remedies).toBeNull()
+  })
+
+  it('draws an open-ended plan over a rolling horizon', () => {
+    const plan = schedulePlan(pattern(), '2026-09-07', 0)
+    expect(plan).toHaveLength(PATTERN_HORIZON_DAYS + 1)
+    expect(plan[0]!.words).toBe(8)                                    // Monday
+    expect(plan.find(d => d.date === '2026-09-12')!.words).toBe(0)    // Saturday off
+    expect(planEnd(pattern(), '2026-09-07')).toBe('2027-03-06')
+  })
+
+  it('asks for nothing when it states no number at all', () => {
+    // No target, no ceiling, no weekday numbers: there is nothing to derive a goal from.
+    const empty = makeSchedule({ targetCount: null, deadline: null, dailyCeiling: null })
+    expect(scheduleStatus({ schedule: empty, today: '2026-09-07', doneSoFar: 0 }).goal).toBe(0)
+    expect(validateSchedule(empty).some(e => /a daily number/.test(e))).toBe(true)
+  })
+
+  it('still honours days off and per-date caps', () => {
+    const s = makeSchedule({
+      targetCount: null, deadline: null, dailyCeiling: 8,
+      dateExceptions: { '2026-09-09': 0, '2026-09-10': 3 },
+    })
+    expect(scheduleStatus({ schedule: s, today: '2026-09-09', doneSoFar: 0 }).goal).toBe(0)
+    expect(scheduleStatus({ schedule: s, today: '2026-09-10', doneSoFar: 0 }).goal).toBe(3)
+  })
+
+  it('assigns past days the number they were always going to hold', () => {
+    expect(plannedForDate(pattern(), '2026-09-07')).toBe(8)
+    expect(plannedForDate(pattern(), '2026-09-12')).toBe(0)
+    expect(plannedForDate(pattern(), '2026-08-31')).toBe(0)   // before the start
+  })
+
+  it('accepts a bare per-weekday pattern with no ceiling', () => {
+    const s = makeSchedule({
+      targetCount: null, deadline: null, dailyCeiling: null,
+      weekdayLimits: { '1': 5, '2': 5, '3': 5, '4': 5, '5': 5, '6': 0, '0': 0 },
+    })
+    expect(validateSchedule(s)).toEqual([])
+    expect(scheduleStatus({ schedule: s, today: '2026-09-07', doneSoFar: 0 }).goal).toBe(5)
+  })
+})
+
 describe('validateSchedule', () => {
   it('accepts a sane schedule', () => {
     expect(validateSchedule(makeSchedule())).toEqual([])
+  })
+
+  it('rejects a target with no deadline to spread it across', () => {
+    const s = makeSchedule({ deadline: null })
+    expect(validateSchedule(s).some(e => /needs a deadline/.test(e))).toBe(true)
   })
 
   it('rejects a deadline before the start', () => {

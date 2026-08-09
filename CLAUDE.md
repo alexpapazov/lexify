@@ -2544,6 +2544,16 @@ read for all `new_words` schedules plus a head-count per `total_words` one, deli
 since it must move the moment you graduate a card. Every schedule read is `.catch`-wrapped so an
 unapplied migration 114 falls through to the old carryover behaviour instead of blanking a page.
 
+**A schedule needs a target OR just numbers (migration 116 — PENDING).** `targetCount`/`deadline` are
+NULLABLE: a "pattern" schedule ("8 a day, none Sundays") is open-ended, its goal each day is simply
+`dayCapacity`, drawn over a rolling `PATTERN_HORIZON_DAYS` (180) window. Pattern measures report
+NEUTRAL values (`feasible: true`, `pace: 0`) rather than zeroes that read as no-progress. A target
+without a deadline is an error in both the validator and the DB. **The editor's calendar now appears
+as soon as the schedule states anything** — it used to be gated behind `targetCount > 0`, which made
+it impossible to block out travel before committing to a target. `profiles.daily_word_ceiling` is a
+limit across ALL languages; only the combined calendar can see the sum, and its warning points at
+staggering with checkpoints rather than raising the ceiling.
+
 **The Daily/Per weekday/Schedule toggle is GLOBAL** (`profiles.goal_mode`, migration 115 — PENDING),
 one choice for all languages. It is a UI mode: NO consumer reads it, so leaving Schedule mode prompts
 to retire the live schedules rather than letting them drive goals invisibly, and a page load with any

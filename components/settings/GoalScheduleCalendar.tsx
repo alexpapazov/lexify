@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { assignedPlan, weekdayOfDate, addScheduleDays, eachDate, dayCapacity } from '@/lib/goalSchedule'
+import { assignedPlan, weekdayOfDate, eachDate, dayCapacity, planEnd } from '@/lib/goalSchedule'
 import type { SchedulePlanDay } from '@/lib/goalSchedule'
 import type { GoalSchedule } from '@/domain'
 
@@ -85,8 +85,8 @@ export function GoalScheduleCalendar({ schedule, plan, today, color, onSetDateCa
   // otherwise close over the anchor/hover from first render and always commit an empty range.
   const anchorRef = useRef<string | null>(null)
   const hoverRef = useRef<string | null>(null)
-  const boundsRef = useRef({ start: schedule.startDate, end: schedule.deadline })
-  boundsRef.current = { start: schedule.startDate, end: schedule.deadline }
+  const boundsRef = useRef({ start: schedule.startDate, end: planEnd(schedule, today) })
+  boundsRef.current = { start: schedule.startDate, end: planEnd(schedule, today) }
 
   /**
    * A drag can end anywhere — on a different cell, off the grid, outside the window — so the release
@@ -121,12 +121,13 @@ export function GoalScheduleCalendar({ schedule, plan, today, color, onSetDateCa
     }
   }, [])
 
-  const months = useMemo(() => monthsBetween(schedule.startDate, schedule.deadline), [schedule.startDate, schedule.deadline])
+  const span = planEnd(schedule, today)
+  const months = useMemo(() => monthsBetween(schedule.startDate, span), [schedule.startDate, span])
   const planByDate = useMemo(() => new Map(plan.map(d => [d.date, d.words])), [plan])
   // Past days show the target they were ASSIGNED. Computed ONCE for the whole span — calling
   // `plannedForDate` per cell re-runs the water-fill per date, which is O(n²) across the grid and
   // freezes a long schedule on every keystroke.
-  const assignedByDate = useMemo(() => assignedPlan(schedule), [schedule])
+  const assignedByDate = useMemo(() => assignedPlan(schedule, today), [schedule, today])
   const checkpointByDate = useMemo(
     () => new Map((schedule.checkpoints ?? []).map(c => [c.date, c.count])),
     [schedule.checkpoints],
@@ -141,7 +142,7 @@ export function GoalScheduleCalendar({ schedule, plan, today, color, onSetDateCa
     return new Set(selection)
   }, [anchor, hover, selection])
 
-  const inSchedule = (d: string) => d >= schedule.startDate && d <= schedule.deadline
+  const inSchedule = (d: string) => d >= schedule.startDate && d <= span
 
   function beginDrag(date: string) {
     if (!inSchedule(date)) return
@@ -318,8 +319,10 @@ export function GoalScheduleCalendar({ schedule, plan, today, color, onSetDateCa
 
       {selection.length === 0 && months.length > 0 && (
         <p className="text-xs text-ink-faint">
-          {`Schedule runs ${schedule.startDate} → ${schedule.deadline}. Days outside it are dimmed; the deadline is outlined.`}
-          {schedule.deadline < addScheduleDays(today, 0) ? ' This deadline is in the past.' : ''}
+          {schedule.deadline
+            ? `Schedule runs ${schedule.startDate} → ${schedule.deadline}. Days outside it are dimmed; the deadline is outlined.`
+            : `Open-ended from ${schedule.startDate} — shown six months ahead. Drag days to block out time or cap them.`}
+          {schedule.deadline && schedule.deadline < today ? ' This deadline is in the past.' : ''}
         </p>
       )}
     </div>
