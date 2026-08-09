@@ -28,7 +28,8 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
 import { GoalScheduleEditor } from '@/components/settings/GoalScheduleEditor'
 import { GoalScheduleOverview, type OverviewLanguage } from '@/components/settings/GoalScheduleOverview'
-import { assignedPlan, schedulePlan, planEnd } from '@/lib/goalSchedule'
+import { assignedPlan, schedulePlan, planEnd, eachDate } from '@/lib/goalSchedule'
+import { applyDailyCeiling } from '@/lib/dailyCeiling'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { getToday } from '@/lib/dates'
 import { langName, assignLanguageColors } from '@/lib/languages'
@@ -71,6 +72,8 @@ export default function GoalsPage() {
   const [overview,      setOverview]      = useState<OverviewLanguage[]>([])
   const [liveSchedules, setLiveSchedules] = useState<GoalSchedule[]>([])
   const [overviewBusy,  setOverviewBusy]  = useState(false)
+  /** What the combined ceiling pushed past the end of the plan, and which days it had to defer. */
+  const [spill, setSpill] = useState<{ overflow: Map<string, number>; deferredDays: string[] }>({ overflow: new Map(), deferredDays: [] })
   /** Bumped after a bulk edit so the per-language editors remount and reload from the server. */
   const [editorEpoch,   setEditorEpoch]   = useState(0)
 
@@ -85,6 +88,11 @@ export default function GoalsPage() {
   const [skipShortfallDays, setSkipShortfallDays] = useState<string[]>([])
   const [skipSurplusDays,   setSkipSurplusDays]   = useState<string[]>([])
   const [saved,             setSaved]             = useState(false)
+
+  /** The combined limit as a number, or null when blank / not yet migrated. */
+  const parsedCeiling = ceilingSupported && dailyCeiling.trim() !== ''
+    ? (parseInt(dailyCeiling, 10) || null)
+    : null
 
   const colorByCode = useMemo(
     () => assignLanguageColors(langPairs.map(p => p.sourceLanguage), langColors),
@@ -179,11 +187,33 @@ export default function GoalsPage() {
       const done = await progressForSchedules({ userId, schedules, timezone: tz, turnoverHour })
         .catch(() => new Map<string, number>())
 
-      setOverview(schedules.map(s => {
+      // Each language's own plan first…
+      const raw = new Map<string, Map<string, number>>()
+      for (const s of schedules) {
         const key = `${s.sourceLanguage}|${s.targetLanguage}`
         const plan = new Map<string, number>()
         for (const [date, words] of assignedPlan(s, today)) if (date < today) plan.set(date, words)
         for (const day of schedulePlan(s, today, done.get(key) ?? 0)) plan.set(day.date, day.words)
+        raw.set(key, plan)
+      }
+
+      // …then the combined ceiling, which is a real CAP: whatever doesn't fit on a day moves to the
+      // next one and is capped again there. Only applied from TODAY forward — a past day's plan is a
+      // historical record, and re-capping it would rewrite what those days were assigned.
+      const from = schedules.reduce((min, s) => (s.startDate < min ? s.startDate : min), today)
+      const to = schedules.reduce((max, s) => (planEnd(s, today) > max ? planEnd(s, today) : max), today)
+      const future = eachDate(today > from ? today : from, to)
+      const futureDemand = new Map(
+        [...raw].map(([key, plan]) => [key, new Map([...plan].filter(([d]) => d >= today))]),
+      )
+      const capped = applyDailyCeiling({ dates: future, demand: futureDemand, ceiling: parsedCeiling })
+      setSpill({ overflow: capped.overflow, deferredDays: capped.deferredDays })
+
+      setOverview(schedules.map(s => {
+        const key = `${s.sourceLanguage}|${s.targetLanguage}`
+        const plan = new Map<string, number>()
+        for (const [date, words] of raw.get(key) ?? []) if (date < today) plan.set(date, words)
+        for (const [date, words] of capped.planned.get(key) ?? []) plan.set(date, words)
         const pair = langPairs.find(p => `${p.sourceLanguage}|${p.targetLanguage}` === key)
         return {
           key,
@@ -196,7 +226,7 @@ export default function GoalsPage() {
         }
       }))
     } finally { setOverviewBusy(false) }
-  }, [userId, langPairs, timezone, turnoverHour, colorByCode])
+  }, [userId, langPairs, timezone, turnoverHour, colorByCode, parsedCeiling])
 
   useEffect(() => {
     if (goalMode === 'schedule') void refreshOverview()
@@ -323,11 +353,6 @@ export default function GoalsPage() {
     void persistMode(next)
   }
 
-  /** The combined limit as a number, or null when blank / not yet migrated. */
-  const parsedCeiling = ceilingSupported && dailyCeiling.trim() !== ''
-    ? (parseInt(dailyCeiling, 10) || null)
-    : null
-
   async function saveDailyCeiling() {
     if (!userId || !ceilingSupported) return
     await supabase.from('profiles')
@@ -425,33 +450,43 @@ export default function GoalsPage() {
         </p>
       )}
 
+      {/* The combined cap — every mode, not just schedules. A per-language number can't express it:
+          three languages at 10 each is 30 however each one is configured. */}
+      {ceilingSupported && langPairs.length > 0 && (
+        <div className="panel space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-sm text-ink">Never more than</label>
+            <input
+              type="number" min={1} max={999}
+              className="input text-center text-sm px-2 py-1.5 w-20"
+              placeholder="—"
+              value={dailyCeiling}
+              onChange={e => setDailyCeiling(e.target.value)}
+              onBlur={saveDailyCeiling}
+            />
+            <span className="text-sm text-ink">new words a day, across every language.</span>
+          </div>
+          <p className="text-xs text-ink-faint">
+            {goalMode === 'schedule'
+              ? 'A cap, not a warning: whatever doesn\'t fit rolls into the next day and is capped again there. When a day is oversubscribed the limit is shared out so a language wanting only a couple of words still gets them.'
+              : 'A cap, not a warning: today\'s goals are trimmed to fit. What\'s withheld only comes back tomorrow if carryover is on below — without it, a trimmed day is simply a lighter day.'}
+          </p>
+        </div>
+      )}
+
       {/* ── Schedule mode: the combined calendar first, then each language's own editor ── */}
       {goalMode === 'schedule' && langPairs.length > 0 && (
         <div className="panel space-y-3">
           <div className="flex flex-wrap items-baseline justify-between gap-3">
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">All languages</h2>
-            <div className="flex items-center gap-2">
-              {overviewBusy && <span className="text-xs text-ink-faint">Updating…</span>}
-              {ceilingSupported && (
-                <>
-                  <label className="text-xs text-ink-faint">Never more than</label>
-                  <input
-                    type="number" min={1} max={999}
-                    className="input text-center text-sm px-2 py-1 w-20"
-                    placeholder="—"
-                    value={dailyCeiling}
-                    onChange={e => setDailyCeiling(e.target.value)}
-                    onBlur={saveDailyCeiling}
-                  />
-                  <span className="text-xs text-ink-faint">words a day across everything</span>
-                </>
-              )}
-            </div>
+            {overviewBusy && <span className="text-xs text-ink-faint">Updating…</span>}
           </div>
           <GoalScheduleOverview
             languages={overview}
             today={todayStr}
             dailyCeiling={parsedCeiling}
+            spillOverflow={spill.overflow}
+            deferredDays={spill.deferredDays}
             restDays={restDays}
             onBulkDateCaps={bulkDateCaps}
             onBulkWeekdayOff={bulkWeekdayOff}

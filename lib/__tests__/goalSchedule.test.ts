@@ -159,6 +159,26 @@ describe('scheduleStatus — the daily number', () => {
     expect(scheduleStatus({ schedule: s, today: '2026-09-02', doneSoFar: 40 }).goal).toBe(4)
   })
 
+  it('redistributes a big overshoot across every remaining day, not just the next one', () => {
+    const s = makeSchedule()   // 100 words, 2026-09-01 → 09-20
+    // A 40-word day on day one. 60 left over the 19 days after it -> ~3.2 -> 4, down from 5.
+    expect(scheduleStatus({ schedule: s, today: '2026-09-02', doneSoFar: 40 }).goal).toBe(4)
+    // Three days in having done 75: 25 over the remaining 17 days -> 1.47 -> 2.
+    expect(scheduleStatus({ schedule: s, today: '2026-09-04', doneSoFar: 75 }).goal).toBe(2)
+    // Getting further ahead only ever lowers it — never raises it to "use up" the surplus.
+    const ahead = scheduleStatus({ schedule: s, today: '2026-09-04', doneSoFar: 90 })
+    expect(ahead.goal).toBeLessThan(2)
+    expect(ahead.pace).toBeGreaterThan(0)
+  })
+
+  it('finishes early rather than inventing more work when you blow past the target', () => {
+    const s = makeSchedule()
+    const st = scheduleStatus({ schedule: s, today: '2026-09-03', doneSoFar: 140 })   // 40 over
+    expect(st.done).toBe(true)
+    expect(st.goal).toBe(0)
+    expect(st.remaining).toBe(0)   // clamped at 0, never negative
+  })
+
   it('pushes the load onto working days when weekends are off', () => {
     // Mon 2026-09-07 → Fri 2026-09-18 is 12 days, of which Sep 12/13 are the weekend: 10 working days.
     const s = makeSchedule({

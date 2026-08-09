@@ -30,6 +30,7 @@ import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding, effectiveDebtSince } from '@/lib/goalCarryover'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
 import { scheduleStatus } from '@/lib/goalSchedule'
+import { shareDayAcrossLanguages } from '@/lib/dailyCeiling'
 import type { GoalSchedule } from '@/domain'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
@@ -394,6 +395,14 @@ export function PresentSnapshot() {
           // Analytics shows the FULL carryover picture (incl. pairs a surplus auto-fulfilled to goal 0,
           // rendered as a green ✓), so filter on the owed base — any pair with a target today shows.
           .filter(g => g.baseGoal > 0 || g.goal > 0)
+
+        // The combined ceiling clamps the whole set, matching the study dashboard exactly — the two
+        // lists deliberately show different SLICES, but the number for a given language must agree.
+        const ceiling = (profile?.daily_word_ceiling as number | null) ?? null
+        if (ceiling && ceiling > 0) {
+          const share = shareDayAcrossLanguages(ceiling, goals.map(g => ({ key: g.key, words: g.goal })))
+          for (const g of goals) g.goal = share.get(g.key) ?? g.goal
+        }
         const remainingNew = goals.reduce((sum, g) => sum + Math.max(0, g.goal - g.done), 0)
 
         /**

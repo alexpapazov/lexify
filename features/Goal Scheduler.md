@@ -209,17 +209,39 @@ included — behind `targetCount > 0`, so you could not block out travel or add 
 you'd committed to a target. The calendar now appears as soon as the schedule states *anything*
 (`stated` in the editor).
 
-### A ceiling across ALL languages (migration 116)
+### A ceiling across ALL languages (migration 116) — a CAP that defers
 
 `profiles.daily_word_ceiling` — the most new words you'll do in a day across every language combined.
-Per-schedule ceilings cannot express this: three languages each capped at 10 still add up to 30, and
-only the combined calendar can see the sum.
+Per-language settings cannot express this: three languages each capped at 10 still add up to 30, and
+only something seeing all of them at once can catch it. It applies in **every** goal mode, so its
+control is its own panel on `/settings/goals`, not part of the schedule editor.
 
-Days over it are tinted red on the combined calendar and named in a banner. The banner deliberately
-does **not** offer "raise the ceiling" as a remedy — the limit is the point. It offers **staggering
-with checkpoints**: give one language an early checkpoint so it front-loads and clears its bulk
-first, leaving the other light until then. That's the one remedy that keeps both the target and the
-limit; the alternatives are pushing a deadline back or lowering a target.
+**It defers, it never discards** (`lib/dailyCeiling.ts`, pure, 13 tests). Words that don't fit today
+move to tomorrow and are capped again there — the same contract `capGoal` has in
+`lib/goalCarryover.ts`, and load-bearing for the same reason: a cap that silently dropped work would
+make every deadline unreachable while showing a comfortable daily number. There's a conservation test
+asserting `planned + overflow === asked`.
+
+**A crowded day is water-filled between languages**, exactly as words are water-filled across days.
+A language asking for 3 gets 3; two languages asking for 20 split what's left. Proportional sharing
+would do the opposite and shave the language that barely wanted anything.
+
+Two entry points, and they answer different questions:
+- `applyDailyCeiling` walks the calendar carrying overflow forward — that's the **projection**, used
+  for the combined calendar.
+- `shareDayAcrossLanguages` caps a **single day** — that's what the study dashboard and
+  `PresentSnapshot` use for "what do I owe right now". Carry-in never applies to today, because a
+  schedule re-derives its number from what's left rather than from a backlog.
+
+The warning therefore changed meaning. "Days over the limit" no longer exists — the plan arriving at
+the calendar is already capped. What's worth flagging is what the cap pushed **clean off the end**:
+work with nowhere left to go. That banner still refuses to offer "raise the limit" and points at
+**staggering with checkpoints** instead.
+
+**Caveat for the fixed modes.** In schedule mode the withheld words come back automatically (the
+schedule re-derives them across the days it has left). In Daily / Per weekday mode there is no such
+mechanism, so a trimmed day only returns via **carryover** — with carryover off, a capped day is
+simply a lighter day. The UI says so under the control.
 
 ### Three ways to not study, and which is which
 

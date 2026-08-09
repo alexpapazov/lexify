@@ -4,7 +4,7 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 804 passing tests (51 suites).
+- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 819 passing tests (52 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`116`, applied BY HAND. **`116` is
   PENDING** — pattern schedules (nullable target/deadline) and the combined daily ceiling.
@@ -25,7 +25,7 @@ implementation notes + error log); this file is the map you read first.
   is the signal that nothing is pending** — put a new migration there, tell the user to run it, and
   move it into `archive/` once it's live. **`116_goal_schedule_patterns.sql` needs running.** Next number = **117**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **51 suites / 804 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **52 suites / 819 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -172,8 +172,10 @@ language then gets its own editor with its own drag-select calendar. **A schedul
 target**: leave target/deadline blank and the weekday numbers alone ARE the schedule (a "pattern"
 schedule, open-ended, `targetCount === null`). That also fixed a real bug — the calendar used to be
 gated behind a target, so you couldn't block out travel until you'd committed to a number. A
-combined `profiles.daily_word_ceiling` warns when languages compete for the same days and points at
-checkpoints as the way to stagger them. The carryover block saves itself
+combined `profiles.daily_word_ceiling` is a real CAP in every goal mode (`lib/dailyCeiling.ts`): it
+DEFERS what doesn't fit to the next day rather than dropping it, water-fills a crowded day between
+languages, and only warns about what spills past the horizon — pointing at checkpoints to stagger
+them. The carryover block saves itself
 with a targeted profile update rather than riding the settings page's omnibus save.
 
 **The debt is DERIVED, not stored**: `plannedGoalSum` sums the *configured* goals and the deficit is

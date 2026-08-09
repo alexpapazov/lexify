@@ -49,11 +49,15 @@ const monthLabel = (ym: string) =>
 const longDate = (d: string) =>
   new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
 
-export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling, onBulkDateCaps, onBulkWeekdayOff }: {
+export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling, spillOverflow, deferredDays, onBulkDateCaps, onBulkWeekdayOff }: {
   languages: OverviewLanguage[]
   today: string
   /** Max new words across ALL languages in one day. Null = no combined limit. */
   dailyCeiling: number | null
+  /** langKey → words the ceiling pushed clean past the end of the plan (`applyDailyCeiling`). */
+  spillOverflow: Map<string, number>
+  /** Dates where the ceiling had to move work to the following day. */
+  deferredDays: string[]
   /** Weekdays currently set to 0 on EVERY live schedule — the "rest day everywhere" state. */
   restDays: number[]
   /** Applies a per-date cap (`null` clears it) to every live schedule at once. */
@@ -120,23 +124,15 @@ export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling,
   }, [languages])
 
   /**
-   * Days whose combined demand exceeds the learner's own limit. Per-schedule ceilings cannot express
-   * this: three languages each capped at 10 still add up to 30. Only the combined view can see it, so
-   * only the combined view can warn about it.
+   * The plans arriving here are ALREADY capped — `applyDailyCeiling` moved whatever didn't fit onto
+   * the following day. So the thing worth warning about isn't "days over the limit" (there are none
+   * by construction) but what the cap pushed clean off the end of the schedule: THAT is work with
+   * nowhere left to go.
    */
-  const over = useMemo(() => {
-    if (!dailyCeiling || dailyCeiling <= 0) return { days: [] as string[], worst: 0 }
-    const days: string[] = []
-    let worst = 0
-    for (const [date, entry] of byDate) {
-      if (entry.total > dailyCeiling) {
-        days.push(date)
-        worst = Math.max(worst, entry.total - dailyCeiling)
-      }
-    }
-    days.sort()
-    return { days, worst }
-  }, [byDate, dailyCeiling])
+  const spilledTotal = useMemo(
+    () => [...spillOverflow.values()].reduce((a, b) => a + b, 0),
+    [spillOverflow],
+  )
 
   const totals = useMemo(() => {
     const out = new Map<string, number>()
@@ -188,7 +184,8 @@ export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling,
                 const entry = byDate.get(date)
                 const isToday = date === today
                 const deadlines = languages.filter(l => l.deadline === date)
-                const overloaded = !!dailyCeiling && !!entry && entry.total > dailyCeiling
+                // A day the cap had to push work off. It is AT the limit, not over it.
+                const overloaded = deferredDays.includes(date)
 
                 // A conic-gradient is the cheapest correct pie: no SVG, no layout, and it stays crisp
                 // at the ~30px a calendar cell can spare.
@@ -250,7 +247,7 @@ export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling,
                         {entry && entry.total > 0 ? (
                           <>
                             <div className={`text-[10px] mb-1 ${overloaded ? 'text-danger' : 'text-ink-faint'}`}>
-                              {entry.total} words planned{overloaded ? ` — ${entry.total - dailyCeiling!} over your ${dailyCeiling}/day limit` : ''}
+                              {entry.total} words planned{overloaded ? ` — at your ${dailyCeiling}/day limit, the rest moved on` : ''}
                             </div>
                             {entry.parts.map(p => (
                               <div key={p.lang.key} className="flex items-center gap-1.5 text-[11px] text-ink-muted">
@@ -279,18 +276,23 @@ export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling,
         ))}
       </div>
 
-      {over.days.length > 0 && (
+      {deferredDays.length > 0 && spilledTotal === 0 && (
+        <p className="text-xs text-ink-faint">
+          {`Your ${dailyCeiling}-word daily limit moved work off ${deferredDays.length} day${deferredDays.length === 1 ? '' : 's'} onto the following one. Everything still fits before your deadlines.`}
+        </p>
+      )}
+
+      {spilledTotal > 0 && (
         <div className="rounded-md border border-danger/40 bg-danger/5 p-3 space-y-1.5">
           <p className="text-xs text-danger">
-            {`${over.days.length} day${over.days.length === 1 ? '' : 's'} ask${over.days.length === 1 ? 's' : ''} for more than your ${dailyCeiling}-word daily limit — up to ${over.worst} over on the worst day (${longDate(over.days[0]!)}${over.days.length > 1 ? ' and others' : ''}).`}
+            {`${spilledTotal} word${spilledTotal === 1 ? '' : 's'} can't fit before the deadlines — your ${dailyCeiling}-word daily limit ran out of days to push them into.`}
           </p>
           <p className="text-xs text-ink-faint">
-            Your languages are competing for the same days. Raising a ceiling won&apos;t help — the
-            limit is the whole point. The fix is to <span className="text-ink">stagger them with
-            checkpoints</span>: give one language an early checkpoint so it front-loads and finishes
-            its bulk first, and let the other stay light until then. Set a checkpoint by clicking a
-            single day on that language&apos;s own calendar below. Failing that, push a deadline back
-            or lower a target.
+            Your languages are competing for the same days. Raising the limit defeats the point of
+            having one. The fix is to <span className="text-ink">stagger them with checkpoints</span>:
+            give one language an early checkpoint so it front-loads and clears its bulk first, and let
+            the other stay light until then. Set a checkpoint by clicking a single day on that
+            language&apos;s own calendar below. Failing that, push a deadline back or lower a target.
           </p>
         </div>
       )}
@@ -335,7 +337,8 @@ export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling,
 
       <p className="text-xs text-ink-faint">
         The number in each day is the total words planned across every language; the ring around it
-        splits that total by language. Hover a day for the exact numbers; a ring marks today and an outline marks a language&apos;s deadline. Drag across
+        splits that total by language. Days already capped by your combined limit carry their excess
+        into the next day. Hover a day for the exact numbers; a ring marks today and an outline marks a language&apos;s deadline. Drag across
         days to block out travel. Colours are the ones set in Settings → Language colors.
       </p>
     </div>

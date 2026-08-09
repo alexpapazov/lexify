@@ -2556,9 +2556,15 @@ NULLABLE: a "pattern" schedule ("8 a day, none Sundays") is open-ended, its goal
 NEUTRAL values (`feasible: true`, `pace: 0`) rather than zeroes that read as no-progress. A target
 without a deadline is an error in both the validator and the DB. **The editor's calendar now appears
 as soon as the schedule states anything** — it used to be gated behind `targetCount > 0`, which made
-it impossible to block out travel before committing to a target. `profiles.daily_word_ceiling` is a
-limit across ALL languages; only the combined calendar can see the sum, and its warning points at
-staggering with checkpoints rather than raising the ceiling.
+it impossible to block out travel before committing to a target. **`profiles.daily_word_ceiling` is a real CAP across ALL languages, in EVERY goal mode** —
+`lib/dailyCeiling.ts` (pure, 13 tests). It DEFERS rather than discards: what doesn't fit rolls to the
+next day and is capped again (same contract as `capGoal`; there's a conservation test). A crowded day
+is WATER-FILLED between languages so a small ask isn't shaved for a big one. `applyDailyCeiling` is
+the forward projection (combined calendar); `shareDayAcrossLanguages` caps a single day and is what
+the dashboard + PresentSnapshot use for today — carry-in never applies to today because a schedule
+re-derives from what's left. The banner flags what spilled PAST the horizon (work with nowhere to go),
+not "days over the limit", which no longer exist by construction. In Daily/Per weekday mode the
+withheld words only return if carryover is on — schedule mode re-derives them for free.
 
 **The Daily/Per weekday/Schedule toggle is GLOBAL** (`profiles.goal_mode`, migration 115 — PENDING),
 one choice for all languages. It is a UI mode: NO consumer reads it, so leaving Schedule mode prompts

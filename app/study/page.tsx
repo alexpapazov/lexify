@@ -21,6 +21,7 @@ import { fetchAllRows } from '@/lib/supabasePaged'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, effectiveDebtSince } from '@/lib/goalCarryover'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
 import { scheduleStatus } from '@/lib/goalSchedule'
+import { shareDayAcrossLanguages } from '@/lib/dailyCeiling'
 import type { GoalSchedule } from '@/domain'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
@@ -317,6 +318,8 @@ export default function StudyPage() {
   // its carryover mode — the derived number has already absorbed any missed day, so stacking full
   // debt on top would charge for it twice. `scheduleDone` is each schedule's progress in its own
   // target units. See features/Goal Scheduler.md.
+  /** The cap across ALL languages (migration 116). Null = no combined limit. */
+  const [dailyCeiling,      setDailyCeiling]      = useState<number | null>(null)
   const [schedules,         setSchedules]         = useState<Map<string, GoalSchedule>>(new Map())
   const [scheduleDone,      setScheduleDone]      = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
@@ -346,7 +349,7 @@ export default function StudyPage() {
     // single pixel rendered, on top of the paged reads. Only the deck→card grouping and the
     // full-debt scan genuinely need an earlier result; those are still awaited in order below.
     const decksP   = deckRepo.list(uid)
-    const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).single())
+    const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals, daily_word_ceiling').eq('user_id', uid).single())
     const paramsP  = new SupabaseUserSchedulerParamsRepository().listForUser(uid)
     // A missing goal_schedules table (migration 114 not yet applied) must never blank the dashboard.
     const schedulesP = new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[])
@@ -388,6 +391,7 @@ export default function StudyPage() {
     setSkipShortfallDays(skipShort)
     setSkipSurplusDays(skipSurp)
     setDeferrals((profileRes.data?.goal_deferrals as string[] | null) ?? [])
+    setDailyCeiling((profileRes.data?.daily_word_ceiling as number | null) ?? null)
     const exemptDaySet = new Set([...skipShort, ...skipSurp])
     const todayStr     = getToday(tz, turnoverHour)
     setTodayStr(todayStr)
@@ -901,10 +905,13 @@ export default function StudyPage() {
   const todayWeekday = todayStr ? new Date(todayStr + 'T12:00:00Z').getUTCDay() : -1
   const yesterdayWeekday = todayWeekday < 0 ? -1 : (todayWeekday + 6) % 7
 
-  /** Pairs with a goal today, each already adjusted by carryover + "move to tomorrow" deferrals. */
+  /**
+   * Pairs with a goal today — adjusted by carryover + "move to tomorrow" deferrals (or derived from a
+   * schedule), and then clamped by the combined daily ceiling.
+   */
   const pairsWithGoalsToday = useMemo(() => {
     if (todayWeekday < 0) return []
-    return langPairs.flatMap(p => {
+    const raw = langPairs.flatMap(p => {
       const key = `${p.sourceLanguage}|${p.targetLanguage}`
       const configuredForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
       const isDeferred = (d: string) => deferrals.includes(`${key}|${d}`)
@@ -945,7 +952,18 @@ export default function StudyPage() {
       }
       return [{ pair: p, key, goal, delta }]
     })
-  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, fullDebtResets, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals, schedules, scheduleDone])
+
+    // The combined ceiling has the LAST word, and it is cross-language by nature: three languages
+    // wanting 10 each is 30, whatever each one's own limit says. Water-filled, so a language asking
+    // for 2 keeps its 2 rather than being shaved to make room for a bigger one. What's withheld is
+    // NOT lost — a schedule re-derives it across the days it has left, and carryover rolls it into
+    // tomorrow, exactly as the 2.5x cap already does.
+    if (!dailyCeiling || dailyCeiling <= 0) return raw
+    const share = shareDayAcrossLanguages(dailyCeiling, raw.map(r => ({ key: r.key, words: r.goal })))
+    return raw
+      .map(r => ({ ...r, goal: share.get(r.key) ?? r.goal }))
+      .filter(r => r.goal > 0)
+  }, [langPairs, dailyCeiling, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, fullDebtResets, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals, schedules, scheduleDone])
 
   // "Move today's load to tomorrow" for one language: record today's study-day as deferred for that pair.
   // owedGoalForDate then zeroes it today and adds it to tomorrow; the row drops off the list immediately.
