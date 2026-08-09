@@ -324,10 +324,19 @@ A card per live schedule, below Today's goals. The two panels answer different q
 the same way the two goal lists already do: **Today's goals** is "what do I owe right now",
 **Goal progress** is "is the whole thing on track".
 
-Per schedule: a progress bar, **words learned since the schedule started**, still to go, today's
-number, days left (calendar, with study days called out separately whenever days off make them
-differ), pace, and the next checkpoint's remaining. Infeasible and expired schedules say so and point
-at Settings → Daily goals.
+**Two row shapes, because there are two kinds of goal:**
+- `kind: 'target'` — a deadline to work toward. Progress bar, **words learned since the schedule
+  started**, still to go, today's number, days left (calendar, with study days called out separately
+  whenever days off make them differ), pace, next checkpoint. Infeasible and expired schedules say so
+  and point at Settings → Daily goals.
+- `kind: 'recurring'` — just a number per day or per week (a pattern schedule, OR plain weekday goals
+  with no schedule at all). It states **the number itself** — "8 a day", or "56 a week · 7 study
+  days" when the week isn't uniform. Rendering these as targets gave a progress bar pinned at 0%
+  forever and a row of zeroes, which is what shipped first and read as broken.
+
+A language stating no number anywhere is **omitted** rather than shown as a row of zeroes. Plain
+weekday goals have no start date to measure from, so their first metric is "Learned today" rather
+than "Learned since".
 
 `learnedSince` is measured differently per target kind and that distinction matters: `new_words`
 counts only what happened during the schedule, so its progress IS `doneSoFar`; `total_words` counts

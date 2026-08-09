@@ -29,7 +29,7 @@ import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProd
 import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding, effectiveDebtSince } from '@/lib/goalCarryover'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { scheduleStatus, daysBetween } from '@/lib/goalSchedule'
+import { scheduleStatus, daysBetween, schedulePlan } from '@/lib/goalSchedule'
 import { shareDayAcrossLanguages } from '@/lib/dailyCeiling'
 import type { GoalSchedule } from '@/domain'
 import { AccuracyTrend } from './AccuracyTrend'
@@ -137,6 +137,13 @@ function fmtDuration(ms: number): string {
  * dashboard shows tomorrow.
  */
 interface ScheduleGoalRow {
+  /**
+   * 'target'    — a deadline to work toward, so progress is a percentage of a finish line.
+   * 'recurring' — just a number per day or per week (a pattern schedule, or plain weekday goals).
+   *               It has nothing to be a percentage OF, so it reports the number itself instead of
+   *               a progress bar full of zeroes.
+   */
+  kind: 'target' | 'recurring'
   key: string
   label: string
   /** The learner's own name for it ("Exam prep"), or null. */
@@ -155,7 +162,8 @@ interface ScheduleGoalRow {
   studyDaysLeft: number
   /** Plain calendar days to the deadline, which is what a person counts. */
   calendarDaysLeft: number | null
-  startDate: string
+  /** Null for plain weekday goals — they have no start date to measure from. */
+  startDate: string | null
   deadline: string | null
   pace: number
   feasible: boolean
@@ -165,6 +173,10 @@ interface ScheduleGoalRow {
   isPattern: boolean
   /** The soonest checkpoint still ahead, if any. */
   nextCheckpoint: { date: string; target: number; remaining: number } | null
+  /** recurring only: the same number every day, or null when the week isn't uniform. */
+  perDay: number | null
+  /** recurring only: words across the next seven days. */
+  perWeek: number
 }
 
 interface Data {
@@ -588,25 +600,32 @@ export function PresentSnapshot() {
           })
         }
 
-        // ── Goal progress: one row per live schedule ──
-        const scheduleGoals: ScheduleGoalRow[] = activeSchedules.flatMap(sc => {
-          const key = `${sc.sourceLanguage}|${sc.targetLanguage}`
-          const st = statusFor(key)
-          if (!st) return []
-          const doneSoFar = scheduleDone.get(key) ?? 0
+        // ── Goal progress ──
+        // A row per language: a full progress row when there's a deadline to work toward, and a
+        // compact "8 a day" row when the goal is just a recurring number. A recurring goal has no
+        // finish line, so rendering it as a target would be a bar stuck at 0% forever.
+        const scheduleGoals: ScheduleGoalRow[] = []
+
+        for (const p of pairs as LanguagePair[]) {
+          const key = `${p.sourceLanguage}|${p.targetLanguage}`
+          const label = `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`
+          const sc = scheduleByPair.get(key)
+          const st = sc ? statusFor(key) : null
+
+          // ── A deadline to work toward ──
+          if (sc && st && !st.isPattern) {
+            const doneSoFar = scheduleDone.get(key) ?? 0
           // `new_words` counts only what happened during the schedule, so its progress IS doneSoFar.
           // `total_words` counts the whole vocabulary, so the work done is what's above the baseline.
-          const learnedSince = sc.targetKind === 'total_words'
-            ? Math.max(0, doneSoFar - sc.baselineCount)
-            : doneSoFar
-          const pair = pairs.find((p: LanguagePair) =>
-            p.sourceLanguage === sc.sourceLanguage && p.targetLanguage === sc.targetLanguage)
-          const next = st.segments.find(seg => !seg.isDeadline) ?? null
-          return [{
-            key,
-            label: pair ? `${langName(pair.sourceLanguage)} → ${langName(pair.targetLanguage)}`
-                        : `${langName(sc.sourceLanguage)} → ${langName(sc.targetLanguage)}`,
-            name: sc.name,
+            const learnedSince = sc.targetKind === 'total_words'
+              ? Math.max(0, doneSoFar - sc.baselineCount)
+              : doneSoFar
+            const next = st.segments.find(seg => !seg.isDeadline) ?? null
+            scheduleGoals.push({
+              kind: 'target',
+              key,
+              label,
+              name: sc.name,
             target: sc.targetCount,
             baseline: sc.baselineCount,
             learnedSince,
@@ -624,11 +643,61 @@ export function PresentSnapshot() {
             done: st.done,
             expired: st.expired,
             isPattern: st.isPattern,
-            nextCheckpoint: next
-              ? { date: next.date, target: next.target, remaining: next.remaining }
-              : null,
-          }]
-        })
+              nextCheckpoint: next
+                ? { date: next.date, target: next.target, remaining: next.remaining }
+                : null,
+              perDay: null,
+              perWeek: 0,
+            })
+            continue
+          }
+
+          // ── Just a recurring number ──
+          // From the pattern schedule's own plan when there is one, otherwise from the pair's
+          // weekday goals. A language stating no number anywhere is omitted rather than shown as a
+          // row of zeroes — that's the noise this replaced.
+          let week: number[]
+          if (sc && st?.isPattern) {
+            week = schedulePlan(sc, today, scheduleDone.get(key) ?? 0).slice(0, 7).map(d => d.words)
+          } else {
+            week = [0, 1, 2, 3, 4, 5, 6].map(offset => {
+              const d = new Date(new Date(today + 'T12:00:00Z').getTime() + offset * 86_400_000)
+              const g = p.goals?.[String(d.getUTCDay())]
+              return typeof g === 'number' && g > 0 ? g : 0
+            })
+          }
+          const perWeek = week.reduce((a, b) => a + b, 0)
+          if (perWeek <= 0) continue
+
+          const uniform = week.every(w => w === week[0])
+          scheduleGoals.push({
+            kind: 'recurring',
+            key,
+            label,
+            name: sc?.name ?? null,
+            target: null,
+            baseline: 0,
+            learnedSince: sc ? (scheduleDone.get(key) ?? 0) : (gradToday.get(key) ?? 0),
+            span: 0,
+            remaining: 0,
+            todayGoal: week[0] ?? 0,
+            studyDaysLeft: week.filter(w => w > 0).length,
+            calendarDaysLeft: null,
+            // A pattern schedule knows when it began; plain weekday goals don't, so "learned since"
+            // falls back to today's count and says so.
+            startDate: sc?.startDate ?? null,
+            deadline: null,
+            pace: 0,
+            feasible: true,
+            shortfall: 0,
+            done: false,
+            expired: false,
+            isPattern: true,
+            nextCheckpoint: null,
+            perDay: uniform ? (week[0] ?? 0) : null,
+            perWeek,
+          })
+        }
 
         if (!cancelled) setData({
           lists, counts, goals, standings, fullDebtSince, scheduleGoals,
@@ -781,8 +850,10 @@ export function PresentSnapshot() {
           <div>
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Goal progress</h2>
             <p className="text-xs text-ink-faint mt-1">
-              Deadline-driven goals. Everything here is recalculated from what you&apos;ve actually
-              done — nothing is banked, so getting ahead lightens the days that are left.
+              Where each language stands. A goal with a deadline shows how far through it you are;
+              one that&apos;s just a number per day or week shows that number. Everything is
+              recalculated from what you&apos;ve actually done — nothing is banked, so getting ahead
+              lightens the days that are left.
             </p>
           </div>
 
@@ -797,15 +868,17 @@ export function PresentSnapshot() {
                     {g.name && <span className="text-ink-faint"> · {g.name}</span>}
                   </span>
                   <span className="text-xs text-ink-faint">
-                    {g.isPattern
-                      ? `${g.todayGoal} a day, open-ended`
+                    {g.kind === 'recurring'
+                      ? (g.perDay != null
+                          ? `${g.perDay} a day`
+                          : `${g.perWeek} a week · ${g.studyDaysLeft} study day${g.studyDaysLeft === 1 ? '' : 's'}`)
                       : g.done ? 'Target reached ✓'
                       : g.expired ? `Deadline passed ${shortDate(g.deadline!)}`
                       : `by ${shortDate(g.deadline!)}`}
                   </span>
                 </div>
 
-                {!g.isPattern && (
+                {g.kind === 'target' && (
                   <>
                     <div className="flex items-baseline justify-between gap-2 text-xs">
                       <span className="text-ink-muted">
@@ -823,8 +896,12 @@ export function PresentSnapshot() {
                 )}
 
                 <div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
-                  <Metric label="Learned since" value={`${g.learnedSince}`} hint={`from ${shortDate(g.startDate)}`} />
-                  {!g.isPattern && (
+                  <Metric
+                    label={g.startDate ? 'Learned since' : 'Learned today'}
+                    value={`${g.learnedSince}`}
+                    hint={g.startDate ? `from ${shortDate(g.startDate)}` : 'words'}
+                  />
+                  {g.kind === 'target' && (
                     <Metric label="Still to go" value={`${g.remaining}`} hint="words" />
                   )}
                   <Metric label="Today" value={g.done ? '—' : `${g.todayGoal}`} hint="words" />
@@ -837,7 +914,7 @@ export function PresentSnapshot() {
                       hint={g.studyDaysLeft !== g.calendarDaysLeft ? `${g.studyDaysLeft} of them study days` : 'calendar days'}
                     />
                   )}
-                  {!g.isPattern && (
+                  {g.kind === 'target' && (
                     <Metric
                       label="Pace"
                       value={g.pace === 0 ? 'Level' : g.pace > 0 ? `+${g.pace}` : `${g.pace}`}

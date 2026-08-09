@@ -2575,7 +2575,11 @@ fallback (the not-yet-migrated-profile-column landmine). Schedule mode leads wit
 language in its `assignLanguageColors` colour, hover for exact percentages; dragging there marks time
 off across EVERY schedule, and rest-day chips set a weekday to 0 on all of them.
 
-**Goal progress panel (Analytics → Present)** — a card per live schedule: progress bar, words learned
+**Goal progress panel (Analytics → Present)** — a card per LANGUAGE, in one of two shapes.
+`kind:'recurring'` (a pattern schedule, or plain weekday goals with no schedule) states the number
+itself — "8 a day" / "56 a week" — because it has no finish line to be a percentage of; rendering
+those as targets gave a bar stuck at 0% and a row of zeroes. A language stating no number anywhere is
+omitted. `kind:'target'` is the full progress card: progress bar, words learned
 SINCE the schedule started, still to go, today's number, calendar days left (study days called out
 when days off make them differ), pace, next checkpoint. `learnedSince` differs by kind on purpose:
 `new_words` progress IS `doneSoFar`, `total_words` is `doneSoFar − baselineCount` — showing the raw

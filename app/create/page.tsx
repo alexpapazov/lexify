@@ -22,7 +22,7 @@ import { OnboardSetup, type OnboardCard, type OnboardDestination } from '@/compo
 import { BatchDeckImport } from '@/components/create/BatchDeckImport'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { descendantDeckIds } from '@/lib/folderStats'
-import { buildFolderOptions, NEW_FOLDER_VALUE, ROOT_FOLDER_VALUE } from '@/lib/folderOptions'
+import { FolderPicker } from '@/components/FolderPicker'
 import { generateCards } from '@/lib/generateCards'
 import { langName } from '@/lib/languages'
 import {
@@ -450,7 +450,8 @@ function OnlineCreatePage() {
           setOnboardError('"SYNCED VOCABULARY" is reserved for automatically synced cards.')
           return
         }
-        const newFolder = await new SupabaseFolderRepository().create(session.user.id, destination.newFolderName, null)
+        // destination.folderId is where the picker was standing — the new folder's parent.
+        const newFolder = await new SupabaseFolderRepository().create(session.user.id, destination.newFolderName, destination.folderId)
         folderId = newFolder.id
       }
       if (folderId) await deckRepo.update(deck.id, { folderId })
@@ -599,7 +600,8 @@ function OnlineCreatePage() {
             return
           }
           const folderRepo = new SupabaseFolderRepository()
-          const newFolder  = await folderRepo.create(session.user.id, name, null)
+          // `selectedFolderId` is the folder the picker was standing in, i.e. the parent.
+          const newFolder  = await folderRepo.create(session.user.id, name, selectedFolderId)
           folderId = newFolder.id
         }
       }
@@ -947,40 +949,29 @@ function OnlineCreatePage() {
           )}
         </div>
 
-        {(() => {
-          const folderOptions = buildFolderOptions(folders, decksForFolders, targetLang, basisLang)
-          return (
-            <div className="space-y-1.5 max-w-sm">
-              <label className="text-sm text-ink-muted">Save to folder</label>
-              <select
-                className="input text-sm"
-                value={creatingFolder ? NEW_FOLDER_VALUE : (selectedFolderId ?? ROOT_FOLDER_VALUE)}
-                onChange={e => {
-                  const v = e.target.value
-                  if (v === NEW_FOLDER_VALUE) { setCreatingFolder(true); setNewFolderName('') }
-                  else { setCreatingFolder(false); setSelectedFolderId(v === ROOT_FOLDER_VALUE ? null : v) }
-                }}
-              >
-                <option value={ROOT_FOLDER_VALUE}>{langName(targetLang)} / {langName(basisLang)} — root</option>
-                {folderOptions.map(({ folder, depth }) => (
-                  <option key={folder.id} value={folder.id}>
-                    {'  '.repeat(depth)}{folder.name}
-                  </option>
-                ))}
-                <option value={NEW_FOLDER_VALUE}>+ New folder…</option>
-              </select>
-              {creatingFolder && (
-                <input
-                  autoFocus
-                  className="input text-sm"
-                  placeholder="New folder name…"
-                  value={newFolderName}
-                  onChange={e => setNewFolderName(e.target.value)}
-                />
-              )}
-            </div>
-          )
-        })()}
+        <div className="space-y-1.5 max-w-sm">
+          <label className="text-sm text-ink-muted">Save to folder</label>
+          <FolderPicker
+            folders={folders}
+            decks={decksForFolders}
+            sourceLanguage={targetLang}
+            targetLanguage={basisLang}
+            rootLabel={`${langName(targetLang)} / ${langName(basisLang)} — root`}
+            value={selectedFolderId}
+            onChange={setSelectedFolderId}
+            creating={creatingFolder}
+            onCreatingChange={c => { setCreatingFolder(c); if (c) setNewFolderName('') }}
+          />
+          {creatingFolder && (
+            <input
+              autoFocus
+              className="input text-sm"
+              placeholder="New folder name…"
+              value={newFolderName}
+              onChange={e => setNewFolderName(e.target.value)}
+            />
+          )}
+        </div>
 
         <div className="flex flex-col gap-3">
           {hasSyncRules && (

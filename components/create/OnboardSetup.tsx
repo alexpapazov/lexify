@@ -21,7 +21,7 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { partitionExistingFronts } from '@/lib/duplicates'
 import { verifyOnboardingCards, type FlaggedCard } from '@/lib/onboardVerify'
-import { buildFolderOptions, NEW_FOLDER_VALUE, ROOT_FOLDER_VALUE } from '@/lib/folderOptions'
+import { FolderPicker } from '@/components/FolderPicker'
 import { langName } from '@/lib/languages'
 import type { Card, Deck, Folder } from '@/domain'
 
@@ -142,11 +142,6 @@ export function OnboardSetup({
   const partition = useMemo(
     () => existingCards ? partitionExistingFronts(kept, existingCards, sourceLanguage) : null,
     [kept, existingCards, sourceLanguage],
-  )
-
-  const folderOptions = useMemo(
-    () => buildFolderOptions(folders, decks, sourceLanguage, targetLanguage),
-    [folders, decks, sourceLanguage, targetLanguage],
   )
 
   // ── Phase 1: checking ──────────────────────────────────────────────────────
@@ -310,21 +305,17 @@ export function OnboardSetup({
 
       <div className="space-y-1.5 max-w-sm">
         <label className="text-sm text-ink-muted">Save to folder</label>
-        <select
-          className="input text-sm"
-          value={creatingFolder ? NEW_FOLDER_VALUE : (selectedFolderId ?? ROOT_FOLDER_VALUE)}
-          onChange={e => {
-            const v = e.target.value
-            if (v === NEW_FOLDER_VALUE) { setCreatingFolder(true); setNewFolderName('') }
-            else { setCreatingFolder(false); setSelectedFolderId(v === ROOT_FOLDER_VALUE ? null : v) }
-          }}
-        >
-          <option value={ROOT_FOLDER_VALUE}>{langName(sourceLanguage)} / {langName(targetLanguage)} — root</option>
-          {folderOptions.map(({ folder, depth }) => (
-            <option key={folder.id} value={folder.id}>{'  '.repeat(depth)}{folder.name}</option>
-          ))}
-          <option value={NEW_FOLDER_VALUE}>+ New folder…</option>
-        </select>
+        <FolderPicker
+          folders={folders}
+          decks={decks}
+          sourceLanguage={sourceLanguage}
+          targetLanguage={targetLanguage}
+          rootLabel={`${langName(sourceLanguage)} / ${langName(targetLanguage)} — root`}
+          value={selectedFolderId}
+          onChange={setSelectedFolderId}
+          creating={creatingFolder}
+          onCreatingChange={c => { setCreatingFolder(c); if (c) setNewFolderName('') }}
+        />
         {creatingFolder && (
           <input autoFocus className="input text-sm" placeholder="New folder name…"
             value={newFolderName} onChange={e => setNewFolderName(e.target.value)} />
@@ -346,7 +337,9 @@ export function OnboardSetup({
           className="btn-primary"
           disabled={fresh.length === 0 || saving || partition === null}
           onClick={() => onStart(fresh, {
-            folderId: creatingFolder ? null : selectedFolderId,
+            // While creating, `selectedFolderId` is the new folder's PARENT, not the destination —
+            // the caller creates inside it and then uses the result.
+            folderId: selectedFolderId,
             newFolderName: creatingFolder ? newFolderName.trim() : '',
             syncEnabled,
           })}
