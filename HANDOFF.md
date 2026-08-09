@@ -4,7 +4,7 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~60,500 lines across 266 TS/TSX files, 706 commits, 783 passing tests (50 suites).
+- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 792 passing tests (51 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`114`, applied BY HAND. **`114` is
   PENDING at the top level — the Goal Scheduler does not work until it is run.**
@@ -26,7 +26,7 @@ implementation notes + error log); this file is the map you read first.
   move it into `archive/` once it's live. **`114_goal_schedules.sql` is sitting there now and needs
   running.** Next number = **115**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **50 suites / 783 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **51 suites / 792 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -154,13 +154,19 @@ Per-language, per-weekday goals (`language_pairs.goals`). Three escalating carry
 2. **Yesterday carryover** — two toggles: carry shortfall / carry surplus. Bounded to one day.
 3. **Full debt** — unbounded cumulative deficit since the enable date, with per-day waivers.
 
-**And a fourth, separate mode: the Goal Scheduler (2026-08-08, migration 114 — PENDING).** Settings →
-Daily Goals → **Schedule** per language: set "200 new words by Dec 1", per-day limits and days off,
-a ceiling, and checkpoints; the daily number is DERIVED from what's left. **A live schedule
-SUPERSEDES that pair's weekday goals AND its carryover mode** — the re-derived goal has already
-absorbed a missed day, so stacking full debt on top would charge for it twice. **Pass 1 only: the
-engine + editor are built, but none of the four goal consumers read it yet.** Read
-`features/Goal Scheduler.md` before touching it.
+**And a fourth, separate mode: the Goal Scheduler (2026-08-08, migration 114 — PENDING).** Set
+"200 new words by Dec 1" and the daily number is DERIVED from what's left, re-spread every morning —
+miss a day and the rest of the schedule rises slightly rather than tomorrow spiking. Per-day limits,
+days off, a ceiling, checkpoints, and a feasibility check that names the three ways out when the
+target can't fit. **A live schedule SUPERSEDES that pair's weekday goals AND its carryover mode** —
+the re-derived goal has already absorbed a missed day, so stacking full debt on top would charge for
+it twice. All four goal consumers branch on it. Read `features/Goal Scheduler.md` before touching it.
+
+**Daily Goals moved to its own page (2026-08-08): `/settings/goals`,** linked from Language
+configuration exactly like `/settings/ladders`. It owns the per-language mode toggle
+(Daily / Per weekday / **Schedule**), the schedule editor with its **drag-select calendar** (mark
+days off, cap a date, drop a checkpoint), and the carryover block — which now saves itself with a
+targeted profile update rather than riding the settings page's omnibus save.
 
 **The debt is DERIVED, not stored**: `plannedGoalSum` sums the *configured* goals and the deficit is
 recomputed as `grads − planned` each day. That statelessness is load-bearing — it's why the **2.5×
@@ -471,19 +477,12 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 ## 7. Where the 2026-08-08 session left off
 
 **Migrations 110–113 are applied. `114_goal_schedules.sql` is PENDING — run it first.** Practice
-Mode phases 0–5 shipped. The **Goal Scheduler is half-built ON PURPOSE** (agreed split, see below);
-nothing else is half-written.
+Mode phases 0–5 shipped; the Goal Scheduler is complete and wired. Nothing is half-written.
 
 **Pick up here — in this order:**
 
-0. **Goal Scheduler Pass 2 — wire the derived goal into the four goal consumers.** Pass 1 (migration,
-   `lib/goalSchedule.ts` + 52 tests, repo, Settings editor) is done and green, but **nothing outside
-   the editor reads a schedule yet**, so a scheduled pair still shows its old weekday number on the
-   dashboard, PresentSnapshot, ReviewCalendar and the ladder's stop-at-goal cap. The full checklist —
-   including the one that is NOT `scheduleStatus` (ReviewCalendar must use `plannedForDate`, because
-   a past day's goal is a historical record) — is in `features/Goal Scheduler.md` §5. **The seam:**
-   `plannedGoalSum`/`owedGoalForDate` already take a per-DATE `goalForDay(dateStr)` function, so a
-   schedule is just another source of it — keep this additive.
+0. **Run migration 114, then click through the Goal Scheduler.** It is code-complete and wired into
+   all four goal surfaces, but **has never executed against a real account** — see open thread 0.
 
 1. **Phase 6: more exercise modes + their grading.** Translate
    target→native, native→target, and free production ("use this word in a sentence"). **STOP AND
@@ -517,8 +516,11 @@ Roughly in priority order. Nothing here is half-written — the tree is clean an
 applied, so any of these is a clean start.
 
 0. **The Goal Scheduler has never run against a real account** — it is behind auth and needs
-   migration 114. The engine is 52-test verified, but the save/update/retire round-trip, the two
-   progress queries, and the live preview against real graduation data are all unexercised.
+   migration 114. The engine is 52-test verified and the calendar's date maths 9-test verified, but
+   NOTHING has been clicked: the save/update/retire round-trip, drag-selection on a real
+   pointer/touch device, both progress queries, and all four consumer branches are unexercised.
+   First run to watch: set a short schedule, confirm the dashboard's "Today's goals" number matches
+   the editor preview, then miss a day and check it goes UP slightly rather than doubling.
    Also: **vocabulary onboarding + batch deck import are unexercised against a real account.** Both are
    code-complete, build/test-verified, and their migrations are live, but neither was clicked through
    (the flows are behind auth). First run to watch for onboarding: rate a handful of words, then check

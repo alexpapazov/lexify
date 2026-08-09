@@ -21,16 +21,6 @@ import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { voiceNameFor } from '@/lib/speak'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { labelCards, type LabelableCard } from '@/lib/labelCards'
-import { SupabaseGoalScheduleRepository } from '@/lib/data/goalSchedules'
-import { GoalScheduleEditor } from '@/components/settings/GoalScheduleEditor'
-
-/**
- * How a language's daily goal is set. 'daily'/'weekday' write `language_pairs.goals`; 'schedule' hands
- * the pair to a deadline-driven `goal_schedules` row, which SUPERSEDES both the weekday goals and the
- * carryover settings below (the schedule re-derives its own number from what's left, so stacking
- * carryover on top would charge for a missed day twice).
- */
-type GoalMode = 'daily' | 'weekday' | 'schedule'
 
 // ── Language color picker: a 7×7 gradient swatch grid, with the OS color wheel behind "Custom". ──
 function hslToHex(h: number, s: number, l: number): string {
@@ -471,16 +461,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
   const [spilloverDue,        setSpilloverDue]        = useState(false)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
-  const [goalCarryShortfall,  setGoalCarryShortfall]  = useState(false)
-  const [goalCarrySurplus,    setGoalCarrySurplus]    = useState(false)
-  const [goalFullDebt,        setGoalFullDebt]        = useState(false)
-  const [goalFullDebtSince,   setGoalFullDebtSince]   = useState<string | null>(null)
-  /** Per-language debt resets (migration 109): `${src}|${tgt}` → the date to start counting from. */
-  const [goalFullDebtResets,  setGoalFullDebtResets]  = useState<Record<string, string>>({})
-  // Study-days waived from full-debt carryover. "Checked" = today is in the list, so each box
-  // auto-unchecks once the day turns over, while past waivers stay honoured in the running total.
-  const [skipShortfallDays,   setSkipShortfallDays]   = useState<string[]>([])
-  const [skipSurplusDays,     setSkipSurplusDays]     = useState<string[]>([])
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
   const [langColors,          setLangColors]          = useState<Record<string, string>>({})
@@ -494,11 +474,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [redistributing,    setRedistributing]    = useState(false)
   const [redistributeMsg,   setRedistributeMsg]   = useState<string | null>(null)
   const [langPairs,              setLangPairs]              = useState<LanguagePair[]>([])
-  const [goalDrafts,             setGoalDrafts]             = useState<Record<string, Record<string, string>>>({})
-  const [goalModes,              setGoalModes]              = useState<Record<string, GoalMode>>({})
-  /** Pair keys with a live schedule — they open in schedule mode and ignore carryover entirely. */
-  const [scheduledPairs,         setScheduledPairs]         = useState<Set<string>>(new Set())
-  const [goalSavingKey,          setGoalSavingKey]          = useState<string | null>(null)
   const [confirmDeletePair,      setConfirmDeletePair]      = useState<string | null>(null)  // "src|tgt", first warning
   const [deletingPair,           setDeletingPair]           = useState(false)
   const [deletePairError,        setDeletePairError]        = useState<string | null>(null)
@@ -556,7 +531,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days')
+          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -570,13 +545,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
         setStudyModeAutoplay((profile.study_mode_autoplay as boolean | null) ?? true)
-        setGoalCarryShortfall((profile.goal_carry_shortfall as boolean | null) ?? false)
-        setGoalCarrySurplus((profile.goal_carry_surplus as boolean | null) ?? false)
-        setGoalFullDebt((profile.goal_full_debt as boolean | null) ?? false)
-        setGoalFullDebtSince((profile.goal_full_debt_since as string | null) ?? null)
-        setGoalFullDebtResets((profile.goal_full_debt_resets as Record<string, string> | null) ?? {})
-        setSkipShortfallDays((profile.full_debt_skip_shortfall_days as string[] | null) ?? [])
-        setSkipSurplusDays((profile.full_debt_skip_surplus_days as string[] | null) ?? [])
         setAudioSourceDefaultState(((profile.audio_source_default as string | null) ?? 'browser') as 'browser' | 'elevenlabs' | 'forvo' | 'standard')
         setAudioSourceByLangState((profile.audio_source_by_language as Record<string, string> | null) ?? {})
         setLangColors((profile.language_colors as Record<string, string> | null) ?? {})
@@ -585,30 +553,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       }
 
       setLangPairs(pairs)
-      // A live schedule owns the pair's goal, so those pairs must open in schedule mode rather than
-      // showing weekday boxes that aren't being used. Never block settings on this read.
-      const scheduled = new Set<string>(
-        await new SupabaseGoalScheduleRepository().listActive(uid)
-          .then(rows => rows.map(s => `${s.sourceLanguage}|${s.targetLanguage}`))
-          .catch(() => []),
-      )
-      setScheduledPairs(scheduled)
-
-      const drafts: Record<string, Record<string, string>> = {}
-      const modes: Record<string, GoalMode> = {}
-      for (const pair of pairs) {
-        const key = `${pair.sourceLanguage}|${pair.targetLanguage}`
-        drafts[key] = {}
-        for (let d = 0; d <= 6; d++) {
-          const val = pair.goals?.[String(d)]
-          drafts[key][String(d)] = typeof val === 'number' ? String(val) : ''
-        }
-        // Default to "daily" mode when every weekday holds the same value, else "weekday".
-        const vals = [0, 1, 2, 3, 4, 5, 6].map(d => drafts[key]![String(d)])
-        modes[key] = scheduled.has(key) ? 'schedule' : (vals.every(v => v === vals[0]) ? 'daily' : 'weekday')
-      }
-      setGoalDrafts(drafts)
-      setGoalModes(modes)
       setLoading(false)
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -624,18 +568,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       timezone:                  timezone || null,
       day_turnover_hour:         turnoverHour,
       study_mode_autoplay:       studyModeAutoplay,
-      goal_carry_shortfall:      goalCarryShortfall,
-      goal_carry_surplus:        goalCarrySurplus,
-      goal_full_debt:            goalFullDebt,
-      // Stamp the enable date the first time it's turned on; clear it when turned off so a later
-      // re-enable starts a fresh debt from that day (never retroactively counts old history).
-      goal_full_debt_since:      goalFullDebt ? (goalFullDebtSince ?? getToday(timezone || deviceTimeZone(), turnoverHour)) : null,
-      // Turning full debt OFF clears the per-language resets too — they only mean anything relative
-      // to a running balance, and a stale one would silently re-apply if it were switched back on.
-      goal_full_debt_resets:     goalFullDebt ? goalFullDebtResets : {},
-      // Kept even when full debt is off — a day already waived must stay waived if it's turned back on.
-      full_debt_skip_shortfall_days: skipShortfallDays,
-      full_debt_skip_surplus_days:   skipSurplusDays,
       audio_source_default:      audioSourceDefault,
       audio_source_by_language:  audioSourceByLang,
       language_colors:           langColors,
@@ -769,26 +701,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       setRedistributeMsg('Something went wrong. Please try again.')
     } finally {
       setRedistributing(false)
-    }
-  }
-
-  async function handleGoalBlur(
-    sourceLanguage: string,
-    targetLanguage: string,
-    draftsOverride?: Record<string, string>,
-  ) {
-    const key    = `${sourceLanguage}|${targetLanguage}`
-    const drafts = draftsOverride ?? goalDrafts[key] ?? {}
-    const goals: Record<string, number | null> = {}
-    for (let d = 0; d <= 6; d++) {
-      const raw = drafts[String(d)]?.trim()
-      goals[String(d)] = raw ? (parseInt(raw, 10) || null) : null
-    }
-    setGoalSavingKey(key)
-    try {
-      await new SupabaseLanguagePairRepository().updateGoals(sourceLanguage, targetLanguage, goals)
-    } finally {
-      setGoalSavingKey(null)
     }
   }
 
@@ -1021,255 +933,16 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         </div>
       )}
 
-      {/* Daily Goals */}
-      {langPairs.length > 0 && (() => {
-        const WEEKDAYS: { day: number; label: string }[] = [
-          { day: 1, label: 'M' }, { day: 2, label: 'T' }, { day: 3, label: 'W' },
-          { day: 4, label: 'T' }, { day: 5, label: 'F' }, { day: 6, label: 'S' }, { day: 0, label: 'S' },
-        ]
-        return (
-          <div className="panel space-y-4">
-            <div>
-              <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily Goals</h2>
-              <p className="text-xs text-ink-faint mt-1">
-                Target number of words to graduate per language. Choose <span className="text-ink">Daily</span> for one goal every day, <span className="text-ink">Per weekday</span> to set a different goal for each day, or <span className="text-ink">Schedule</span> to work backwards from a deadline — set the words and the date, and the daily number is worked out for you. Leave blank for no goal.
-              </p>
-            </div>
-            <div className="space-y-5">
-              {langPairs.map(pair => {
-                const pairKey = `${pair.sourceLanguage}|${pair.targetLanguage}`
-                const drafts  = goalDrafts[pairKey] ?? {}
-                const mode    = goalModes[pairKey] ?? 'daily'
-                // Switch modes. daily -> collapse every weekday to Monday's value and save.
-                // schedule -> just reveal the editor; nothing is written until it is saved, and the
-                // weekday goals stay untouched underneath so retiring a schedule restores them.
-                const setMode = (next: GoalMode) => {
-                  setGoalModes(prev => ({ ...prev, [pairKey]: next }))
-                  if (next === 'daily') {
-                    const common = drafts['0'] ?? ''
-                    const collapsed: Record<string, string> = {}
-                    for (let d = 0; d <= 6; d++) collapsed[String(d)] = common
-                    setGoalDrafts(prev => ({ ...prev, [pairKey]: collapsed }))
-                    handleGoalBlur(pair.sourceLanguage, pair.targetLanguage, collapsed)
-                  }
-                }
-                return (
-                  <div key={pairKey} className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-ink">{pairLabel(pair)}</span>
-                      <div className="flex items-center gap-2">
-                        {goalSavingKey === pairKey && <span className="text-xs text-ink-faint">Saving…</span>}
-                        <div className="flex rounded-md overflow-hidden border border-surface-border text-xs">
-                          {(['daily', 'weekday', 'schedule'] as const).map(m => (
-                            <button
-                              key={m}
-                              onClick={() => setMode(m)}
-                              className={`px-2 py-0.5 ${mode === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
-                            >
-                              {m === 'daily' ? 'Daily' : m === 'weekday' ? 'Per weekday' : 'Schedule'}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                    {mode === 'schedule' ? (
-                      <GoalScheduleEditor
-                        userId={userId}
-                        sourceLanguage={pair.sourceLanguage}
-                        targetLanguage={pair.targetLanguage}
-                        label={pairLabel(pair)}
-                        timezone={timezone || deviceTimeZone()}
-                        turnoverHour={turnoverHour}
-                        onChanged={(has) => setScheduledPairs(prev => {
-                          // Reflect the save/retire immediately so the carryover note below is right
-                          // without waiting for a reload.
-                          const next = new Set(prev)
-                          if (has) next.add(pairKey); else next.delete(pairKey)
-                          return next
-                        })}
-                      />
-                    ) : mode === 'daily' ? (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-ink-faint select-none w-20">Every day</span>
-                        <input
-                          type="number"
-                          min={1}
-                          max={999}
-                          className="input text-center text-sm px-1 py-1.5 w-24"
-                          placeholder="—"
-                          value={drafts['0'] ?? ''}
-                          onChange={e => {
-                            const v = e.target.value
-                            setGoalDrafts(prev => {
-                              const next: Record<string, string> = {}
-                              for (let d = 0; d <= 6; d++) next[String(d)] = v
-                              return { ...prev, [pairKey]: next }
-                            })
-                          }}
-                          onBlur={() => handleGoalBlur(pair.sourceLanguage, pair.targetLanguage)}
-                        />
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-7 gap-1.5">
-                        {WEEKDAYS.map(({ day, label }) => (
-                          <div key={day} className="flex flex-col items-center gap-1">
-                            <span className="text-xs text-ink-faint select-none">{label}</span>
-                            <input
-                              type="number"
-                              min={1}
-                              max={999}
-                              className="input text-center text-sm px-1 py-1.5 w-full"
-                              placeholder="—"
-                              value={drafts[String(day)] ?? ''}
-                              onChange={e => setGoalDrafts(prev => ({
-                                ...prev,
-                                [pairKey]: { ...(prev[pairKey] ?? {}), [String(day)]: e.target.value }
-                              }))}
-                              onBlur={() => handleGoalBlur(pair.sourceLanguage, pair.targetLanguage)}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Scheduled languages derive their own catch-up, so the carryover settings below don't
-                reach them — say so rather than letting the checkboxes imply otherwise. */}
-            {scheduledPairs.size > 0 && (
-              <p className="text-xs text-ink-faint pt-2 border-t border-line/10">
-                {`${[...scheduledPairs].length === 1 ? 'One language is' : `${scheduledPairs.size} languages are`} on a schedule. Carryover below doesn't apply to ${scheduledPairs.size === 1 ? 'it' : 'them'} — a schedule already spreads whatever you miss across the days it has left.`}
-              </p>
-            )}
-
-            {/* Carryover — adjusts the goal number only; it does not raise how many new cards
-                you're served. Scoped to yesterday, so time off can't build an unpayable debt. */}
-            <div className="space-y-3 pt-2 border-t border-line/10">
-              <div className="space-y-1">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={goalCarryShortfall} onChange={e => setGoalCarryShortfall(e.target.checked)} className="accent-accent w-4 h-4" />
-                  <span className="text-sm text-ink">Make up missed cards the next day</span>
-                </label>
-                <p className="text-xs text-ink-faint pl-6">
-                  {goalCarryShortfall
-                    ? 'If you fall short of a goal, the difference is added to the next day\'s goal for that language. Only the previous day carries over.'
-                    : 'Missed cards are forgiven — each day\'s goal stands on its own.'}
-                </p>
-              </div>
-              <div className="space-y-1">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={goalCarrySurplus} onChange={e => setGoalCarrySurplus(e.target.checked)} className="accent-accent w-4 h-4" />
-                  <span className="text-sm text-ink">Extra cards count toward the next day</span>
-                </label>
-                <p className="text-xs text-ink-faint pl-6">
-                  {goalCarrySurplus
-                    ? 'Cards beyond a goal are credited against the next day\'s goal for that language, down to zero. Only the previous day carries over.'
-                    : 'Extra cards don\'t reduce the next day\'s goal.'}
-                </p>
-              </div>
-              <div className="space-y-1 pt-2 border-t border-line/10">
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input type="checkbox" checked={goalFullDebt} onChange={e => setGoalFullDebt(e.target.checked)} className="accent-accent w-4 h-4" />
-                  <span className="text-sm text-ink">Full debt</span>
-                </label>
-                <p className="text-xs text-ink-faint pl-6">
-                  {goalFullDebt
-                    ? 'From the day you turned this on, a language\'s entire running shortfall or surplus carries forward — incomplete cards always roll to the next day, and extra study rolls credit forward across as many days as it takes. Supersedes the two options above.'
-                    : 'Carryover is limited to the previous day (uses the two options above).'}
-                </p>
-              </div>
-
-              {/* One-day waivers — only meaningful while full debt is on. Each resets itself at day
-                  turnover (checked == today is in the list), but the day it waived stays waived. */}
-              {goalFullDebt && (() => {
-                const todayStr = getToday(timezone || deviceTimeZone(), turnoverHour)
-                const toggle = (list: string[], on: boolean) =>
-                  on ? Array.from(new Set([...list, todayStr])) : list.filter(d => d !== todayStr)
-                return (
-                  <div className="space-y-3 pl-6 border-l border-line/10">
-                    <div className="space-y-1">
-                      <label className="flex items-center gap-2 cursor-pointer select-none">
-                        <input type="checkbox" checked={skipShortfallDays.includes(todayStr)}
-                          onChange={e => setSkipShortfallDays(l => toggle(l, e.target.checked))}
-                          className="accent-accent w-4 h-4" />
-                        <span className="text-sm text-ink">Do not carry over today&apos;s incomplete cards</span>
-                      </label>
-                      <p className="text-xs text-ink-faint pl-6">
-                        Today&apos;s shortfall is forgiven instead of rolling into the debt. Resets tomorrow — re-check it each day you want it.
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="flex items-center gap-2 cursor-pointer select-none">
-                        <input type="checkbox" checked={skipSurplusDays.includes(todayStr)}
-                          onChange={e => setSkipSurplusDays(l => toggle(l, e.target.checked))}
-                          className="accent-accent w-4 h-4" />
-                        <span className="text-sm text-ink">Do not carry over today&apos;s surplus</span>
-                      </label>
-                      <p className="text-xs text-ink-faint pl-6">
-                        Extra cards done today don&apos;t bank credit against future days. Resets tomorrow — re-check it each day you want it.
-                      </p>
-                    </div>
-
-                    {/* ── Wipe the accumulated balance ──────────────────────────────────
-                        The debt is derived from history, not stored, so "reset" means "start
-                        counting from today": today's goal drops straight back to the number set
-                        above. Saved as a date per language (migration 109) rather than a cleared
-                        counter, which keeps the whole model stateless. */}
-                    <div className="space-y-2 pt-1">
-                      <p className="text-sm text-ink">Reset the running balance</p>
-                      <p className="text-xs text-ink-faint">
-                        Clears everything owed or banked so far and puts today&apos;s goal back to the
-                        number you set above. Takes effect on save.
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setGoalFullDebtResets(Object.fromEntries(
-                            langPairs.map(p => [`${p.sourceLanguage}|${p.targetLanguage}`, todayStr]),
-                          ))}
-                          className="text-xs px-3 py-1.5 rounded-full border border-danger/30 text-ink hover:bg-danger/10 transition-colors"
-                        >
-                          Reset all
-                        </button>
-                        {langPairs.map(p => {
-                          const key = `${p.sourceLanguage}|${p.targetLanguage}`
-                          const isReset = goalFullDebtResets[key] === todayStr
-                          return (
-                            <button
-                              key={key}
-                              type="button"
-                              onClick={() => setGoalFullDebtResets(prev => {
-                                const next = { ...prev }
-                                // Clicking again un-does a reset you haven't saved yet.
-                                if (next[key] === todayStr) delete next[key]
-                                else next[key] = todayStr
-                                return next
-                              })}
-                              className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                                isReset
-                                  ? 'border-danger bg-danger/15 text-ink'
-                                  : 'border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40'}`}
-                            >
-                              {isReset ? '✓ ' : ''}{langName(p.sourceLanguage)}
-                            </button>
-                          )
-                        })}
-                      </div>
-                      {Object.values(goalFullDebtResets).includes(todayStr) && (
-                        <p className="text-xs text-warning">
-                          {`${Object.values(goalFullDebtResets).filter(d => d === todayStr).length} language${Object.values(goalFullDebtResets).filter(d => d === todayStr).length === 1 ? '' : 's'} will be reset when you save. This can't be undone afterwards.`}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )
-              })()}
-            </div>
-          </div>
-        )
-      })()}
+      {/* Daily goals — its own page (like learning ladders): a goal is a configurable object now,
+          and a schedule needs room for its limits, checkpoints and plan preview. */}
+      <div className="panel space-y-3">
+        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily goals</h2>
+        <p className="text-xs text-ink-faint">
+          How many words you aim to graduate per language — a fixed number that repeats, or an adaptive
+          schedule that works backwards from a deadline. Carryover settings live there too.
+        </p>
+        <a href="/settings/goals" className="btn-ghost inline-block text-sm py-1.5 px-3">Edit daily goals →</a>
+      </div>
 
       {/* Language Sync — online only */}
       {!offline && userId && (

@@ -49,8 +49,8 @@ Current feature files:
   synonym/confusion infrastructure audit — including a real `addMember` merge bug
   worth fixing independently of the agent.
 - `features/Goal Scheduler.md` — deadline-driven goals ("200 words by Dec 1"): the
-  derived daily number, water-filled day limits, checkpoints, feasibility remedies.
-  **Pass 1 only — migration 114 PENDING and no goal consumer reads it yet.**
+  derived daily number, water-filled day limits, the drag-select calendar, checkpoints,
+  feasibility remedies. **Migration 114 PENDING; never run against a real account.**
 
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
@@ -2536,11 +2536,20 @@ Model (all in the pure, 52-test `lib/goalSchedule.ts`):
 - `new_words` excludes auto-graduated cards; `total_words` includes them. `baselineCount` is the one
   stored number and it's a SNAPSHOT (value at creation), not a counter.
 
-**Pass 1 only.** `app/study/page.tsx`, `PresentSnapshot`, `ReviewCalendar` and `LadderStudy`'s
-stop-at-goal cap still read `language_pairs.goals` + carryover — a scheduled pair shows its old
-weekday number everywhere except the Settings preview. The seam for Pass 2 is the per-DATE
-`goalForDay(dateStr)` function that `plannedGoalSum`/`owedGoalForDate` already thread through every
-consumer. Checklist in the feature doc §5.
+**Wired into all four goal consumers**, each a short branch on "does this pair have a live
+schedule": `app/study/page.tsx`, `PresentSnapshot` (goals AND the standing panel, which now shows
+scheduled pairs via `status.pace` in every mode), `ReviewCalendar` (via `plannedForDate`), and
+`LadderStudy`'s stop-at-goal cap. `progressForSchedules` is the shared `doneSoFar` loader — one paged
+read for all `new_words` schedules plus a head-count per `total_words` one, deliberately NOT cached
+since it must move the moment you graduate a card. Every schedule read is `.catch`-wrapped so an
+unapplied migration 114 falls through to the old carryover behaviour instead of blanking a page.
+
+**Daily Goals is its own page now: `/settings/goals`** (linked from Language configuration, same
+pattern as `/settings/ladders`). It owns the mode toggle, the schedule editor, the **drag-select
+calendar** (`GoalScheduleCalendar` — drag days to mark time off or cap them, click one to add a
+checkpoint; past days render `plannedForDate`, future days the live plan), and the carryover block,
+which now saves itself with a TARGETED profile update — the settings page's omnibus `handleSave` no
+longer writes the `goal_*` columns, so don't put them back.
 
 ## Verifying changes
 

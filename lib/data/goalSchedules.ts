@@ -184,6 +184,67 @@ export async function scheduleProgress({ userId, schedule, timezone, turnoverHou
 }
 
 /**
+ * `doneSoFar` for EVERY active schedule at once, keyed `${src}|${tgt}` — what the goal surfaces feed
+ * into `scheduleStatus`.
+ *
+ * One paged read covers all the `new_words` schedules (a single window from the earliest start date,
+ * bucketed per pair) plus one cheap head-count per `total_words` schedule. Doing it per pair instead
+ * would be an N+1 on the study dashboard's critical path.
+ *
+ * Deliberately NOT memoised through `readCache`: the answer changes the moment you graduate a card,
+ * and the whole point of the number is to move as you study.
+ */
+export async function progressForSchedules({ userId, schedules, timezone, turnoverHour }: {
+  userId: UserId
+  schedules: GoalSchedule[]
+  timezone: string
+  turnoverHour: number
+}): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  if (schedules.length === 0) return out
+
+  const db = createClient()
+  const newWord = schedules.filter(s => s.targetKind === 'new_words')
+  const totals  = schedules.filter(s => s.targetKind === 'total_words')
+
+  const totalsP = Promise.all(totals.map(async s => {
+    const n = await currentVocabularySize(userId, s.sourceLanguage, s.targetLanguage).catch(() => 0)
+    return [`${s.sourceLanguage}|${s.targetLanguage}`, n] as const
+  }))
+
+  if (newWord.length > 0) {
+    const earliest = newWord.reduce((min, s) => (s.startDate < min ? s.startDate : min), newWord[0]!.startDate)
+    const rows = await fetchAllRows<Record<string, unknown>>(
+      (from, to) => db.from('card_states')
+        .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
+        .eq('user_id', userId).eq('graduated', true).neq('review_direction', 'reverse')
+        .not('graduated_at', 'is', null)
+        // 48h of slack so a turnover-shifted study-day at the boundary isn't cut off.
+        .gte('graduated_at', new Date(new Date(earliest + 'T00:00:00Z').getTime() - 48 * 3600 * 1000).toISOString())
+        .order('graduated_at', { ascending: true }).range(from, to),
+    ).catch(() => [] as Record<string, unknown>[])
+
+    const startByPair = new Map(newWord.map(s => [`${s.sourceLanguage}|${s.targetLanguage}`, s.startDate]))
+    for (const key of startByPair.keys()) out.set(key, 0)
+
+    for (const row of rows) {
+      const r = row as { graduated_at: string; accelerated_mode: string | null; cards: { source_language: string; target_language: string } | null }
+      if (!r.graduated_at || !r.cards) continue
+      if (isAutoGraduated(r.accelerated_mode)) continue
+      const key = `${r.cards.source_language}|${r.cards.target_language}`
+      const start = startByPair.get(key)
+      // Each schedule counts from ITS OWN start; the shared window is wider than any single one.
+      if (start && localDateWithTurnover(r.graduated_at, timezone, turnoverHour) >= start) {
+        out.set(key, (out.get(key) ?? 0) + 1)
+      }
+    }
+  }
+
+  for (const [key, n] of await totalsP) out.set(key, n)
+  return out
+}
+
+/**
  * The pair's current graduated vocabulary — what a new `total_words` schedule records as its
  * baseline, so "reach 2000 words" can show how far along it already is.
  */

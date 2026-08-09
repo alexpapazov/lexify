@@ -28,6 +28,9 @@ import { minAnswersForPipeline, struggleFactor, newCardMs, DEFAULT_MS_PER_ANSWER
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding, effectiveDebtSince } from '@/lib/goalCarryover'
+import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
+import { scheduleStatus } from '@/lib/goalSchedule'
+import type { GoalSchedule } from '@/domain'
 import { AccuracyTrend } from './AccuracyTrend'
 import { LearningEfficiency } from './LearningEfficiency'
 import { langName } from '@/lib/languages'
@@ -178,6 +181,10 @@ export function PresentSnapshot() {
         // new-word estimate now reads each language's CURRENT ladder/pathway rather than inferring
         // its cost from history alone.
         const pathRepo = new SupabasePathwayRepository()
+        // Deadline-driven goals (migration 114). Never fatal — an unapplied migration just leaves
+        // every pair on its weekday goals, which is what this panel showed before schedules existed.
+        const schedulesP = new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[])
+
         const [decks, pairs, paramRows, savedLadders, defaultLadderRow] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
           new SupabaseLanguagePairRepository().list(uid),
@@ -334,6 +341,17 @@ export function PresentSnapshot() {
           }
         }
 
+        const activeSchedules = await schedulesP
+        const scheduleByPair = new Map(activeSchedules.map(sc => [`${sc.sourceLanguage}|${sc.targetLanguage}`, sc]))
+        const scheduleDone = activeSchedules.length === 0
+          ? new Map<string, number>()
+          : await progressForSchedules({ userId: uid, schedules: activeSchedules, timezone: tz, turnoverHour: turnover })
+              .catch(() => new Map<string, number>())
+        const statusFor = (key: string) => {
+          const sc = scheduleByPair.get(key)
+          return sc ? scheduleStatus({ schedule: sc, today, doneSoFar: scheduleDone.get(key) ?? 0 }) : null
+        }
+
         const goals = pairs
           .map((p: LanguagePair) => {
             const key = `${p.sourceLanguage}|${p.targetLanguage}`
@@ -343,6 +361,13 @@ export function PresentSnapshot() {
             const baseGoal = owed(today)  // deferral-adjusted "owed today"
             // Apply goal carryover so "words needed today" matches the Study page.
             let goal: number, delta: number
+            // A live schedule OWNS this pair's goal — it has already absorbed any missed day, so
+            // carryover on top would charge for it twice.
+            const sched = statusFor(key)
+            if (sched) {
+              return { key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`,
+                       baseGoal: sched.goal, goal: sched.goal, delta: 0, done: gradToday.get(key) ?? 0 }
+            }
             const pairSince = effectiveDebtSince(fullDebtSince, fullDebtResets, key)
             if (fullDebtOn && pairSince) {
               ;({ goal, delta } = fullDebtGoal({
@@ -379,9 +404,14 @@ export function PresentSnapshot() {
          * `goals` above, this deliberately keeps pairs with NO goal today: a language you owe 30
          * cards on must not vanish from the standing because today happens to be a rest day.
          */
-        const standings = (fullDebtOn && fullDebtSince)
-          ? pairs.flatMap((p: LanguagePair) => {
+        const standings = pairs.flatMap((p: LanguagePair) => {
               const key = `${p.sourceLanguage}|${p.targetLanguage}`
+              // A scheduled language reports its own balance — `pace`, measured against the plan's
+              // capacity rather than calendar days — and does so in EVERY mode, not just full debt,
+              // because a schedule always has a cumulative position to be ahead or behind of.
+              const sched = statusFor(key)
+              if (sched) return [{ key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, standing: sched.pace }]
+              if (!(fullDebtOn && fullDebtSince)) return []
               const configuredForWeekday = (wd: number) => { const g = p.goals?.[String(wd)]; return typeof g === 'number' ? g : 0 }
               const isDeferred = (d: string) => deferrals.includes(`${key}|${d}`)
               // Each day's CONFIGURED goal, never the displayed one — the displayed goal is clamped
@@ -405,7 +435,6 @@ export function PresentSnapshot() {
               })
               return [{ key, label: `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`, standing }]
             })
-          : []
 
         // ── Time today + projections ──
         // Learning pace is measured PER LANGUAGE, since a Korean word takes far longer to answer than
@@ -639,8 +668,9 @@ export function PresentSnapshot() {
         </div>
       )}
 
-      {/* 3. Current standing — the running full-debt balance. Full-debt mode only, since that's the
-             only mode with a cumulative balance to report. */}
+      {/* 3. Current standing — the running balance: the full-debt total for carryover languages, and
+             `pace` (progress vs the plan) for scheduled ones. Both answer "how far ahead or behind
+             am I", so they share the panel; only full debt has a meaningful "since" date. */}
       {data.standings.length > 0 && (() => {
         // Bars are relative to the largest imbalance on screen, so languages compare with each other.
         const maxMagnitude = data.standings.reduce((m, s) => Math.max(m, Math.abs(s.standing)), 0)

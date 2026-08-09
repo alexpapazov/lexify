@@ -19,6 +19,9 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, effectiveDebtSince } from '@/lib/goalCarryover'
+import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
+import { scheduleStatus } from '@/lib/goalSchedule'
+import type { GoalSchedule } from '@/domain'
 import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
@@ -310,6 +313,12 @@ export default function StudyPage() {
   const [exemptDayGrads,    setExemptDayGrads]    = useState<Map<string, number>>(new Map())
   // "Move today's load to tomorrow" — list of `${src}|${tgt}|${date}` deferred study-days.
   const [deferrals,         setDeferrals]         = useState<string[]>([])
+  // Deadline-driven goals (migration 114). A live schedule SUPERSEDES that pair's weekday goals AND
+  // its carryover mode — the derived number has already absorbed any missed day, so stacking full
+  // debt on top would charge for it twice. `scheduleDone` is each schedule's progress in its own
+  // target units. See features/Goal Scheduler.md.
+  const [schedules,         setSchedules]         = useState<Map<string, GoalSchedule>>(new Map())
+  const [scheduleDone,      setScheduleDone]      = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
@@ -339,6 +348,8 @@ export default function StudyPage() {
     const decksP   = deckRepo.list(uid)
     const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals').eq('user_id', uid).single())
     const paramsP  = new SupabaseUserSchedulerParamsRepository().listForUser(uid)
+    // A missing goal_schedules table (migration 114 not yet applied) must never blank the dashboard.
+    const schedulesP = new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[])
     const cardsP   = cardRepo.listAllForUser(uid)
     const statesP  = stateRepo.listAllForUser(uid)
     const climbP   = climbRepo.listAllForUser(uid).catch(() => new Map())
@@ -380,6 +391,15 @@ export default function StudyPage() {
     const exemptDaySet = new Set([...skipShort, ...skipSurp])
     const todayStr     = getToday(tz, turnoverHour)
     setTodayStr(todayStr)
+
+    // Deadline-driven goals. Resolved here rather than in the first wave because the progress
+    // buckets are turnover-aware, so they need `tz` — but the row fetch itself already overlapped it.
+    const activeSchedules = await schedulesP
+    setSchedules(new Map(activeSchedules.map(sc => [`${sc.sourceLanguage}|${sc.targetLanguage}`, sc])))
+    setScheduleDone(activeSchedules.length === 0
+      ? new Map()
+      : await progressForSchedules({ userId: uid, schedules: activeSchedules, timezone: tz, turnoverHour })
+          .catch(() => new Map<string, number>()))
     setTz(tz)
     const todayDate    = new Date(todayStr + 'T00:00:00.000Z')
     const now          = new Date()
@@ -892,8 +912,18 @@ export default function StudyPage() {
       const owed = (d: string) => owedGoalForDate(d, configuredForWeekday, isDeferred)
       const baseOwed = owed(todayStr)
       // Nothing owed today (no assignment, or deferred away with no carry-in) → not on the list.
-      if (configuredForWeekday(todayWeekday) <= 0 && baseOwed <= 0) return []
+      // Scheduled pairs skip this: their goal comes from the deadline, not from `goals[weekday]`.
+      if (!schedules.has(key) && configuredForWeekday(todayWeekday) <= 0 && baseOwed <= 0) return []
       let goal: number, delta: number
+      // A live schedule OWNS this pair's goal: it re-derives from what's left, so it has already
+      // absorbed any missed day. Running carryover on top would charge for that day a second time.
+      const sched = schedules.get(key)
+      if (sched) {
+        const st = scheduleStatus({ schedule: sched, today: todayStr, doneSoFar: scheduleDone.get(key) ?? 0 })
+        // Nothing owed today (a scheduled day off, or the target is already met) → off the list.
+        if (st.goal <= 0) return []
+        return [{ pair: p, key, goal: st.goal, delta: 0 }]
+      }
       const pairSince = effectiveDebtSince(fullDebtSince, fullDebtResets, key)
       if (fullDebt && pairSince) {
         const throughYesterday = addDays(todayStr, -1)
@@ -915,7 +945,7 @@ export default function StudyPage() {
       }
       return [{ pair: p, key, goal, delta }]
     })
-  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, fullDebtResets, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals])
+  }, [langPairs, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, fullDebtResets, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals, schedules, scheduleDone])
 
   // "Move today's load to tomorrow" for one language: record today's study-day as deferred for that pair.
   // owedGoalForDate then zeroes it today and adds it to tomorrow; the row drops off the list immediately.
@@ -984,7 +1014,9 @@ export default function StudyPage() {
                         <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
                         <div className="flex items-center gap-3">
                           {/* Small remaining load → offer to push it to tomorrow instead of doing a card or two now. */}
-                          {(goal - count) > 0 && (goal - count) < 5 && (
+                          {/* Deferring is meaningless under a schedule: skipping today already
+                              redistributes across the days that are left. */}
+                          {!schedules.has(key) && (goal - count) > 0 && (goal - count) < 5 && (
                             <button onClick={() => deferGoalToTomorrow(key)}
                               className="text-xs text-ink-faint hover:text-accent transition-colors"
                               title="Move today's remaining cards for this language to tomorrow">→ tomorrow</button>

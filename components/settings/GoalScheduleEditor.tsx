@@ -11,6 +11,11 @@
  * is a legitimate thing to type; the honest response is to show that it doesn't fit and name the three
  * levers (ceiling, target, deadline), not to refuse the input. Only incoherent schedules — a deadline
  * before the start, a checkpoint above the final target — are hard errors.
+ *
+ * Dates are edited on the CALENDAR (`GoalScheduleCalendar`), not in rows of date inputs: time off and
+ * checkpoints are statements about particular days, and a grid is how you pick days. The draft
+ * therefore keys `dateExceptions`/`checkpoints` BY DATE — one entry per day by construction, so the
+ * calendar can set and clear them without hunting through an array.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -20,6 +25,7 @@ import {
 import {
   scheduleStatus, schedulePlan, validateSchedule, daysBetween, addScheduleDays,
 } from '@/lib/goalSchedule'
+import { GoalScheduleCalendar } from '@/components/settings/GoalScheduleCalendar'
 import { getToday } from '@/lib/dates'
 import type { GoalSchedule, GoalScheduleCheckpoint, GoalTargetKind } from '@/domain'
 
@@ -39,8 +45,10 @@ type Draft = {
   deadline:       string
   dailyCeiling:   string
   weekdayLimits:  Record<string, string>
-  dateExceptions: { date: string; cap: string }[]
-  checkpoints:    { date: string; count: string }[]
+  /** date → words allowed that day; 0 = time off. Keyed so the calendar can set/clear directly. */
+  dateExceptions: Record<string, number>
+  /** date → cumulative target by then. Keyed, so two checkpoints can't share a date. */
+  checkpoints:    Record<string, number>
 }
 
 function draftFrom(schedule: GoalSchedule | null, today: string): Draft {
@@ -48,7 +56,7 @@ function draftFrom(schedule: GoalSchedule | null, today: string): Draft {
     return {
       name: '', targetKind: 'new_words', targetCount: '',
       startDate: today, deadline: addScheduleDays(today, 30),
-      dailyCeiling: '', weekdayLimits: {}, dateExceptions: [], checkpoints: [],
+      dailyCeiling: '', weekdayLimits: {}, dateExceptions: {}, checkpoints: {},
     }
   }
   const limits: Record<string, string> = {}
@@ -61,8 +69,8 @@ function draftFrom(schedule: GoalSchedule | null, today: string): Draft {
     deadline:      schedule.deadline,
     dailyCeiling:  schedule.dailyCeiling == null ? '' : String(schedule.dailyCeiling),
     weekdayLimits: limits,
-    dateExceptions: Object.entries(schedule.dateExceptions ?? {}).map(([date, cap]) => ({ date, cap: String(cap) })),
-    checkpoints:    (schedule.checkpoints ?? []).map(c => ({ date: c.date, count: String(c.count) })),
+    dateExceptions: { ...(schedule.dateExceptions ?? {}) },
+    checkpoints:    Object.fromEntries((schedule.checkpoints ?? []).map(c => [c.date, c.count])),
   }
 }
 
@@ -79,14 +87,14 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
 }) {
   const today = useMemo(() => getToday(timezone, turnoverHour), [timezone, turnoverHour])
 
-  const [saved,   setSaved]   = useState<GoalSchedule | null>(null)
-  const [draft,   setDraft]   = useState<Draft>(() => draftFrom(null, today))
-  const [vocabNow, setVocabNow] = useState(0)
+  const [saved,     setSaved]     = useState<GoalSchedule | null>(null)
+  const [draft,     setDraft]     = useState<Draft>(() => draftFrom(null, today))
+  const [vocabNow,  setVocabNow]  = useState(0)
   const [doneSoFar, setDoneSoFar] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [busy,    setBusy]    = useState(false)
-  const [error,   setError]   = useState<string | null>(null)
-  const [note,    setNote]    = useState<string | null>(null)
+  const [loading,   setLoading]   = useState(true)
+  const [busy,      setBusy]      = useState(false)
+  const [error,     setError]     = useState<string | null>(null)
+  const [note,      setNote]      = useState<string | null>(null)
   const [confirmArchive, setConfirmArchive] = useState(false)
 
   // ── Load ──
@@ -122,7 +130,6 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     : 0
 
   // ── Progress, re-read when the measure or its start moves ──
-  const progressKey = `${draft.targetKind}:${draft.startDate}`
   useEffect(() => {
     let cancelled = false
     const timer = setTimeout(async () => {
@@ -136,7 +143,7 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
       } catch { /* the preview degrades to "nothing done yet"; never block editing on it */ }
     }, 350)   // debounced: the date input fires on every keystroke
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [progressKey, userId, sourceLanguage, targetLanguage, timezone, turnoverHour, draft.targetKind, draft.startDate])
+  }, [userId, sourceLanguage, targetLanguage, timezone, turnoverHour, draft.targetKind, draft.startDate])
 
   // ── The live schedule object the engine reasons about ──
   const candidate = useMemo<GoalSchedule>(() => {
@@ -144,13 +151,9 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     for (const [k, v] of Object.entries(draft.weekdayLimits)) {
       if (v.trim() !== '') limits[k] = Math.max(0, parseInt(v, 10) || 0)
     }
-    const exceptions: Record<string, number> = {}
-    for (const { date, cap } of draft.dateExceptions) {
-      if (date) exceptions[date] = cap.trim() === '' ? 0 : Math.max(0, parseInt(cap, 10) || 0)
-    }
-    const checkpoints: GoalScheduleCheckpoint[] = draft.checkpoints
-      .filter(c => c.date && c.count.trim() !== '')
-      .map(c => ({ date: c.date, count: parseInt(c.count, 10) || 0 }))
+    const checkpoints: GoalScheduleCheckpoint[] = Object.entries(draft.checkpoints)
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date))
 
     return {
       id: saved?.id ?? 'draft', userId, sourceLanguage, targetLanguage,
@@ -162,7 +165,7 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
       baselineCount,
       dailyCeiling: draft.dailyCeiling.trim() === '' ? null : Math.max(0, parseInt(draft.dailyCeiling, 10) || 0),
       weekdayLimits:  Object.keys(limits).length ? limits : null,
-      dateExceptions: Object.keys(exceptions).length ? exceptions : null,
+      dateExceptions: Object.keys(draft.dateExceptions).length ? draft.dateExceptions : null,
       checkpoints,
       archivedAt: null,
       createdAt: saved?.createdAt ?? '', updatedAt: saved?.updatedAt ?? '',
@@ -179,6 +182,33 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
 
   const set = useCallback(<K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft(prev => ({ ...prev, [key]: value }))
+    setNote(null)
+  }, [])
+
+  // ── Calendar callbacks ──
+  const setDateCaps = useCallback((dates: string[], cap: number | null) => {
+    setDraft(prev => {
+      const next = { ...prev.dateExceptions }
+      for (const d of dates) {
+        if (cap == null) delete next[d]          // back to the weekday limit / ceiling
+        else next[d] = Math.max(0, cap)
+      }
+      return { ...prev, dateExceptions: next }
+    })
+    setNote(null)
+  }, [])
+
+  const setCheckpoint = useCallback((date: string, count: number) => {
+    setDraft(prev => ({ ...prev, checkpoints: { ...prev.checkpoints, [date]: count } }))
+    setNote(null)
+  }, [])
+
+  const removeCheckpoint = useCallback((date: string) => {
+    setDraft(prev => {
+      const next = { ...prev.checkpoints }
+      delete next[date]
+      return { ...prev, checkpoints: next }
+    })
     setNote(null)
   }, [])
 
@@ -221,9 +251,11 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
   if (loading) return <p className="text-xs text-ink-faint">Loading schedule…</p>
 
   const span = daysBetween(draft.startDate, draft.deadline)
+  const checkpointList = Object.entries(draft.checkpoints).sort(([a], [b]) => a.localeCompare(b))
+  const timeOffCount = Object.values(draft.dateExceptions).filter(v => v === 0).length
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* ── Target ── */}
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1">
@@ -256,6 +288,19 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
           <input type="date" className="input text-sm px-2 py-1.5" value={draft.deadline}
                  onChange={e => set('deadline', e.target.value)} />
         </div>
+        <div className="space-y-1">
+          <label className="text-xs text-ink-faint block">Never more than</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number" min={1} max={999}
+              className="input text-center text-sm px-2 py-1.5 w-20"
+              placeholder="—"
+              value={draft.dailyCeiling}
+              onChange={e => set('dailyCeiling', e.target.value)}
+            />
+            <span className="text-xs text-ink-faint">a day</span>
+          </div>
+        </div>
         <div className="space-y-1 flex-1 min-w-[10rem]">
           <label className="text-xs text-ink-faint block">Name (optional)</label>
           <input type="text" className="input text-sm px-2 py-1.5 w-full" placeholder="Exam prep"
@@ -270,88 +315,26 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
         {span > 0 && ` ${span} day${span === 1 ? '' : 's'} from start to deadline.`}
       </p>
 
-      {/* ── Limits ── */}
-      <div className="space-y-2 pt-2 border-t border-line/10">
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-ink-faint">Never more than</label>
-          <input
-            type="number" min={1} max={999}
-            className="input text-center text-sm px-2 py-1.5 w-20"
-            placeholder="—"
-            value={draft.dailyCeiling}
-            onChange={e => set('dailyCeiling', e.target.value)}
-          />
-          <span className="text-xs text-ink-faint">words a day. Blank = no ceiling.</span>
+      {/* ── The usual week ── the calendar below handles one-off days; this is for "every weekend". */}
+      <div className="space-y-2 pt-3 border-t border-line/10">
+        <p className="text-xs text-ink-faint">
+          Your usual week — blank follows the ceiling, <span className="text-ink">0 is a day off every week</span>.
+          Use the calendar for one-off days.
+        </p>
+        <div className="grid grid-cols-7 gap-2 max-w-md">
+          {WEEKDAYS.map(({ day, label: wd }) => (
+            <div key={day} className="flex flex-col items-center gap-1">
+              <span className="text-xs text-ink-faint select-none">{wd}</span>
+              <input
+                type="number" min={0} max={999}
+                className="input text-center text-sm px-1 py-1.5 w-full"
+                placeholder="—"
+                value={draft.weekdayLimits[String(day)] ?? ''}
+                onChange={e => set('weekdayLimits', { ...draft.weekdayLimits, [String(day)]: e.target.value })}
+              />
+            </div>
+          ))}
         </div>
-
-        <div>
-          <p className="text-xs text-ink-faint mb-1.5">Per-day limits — blank follows the ceiling, <span className="text-ink">0 is a day off</span>.</p>
-          <div className="grid grid-cols-7 gap-1.5">
-            {WEEKDAYS.map(({ day, label: wd }) => (
-              <div key={day} className="flex flex-col items-center gap-1">
-                <span className="text-xs text-ink-faint select-none">{wd}</span>
-                <input
-                  type="number" min={0} max={999}
-                  className="input text-center text-sm px-1 py-1.5 w-full"
-                  placeholder="—"
-                  value={draft.weekdayLimits[String(day)] ?? ''}
-                  onChange={e => set('weekdayLimits', { ...draft.weekdayLimits, [String(day)]: e.target.value })}
-                />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── Specific dates ── */}
-      <div className="space-y-2 pt-2 border-t border-line/10">
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-ink-faint">Specific dates — holidays, or a free day you want to do extra. Overrides the ceiling.</p>
-          <button className="btn-ghost text-xs py-1"
-                  onClick={() => set('dateExceptions', [...draft.dateExceptions, { date: today, cap: '0' }])}>
-            + Date
-          </button>
-        </div>
-        {draft.dateExceptions.map((ex, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <input type="date" className="input text-sm px-2 py-1.5" value={ex.date}
-                   onChange={e => set('dateExceptions', draft.dateExceptions.map((x, j) => j === i ? { ...x, date: e.target.value } : x))} />
-            <input type="number" min={0} max={999} className="input text-center text-sm px-2 py-1.5 w-20" placeholder="0"
-                   value={ex.cap}
-                   onChange={e => set('dateExceptions', draft.dateExceptions.map((x, j) => j === i ? { ...x, cap: e.target.value } : x))} />
-            <span className="text-xs text-ink-faint flex-1">
-              {ex.cap.trim() === '' || parseInt(ex.cap, 10) === 0 ? 'day off' : `max ${parseInt(ex.cap, 10)} words`}
-            </span>
-            <button className="btn-ghost text-xs py-1"
-                    onClick={() => set('dateExceptions', draft.dateExceptions.filter((_, j) => j !== i))}>Remove</button>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Checkpoints ── */}
-      <div className="space-y-2 pt-2 border-t border-line/10">
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-ink-faint">
-            Checkpoints — a running total to have reached by a date. Counts are cumulative, and the
-            nearest one sets today&apos;s number when it&apos;s the tighter constraint.
-          </p>
-          <button className="btn-ghost text-xs py-1"
-                  onClick={() => set('checkpoints', [...draft.checkpoints, { date: draft.startDate, count: '' }])}>
-            + Checkpoint
-          </button>
-        </div>
-        {draft.checkpoints.map((cp, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <input type="date" className="input text-sm px-2 py-1.5" value={cp.date}
-                   onChange={e => set('checkpoints', draft.checkpoints.map((x, j) => j === i ? { ...x, date: e.target.value } : x))} />
-            <input type="number" min={1} max={100000} className="input text-center text-sm px-2 py-1.5 w-24" placeholder="50"
-                   value={cp.count}
-                   onChange={e => set('checkpoints', draft.checkpoints.map((x, j) => j === i ? { ...x, count: e.target.value } : x))} />
-            <span className="text-xs text-ink-faint flex-1">words by then</span>
-            <button className="btn-ghost text-xs py-1"
-                    onClick={() => set('checkpoints', draft.checkpoints.filter((_, j) => j !== i))}>Remove</button>
-          </div>
-        ))}
       </div>
 
       {/* ── Errors ── */}
@@ -363,8 +346,8 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
 
       {/* ── Live preview ── */}
       {status && (
-        <div className="space-y-3 pt-2 border-t border-line/10">
-          <div className="flex flex-wrap gap-4">
+        <div className="space-y-4 pt-3 border-t border-line/10">
+          <div className="flex flex-wrap gap-6">
             <Stat label="Today" value={status.done ? 'Done' : status.expired ? '—' : `${status.goal}`}
                   hint={status.done ? 'target reached' : status.expired ? 'deadline passed' : 'words'} />
             <Stat label="Still to go" value={`${status.remaining}`} hint={`over ${status.daysLeft} study day${status.daysLeft === 1 ? '' : 's'}`} />
@@ -376,6 +359,9 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
             />
             {status.binding && !status.binding.isDeadline && (
               <Stat label="Next checkpoint" value={`${status.binding.target}`} hint={`by ${shortDate(status.binding.date)}`} />
+            )}
+            {timeOffCount > 0 && (
+              <Stat label="Time off" value={`${timeOffCount}`} hint={`day${timeOffCount === 1 ? '' : 's'} blocked out`} />
             )}
           </div>
 
@@ -411,12 +397,36 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
             </div>
           )}
 
-          <PlanStrip plan={plan} schedule={candidate} />
+          <GoalScheduleCalendar
+            schedule={candidate}
+            plan={plan}
+            today={today}
+            onSetDateCaps={setDateCaps}
+            onSetCheckpoint={setCheckpoint}
+            onRemoveCheckpoint={removeCheckpoint}
+          />
+
+          {checkpointList.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs text-ink-faint">
+                Checkpoints — cumulative targets. The nearest sets today&apos;s number whenever it&apos;s the tighter constraint.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {checkpointList.map(([date, count]) => (
+                  <span key={date} className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-full border border-line/10 text-ink">
+                    {`${count} by ${shortDate(date)}`}
+                    <button className="text-ink-faint hover:text-danger" onClick={() => removeCheckpoint(date)}
+                            aria-label={`Remove checkpoint on ${date}`}>×</button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* ── Save ── */}
-      <div className="flex items-center gap-2 pt-2 border-t border-line/10">
+      <div className="flex items-center gap-2 pt-3 border-t border-line/10">
         <button className="btn-primary text-sm py-1.5 px-4 disabled:opacity-50" disabled={!ready || busy} onClick={save}>
           {saved ? 'Update schedule' : 'Start schedule'}
         </button>
@@ -446,53 +456,6 @@ function Stat({ label, value, hint, tone = 'muted' }: {
       <div className="text-xs text-ink-faint uppercase tracking-wider">{label}</div>
       <div className={`text-lg font-medium ${color}`}>{value}</div>
       <div className="text-xs text-ink-faint">{hint}</div>
-    </div>
-  )
-}
-
-/**
- * The plan as a bar strip. Long schedules bucket by week — 200 one-pixel bars say nothing, and the
- * shape (where the checkpoints bend it, where the days off fall) is the whole point.
- */
-function PlanStrip({ plan, schedule }: { plan: { date: string; words: number; capacity: number; milestone: unknown }[]; schedule: GoalSchedule }) {
-  if (plan.length === 0) return null
-
-  const weekly = plan.length > 45
-  const buckets: { label: string; words: number; milestone: boolean }[] = []
-  if (weekly) {
-    for (let i = 0; i < plan.length; i += 7) {
-      const week = plan.slice(i, i + 7)
-      buckets.push({
-        label: shortDate(week[0]!.date),
-        words: week.reduce((a, d) => a + d.words, 0),
-        milestone: week.some(d => d.milestone != null),
-      })
-    }
-  } else {
-    for (const d of plan) {
-      buckets.push({ label: shortDate(d.date), words: d.words, milestone: d.milestone != null })
-    }
-  }
-
-  const max = Math.max(1, ...buckets.map(b => b.words))
-  return (
-    <div>
-      <div className="flex items-end gap-px h-16">
-        {buckets.map((b, i) => (
-          <div key={i} className="flex-1 flex flex-col justify-end h-full group relative"
-               title={`${b.label}: ${b.words} word${b.words === 1 ? '' : 's'}`}>
-            <div
-              className={`w-full rounded-sm ${b.milestone ? 'bg-accent' : b.words === 0 ? 'bg-line/20' : 'bg-accent/45'}`}
-              style={{ height: `${Math.max(b.words === 0 ? 3 : 8, (b.words / max) * 100)}%` }}
-            />
-          </div>
-        ))}
-      </div>
-      <div className="flex justify-between text-xs text-ink-faint mt-1">
-        <span>{shortDate(schedule.startDate > plan[0]!.date ? schedule.startDate : plan[0]!.date)}</span>
-        <span>{weekly ? 'per week' : 'per day'}</span>
-        <span>{shortDate(schedule.deadline)}</span>
-      </div>
     </div>
   )
 }

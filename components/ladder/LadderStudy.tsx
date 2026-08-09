@@ -28,6 +28,8 @@ import { prefetchAudio } from '@/lib/distractors'
 import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, effectiveDebtSince } from '@/lib/goalCarryover'
+import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
+import { scheduleStatus } from '@/lib/goalSchedule'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import type { CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
@@ -421,8 +423,19 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           (profRes.data?.goal_full_debt_resets as Record<string, string> | null) ?? {},
           `${src}|${tgt}`,
         )
+        // A live schedule OWNS this pair's goal, so the intake cap must follow it rather than the
+        // weekday numbers + carryover. Online only, and never fatal: a missing goal_schedules table
+        // (migration 114 unapplied) falls straight through to the carryover path below.
+        const sched = await new SupabaseGoalScheduleRepository()
+          .getForPair(uid, src, tgt).catch(() => null)
+
         let goalToday: number
-        if (fullDebtOn && fullDebtSince) {
+        if (sched) {
+          const done = await progressForSchedules({
+            userId: uid, schedules: [sched], timezone: tzRef.current, turnoverHour: turnoverRef.current,
+          }).then(m => m.get(`${src}|${tgt}`) ?? 0).catch(() => 0)
+          goalToday = scheduleStatus({ schedule: sched, today: todayStr, doneSoFar: done }).goal
+        } else if (fullDebtOn && fullDebtSince) {
           // Unbounded: the whole running deficit/surplus since the enable date lands on today's goal.
           const lower = new Date(new Date(fullDebtSince + 'T00:00:00Z').getTime() - 48 * 3600 * 1000).toISOString()
           const rows = await fetchAllRows<{ graduated_at: string; accelerated_mode: string | null }>(

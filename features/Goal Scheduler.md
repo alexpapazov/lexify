@@ -1,8 +1,8 @@
 # Goal Scheduler
 
-**Status (2026-08-08): Pass 1 shipped — data model, engine, Settings editor. Pass 2 (wiring the
-derived goal into the goal consumers) is NOT built; see "Remaining" at the bottom.**
-Migration **114 is PENDING** — it must be run before the editor works at all.
+**Status (2026-08-08): complete and wired.** Data model, engine, calendar editor, its own settings
+page, and all four goal consumers read it. Migration **114 is PENDING** — nothing works until it runs.
+**Never verified against a real account** (§7).
 
 A schedule answers the opposite question to a daily goal. `language_pairs.goals` says *"I want to do
 8 words a day"*; a schedule says *"I want 200 words by December 1st"* and works the daily number out
@@ -140,14 +140,35 @@ its stored snapshot — re-reading it live would silently move the finish line.
 |---|---|
 | `lib/goalSchedule.ts` | **Pure, 52 tests.** All of §3. No React, no Supabase |
 | `lib/data/goalSchedules.ts` | The repo + `scheduleProgress` / `currentVocabularySize`. Online only |
-| `components/settings/GoalScheduleEditor.tsx` | The editor and its live preview |
+| `components/settings/GoalScheduleEditor.tsx` | The editor, its live preview and feasibility remedies |
+| `components/settings/GoalScheduleCalendar.tsx` | The calendar: drag-select days, time off, per-date caps, checkpoints |
+| `app/settings/goals/page.tsx` | **The whole Daily Goals page** — fixed goals, schedules, carryover |
 | `domain/index.ts` | `GoalSchedule`, `GoalScheduleCheckpoint`, `GoalTargetKind` |
 | `supabase/migrations/114_goal_schedules.sql` | **PENDING** |
-| `app/settings/page.tsx` | Third mode in the per-pair Daily/Per weekday toggle |
+| `lib/data/goalSchedules.ts` | Repo + `scheduleProgress` / `progressForSchedules` / `currentVocabularySize` |
 
-**Entry point:** Settings → Daily Goals → per language, the **Schedule** tab. Slotting it into the
-existing mode toggle is what makes "this replaces your weekday goals" legible without a paragraph of
-explanation.
+**Entry point:** Settings → Language configuration → **Daily goals** → per language, the **Schedule**
+tab. Daily Goals moved off the settings page into `/settings/goals` on 2026-08-08 (same pattern as
+`/settings/ladders`) — a goal stopped being a number in a box, and a schedule needs the room.
+Slotting Schedule into the existing Daily / Per weekday toggle is what makes "this replaces your
+weekday goals" legible without a paragraph of explanation.
+
+### The calendar
+
+Dates are edited on a calendar, not in rows of date inputs: "I'm away that week" and "be at 120 by
+here" are statements about particular days, and a grid is how you pick days.
+
+- **Drag across days** → mark time off, cap them at N, or clear the overrides.
+- **Click one day** → the same, plus hang a checkpoint on it.
+- Each cell shows the words planned for that day. **Past days render from `plannedForDate`**, future
+  days from the live plan — see the note in §3 about why those are different functions.
+- The calendar EDITS `dateExceptions`/`checkpoints`, it does not own them: it renders the parent's
+  draft and calls back, so the preview and feasibility check stay the single source of truth.
+- The draft keys both by DATE (`Record<string, number>`), so a day can't get two conflicting entries.
+- The drag release is bound to `window`, not the cells — a pointerup off-grid would otherwise leave
+  the calendar stuck mid-drag.
+- The weekday-limit row stays for the recurring case ("every weekend off"); the calendar is for
+  one-offs. Precedence is documented in §3: a date exception beats the weekday limit AND the ceiling.
 
 The editor **does not block an over-ambitious schedule.** Wanting 500 words in a fortnight is a
 legitimate thing to type; the honest response is to show that it doesn't fit and offer the three
@@ -159,35 +180,41 @@ otherwise turn every keystroke's preview into a multi-million-iteration loop and
 
 ---
 
-## 5. Remaining (Pass 2)
+## 5. How it reaches the goal surfaces
 
-The derived goal is **not yet read by anything outside the editor.** All four goal consumers still
-read `language_pairs.goals` + carryover, so a scheduled pair currently shows its old weekday number
-everywhere except the Settings preview. To finish:
+All four consumers branch on "does this pair have a live schedule" and, if so, ignore carryover
+entirely. The branch is deliberately 3–8 lines in each — the seam already existed, because
+`plannedGoalSum`/`owedGoalForDate` take a per-DATE `goalForDay(dateStr)` function (the 2026-07-25
+deferrals change), so a schedule is just another source of that number.
 
-1. **`app/study/page.tsx`** — `pairsWithGoalsToday` should branch to `scheduleStatus` when the pair
-   has a live schedule, instead of `carriedGoal`/`fullDebtGoal`.
-2. **`components/analytics/PresentSnapshot.tsx`** — same branch, in both of its loops. Its "Current
-   standing" panel has a natural schedule analogue in `status.pace`.
-3. **`components/analytics/ReviewCalendar.tsx`** — past days should use **`plannedForDate`**, not
-   `scheduleStatus`. A past day's goal is a historical record (the reasoning the calendar already
-   applies to weekday goals); re-deriving it from today's remaining would rewrite history every time
-   you study. `plannedForDate` exists for exactly this and is deliberately independent of progress.
-4. **`components/ladder/LadderStudy.tsx`** — the stop-at-goal intake cap reads `goalToday`; feeding
-   it the schedule's number makes the cap compose for free. **Nothing else should touch new-card
-   serving** — per the standing rule, a goal is a target, not permission to be served more cards.
-5. A **checkpoint progress panel** (segments, pace, feasibility) on Analytics → Present.
+| Surface | What it does |
+|---|---|
+| `app/study/page.tsx` | `pairsWithGoalsToday` returns `scheduleStatus(...).goal`. Scheduled pairs bypass the "no weekday assignment → not on the list" gate (their goal doesn't come from `goals[weekday]`) and drop off when the goal is 0 — a scheduled day off, or the target already met |
+| `components/analytics/PresentSnapshot.tsx` | Same in the goals loop. **"Current standing" now shows scheduled pairs too, in every mode** — it reports `status.pace` rather than the full-debt balance, since a schedule always has a cumulative position |
+| `components/analytics/ReviewCalendar.tsx` | Uses **`plannedForDate`**, NOT `scheduleStatus` — see §3 |
+| `components/ladder/LadderStudy.tsx` | The stop-at-goal intake cap reads the schedule's number. Nothing else touches new-card serving: a goal is a target, not permission to be served more cards |
 
-**The seam to use:** `plannedGoalSum` and `owedGoalForDate` already thread a **per-date**
-`goalForDay(dateStr)` function through every consumer (the 2026-07-25 deferrals change). A schedule
-is just another source of that function, so this should stay additive rather than becoming a rewrite.
+**`progressForSchedules`** (in the repo) is the shared loader: ONE paged read covers every
+`new_words` schedule (a single window from the earliest start date, bucketed per pair) plus a cheap
+head-count per `total_words` schedule. Per-pair would have been an N+1 on the dashboard's critical
+path. It is deliberately **not** memoised through `readCache` — the answer must change the moment you
+graduate a card.
 
-Also unbuilt, in rough priority order: surfacing `listArchived` as a "past schedules" history; a
-deferral (`goal_deferrals`) in schedule mode — it should mean "today is a day off", i.e. capacity 0
-for that date, which redistributes for free; and offline support (there is none — the editor and
-`scheduleProgress` are both online-only).
+Every schedule read is wrapped so a missing `goal_schedules` table (migration 114 unapplied) falls
+through to the old carryover behaviour instead of blanking a page.
 
----
+**The "→ tomorrow" defer button is hidden for scheduled pairs.** Deferring is what a schedule already
+does: skip today and the remaining days absorb it. `goal_deferrals` only feeds `owedGoalForDate`, so
+the button would have been a no-op.
+
+### Still unbuilt
+
+- A **checkpoint progress panel** on Analytics → Present (segments, per-segment feasibility). Today
+  only the binding checkpoint surfaces, via the editor preview and the goals list.
+- `listArchived` is written but nothing surfaces a **"past schedules" history**.
+- **Offline**: none. The editor and both progress readers are online-only.
+- A schedule spanning multiple decks of one pair is fine, but there is **no cross-language schedule**
+  ("300 words across all my languages") — targets are per pair.
 
 ## 6. Error log
 
@@ -214,7 +241,11 @@ caught during the build, kept because they're easy to reintroduce.)*
 - `lib/goalSchedule.ts`: **52 unit tests, all green.** The whole model in §3 is covered, including
   the re-spread behaviour, the water-fill-vs-proportional distinction, checkpoint binding, missed
   checkpoints, all three remedies, and the day-off pace property.
-- `npm run build` + `npm test` green (50 suites / 783 tests).
-- **NOT verified against a real account.** The editor is behind `AuthWall` and needs migration 114
-  applied. Nothing has been clicked through: the save/update/retire round-trip, the progress queries,
-  and the live preview against real graduation data are all unexercised.
+- The calendar's date maths: **9 tests** (`lib/__tests__/goalScheduleCalendar.test.ts`) — month
+  lengths, leap-year February, the year boundary, Monday-start padding. Hand-rolled calendars break
+  exactly there, and none of it is visible in a screenshot of the current month.
+- `npm run build` + `npm test` green (51 suites / 792 tests), `tsc --noEmit` clean.
+- **NOT verified against a real account — nothing here has ever been clicked.** The editor is behind
+  `AuthWall` and needs migration 114 applied. Unexercised: the save/update/retire round-trip, drag
+  selection on a real pointer/touch device, both progress queries, the live preview against real
+  graduation data, and every one of the four consumer branches in §5.

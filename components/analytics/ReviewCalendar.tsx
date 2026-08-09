@@ -22,6 +22,9 @@ import { langName, assignLanguageColors } from '@/lib/languages'
 import { localDateWithTurnover, getToday } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { carriedGoal, fullDebtGoal, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
+import { SupabaseGoalScheduleRepository } from '@/lib/data/goalSchedules'
+import { plannedForDate } from '@/lib/goalSchedule'
+import type { GoalSchedule } from '@/domain'
 import { DayDetailModal } from '@/components/analytics/DayDetailModal'
 import type { LanguagePair } from '@/domain'
 
@@ -39,6 +42,8 @@ interface DayInfo { counts: Map<string, number>; total: number }
 export function ReviewCalendar() {
   const [byDay, setByDay] = useState<Map<string, DayInfo>>(new Map())
   const [pairs, setPairs] = useState<LanguagePair[]>([])
+  /** Live schedules by `${src}|${tgt}` — a scheduled pair's past goals come from its plan, not carryover. */
+  const [schedules, setSchedules] = useState<Map<string, GoalSchedule>>(new Map())
   const [minDate, setMinDate] = useState<string | null>(null)
   const [todayStr, setTodayStr] = useState<string>('')
   const [loading, setLoading] = useState(true)
@@ -68,6 +73,11 @@ export function ReviewCalendar() {
       const today = getToday(tzv, turnoverv)
       setTz(tzv); setTurnover(turnoverv)
       setColorOverrides((profile?.language_colors as Record<string, string> | null) ?? {})
+      // Never fatal: without migration 114 every pair simply stays on the carryover path below.
+      setSchedules(new Map(
+        (await new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[]))
+          .map(sc => [`${sc.sourceLanguage}|${sc.targetLanguage}`, sc]),
+      ))
       setCarry({
         shortfall: (profile?.goal_carry_shortfall as boolean | null) ?? false,
         surplus:   (profile?.goal_carry_surplus as boolean | null) ?? false,
@@ -141,6 +151,15 @@ export function ReviewCalendar() {
       const out = new Map<string, number>()
       for (const p of pairs) {
         const key = `${p.sourceLanguage}|${p.targetLanguage}`
+        // A scheduled pair's past target is `plannedForDate` — the number that day was ASSIGNED when
+        // the schedule was drawn up. Deliberately NOT `scheduleStatus`, which re-derives from what's
+        // left TODAY and would therefore rewrite the whole calendar's history every time you study.
+        const sched = schedules.get(key)
+        if (sched) {
+          const planned = plannedForDate(sched, date)
+          if (planned > 0) out.set(key, planned)
+          continue
+        }
         const base = baseGoal(p, date)
         if (base <= 0) continue                 // not assigned that weekday
         let eff = base
@@ -173,7 +192,7 @@ export function ReviewCalendar() {
       }
       return out
     }
-  }, [pairs, byDay, carry])
+  }, [pairs, byDay, carry, schedules])
 
   if (loading) return <p className="text-sm text-ink-faint">Loading…</p>
   if (!view || !minDate) {
