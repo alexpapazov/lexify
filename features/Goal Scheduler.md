@@ -177,6 +177,11 @@ In Schedule mode, above the per-language editors: every language's plan on one c
 same colour everywhere. Hovering a day gives exact words and percentages per language. The pie is a
 `conic-gradient`, not SVG: no layout cost and it stays crisp at the ~30px a cell can spare.
 
+Each day carries **its total words in the middle** — the split is the ring around it. It's drawn as a
+DONUT rather than a filled pie specifically so the number stays legible: a label on top of a filled
+pie sits over arbitrary language colours and needs a text shadow to survive, whereas a hole matching
+the panel background never does. Three-digit totals shrink a step instead of overflowing.
+
 It shows SAVED schedules, and refreshes when one is saved — an unsaved draft has no business
 colouring a shared view.
 

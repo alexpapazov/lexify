@@ -225,10 +225,21 @@ export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling,
                       {Number(date.slice(8))}
                     </span>
                     {background ? (
+                      // A DONUT, not a pie: the total sits in the hole, which is the only way a
+                      // number stays legible on top of arbitrary language colours without a text
+                      // shadow. Three-digit days shrink a step rather than overflowing the hole.
                       <span
-                        className={`mt-0.5 rounded-full ${isToday ? 'ring-1 ring-ink' : ''} ${deadlines.length ? 'outline outline-1 outline-offset-1 outline-ink-muted' : ''}`}
-                        style={{ background, width: '68%', aspectRatio: '1 / 1' }}
-                      />
+                        className={`relative mt-0.5 rounded-full ${isToday ? 'ring-1 ring-ink' : ''} ${deadlines.length ? 'outline outline-1 outline-offset-1 outline-ink-muted' : ''}`}
+                        style={{ background, width: '78%', aspectRatio: '1 / 1' }}
+                      >
+                        <span className="absolute inset-[24%] rounded-full bg-surface" />
+                        <span
+                          className={`absolute inset-0 flex items-center justify-center font-semibold tabular-nums leading-none ${overloaded ? 'text-danger' : 'text-ink'}`}
+                          style={{ fontSize: entry!.total >= 100 ? '7px' : '9px' }}
+                        >
+                          {entry!.total}
+                        </span>
+                      </span>
                     ) : (
                       <span className="mt-0.5 rounded-full bg-line/15" style={{ width: '38%', aspectRatio: '1 / 1' }} />
                     )}
@@ -323,8 +334,8 @@ export function GoalScheduleOverview({ languages, today, restDays, dailyCeiling,
       </div>
 
       <p className="text-xs text-ink-faint">
-        Each day is split by language in proportion to the words planned for it. Hover a day for the
-        exact numbers; a ring marks today and an outline marks a language&apos;s deadline. Drag across
+        The number in each day is the total words planned across every language; the ring around it
+        splits that total by language. Hover a day for the exact numbers; a ring marks today and an outline marks a language&apos;s deadline. Drag across
         days to block out travel. Colours are the ones set in Settings → Language colors.
       </p>
     </div>
