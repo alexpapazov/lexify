@@ -14,8 +14,8 @@ import { setOfflineMode } from '@/lib/offline/mode'
 
 const NAV_LINKS = [
   { href: '/study',     label: 'Study'    },
-  { href: '/practice',  label: 'Practice' },
   { href: '/library',   label: 'Library'  },
+  { href: '/practice',  label: 'Practice' },
   { href: '/browse',    label: 'Browse'   },
   { href: '/create',    label: 'Create'   },
   { href: '/agents',    label: 'Agents'   },
