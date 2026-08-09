@@ -24,9 +24,10 @@ function rowToSchedule(row: Record<string, unknown>): GoalSchedule {
     targetLanguage: row.target_language as string,
     name:           (row.name as string | null) ?? null,
     targetKind:     (row.target_kind as GoalTargetKind) ?? 'new_words',
-    targetCount:    (row.target_count as number) ?? 0,
+    // NULL is meaningful here — it's a pattern schedule (no finish line), NOT a target of zero.
+    targetCount:    (row.target_count as number | null) ?? null,
     startDate:      row.start_date as string,
-    deadline:       row.deadline as string,
+    deadline:       (row.deadline as string | null) ?? null,
     baselineCount:  (row.baseline_count as number) ?? 0,
     dailyCeiling:   (row.daily_ceiling as number | null) ?? null,
     weekdayLimits:  (row.weekday_limits as Record<string, number | null> | null) ?? null,
@@ -54,7 +55,8 @@ export class SupabaseGoalScheduleRepository {
     return cachedRead(`goalsched:${userId}:active`, async () => {
       const { data, error } = await this.db.from('goal_schedules')
         .select('*').eq('user_id', userId).is('archived_at', null)
-        .order('deadline', { ascending: true })
+        // Pattern schedules have no deadline; nulls sort last, which is the right place for them.
+        .order('deadline', { ascending: true, nullsFirst: false })
       if (error) throw new Error(error.message)
       return (data ?? []).map(rowToSchedule)
     })
@@ -151,8 +153,11 @@ export async function scheduleProgress({ userId, schedule, timezone, turnoverHou
 
   if (schedule.targetKind === 'total_words') {
     // A plain count — no rows shipped, and it can't hit the 1000-row cap.
+    // NOTE the projection is `card_id`: `card_states` is keyed on
+    // (user_id, card_id, review_direction) and HAS NO `id` COLUMN. Selecting one returns a 400,
+    // which a caller that swallows errors will happily render as "you know 0 words".
     const { count, error } = await db.from('card_states')
-      .select('id, cards!inner(source_language, target_language)', { count: 'exact', head: true })
+      .select('card_id, cards!inner(source_language, target_language)', { count: 'exact', head: true })
       .eq('user_id', userId).eq('graduated', true).neq('review_direction', 'reverse')
       .eq('cards.source_language', schedule.sourceLanguage)
       .eq('cards.target_language', schedule.targetLanguage)
@@ -247,11 +252,18 @@ export async function progressForSchedules({ userId, schedules, timezone, turnov
 /**
  * The pair's current graduated vocabulary — what a new `total_words` schedule records as its
  * baseline, so "reach 2000 words" can show how far along it already is.
+ *
+ * Projects `card_id`, NOT `id`: `card_states` is keyed on (user_id, card_id, review_direction) and
+ * has no `id` column. This was a real bug — the 400 it returned was swallowed by the caller and
+ * displayed as a vocabulary of 0, which would then have been stored as the schedule's baseline.
+ *
+ * THROWS on failure by design. Callers must not paper over it with a 0: an unreadable count and a
+ * genuine zero are different facts, and only one of them should be shown as a number.
  */
 export async function currentVocabularySize(userId: UserId, sourceLanguage: string, targetLanguage: string): Promise<number> {
   const db = createClient()
   const { count, error } = await db.from('card_states')
-    .select('id, cards!inner(source_language, target_language)', { count: 'exact', head: true })
+    .select('card_id, cards!inner(source_language, target_language)', { count: 'exact', head: true })
     .eq('user_id', userId).eq('graduated', true).neq('review_direction', 'reverse')
     .eq('cards.source_language', sourceLanguage).eq('cards.target_language', targetLanguage)
   if (error) throw new Error(error.message)

@@ -99,7 +99,8 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
 
   const [saved,     setSaved]     = useState<GoalSchedule | null>(null)
   const [draft,     setDraft]     = useState<Draft>(() => draftFrom(null, today))
-  const [vocabNow,  setVocabNow]  = useState(0)
+  /** null = the count could not be read. Distinct from 0, which is a real answer. */
+  const [vocabNow,  setVocabNow]  = useState<number | null>(null)
   const [doneSoFar, setDoneSoFar] = useState(0)
   const [loading,   setLoading]   = useState(true)
   const [busy,      setBusy]      = useState(false)
@@ -115,9 +116,10 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
       try {
         const [existing, vocab] = await Promise.all([
           new SupabaseGoalScheduleRepository().getForPair(userId, sourceLanguage, targetLanguage),
-          // Only the 'total_words' baseline needs this; a failure must not take the editor down with
-          // it, so it degrades to 0 rather than rejecting the pair.
-          currentVocabularySize(userId, sourceLanguage, targetLanguage).catch(() => 0),
+          // A failure must not take the editor down with it — but it must NOT become a 0 either.
+          // Reporting "you know 0 words" when the query simply failed is worse than saying nothing,
+          // and it would have been stored as the schedule's baseline. null means "unknown".
+          currentVocabularySize(userId, sourceLanguage, targetLanguage).catch(() => null),
         ])
         if (cancelled) return
         setSaved(existing)
@@ -138,8 +140,10 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
    * (re-reading it now would silently move the finish line), and switching kind takes a fresh one.
    */
   const baselineCount = draft.targetKind === 'total_words'
-    ? (saved && saved.targetKind === 'total_words' ? saved.baselineCount : vocabNow)
+    ? (saved && saved.targetKind === 'total_words' ? saved.baselineCount : (vocabNow ?? 0))
     : 0
+  /** A 'total_words' schedule can't be trusted without a baseline — see the load above. */
+  const baselineUnknown = draft.targetKind === 'total_words' && vocabNow == null && !(saved && saved.targetKind === 'total_words')
 
   // ── Progress, re-read when the measure or its start moves ──
   useEffect(() => {
@@ -194,7 +198,7 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     || Object.values(draft.weekdayLimits).some(v => v.trim() !== '')
 
   const errors = useMemo(() => (stated ? validateSchedule(candidate) : []), [stated, candidate])
-  const ready = stated && errors.length === 0
+  const ready = stated && errors.length === 0 && !baselineUnknown
   const status = useMemo(
     () => (ready ? scheduleStatus({ schedule: candidate, today, doneSoFar }) : null),
     [ready, candidate, today, doneSoFar],
@@ -332,7 +336,7 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
 
       <p className="text-xs text-ink-faint">
         {draft.targetKind === 'total_words'
-          ? `Counts your whole ${(label.split('→')[0] ?? label).trim()} vocabulary, including words you onboarded as already known. You have ${baselineCount} now.`
+          ? `Counts your whole ${(label.split('→')[0] ?? label).trim()} vocabulary, including words you onboarded as already known.${baselineUnknown ? '' : ` You have ${baselineCount} now.`}`
           : 'Counts only words you learn through the ladder during the schedule. Onboarded "already known" words don’t count.'}
         {span > 0
           ? ` ${span} day${span === 1 ? '' : 's'} from start to deadline.`
@@ -360,6 +364,13 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
           ))}
         </div>
       </div>
+
+      {baselineUnknown && (
+        <p className="text-xs text-danger">
+          Couldn&apos;t read your current vocabulary size, so a total-words target can&apos;t be set
+          up correctly. Reload the page; if it persists, use “new words” instead.
+        </p>
+      )}
 
       {/* ── Errors ── */}
       {errors.length > 0 && (

@@ -2544,6 +2544,12 @@ read for all `new_words` schedules plus a head-count per `total_words` one, deli
 since it must move the moment you graduate a card. Every schedule read is `.catch`-wrapped so an
 unapplied migration 114 falls through to the old carryover behaviour instead of blanking a page.
 
+**`card_states` HAS NO `id` COLUMN** — it is keyed on (user_id, card_id, review_direction). A
+`select('id', {count:'exact', head:true})` against it 400s, and if the caller swallows the error you
+get a confident wrong number (this shipped once as "you have 0 words" on a 1000-word library).
+Project `card_id`. Related rule: never `.catch(() => 0)` a count the user reads as data — an
+unreadable value and a real zero are different facts and must look different.
+
 **A schedule needs a target OR just numbers (migration 116 — PENDING).** `targetCount`/`deadline` are
 NULLABLE: a "pattern" schedule ("8 a day, none Sundays") is open-ended, its goal each day is simply
 `dayCapacity`, drawn over a rolling `PATTERN_HORIZON_DAYS` (180) window. Pattern measures report

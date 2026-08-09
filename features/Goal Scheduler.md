@@ -314,16 +314,31 @@ caught during the build, kept because they're easy to reintroduce.)*
    of `scheduledPairs`, so saving a schedule twice removed it from the "these languages are on a
    schedule" note. The editor now reports the resulting state (`onChanged(hasSchedule)`) rather than
    the parent guessing. Applies to any "did this change" callback: report the state, not the event.
-3. **Drag-select did nothing on touch.** Touch and pen pointers are IMPLICITLY captured by the
+3. **"You have 0 words" on a library of 1000+.** `currentVocabularySize` projected `id` from
+   `card_states` — a table keyed on **(user_id, card_id, review_direction) with NO `id` column**. The
+   400 that came back was swallowed by a `.catch(() => 0)` in the editor and rendered as a confident
+   vocabulary of zero, which would then have been saved as the schedule's baseline and made every
+   derived number wrong. Two lessons, both applied:
+   - **Project `card_id`, never `id`, from `card_states`.** It is the only heavily-used table in this
+     codebase without a surrogate key, and the mistake is invisible until runtime.
+   - **Never `.catch(() => 0)` a number the user reads as data.** An unreadable count and a genuine
+     zero are different facts. `vocabNow` is now `number | null`, the editor says it couldn't read it,
+     and a `total_words` schedule refuses to save without a baseline.
+4. **A pattern schedule loaded back as a target of 0.** `rowToSchedule` had `?? 0` on `target_count`
+   and cast `deadline` straight to `string`, both written when the columns were NOT NULL. After
+   migration 116 made them nullable, a round-tripped pattern schedule came back as "reach 0 words"
+   instead of "no finish line". When a column becomes nullable, its mapper's `?? default` becomes a
+   bug — null had no meaning before and carries one now.
+5. **Drag-select did nothing on touch.** Touch and pen pointers are IMPLICITLY captured by the
    element that received `pointerdown`, so `pointerenter` never fired on any other cell and a drag on
    a phone selected only the day it started on. Fixed with `releasePointerCapture` for non-mouse
    pointers. The release is also handled on `window`, not the cell, so a drag ending off-grid still
    commits instead of silently vanishing.
-4. **The calendar was O(n²).** It called `plannedForDate` per past cell, and that function re-runs the
+6. **The calendar was O(n²).** It called `plannedForDate` per past cell, and that function re-runs the
    whole water-fill for the entire span every time — fine for 30 days, a visible freeze on a
    multi-year schedule, on every keystroke. `assignedPlan(schedule)` now computes the map once;
    `plannedForDate` delegates to it. **Anything rendering many dates must use `assignedPlan`.**
-5. **Rounding could push a day past a limit the user set explicitly.** `distributeIntegers` hands the
+7. **Rounding could push a day past a limit the user set explicitly.** `distributeIntegers` hands the
    largest-remainder deficit to the biggest fractional parts; without the cap check it would add a
    word to a day already at its ceiling. It now skips capped days.
 
