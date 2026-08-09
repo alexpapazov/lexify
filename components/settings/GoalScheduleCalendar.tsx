@@ -55,8 +55,18 @@ export function monthGrid(ym: string): (string | null)[] {
   return cells
 }
 
-export function GoalScheduleCalendar({ schedule, plan, today, onSetDateCaps, onSetCheckpoint, onRemoveCheckpoint }: {
+/**
+ * `#rrggbb` + an alpha byte. Tailwind's `/25` opacity syntax can't take a runtime value, and a
+ * per-language colour is only known at runtime.
+ */
+function tint(hex: string | undefined, alphaHex: string): string | undefined {
+  return hex && /^#[0-9a-f]{6}$/i.test(hex) ? `${hex}${alphaHex}` : undefined
+}
+
+export function GoalScheduleCalendar({ schedule, plan, today, color, onSetDateCaps, onSetCheckpoint, onRemoveCheckpoint }: {
   schedule: GoalSchedule
+  /** The language's assigned colour; falls back to the accent when absent. */
+  color?: string
   /** The forward plan from `schedulePlan` — used for today and later. */
   plan: SchedulePlanDay[]
   today: string
@@ -204,7 +214,10 @@ export function GoalScheduleCalendar({ schedule, plan, today, onSetDateCaps, onS
                       beginDrag(date)
                     }}
                     onPointerEnter={() => extendDrag(date)}
-                    style={{ touchAction: 'none' }}
+                    style={{
+                      touchAction: 'none',
+                      backgroundColor: within && cap !== 0 ? tint(color, '40') : undefined,
+                    }}
                     title={within
                       ? `${date}${cap === 0 ? ' — time off' : ` — ${words} word${words === 1 ? '' : 's'}`}${isCheckpoint ? ` · checkpoint ${checkpointByDate.get(date)}` : ''}`
                       : `${date} — outside the schedule`}
@@ -212,7 +225,7 @@ export function GoalScheduleCalendar({ schedule, plan, today, onSetDateCaps, onS
                       'relative aspect-square rounded-sm text-[10px] leading-none flex flex-col items-center justify-center transition-colors',
                       !within ? 'text-ink-faint/40 cursor-default'
                         : cap === 0 ? 'bg-line/25 text-ink-faint'
-                        : 'bg-accent/25 text-ink hover:bg-accent/40',
+                        : `text-ink hover:brightness-110 ${color ? '' : 'bg-accent/25'}`,
                       selected && within ? 'ring-2 ring-accent' : hasOverride && within && cap > 0 ? 'ring-1 ring-warning' : '',
                       isDeadline ? 'outline outline-1 outline-accent' : '',
                       isToday ? 'font-semibold underline underline-offset-2' : '',

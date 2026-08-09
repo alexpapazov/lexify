@@ -74,12 +74,14 @@ function draftFrom(schedule: GoalSchedule | null, today: string): Draft {
   }
 }
 
-export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, label, timezone, turnoverHour, onChanged }: {
+export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, label, color, timezone, turnoverHour, onChanged }: {
   userId:         string
   sourceLanguage: string
   targetLanguage: string
   /** Human label for the pair, e.g. "Spanish → English". */
   label:          string
+  /** The language's assigned colour, so its calendar matches the combined overview. */
+  color?:         string
   timezone:       string
   turnoverHour:   number
   /** Fired after a save or retire with whether this pair now has a live schedule. */
@@ -403,6 +405,7 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
             schedule={candidate}
             plan={plan}
             today={today}
+            color={color}
             onSetDateCaps={setDateCaps}
             onSetCheckpoint={setCheckpoint}
             onRemoveCheckpoint={removeCheckpoint}

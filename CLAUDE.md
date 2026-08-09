@@ -2544,6 +2544,15 @@ read for all `new_words` schedules plus a head-count per `total_words` one, deli
 since it must move the moment you graduate a card. Every schedule read is `.catch`-wrapped so an
 unapplied migration 114 falls through to the old carryover behaviour instead of blanking a page.
 
+**The Daily/Per weekday/Schedule toggle is GLOBAL** (`profiles.goal_mode`, migration 115 — PENDING),
+one choice for all languages. It is a UI mode: NO consumer reads it, so leaving Schedule mode prompts
+to retire the live schedules rather than letting them drive goals invisibly, and a page load with any
+live schedule opens in Schedule mode regardless. The column is read behind a full-then-core select
+fallback (the not-yet-migrated-profile-column landmine). Schedule mode leads with
+`GoalScheduleOverview` — all languages on one calendar, each day a `conic-gradient` pie split by
+language in its `assignLanguageColors` colour, hover for exact percentages; dragging there marks time
+off across EVERY schedule, and rest-day chips set a weekday to 0 on all of them.
+
 **Daily Goals is its own page now: `/settings/goals`** (linked from Language configuration, same
 pattern as `/settings/ladders`). It owns the mode toggle, the schedule editor, the **drag-select
 calendar** (`GoalScheduleCalendar` — drag days to mark time off or cap them, click one to add a

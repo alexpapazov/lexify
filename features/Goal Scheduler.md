@@ -1,8 +1,9 @@
 # Goal Scheduler
 
 **Status (2026-08-08): complete and wired.** Data model, engine, calendar editor, its own settings
-page, and all four goal consumers read it. Migration **114 is applied**.
-**Never verified against a real account** (§7).
+page, and all four goal consumers read it. Migration **114 is applied; 115 is PENDING** (it only
+stores the mode toggle — everything else works without it). **Never verified against a real
+account** (§7).
 
 A schedule answers the opposite question to a daily goal. `language_pairs.goals` says *"I want to do
 8 words a day"*; a schedule says *"I want 200 words by December 1st"* and works the daily number out
@@ -142,13 +143,60 @@ its stored snapshot — re-reading it live would silently move the finish line.
 | `lib/data/goalSchedules.ts` | The repo + `scheduleProgress` / `currentVocabularySize`. Online only |
 | `components/settings/GoalScheduleEditor.tsx` | The editor, its live preview and feasibility remedies |
 | `components/settings/GoalScheduleCalendar.tsx` | The calendar: drag-select days, time off, per-date caps, checkpoints |
-| `app/settings/goals/page.tsx` | **The whole Daily Goals page** — fixed goals, schedules, carryover |
+| `components/settings/GoalScheduleOverview.tsx` | Every language on ONE calendar: pie days, hover breakdown, global time off |
+| `app/settings/goals/page.tsx` | **The whole Daily Goals page** — the global mode toggle, schedules, carryover |
+| `supabase/migrations/115_goal_mode.sql` | **PENDING** — `profiles.goal_mode` |
 | `domain/index.ts` | `GoalSchedule`, `GoalScheduleCheckpoint`, `GoalTargetKind` |
 | `supabase/migrations/archive/114_goal_schedules.sql` | Applied 2026-08-08 |
 | `lib/data/goalSchedules.ts` | Repo + `scheduleProgress` / `progressForSchedules` / `currentVocabularySize` |
 
-**Entry point:** Settings → Language configuration → **Daily goals** → per language, the **Schedule**
-tab. Daily Goals moved off the settings page into `/settings/goals` on 2026-08-08 (same pattern as
+**Entry point:** Settings → Language configuration → **Daily goals** → the **Schedule** tab.
+
+### The mode toggle is GLOBAL (2026-08-08, migration 115)
+
+Daily / Per weekday / Schedule is one toggle at the top of the page, applying to every language —
+"am I working to a repeating number or to a deadline" is a decision about how you study, not about
+Spanish specifically. Stored in `profiles.goal_mode` so it follows you between desktop and phone.
+
+**It is a UI mode only.** What drives the goal surfaces is still "does this pair have a non-archived
+`goal_schedules` row" (§2) — no consumer reads `goal_mode`. That is deliberate, and it's why leaving
+Schedule mode **prompts to retire the live schedules**: without that, a schedule would keep setting
+your daily number from behind a page showing weekday boxes. A page load with any live schedule opens
+in Schedule mode regardless of the stored value, because that's what's actually in force.
+
+Migration 115 is read behind a **full-select-then-core-select fallback** — the documented landmine is
+that selecting a not-yet-migrated profile column errors the WHOLE query and silently resets timezone
+and every carryover flag to defaults. Without 115 the page still works; the toggle just isn't
+remembered, and says so.
+
+### The combined calendar
+
+In Schedule mode, above the per-language editors: every language's plan on one calendar, each day a
+**pie split by language in proportion to that day's planned words**, coloured from
+`assignLanguageColors` — the same helper the review calendar and library use, so a language is the
+same colour everywhere. Hovering a day gives exact words and percentages per language. The pie is a
+`conic-gradient`, not SVG: no layout cost and it stays crisp at the ~30px a cell can spare.
+
+It shows SAVED schedules, and refreshes when one is saved — an unsaved draft has no business
+colouring a shared view.
+
+### Three ways to not study, and which is which
+
+| Want | Where | Stored as |
+|---|---|---|
+| "I'm travelling the 12th–20th" | Drag that range on any calendar | `dateExceptions[date] = 0` |
+| "Spanish only Mon/Wed/Fri" | That language's weekday row in its own editor | `weekdayLimits[wd] = 0` on that schedule |
+| "No new words on Sundays, ever, anywhere" | The **rest-day chips** under the combined calendar | `weekdayLimits[0] = 0` on EVERY live schedule |
+
+The first two are per-schedule and were there from the start. The third is the combined calendar's
+only editing power, and it exists precisely because doing it per-language means writing the same 0 on
+every schedule by hand. Dragging on the combined calendar likewise applies to all languages at once;
+dragging on a language's own calendar applies to just that one.
+
+`bulkUpdate` skips dates outside a given schedule's span — a shared range can cross schedules that
+start later or end sooner, and writing outside the span would be dead data. Turning a rest day back
+ON deletes the entry rather than writing a number, so the day returns to following the ceiling
+instead of some value the control invented. Daily Goals moved off the settings page into `/settings/goals` on 2026-08-08 (same pattern as
 `/settings/ladders`) — a goal stopped being a number in a box, and a schedule needs the room.
 Slotting Schedule into the existing Daily / Per weekday toggle is what makes "this replaces your
 weekday goals" legible without a paragraph of explanation.

@@ -6,8 +6,8 @@ implementation notes + error log); this file is the map you read first.
 
 - **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 795 passing tests (51 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`114`, applied BY HAND — **all
-  applied, nothing pending.**
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`115`, applied BY HAND. **`115` is
+  PENDING** — it only stores the goals mode toggle; everything else works without it.
 
 ---
 
@@ -23,7 +23,7 @@ implementation notes + error log); this file is the map you read first.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
   `001`–`113` are all applied and all live in `supabase/migrations/archive/`. **An empty top level
   is the signal that nothing is pending** — put a new migration there, tell the user to run it, and
-  move it into `archive/` once it's live. Next number = **115**.
+  move it into `archive/` once it's live. **`115_goal_mode.sql` needs running.** Next number = **116**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
   **51 suites / 795 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
@@ -162,10 +162,14 @@ the re-derived goal has already absorbed a missed day, so stacking full debt on 
 it twice. All four goal consumers branch on it. Read `features/Goal Scheduler.md` before touching it.
 
 **Daily Goals moved to its own page (2026-08-08): `/settings/goals`,** linked from Language
-configuration exactly like `/settings/ladders`. It owns the per-language mode toggle
-(Daily / Per weekday / **Schedule**), the schedule editor with its **drag-select calendar** (mark
-days off, cap a date, drop a checkpoint), and the carryover block — which now saves itself with a
-targeted profile update rather than riding the settings page's omnibus save.
+configuration exactly like `/settings/ladders`. The Daily / Per weekday / **Schedule** toggle is
+GLOBAL (`profiles.goal_mode`, migration 115) — one choice for every language. It's a UI mode only;
+what drives the goal surfaces is still "does this pair have a live schedule", which is why leaving
+Schedule mode PROMPTS TO RETIRE them. In Schedule mode the page leads with a **combined calendar**:
+every language on one grid, each day a pie split by language in its assigned colour, hover for exact
+percentages, drag to block out travel for everything at once, plus weekly rest-day chips. Each
+language then gets its own editor with its own drag-select calendar. The carryover block saves itself
+with a targeted profile update rather than riding the settings page's omnibus save.
 
 **The debt is DERIVED, not stored**: `plannedGoalSum` sums the *configured* goals and the deficit is
 recomputed as `grads − planned` each day. That statelessness is load-bearing — it's why the **2.5×

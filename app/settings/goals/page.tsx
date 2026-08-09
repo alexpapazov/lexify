@@ -7,31 +7,34 @@
  * lives at `/settings/ladders`: a goal is now a configurable object, not a number in a box, and a
  * schedule needs room for its limits, checkpoints and plan preview.
  *
- * Two families of goal, chosen per language:
- *   • **Fixed** (`daily` / `weekday`) — a recurring target from `language_pairs.goals`, optionally
- *     adjusted by the carryover settings at the bottom of the page.
- *   • **Adaptive** (`schedule`) — a deadline in `goal_schedules`, with the daily number derived from
- *     what's left. A live schedule SUPERSEDES both the weekday goals and carryover for that language;
- *     see `features/Goal Scheduler.md` for why stacking them would double-count a missed day.
+ * ── One mode for everything ──
+ * The Daily / Per weekday / Schedule toggle is GLOBAL (`profiles.goal_mode`, migration 115), not
+ * per-language: "am I working to a repeating number or to a deadline" is a decision about how you
+ * study, not about Spanish specifically. Each language still has its own numbers or its own schedule
+ * underneath — the toggle chooses which of those is being edited.
+ *
+ * The mode is a UI concept. What actually drives the goal surfaces is still "does this pair have a
+ * non-archived `goal_schedules` row" (see `features/Goal Scheduler.md` §2), which is why leaving
+ * Schedule mode OFFERS TO RETIRE the live schedules: otherwise they would keep setting your daily
+ * goal from behind a page showing weekday boxes.
  *
  * Weekday numbers save on blur (they're one integer each). The carryover block has an explicit Save
  * because turning full debt on stamps a date and the per-language resets are irreversible.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
-import { SupabaseGoalScheduleRepository } from '@/lib/data/goalSchedules'
+import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
 import { GoalScheduleEditor } from '@/components/settings/GoalScheduleEditor'
+import { GoalScheduleOverview, type OverviewLanguage } from '@/components/settings/GoalScheduleOverview'
+import { assignedPlan, schedulePlan } from '@/lib/goalSchedule'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { getToday } from '@/lib/dates'
-import { langName } from '@/lib/languages'
-import type { LanguagePair } from '@/domain'
+import { langName, assignLanguageColors } from '@/lib/languages'
+import type { GoalSchedule, LanguagePair } from '@/domain'
 
-/**
- * How a language's goal is set. 'daily'/'weekday' write `language_pairs.goals`; 'schedule' hands the
- * pair to a `goal_schedules` row and ignores both the weekday numbers and carryover.
- */
+/** How goals are set, for every language at once. */
 type GoalMode = 'daily' | 'weekday' | 'schedule'
 
 const WEEKDAYS: { day: number; label: string }[] = [
@@ -41,6 +44,9 @@ const WEEKDAYS: { day: number; label: string }[] = [
 
 const pairLabel = (p: LanguagePair) => `${langName(p.sourceLanguage)} → ${langName(p.targetLanguage)}`
 
+/** Everything the profile read needs, minus the columns a pending migration might not have yet. */
+const PROFILE_CORE = 'timezone, day_turnover_hour, language_colors, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days'
+
 export default function GoalsPage() {
   const supabase = createClient()
 
@@ -48,13 +54,22 @@ export default function GoalsPage() {
   const [langPairs,    setLangPairs]    = useState<LanguagePair[]>([])
   const [timezone,     setTimezone]     = useState('')
   const [turnoverHour, setTurnoverHour] = useState(0)
+  const [langColors,   setLangColors]   = useState<Record<string, string>>({})
   const [loading,      setLoading]      = useState(true)
 
-  const [goalDrafts,     setGoalDrafts]     = useState<Record<string, Record<string, string>>>({})
-  const [goalModes,      setGoalModes]      = useState<Record<string, GoalMode>>({})
-  const [goalSavingKey,  setGoalSavingKey]  = useState<string | null>(null)
-  /** Pair keys with a live schedule — they open in schedule mode and ignore carryover entirely. */
+  const [goalMode,      setGoalMode]      = useState<GoalMode>('daily')
+  const [modeSupported, setModeSupported] = useState(true)   // false until migration 115 is applied
+  const [goalDrafts,    setGoalDrafts]    = useState<Record<string, Record<string, string>>>({})
+  const [goalSavingKey, setGoalSavingKey] = useState<string | null>(null)
+  /** Pair keys with a live schedule. */
   const [scheduledPairs, setScheduledPairs] = useState<Set<string>>(new Set())
+  const [confirmLeaveSchedule, setConfirmLeaveSchedule] = useState<GoalMode | null>(null)
+
+  const [overview,      setOverview]      = useState<OverviewLanguage[]>([])
+  const [liveSchedules, setLiveSchedules] = useState<GoalSchedule[]>([])
+  const [overviewBusy,  setOverviewBusy]  = useState(false)
+  /** Bumped after a bulk edit so the per-language editors remount and reload from the server. */
+  const [editorEpoch,   setEditorEpoch]   = useState(0)
 
   const [carryShortfall,   setCarryShortfall]   = useState(false)
   const [carrySurplus,     setCarrySurplus]     = useState(false)
@@ -68,6 +83,12 @@ export default function GoalsPage() {
   const [skipSurplusDays,   setSkipSurplusDays]   = useState<string[]>([])
   const [saved,             setSaved]             = useState(false)
 
+  const colorByCode = useMemo(
+    () => assignLanguageColors(langPairs.map(p => p.sourceLanguage), langColors),
+    [langPairs, langColors],
+  )
+
+  // ── Load ──
   useEffect(() => {
     ;(async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -75,21 +96,28 @@ export default function GoalsPage() {
       const uid = session.user.id
       setUserId(uid)
 
-      const [profileRes, pairs, scheduleKeys] = await Promise.all([
-        supabase.from('profiles')
-          .select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days')
-          .eq('user_id', uid).maybeSingle(),
+      // `goal_mode` arrives with migration 115. Selecting a column that doesn't exist yet errors the
+      // WHOLE query and would silently reset the timezone and every carryover flag to its default —
+      // the landmine documented in CLAUDE.md. So: try the full select, fall back to the core one.
+      let profileRes = await supabase.from('profiles').select(`${PROFILE_CORE}, goal_mode`).eq('user_id', uid).maybeSingle()
+      if (profileRes.error) {
+        setModeSupported(false)
+        profileRes = await supabase.from('profiles').select(PROFILE_CORE).eq('user_id', uid).maybeSingle()
+      }
+      const profile = profileRes.data as Record<string, unknown> | null
+
+      const [pairs, scheduleRows] = await Promise.all([
         new SupabaseLanguagePairRepository().list(uid),
-        // A missing goal_schedules table (migration 114 not yet run) must not blank the page — the
-        // weekday editors below work perfectly well without it.
-        new SupabaseGoalScheduleRepository().listActive(uid)
-          .then(rows => rows.map(s => `${s.sourceLanguage}|${s.targetLanguage}`))
-          .catch(() => [] as string[]),
+        // A missing goal_schedules table (migration 114 not run) must not blank the page — the
+        // weekday editors work perfectly well without it.
+        new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[]),
       ])
 
-      const profile = profileRes.data
-      setTimezone((profile?.timezone as string | null) ?? detectBrowserTimezone())
-      setTurnoverHour((profile?.day_turnover_hour as number | null) ?? 0)
+      const tz = (profile?.timezone as string | null) ?? detectBrowserTimezone()
+      const turnover = (profile?.day_turnover_hour as number | null) ?? 0
+      setTimezone(tz)
+      setTurnoverHour(turnover)
+      setLangColors((profile?.language_colors as Record<string, string> | null) ?? {})
       setCarryShortfall((profile?.goal_carry_shortfall as boolean | null) ?? false)
       setCarrySurplus((profile?.goal_carry_surplus as boolean | null) ?? false)
       setFullDebt((profile?.goal_full_debt as boolean | null) ?? false)
@@ -98,12 +126,16 @@ export default function GoalsPage() {
       setSkipShortfallDays((profile?.full_debt_skip_shortfall_days as string[] | null) ?? [])
       setSkipSurplusDays((profile?.full_debt_skip_surplus_days as string[] | null) ?? [])
 
-      const scheduled = new Set(scheduleKeys)
+      const scheduled = new Set(scheduleRows.map(s => `${s.sourceLanguage}|${s.targetLanguage}`))
       setScheduledPairs(scheduled)
       setLangPairs(pairs)
 
+      // A live schedule means the learner IS in schedule mode, whatever the column says — that's the
+      // thing actually driving their goals. Otherwise trust the stored mode.
+      const stored = (profile?.goal_mode as GoalMode | null) ?? null
+      setGoalMode(scheduled.size > 0 ? 'schedule' : (stored ?? 'daily'))
+
       const drafts: Record<string, Record<string, string>> = {}
-      const modes: Record<string, GoalMode> = {}
       for (const pair of pairs) {
         const key = `${pair.sourceLanguage}|${pair.targetLanguage}`
         drafts[key] = {}
@@ -111,16 +143,110 @@ export default function GoalsPage() {
           const val = pair.goals?.[String(d)]
           drafts[key][String(d)] = typeof val === 'number' ? String(val) : ''
         }
-        // Default to "daily" when every weekday holds the same value, else "weekday" — unless a live
-        // schedule owns the pair, in which case showing weekday boxes would be a lie.
-        const vals = [0, 1, 2, 3, 4, 5, 6].map(d => drafts[key]![String(d)])
-        modes[key] = scheduled.has(key) ? 'schedule' : (vals.every(v => v === vals[0]) ? 'daily' : 'weekday')
       }
       setGoalDrafts(drafts)
-      setGoalModes(modes)
       setLoading(false)
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Rebuilds the combined overview from the SAVED schedules. Past days use the plan as ASSIGNED
+   * (`assignedPlan`), future days the live re-spread plan — the same split the per-language calendar
+   * makes, and for the same reason: a past day's target is a historical record.
+   */
+  const refreshOverview = useCallback(async () => {
+    if (!userId || langPairs.length === 0) return
+    setOverviewBusy(true)
+    try {
+      const schedules = await new SupabaseGoalScheduleRepository().listActive(userId).catch(() => [] as GoalSchedule[])
+      setScheduledPairs(new Set(schedules.map(s => `${s.sourceLanguage}|${s.targetLanguage}`)))
+      setLiveSchedules(schedules)
+      if (schedules.length === 0) { setOverview([]); return }
+
+      const tz = timezone || deviceTimeZone()
+      const today = getToday(tz, turnoverHour)
+      const done = await progressForSchedules({ userId, schedules, timezone: tz, turnoverHour })
+        .catch(() => new Map<string, number>())
+
+      setOverview(schedules.map(s => {
+        const key = `${s.sourceLanguage}|${s.targetLanguage}`
+        const plan = new Map<string, number>()
+        for (const [date, words] of assignedPlan(s)) if (date < today) plan.set(date, words)
+        for (const day of schedulePlan(s, today, done.get(key) ?? 0)) plan.set(day.date, day.words)
+        const pair = langPairs.find(p => `${p.sourceLanguage}|${p.targetLanguage}` === key)
+        return {
+          key,
+          label: pair ? pairLabel(pair) : `${langName(s.sourceLanguage)} → ${langName(s.targetLanguage)}`,
+          color: colorByCode[s.sourceLanguage] ?? '#888888',
+          plan,
+          startDate: s.startDate,
+          deadline: s.deadline,
+        }
+      }))
+    } finally { setOverviewBusy(false) }
+  }, [userId, langPairs, timezone, turnoverHour, colorByCode])
+
+  useEffect(() => {
+    if (goalMode === 'schedule') void refreshOverview()
+  }, [goalMode, refreshOverview])
+
+  /**
+   * Applies a change to EVERY live schedule. Each schedule still owns its own days — this just spares
+   * you setting the same "I'm away" or "never on Sundays" on each one by hand, which is the whole
+   * point of having a combined view.
+   */
+  const bulkUpdate = useCallback(async (mutate: (s: GoalSchedule) => GoalSchedule) => {
+    if (!userId) return
+    setOverviewBusy(true)
+    try {
+      const repo = new SupabaseGoalScheduleRepository()
+      const live = await repo.listActive(userId).catch(() => [] as GoalSchedule[])
+      for (const s of live) {
+        const next = mutate(s)
+        await repo.save(userId, {
+          sourceLanguage: next.sourceLanguage, targetLanguage: next.targetLanguage,
+          name: next.name, targetKind: next.targetKind, targetCount: next.targetCount,
+          startDate: next.startDate, deadline: next.deadline, baselineCount: next.baselineCount,
+          dailyCeiling: next.dailyCeiling, weekdayLimits: next.weekdayLimits,
+          dateExceptions: next.dateExceptions, checkpoints: next.checkpoints,
+        }).catch(() => {})
+      }
+    } finally { setOverviewBusy(false) }
+    await refreshOverview()
+    setEditorEpoch(e => e + 1)   // remount the editors so they pick the change up
+  }, [userId, refreshOverview])
+
+  const bulkDateCaps = useCallback((dates: string[], cap: number | null) => {
+    void bulkUpdate(s => {
+      const next = { ...(s.dateExceptions ?? {}) }
+      for (const d of dates) {
+        // Only touch days the schedule actually covers; a shared range can span schedules that
+        // start later or end sooner, and writing outside the span would be dead data.
+        if (d < s.startDate || d > s.deadline) continue
+        if (cap == null) delete next[d]
+        else next[d] = Math.max(0, cap)
+      }
+      return { ...s, dateExceptions: Object.keys(next).length ? next : null }
+    })
+  }, [bulkUpdate])
+
+  const bulkWeekdayOff = useCallback((weekday: number, off: boolean) => {
+    void bulkUpdate(s => {
+      const next = { ...(s.weekdayLimits ?? {}) }
+      // Turning a rest day back ON clears the entry entirely rather than writing a number — the day
+      // should return to following the ceiling, not to some value this control invented.
+      if (off) next[String(weekday)] = 0
+      else delete next[String(weekday)]
+      return { ...s, weekdayLimits: Object.keys(next).length ? next : null }
+    })
+  }, [bulkUpdate])
+
+  /** Weekdays set to 0 on EVERY live schedule — the only ones that read as a global rest day. */
+  const restDays = useMemo(() => {
+    if (overview.length === 0) return []
+    return [0, 1, 2, 3, 4, 5, 6].filter(d => liveSchedules.length > 0
+      && liveSchedules.every(s => s.weekdayLimits?.[String(d)] === 0))
+  }, [overview, liveSchedules])
 
   const handleGoalBlur = useCallback(async (
     sourceLanguage: string,
@@ -138,6 +264,52 @@ export default function GoalsPage() {
     try { await new SupabaseLanguagePairRepository().updateGoals(sourceLanguage, targetLanguage, goals) }
     finally { setGoalSavingKey(null) }
   }, [goalDrafts])
+
+  /** Persists the global mode. Silently a no-op until migration 115 is applied. */
+  const persistMode = useCallback(async (mode: GoalMode) => {
+    if (!userId || !modeSupported) return
+    await supabase.from('profiles').update({ goal_mode: mode }).eq('user_id', userId).then(() => {}, () => {})
+  }, [userId, modeSupported]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
+   * Switching to Daily collapses every language's seven weekday numbers to one value, so the two
+   * fixed modes stay consistent rather than the collapse being a per-language surprise.
+   */
+  async function applyMode(next: GoalMode) {
+    if (next === goalMode) return
+    // Leaving Schedule while schedules are live would leave them driving the goals invisibly.
+    if (goalMode === 'schedule' && next !== 'schedule' && scheduledPairs.size > 0) {
+      setConfirmLeaveSchedule(next)
+      return
+    }
+    setGoalMode(next)
+    void persistMode(next)
+    if (next === 'daily') {
+      for (const pair of langPairs) {
+        const key = `${pair.sourceLanguage}|${pair.targetLanguage}`
+        const common = goalDrafts[key]?.['0'] ?? ''
+        const collapsed: Record<string, string> = {}
+        for (let d = 0; d <= 6; d++) collapsed[String(d)] = common
+        setGoalDrafts(prev => ({ ...prev, [key]: collapsed }))
+        await handleGoalBlur(pair.sourceLanguage, pair.targetLanguage, collapsed)
+      }
+    }
+  }
+
+  /** Retires every live schedule, then completes the mode switch that triggered the prompt. */
+  async function retireAllAndSwitch() {
+    const next = confirmLeaveSchedule
+    if (!next || !userId) return
+    const repo = new SupabaseGoalScheduleRepository()
+    const live = await repo.listActive(userId).catch(() => [] as GoalSchedule[])
+    for (const s of live) await repo.archive(s.id).catch(() => {})
+    setScheduledPairs(new Set())
+    setOverview([])
+    setLiveSchedules([])
+    setConfirmLeaveSchedule(null)
+    setGoalMode(next)
+    void persistMode(next)
+  }
 
   /**
    * Writes ONLY the carryover fields. A targeted update rather than the omnibus profile save the
@@ -167,7 +339,6 @@ export default function GoalsPage() {
   if (loading) return <p className="p-6 text-sm text-ink-faint">Loading…</p>
 
   const todayStr = getToday(timezone || deviceTimeZone(), turnoverHour)
-  const fixedPairs = langPairs.filter(p => goalModes[`${p.sourceLanguage}|${p.targetLanguage}`] !== 'schedule')
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-5">
@@ -175,13 +346,53 @@ export default function GoalsPage() {
         <a href="/settings/language" className="inline-block text-xs text-ink-faint hover:text-ink">
           ← Language configuration
         </a>
-        <h1 className="text-2xl font-semibold text-ink mt-3">Daily goals</h1>
+
+        {/* Mode toggle — at the very top, and it applies to every language at once. */}
+        <div className="flex w-fit rounded-lg border border-line/10 p-0.5 text-sm mt-3 mb-3">
+          {(['daily', 'weekday', 'schedule'] as GoalMode[]).map(m => (
+            <button key={m} onClick={() => void applyMode(m)}
+              className={`px-4 py-1.5 rounded-md transition-colors ${goalMode === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}>
+              {m === 'daily' ? 'Daily' : m === 'weekday' ? 'Per weekday' : 'Schedule'}
+            </button>
+          ))}
+        </div>
+
+        <h1 className="text-2xl font-semibold text-ink">Daily goals</h1>
         <p className="text-sm text-ink-muted mt-1">
-          How many words you aim to graduate, per language. Set a <span className="text-ink">fixed</span> number
-          that repeats — every day or per weekday — or an <span className="text-ink">adaptive schedule</span> that
-          works backwards from a deadline and recalculates the daily number as you go.
+          {goalMode === 'schedule'
+            ? 'Every language works backwards from its own deadline. The daily number is recalculated each morning from the words still to go, so missing a day nudges the rest of the schedule up instead of piling onto tomorrow.'
+            : goalMode === 'daily'
+              ? 'One target every day, per language.'
+              : 'A different target for each day of the week, per language.'}
         </p>
+        {!modeSupported && (
+          <p className="text-xs text-warning mt-1">
+            Migration 115 hasn&apos;t been applied, so this choice won&apos;t be remembered between visits.
+          </p>
+        )}
       </div>
+
+      {/* Leaving schedule mode — never silently, since a live schedule would keep setting goals. */}
+      {confirmLeaveSchedule && (
+        <div className="panel space-y-2 border-danger/40">
+          <p className="text-sm text-ink">
+            {`${scheduledPairs.size} language${scheduledPairs.size === 1 ? ' has a' : 's have'} live schedule${scheduledPairs.size === 1 ? '' : 's'}.`}
+          </p>
+          <p className="text-xs text-ink-faint">
+            A schedule overrides weekday goals wherever it exists, so switching modes without retiring
+            them would leave them setting your daily number from behind this page. Retiring keeps the
+            schedule on record — you just have to set it up again to resume.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button className="btn-primary text-sm py-1.5 px-4" onClick={() => void retireAllAndSwitch()}>
+              Retire them and switch
+            </button>
+            <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => setConfirmLeaveSchedule(null)}>
+              Stay on schedules
+            </button>
+          </div>
+        </div>
+      )}
 
       {langPairs.length === 0 && (
         <p className="panel text-sm text-ink-faint">
@@ -189,71 +400,57 @@ export default function GoalsPage() {
         </p>
       )}
 
-      {/* ── One panel per language, full width so a schedule has room ── */}
+      {/* ── Schedule mode: the combined calendar first, then each language's own editor ── */}
+      {goalMode === 'schedule' && langPairs.length > 0 && (
+        <div className="panel space-y-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">All languages</h2>
+            {overviewBusy && <span className="text-xs text-ink-faint">Updating…</span>}
+          </div>
+          <GoalScheduleOverview
+            languages={overview}
+            today={todayStr}
+            restDays={restDays}
+            onBulkDateCaps={bulkDateCaps}
+            onBulkWeekdayOff={bulkWeekdayOff}
+          />
+        </div>
+      )}
+
+      {/* ── One panel per language ── */}
       {langPairs.map(pair => {
         const pairKey = `${pair.sourceLanguage}|${pair.targetLanguage}`
         const drafts  = goalDrafts[pairKey] ?? {}
-        const mode    = goalModes[pairKey] ?? 'daily'
-        // daily -> collapse every weekday to one value and save. schedule -> only reveal the editor;
-        // nothing is written until it's saved, and the weekday goals stay stored underneath so
-        // retiring a schedule restores them.
-        const setMode = (next: GoalMode) => {
-          setGoalModes(prev => ({ ...prev, [pairKey]: next }))
-          if (next === 'daily') {
-            const common = drafts['0'] ?? ''
-            const collapsed: Record<string, string> = {}
-            for (let d = 0; d <= 6; d++) collapsed[String(d)] = common
-            setGoalDrafts(prev => ({ ...prev, [pairKey]: collapsed }))
-            void handleGoalBlur(pair.sourceLanguage, pair.targetLanguage, collapsed)
-          }
-        }
+        const color   = colorByCode[pair.sourceLanguage] ?? '#888888'
 
         return (
           <div key={pairKey} className="panel space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h2 className="text-base font-medium text-ink">{pairLabel(pair)}</h2>
-                <p className="text-xs text-ink-faint mt-0.5">
-                  {mode === 'schedule'
-                    ? (scheduledPairs.has(pairKey)
-                        ? 'Adaptive — the daily number comes from the deadline below.'
-                        : 'Adaptive — nothing is active until you start a schedule below.')
-                    : mode === 'daily'
-                      ? 'Fixed — the same target every day.'
-                      : 'Fixed — a different target for each weekday.'}
-                </p>
-              </div>
+              <h2 className="text-base font-medium text-ink flex items-center gap-2">
+                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: color }} />
+                {pairLabel(pair)}
+              </h2>
               <div className="flex items-center gap-2">
                 {goalSavingKey === pairKey && <span className="text-xs text-ink-faint">Saving…</span>}
-                <div className="flex rounded-lg border border-line/10 p-0.5 text-sm">
-                  {(['daily', 'weekday', 'schedule'] as const).map(m => (
-                    <button
-                      key={m}
-                      onClick={() => setMode(m)}
-                      className={`px-3 py-1 rounded-md transition-colors ${mode === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}
-                    >
-                      {m === 'daily' ? 'Daily' : m === 'weekday' ? 'Per weekday' : 'Schedule'}
-                    </button>
-                  ))}
-                </div>
+                {goalMode === 'schedule' && !scheduledPairs.has(pairKey) && (
+                  <span className="text-xs text-ink-faint">No schedule yet</span>
+                )}
               </div>
             </div>
 
-            {mode === 'schedule' ? (
+            {goalMode === 'schedule' ? (
               <GoalScheduleEditor
+                key={`${pairKey}:${editorEpoch}`}
                 userId={userId}
                 sourceLanguage={pair.sourceLanguage}
                 targetLanguage={pair.targetLanguage}
                 label={pairLabel(pair)}
+                color={color}
                 timezone={timezone || deviceTimeZone()}
                 turnoverHour={turnoverHour}
-                onChanged={(has) => setScheduledPairs(prev => {
-                  const next = new Set(prev)
-                  if (has) next.add(pairKey); else next.delete(pairKey)
-                  return next
-                })}
+                onChanged={() => void refreshOverview()}
               />
-            ) : mode === 'daily' ? (
+            ) : goalMode === 'daily' ? (
               <div className="flex items-center gap-2">
                 <span className="text-xs text-ink-faint select-none">Every day</span>
                 <input
@@ -297,24 +494,18 @@ export default function GoalsPage() {
         )
       })}
 
-      {/* ── Carryover — fixed-goal languages only ──
-          Adjusts the goal NUMBER only; it never raises how many new cards you're served. */}
-      {langPairs.length > 0 && (
+      {/* ── Carryover — fixed-goal modes only ──
+          Adjusts the goal NUMBER only; it never raises how many new cards you're served. A schedule
+          derives its own catch-up, so none of this applies in schedule mode. */}
+      {langPairs.length > 0 && goalMode !== 'schedule' && (
         <div className="panel space-y-4">
           <div>
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Carryover</h2>
             <p className="text-xs text-ink-faint mt-1">
-              What happens when you miss a fixed goal, or beat it. Adjusts the target number only — it
-              never changes how many new cards you&apos;re served.
+              What happens when you miss a goal, or beat it. Adjusts the target number only — it never
+              changes how many new cards you&apos;re served.
             </p>
           </div>
-
-          {scheduledPairs.size > 0 && (
-            <p className="text-xs text-ink-faint">
-              {`Doesn't apply to ${[...scheduledPairs].map(k => langName(k.split('|')[0] ?? '')).join(', ')} — a schedule already spreads whatever you miss across the days it has left.`}
-              {fixedPairs.length === 0 && ' Every language is on a schedule right now, so nothing here is in use.'}
-            </p>
-          )}
 
           <div className="space-y-3">
             <div className="space-y-1">
