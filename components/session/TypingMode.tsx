@@ -531,7 +531,10 @@ export function TypingMode({
               <button
                 onClick={() => setResetConfirm(true)}
                 title="Reset card to learning pipeline"
-                className="absolute top-3 left-3 text-xs text-ink-faint hover:text-ink-muted transition-colors leading-none w-5 h-5 flex items-center justify-center rounded-full border border-line/10 hover:border-line/20"
+                // Sits BESIDE the star, not under it: `StarButton` is also `top-3 left-3 w-5 h-5`
+                // and carries z-10, so sharing the corner buried this button and made it
+                // unclickable. It keeps the corner when there's no star to move over for.
+                className={`absolute top-3 ${onToggleStar ? 'left-10' : 'left-3'} text-xs text-ink-faint hover:text-ink-muted transition-colors leading-none w-5 h-5 flex items-center justify-center rounded-full border border-line/10 hover:border-line/20`}
               >
                 ↺
               </button>
