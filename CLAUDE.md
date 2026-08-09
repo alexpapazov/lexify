@@ -2575,6 +2575,13 @@ fallback (the not-yet-migrated-profile-column landmine). Schedule mode leads wit
 language in its `assignLanguageColors` colour, hover for exact percentages; dragging there marks time
 off across EVERY schedule, and rest-day chips set a weekday to 0 on all of them.
 
+**Goal progress panel (Analytics → Present)** — a card per live schedule: progress bar, words learned
+SINCE the schedule started, still to go, today's number, calendar days left (study days called out
+when days off make them differ), pace, next checkpoint. `learnedSince` differs by kind on purpose:
+`new_words` progress IS `doneSoFar`, `total_words` is `doneSoFar − baselineCount` — showing the raw
+total there would credit you for words you already knew. Sits below Today's goals and answers a
+different question ("is this on track" vs "what do I owe now"), the same split the two goal lists have.
+
 **Daily Goals is its own page now: `/settings/goals`** (linked from Language configuration, same
 pattern as `/settings/ladders`). It owns the mode toggle, the schedule editor, the **drag-select
 calendar** (`GoalScheduleCalendar` — drag days to mark time off or cap them, click one to add a

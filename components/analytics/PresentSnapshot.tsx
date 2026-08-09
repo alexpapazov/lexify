@@ -29,7 +29,7 @@ import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProd
 import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding, effectiveDebtSince } from '@/lib/goalCarryover'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { scheduleStatus } from '@/lib/goalSchedule'
+import { scheduleStatus, daysBetween } from '@/lib/goalSchedule'
 import { shareDayAcrossLanguages } from '@/lib/dailyCeiling'
 import type { GoalSchedule } from '@/domain'
 import { AccuracyTrend } from './AccuracyTrend'
@@ -106,6 +106,22 @@ function pace(
   return any && any > 0 ? any : DEFAULT_DUE_MS
 }
 
+const shortDate = (d: string) =>
+  new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+
+function Metric({ label, value, hint, tone = 'muted' }: {
+  label: string; value: string; hint: string; tone?: 'muted' | 'success' | 'danger'
+}) {
+  const color = tone === 'success' ? 'text-success' : tone === 'danger' ? 'text-danger' : 'text-ink'
+  return (
+    <div>
+      <div className="text-[10px] text-ink-faint uppercase tracking-wider">{label}</div>
+      <div className={`text-base font-medium ${color}`}>{value}</div>
+      <div className="text-[10px] text-ink-faint">{hint}</div>
+    </div>
+  )
+}
+
 function fmtDuration(ms: number): string {
   if (ms <= 0) return '—'
   const totalMin = Math.round(ms / 60000)
@@ -113,6 +129,42 @@ function fmtDuration(ms: number): string {
   const h = Math.floor(totalMin / 60), m = totalMin % 60
   if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`
   return `${m} min`
+}
+
+/**
+ * One live schedule's standing, for the "Goal progress" panel. Everything here is DERIVED from
+ * `scheduleStatus` + the schedule row — nothing is stored, so it can't drift from what the study
+ * dashboard shows tomorrow.
+ */
+interface ScheduleGoalRow {
+  key: string
+  label: string
+  /** The learner's own name for it ("Exam prep"), or null. */
+  name: string | null
+  /** Null for a pattern schedule — no finish line, so most of the columns below don't apply. */
+  target: number | null
+  /** Words the measure had when the schedule started; 0 for a `new_words` goal. */
+  baseline: number
+  /** Words earned SINCE the schedule began — the honest "what have I done about this" number. */
+  learnedSince: number
+  /** Size of the job: `target − baseline`. */
+  span: number
+  remaining: number
+  todayGoal: number
+  /** Days that actually carry words (days off excluded). */
+  studyDaysLeft: number
+  /** Plain calendar days to the deadline, which is what a person counts. */
+  calendarDaysLeft: number | null
+  startDate: string
+  deadline: string | null
+  pace: number
+  feasible: boolean
+  shortfall: number
+  done: boolean
+  expired: boolean
+  isPattern: boolean
+  /** The soonest checkpoint still ahead, if any. */
+  nextCheckpoint: { date: string; target: number; remaining: number } | null
 }
 
 interface Data {
@@ -123,6 +175,8 @@ interface Data {
   standings: { key: string; label: string; standing: number }[]
   /** The date full debt was switched on, for the standing panel's subtitle. */
   fullDebtSince: string | null
+  /** Live deadline-driven goals. Empty when no language is on a schedule. */
+  scheduleGoals: ScheduleGoalRow[]
   timeTodayMs: number
   projDueMs: number
   projNewMs: number
@@ -534,8 +588,50 @@ export function PresentSnapshot() {
           })
         }
 
+        // ── Goal progress: one row per live schedule ──
+        const scheduleGoals: ScheduleGoalRow[] = activeSchedules.flatMap(sc => {
+          const key = `${sc.sourceLanguage}|${sc.targetLanguage}`
+          const st = statusFor(key)
+          if (!st) return []
+          const doneSoFar = scheduleDone.get(key) ?? 0
+          // `new_words` counts only what happened during the schedule, so its progress IS doneSoFar.
+          // `total_words` counts the whole vocabulary, so the work done is what's above the baseline.
+          const learnedSince = sc.targetKind === 'total_words'
+            ? Math.max(0, doneSoFar - sc.baselineCount)
+            : doneSoFar
+          const pair = pairs.find((p: LanguagePair) =>
+            p.sourceLanguage === sc.sourceLanguage && p.targetLanguage === sc.targetLanguage)
+          const next = st.segments.find(seg => !seg.isDeadline) ?? null
+          return [{
+            key,
+            label: pair ? `${langName(pair.sourceLanguage)} → ${langName(pair.targetLanguage)}`
+                        : `${langName(sc.sourceLanguage)} → ${langName(sc.targetLanguage)}`,
+            name: sc.name,
+            target: sc.targetCount,
+            baseline: sc.baselineCount,
+            learnedSince,
+            span: Math.max(0, (sc.targetCount ?? 0) - sc.baselineCount),
+            remaining: st.remaining,
+            todayGoal: st.goal,
+            studyDaysLeft: st.daysLeft,
+            // Inclusive of today, and 0 once the deadline has passed — `daysBetween` floors at 0.
+            calendarDaysLeft: sc.deadline ? daysBetween(today, sc.deadline) : null,
+            startDate: sc.startDate,
+            deadline: sc.deadline,
+            pace: st.pace,
+            feasible: st.feasible,
+            shortfall: st.shortfall,
+            done: st.done,
+            expired: st.expired,
+            isPattern: st.isPattern,
+            nextCheckpoint: next
+              ? { date: next.date, target: next.target, remaining: next.remaining }
+              : null,
+          }]
+        })
+
         if (!cancelled) setData({
-          lists, counts, goals, standings, fullDebtSince,
+          lists, counts, goals, standings, fullDebtSince, scheduleGoals,
           timeTodayMs: ladderTodayMs + dueTodayMs,
           projDueMs,
           projNewMs,
@@ -671,6 +767,103 @@ export function PresentSnapshot() {
                 <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">
                   <div className={`h-full rounded-full transition-all duration-500 ${done ? 'bg-success' : 'bg-accent'}`} style={{ width: `${pct}%` }} />
                 </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* 3. Goal progress — one card per live schedule. "Today's goals" above answers what you owe
+             right now; this answers whether the whole thing is on track: what you've done since you
+             set it, what's left, and how long there is to do it in. */}
+      {data.scheduleGoals.length > 0 && (
+        <div className="panel space-y-4">
+          <div>
+            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Goal progress</h2>
+            <p className="text-xs text-ink-faint mt-1">
+              Deadline-driven goals. Everything here is recalculated from what you&apos;ve actually
+              done — nothing is banked, so getting ahead lightens the days that are left.
+            </p>
+          </div>
+
+          {data.scheduleGoals.map(g => {
+            const pct = g.span > 0 ? Math.min(100, Math.round((g.learnedSince / g.span) * 100)) : 0
+            const tone = g.done ? 'bg-success' : !g.feasible ? 'bg-danger' : 'bg-accent'
+            return (
+              <div key={g.key} className="space-y-2 pt-3 first:pt-0 border-t first:border-t-0 border-line/10">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-sm text-ink">
+                    {g.label}
+                    {g.name && <span className="text-ink-faint"> · {g.name}</span>}
+                  </span>
+                  <span className="text-xs text-ink-faint">
+                    {g.isPattern
+                      ? `${g.todayGoal} a day, open-ended`
+                      : g.done ? 'Target reached ✓'
+                      : g.expired ? `Deadline passed ${shortDate(g.deadline!)}`
+                      : `by ${shortDate(g.deadline!)}`}
+                  </span>
+                </div>
+
+                {!g.isPattern && (
+                  <>
+                    <div className="flex items-baseline justify-between gap-2 text-xs">
+                      <span className="text-ink-muted">
+                        {`${g.learnedSince} of ${g.span} words`}
+                        {g.target != null && g.baseline > 0 && (
+                          <span className="text-ink-faint">{` · ${g.baseline} → ${g.target} total`}</span>
+                        )}
+                      </span>
+                      <span className={g.done ? 'text-success' : 'text-ink-muted'}>{pct}%</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-line/10 overflow-hidden">
+                      <div className={`h-full rounded-full transition-all duration-500 ${tone}`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </>
+                )}
+
+                <div className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
+                  <Metric label="Learned since" value={`${g.learnedSince}`} hint={`from ${shortDate(g.startDate)}`} />
+                  {!g.isPattern && (
+                    <Metric label="Still to go" value={`${g.remaining}`} hint="words" />
+                  )}
+                  <Metric label="Today" value={g.done ? '—' : `${g.todayGoal}`} hint="words" />
+                  {g.calendarDaysLeft != null && (
+                    <Metric
+                      label="Days left"
+                      value={`${g.calendarDaysLeft}`}
+                      // Study days differ from calendar days whenever there are days off, and that
+                      // gap is exactly what makes a deadline tighter than it looks.
+                      hint={g.studyDaysLeft !== g.calendarDaysLeft ? `${g.studyDaysLeft} of them study days` : 'calendar days'}
+                    />
+                  )}
+                  {!g.isPattern && (
+                    <Metric
+                      label="Pace"
+                      value={g.pace === 0 ? 'Level' : g.pace > 0 ? `+${g.pace}` : `${g.pace}`}
+                      hint={g.pace === 0 ? 'on track' : g.pace > 0 ? 'words ahead' : 'words behind'}
+                      tone={g.pace < 0 ? 'danger' : g.pace > 0 ? 'success' : 'muted'}
+                    />
+                  )}
+                  {g.nextCheckpoint && (
+                    <Metric
+                      label="Next checkpoint"
+                      value={`${g.nextCheckpoint.remaining}`}
+                      hint={`more by ${shortDate(g.nextCheckpoint.date)}`}
+                    />
+                  )}
+                </div>
+
+                {!g.feasible && !g.done && (
+                  <p className="text-xs text-danger">
+                    {`${g.shortfall} word${g.shortfall === 1 ? '' : 's'} more than the days left can hold. Raise the daily limit, push the deadline back, or lower the target in Settings → Daily goals.`}
+                  </p>
+                )}
+                {g.expired && !g.done && (
+                  <p className="text-xs text-warning">
+                    {`The deadline passed with ${g.remaining} to go. Retire or re-date it in Settings → Daily goals.`}
+                  </p>
+                )}
               </div>
             )
           })}

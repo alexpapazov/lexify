@@ -318,10 +318,30 @@ through to the old carryover behaviour instead of blanking a page.
 does: skip today and the remaining days absorb it. `goal_deferrals` only feeds `owedGoalForDate`, so
 the button would have been a no-op.
 
+### Goal progress (Analytics → Present)
+
+A card per live schedule, below Today's goals. The two panels answer different questions on purpose,
+the same way the two goal lists already do: **Today's goals** is "what do I owe right now",
+**Goal progress** is "is the whole thing on track".
+
+Per schedule: a progress bar, **words learned since the schedule started**, still to go, today's
+number, days left (calendar, with study days called out separately whenever days off make them
+differ), pace, and the next checkpoint's remaining. Infeasible and expired schedules say so and point
+at Settings → Daily goals.
+
+`learnedSince` is measured differently per target kind and that distinction matters: `new_words`
+counts only what happened during the schedule, so its progress IS `doneSoFar`; `total_words` counts
+the whole vocabulary, so the work done is `doneSoFar − baselineCount`. Showing the raw total against
+a `total_words` goal would credit you for every word you already knew. A pattern schedule shows only
+what applies to it — words since the start, today's number — since it has no finish line to be a
+percentage of.
+
+Every value comes from `scheduleStatus` plus the schedule row; nothing is stored, so it cannot drift
+from what the study dashboard shows.
+
 ### Still unbuilt
 
-- A **checkpoint progress panel** on Analytics → Present (segments, per-segment feasibility). Today
-  only the binding checkpoint surfaces, via the editor preview and the goals list.
+- **Per-segment** checkpoint detail (each checkpoint's own feasibility). Only the binding one shows.
 - `listArchived` is written but nothing surfaces a **"past schedules" history**.
 - **Offline**: none. The editor and both progress readers are online-only.
 - A schedule spanning multiple decks of one pair is fine, but there is **no cross-language schedule**
