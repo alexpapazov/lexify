@@ -50,7 +50,7 @@ Current feature files:
   worth fixing independently of the agent.
 - `features/Goal Scheduler.md` — deadline-driven goals ("200 words by Dec 1"): the
   derived daily number, water-filled day limits, the drag-select calendar, checkpoints,
-  feasibility remedies. **Migration 114 PENDING; never run against a real account.**
+  feasibility remedies. **Never run against a real account.**
 
 ## ⚠️ Pending from 2026-06-15 session(s) — verify before relying on this
 
@@ -2500,7 +2500,7 @@ alter characters inside a JS template literal, so the whole class of bug disappe
 patched. To audit: grep for `}` followed by a space and a letter, then check whether that text node
 reaches a closing tag on the same line.
 
-## Goal Scheduler — deadline-driven goals (2026-08-08, migration 114 — PENDING)
+## Goal Scheduler — deadline-driven goals (2026-08-08, migration 114 — APPLIED)
 
 A fourth goal mode beside Daily / Per weekday, chosen per language in Settings → Daily Goals.
 Instead of "8 words a day" you say "200 new words by Dec 1" and the daily number is worked out.

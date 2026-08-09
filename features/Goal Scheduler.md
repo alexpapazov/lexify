@@ -1,7 +1,7 @@
 # Goal Scheduler
 
 **Status (2026-08-08): complete and wired.** Data model, engine, calendar editor, its own settings
-page, and all four goal consumers read it. Migration **114 is PENDING** — nothing works until it runs.
+page, and all four goal consumers read it. Migration **114 is applied**.
 **Never verified against a real account** (§7).
 
 A schedule answers the opposite question to a daily goal. `language_pairs.goals` says *"I want to do
@@ -144,7 +144,7 @@ its stored snapshot — re-reading it live would silently move the finish line.
 | `components/settings/GoalScheduleCalendar.tsx` | The calendar: drag-select days, time off, per-date caps, checkpoints |
 | `app/settings/goals/page.tsx` | **The whole Daily Goals page** — fixed goals, schedules, carryover |
 | `domain/index.ts` | `GoalSchedule`, `GoalScheduleCheckpoint`, `GoalTargetKind` |
-| `supabase/migrations/114_goal_schedules.sql` | **PENDING** |
+| `supabase/migrations/archive/114_goal_schedules.sql` | Applied 2026-08-08 |
 | `lib/data/goalSchedules.ts` | Repo + `scheduleProgress` / `progressForSchedules` / `currentVocabularySize` |
 
 **Entry point:** Settings → Language configuration → **Daily goals** → per language, the **Schedule**
@@ -230,7 +230,16 @@ caught during the build, kept because they're easy to reintroduce.)*
    of `scheduledPairs`, so saving a schedule twice removed it from the "these languages are on a
    schedule" note. The editor now reports the resulting state (`onChanged(hasSchedule)`) rather than
    the parent guessing. Applies to any "did this change" callback: report the state, not the event.
-3. **Rounding could push a day past a limit the user set explicitly.** `distributeIntegers` hands the
+3. **Drag-select did nothing on touch.** Touch and pen pointers are IMPLICITLY captured by the
+   element that received `pointerdown`, so `pointerenter` never fired on any other cell and a drag on
+   a phone selected only the day it started on. Fixed with `releasePointerCapture` for non-mouse
+   pointers. The release is also handled on `window`, not the cell, so a drag ending off-grid still
+   commits instead of silently vanishing.
+4. **The calendar was O(n²).** It called `plannedForDate` per past cell, and that function re-runs the
+   whole water-fill for the entire span every time — fine for 30 days, a visible freeze on a
+   multi-year schedule, on every keystroke. `assignedPlan(schedule)` now computes the map once;
+   `plannedForDate` delegates to it. **Anything rendering many dates must use `assignedPlan`.**
+5. **Rounding could push a day past a limit the user set explicitly.** `distributeIntegers` hands the
    largest-remainder deficit to the biggest fractional parts; without the cap check it would add a
    word to a day already at its ceiling. It now skips capped days.
 
@@ -238,14 +247,14 @@ caught during the build, kept because they're easy to reintroduce.)*
 
 ## 7. Verification status
 
-- `lib/goalSchedule.ts`: **52 unit tests, all green.** The whole model in §3 is covered, including
+- `lib/goalSchedule.ts`: **55 unit tests, all green.** The whole model in §3 is covered, including
   the re-spread behaviour, the water-fill-vs-proportional distinction, checkpoint binding, missed
   checkpoints, all three remedies, and the day-off pace property.
 - The calendar's date maths: **9 tests** (`lib/__tests__/goalScheduleCalendar.test.ts`) — month
   lengths, leap-year February, the year boundary, Monday-start padding. Hand-rolled calendars break
   exactly there, and none of it is visible in a screenshot of the current month.
-- `npm run build` + `npm test` green (51 suites / 792 tests), `tsc --noEmit` clean.
+- `npm run build` + `npm test` green (51 suites / 795 tests), `tsc --noEmit` clean.
 - **NOT verified against a real account — nothing here has ever been clicked.** The editor is behind
-  `AuthWall` and needs migration 114 applied. Unexercised: the save/update/retire round-trip, drag
+  `AuthWall`, so it could not be exercised here. Unexercised: the save/update/retire round-trip, drag
   selection on a real pointer/touch device, both progress queries, the live preview against real
   graduation data, and every one of the four consumer branches in §5.

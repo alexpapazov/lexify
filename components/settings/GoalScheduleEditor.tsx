@@ -105,7 +105,9 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
       try {
         const [existing, vocab] = await Promise.all([
           new SupabaseGoalScheduleRepository().getForPair(userId, sourceLanguage, targetLanguage),
-          currentVocabularySize(userId, sourceLanguage, targetLanguage),
+          // Only the 'total_words' baseline needs this; a failure must not take the editor down with
+          // it, so it degrades to 0 rather than rejecting the pair.
+          currentVocabularySize(userId, sourceLanguage, targetLanguage).catch(() => 0),
         ])
         if (cancelled) return
         setSaved(existing)

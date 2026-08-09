@@ -459,20 +459,29 @@ export function schedulePlan(schedule: GoalSchedule, today: string, doneSoFar: n
 }
 
 /**
- * The target a PAST date was assigned, computed from the schedule as it stood at the start.
+ * The whole plan as ASSIGNED at the start — every date in the schedule mapped to the target it was
+ * given, computed from the schedule as it stood when it was drawn up.
  *
- * Deliberately NOT the re-spread number that day actually showed: a past day's goal is a historical
+ * Deliberately NOT the re-spread numbers days actually showed: a past day's goal is a historical
  * record (the same reasoning `ReviewCalendar` already applies to weekday goals), and re-deriving it
- * from today's remaining would rewrite history every time you study. Cheap, deterministic, and
- * independent of what you've done since.
+ * from today's remaining would rewrite history every time you study. Deterministic and independent of
+ * progress.
+ *
+ * Callers rendering many dates at once (the calendar) MUST use this rather than looping
+ * `plannedForDate`: that recomputes the whole water-fill per date, which is O(n²) across a grid and
+ * visibly freezes a multi-year schedule on every keystroke.
  */
+export function assignedPlan(schedule: GoalSchedule): Map<string, number> {
+  const { dates, caps } = capacityWindow(schedule, schedule.startDate, schedule.deadline)
+  const { values } = waterFill(Math.max(0, schedule.targetCount - schedule.baselineCount), caps)
+  const whole = distributeIntegers(values, caps)
+  return new Map(dates.map((d, i) => [d, whole[i] ?? 0]))
+}
+
+/** One date's assigned target. For more than a couple of dates, use `assignedPlan` instead. */
 export function plannedForDate(schedule: GoalSchedule, date: string): number {
   if (date < schedule.startDate || date > schedule.deadline) return 0
-  const { dates, caps } = capacityWindow(schedule, schedule.startDate, schedule.deadline)
-  const i = dates.indexOf(date)
-  if (i < 0) return 0
-  const { values } = waterFill(Math.max(0, schedule.targetCount - schedule.baselineCount), caps)
-  return distributeIntegers(values, caps)[i] ?? 0
+  return assignedPlan(schedule).get(date) ?? 0
 }
 
 // ─── Validation ───────────────────────────────────────────────────────────────

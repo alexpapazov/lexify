@@ -4,10 +4,10 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 792 passing tests (51 suites).
+- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 795 passing tests (51 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`114`, applied BY HAND. **`114` is
-  PENDING at the top level — the Goal Scheduler does not work until it is run.**
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`114`, applied BY HAND — **all
+  applied, nothing pending.**
 
 ---
 
@@ -23,10 +23,9 @@ implementation notes + error log); this file is the map you read first.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
   `001`–`113` are all applied and all live in `supabase/migrations/archive/`. **An empty top level
   is the signal that nothing is pending** — put a new migration there, tell the user to run it, and
-  move it into `archive/` once it's live. **`114_goal_schedules.sql` is sitting there now and needs
-  running.** Next number = **115**.
+  move it into `archive/` once it's live. Next number = **115**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **51 suites / 792 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **51 suites / 795 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -154,7 +153,7 @@ Per-language, per-weekday goals (`language_pairs.goals`). Three escalating carry
 2. **Yesterday carryover** — two toggles: carry shortfall / carry surplus. Bounded to one day.
 3. **Full debt** — unbounded cumulative deficit since the enable date, with per-day waivers.
 
-**And a fourth, separate mode: the Goal Scheduler (2026-08-08, migration 114 — PENDING).** Set
+**And a fourth, separate mode: the Goal Scheduler (2026-08-08, migration 114).** Set
 "200 new words by Dec 1" and the daily number is DERIVED from what's left, re-spread every morning —
 miss a day and the rest of the schedule rises slightly rather than tomorrow spiking. Per-day limits,
 days off, a ceiling, checkpoints, and a feasibility check that names the three ways out when the
@@ -476,13 +475,14 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 
 ## 7. Where the 2026-08-08 session left off
 
-**Migrations 110–113 are applied. `114_goal_schedules.sql` is PENDING — run it first.** Practice
-Mode phases 0–5 shipped; the Goal Scheduler is complete and wired. Nothing is half-written.
+**Everything is committed, migrations 110–114 are applied, and the tree is clean.** Practice Mode
+phases 0–5 shipped; the Goal Scheduler is complete and wired. Nothing is half-written.
 
 **Pick up here — in this order:**
 
-0. **Run migration 114, then click through the Goal Scheduler.** It is code-complete and wired into
-   all four goal surfaces, but **has never executed against a real account** — see open thread 0.
+0. **Click through the Goal Scheduler.** Migration 114 is applied and it is wired into all four goal
+   surfaces, but **it has never executed against a real account** — see open thread 0 for what to
+   watch on the first run.
 
 1. **Phase 6: more exercise modes + their grading.** Translate
    target→native, native→target, and free production ("use this word in a sentence"). **STOP AND
@@ -515,9 +515,8 @@ Mode phases 0–5 shipped; the Goal Scheduler is complete and wired. Nothing is 
 Roughly in priority order. Nothing here is half-written — the tree is clean and every migration is
 applied, so any of these is a clean start.
 
-0. **The Goal Scheduler has never run against a real account** — it is behind auth and needs
-   migration 114. The engine is 52-test verified and the calendar's date maths 9-test verified, but
-   NOTHING has been clicked: the save/update/retire round-trip, drag-selection on a real
+0. **The Goal Scheduler has never run against a real account.** The engine is 55-test verified and
+   the calendar's date maths 9-test verified, but NOTHING has been clicked: the save/update/retire round-trip, drag-selection on a real
    pointer/touch device, both progress queries, and all four consumer branches are unexercised.
    First run to watch: set a short schedule, confirm the dashboard's "Today's goals" number matches
    the editor preview, then miss a day and check it goes UP slightly rather than doubling.

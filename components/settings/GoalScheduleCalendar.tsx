@@ -20,7 +20,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { plannedForDate, weekdayOfDate, addScheduleDays, eachDate, dayCapacity } from '@/lib/goalSchedule'
+import { assignedPlan, weekdayOfDate, addScheduleDays, eachDate, dayCapacity } from '@/lib/goalSchedule'
 import type { SchedulePlanDay } from '@/lib/goalSchedule'
 import type { GoalSchedule } from '@/domain'
 
@@ -71,26 +71,52 @@ export function GoalScheduleCalendar({ schedule, plan, today, onSetDateCaps, onS
   const [limitDraft, setLimitDraft] = useState('')
   const [checkpointDraft, setCheckpointDraft] = useState('')
   const dragging = useRef(false)
+  // The window-level release handler reads the drag through refs: it is registered once, so it would
+  // otherwise close over the anchor/hover from first render and always commit an empty range.
+  const anchorRef = useRef<string | null>(null)
+  const hoverRef = useRef<string | null>(null)
+  const boundsRef = useRef({ start: schedule.startDate, end: schedule.deadline })
+  boundsRef.current = { start: schedule.startDate, end: schedule.deadline }
 
-  // A drag can end anywhere — off the grid, outside the window — so the release is bound globally
-  // rather than to the cells. Without this a pointerup off-grid leaves the calendar stuck in drag.
+  /**
+   * A drag can end anywhere — on a different cell, off the grid, outside the window — so the release
+   * is handled globally and COMMITS there. Committing on the cell's own pointerup would silently drop
+   * any selection that ended outside the calendar.
+   */
   useEffect(() => {
-    const finish = () => {
+    const finish = (commit: boolean) => () => {
       if (!dragging.current) return
       dragging.current = false
+      const a = anchorRef.current
+      const b = hoverRef.current
+      if (commit && a && b) {
+        const [lo, hi] = a <= b ? [a, b] : [b, a]
+        const { start, end } = boundsRef.current
+        setSelection(eachDate(lo, hi).filter(d => d >= start && d <= end))
+        setLimitDraft('')
+        setCheckpointDraft('')
+      }
+      anchorRef.current = null
+      hoverRef.current = null
       setAnchor(null)
       setHover(null)
     }
-    window.addEventListener('pointerup', finish)
-    window.addEventListener('pointercancel', finish)
+    const onUp = finish(true)
+    const onCancel = finish(false)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
     return () => {
-      window.removeEventListener('pointerup', finish)
-      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
     }
   }, [])
 
   const months = useMemo(() => monthsBetween(schedule.startDate, schedule.deadline), [schedule.startDate, schedule.deadline])
   const planByDate = useMemo(() => new Map(plan.map(d => [d.date, d.words])), [plan])
+  // Past days show the target they were ASSIGNED. Computed ONCE for the whole span — calling
+  // `plannedForDate` per cell re-runs the water-fill per date, which is O(n²) across the grid and
+  // freezes a long schedule on every keystroke.
+  const assignedByDate = useMemo(() => assignedPlan(schedule), [schedule])
   const checkpointByDate = useMemo(
     () => new Map((schedule.checkpoints ?? []).map(c => [c.date, c.count])),
     [schedule.checkpoints],
@@ -110,6 +136,8 @@ export function GoalScheduleCalendar({ schedule, plan, today, onSetDateCaps, onS
   function beginDrag(date: string) {
     if (!inSchedule(date)) return
     dragging.current = true
+    anchorRef.current = date
+    hoverRef.current = date
     setAnchor(date)
     setHover(date)
     setSelection([])
@@ -117,15 +145,8 @@ export function GoalScheduleCalendar({ schedule, plan, today, onSetDateCaps, onS
 
   function extendDrag(date: string) {
     if (!dragging.current || !inSchedule(date)) return
+    hoverRef.current = date
     setHover(date)
-  }
-
-  function commitDrag() {
-    if (!anchor || !hover) return
-    const [a, b] = anchor <= hover ? [anchor, hover] : [hover, anchor]
-    setSelection(eachDate(a, b).filter(inSchedule))
-    setLimitDraft('')
-    setCheckpointDraft('')
   }
 
   function clearSelection() {
@@ -162,7 +183,7 @@ export function GoalScheduleCalendar({ schedule, plan, today, onSetDateCaps, onS
                 const within = inSchedule(date)
                 const cap = dayCapacity(schedule, date)
                 const hasOverride = schedule.dateExceptions?.[date] != null
-                const words = date >= today ? (planByDate.get(date) ?? 0) : plannedForDate(schedule, date)
+                const words = date >= today ? (planByDate.get(date) ?? 0) : (assignedByDate.get(date) ?? 0)
                 const isCheckpoint = checkpointByDate.has(date)
                 const isDeadline = date === schedule.deadline
                 const isToday = date === today
@@ -173,9 +194,16 @@ export function GoalScheduleCalendar({ schedule, plan, today, onSetDateCaps, onS
                     key={date}
                     type="button"
                     disabled={!within}
-                    onPointerDown={e => { e.preventDefault(); beginDrag(date) }}
+                    onPointerDown={e => {
+                      e.preventDefault()
+                      // Touch and pen pointers are IMPLICITLY captured by the element that received
+                      // pointerdown, so pointerenter would never fire on any other cell and a drag
+                      // on a phone would only ever select the day it started on. Releasing the
+                      // capture is what makes drag-select work off the desktop.
+                      if (e.pointerType !== 'mouse') e.currentTarget.releasePointerCapture(e.pointerId)
+                      beginDrag(date)
+                    }}
                     onPointerEnter={() => extendDrag(date)}
-                    onPointerUp={() => { if (dragging.current) commitDrag() }}
                     style={{ touchAction: 'none' }}
                     title={within
                       ? `${date}${cap === 0 ? ' — time off' : ` — ${words} word${words === 1 ? '' : 's'}`}${isCheckpoint ? ` · checkpoint ${checkpointByDate.get(date)}` : ''}`

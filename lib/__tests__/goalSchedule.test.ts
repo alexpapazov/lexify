@@ -1,7 +1,7 @@
 import {
   addScheduleDays, weekdayOfDate, daysBetween, eachDate, MAX_SCHEDULE_DAYS,
   dayCapacity, capacityWindow, waterFill, distributeIntegers, activeSegments,
-  scheduleStatus, schedulePace, scheduleRemedies, schedulePlan, plannedForDate, validateSchedule,
+  scheduleStatus, schedulePace, scheduleRemedies, schedulePlan, plannedForDate, assignedPlan, validateSchedule,
 } from '../goalSchedule'
 import type { GoalSchedule } from '@/domain'
 
@@ -367,6 +367,26 @@ describe('plannedForDate', () => {
     })
     expect(plannedForDate(s, '2026-09-12')).toBe(0)
     expect(plannedForDate(s, '2026-09-14')).toBe(5)
+  })
+})
+
+describe('assignedPlan', () => {
+  it('agrees with plannedForDate on every date', () => {
+    const s = makeSchedule({ dailyCeiling: 10, weekdayLimits: { '0': 0, '6': 0 }, checkpoints: [] })
+    const plan = assignedPlan(s)
+    for (const [date, words] of plan) expect(words).toBe(plannedForDate(s, date))
+  })
+
+  it('covers the whole span and sums to the target', () => {
+    const s = makeSchedule({ dailyCeiling: 10 })
+    const plan = assignedPlan(s)
+    expect(plan.size).toBe(20)
+    expect([...plan.values()].reduce((a, b) => a + b, 0)).toBe(100)
+  })
+
+  it('measures a total-words schedule from its baseline', () => {
+    const s = makeSchedule({ targetKind: 'total_words', targetCount: 1000, baselineCount: 900, dailyCeiling: 10 })
+    expect([...assignedPlan(s).values()].reduce((a, b) => a + b, 0)).toBe(100)
   })
 })
 
