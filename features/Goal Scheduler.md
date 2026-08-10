@@ -348,6 +348,26 @@ percentage of.
 Every value comes from `scheduleStatus` plus the schedule row; nothing is stored, so it cannot drift
 from what the study dashboard shows.
 
+### The Future forecast follows the goal system (Analytics → Future)
+
+`DueForecastProjection` used to feed new cards in at a flat `sum(weekday goals)/7` per day, forever —
+blind to schedules, deadlines, rest days and the combined ceiling. Now new-card intake is a **per-day
+series** built exactly as the goal surfaces build it: a target schedule contributes its re-spread plan
+and **nothing after its deadline**; a pattern schedule contributes its per-day capacity; weekday goals
+contribute each weekday's own number; `applyDailyCeiling` caps the cross-language sum. A schedule
+supersedes its pair's weekday goals here too.
+
+The math generalises cleanly: the old model was `load(t) = dailyGoal · cum(t)` (flat continuous
+intake); the new one is the superposition `load(d) = Σ_c intake[c] · reviews(d − c)`, which reduces to
+the old formula when intake is flat. It is computed by iterating each Monte-Carlo trajectory's review
+days (sparse — a few dozen per run) against cohort days, NOT by densifying to an O(HORIZON²)
+convolution.
+
+**Deadline markers**: each target schedule's deadline is a dashed vertical line in the language's
+colour, labelled with the goal name and date. They exist because a met deadline makes the projected
+load taper — without the marker that taper reads as a bug in the curve rather than a goal being
+reached. Markers respect the language filter; labels stagger to stay readable.
+
 ### Still unbuilt
 
 - **Per-segment** checkpoint detail (each checkpoint's own feasibility). Only the binding one shows.

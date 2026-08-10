@@ -9,6 +9,12 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { createClient } from '@/lib/supabase/client'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 import { monteCarloSteps, percentile, measureRatingModel, mixForReps, driftLabel, estimateInitialInterval, seedStability, seedDifficulty, DEFAULT_DIFFICULTY, stabilityForInterval, type RatingModel } from '@/lib/forecastFsrs'
+import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
+import { schedulePlan, dayCapacity, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
+import { deviceTimeZone } from '@/lib/offline/profilePrefs'
+import { getToday } from '@/lib/dates'
+import { applyDailyCeiling } from '@/lib/dailyCeiling'
+import type { GoalSchedule } from '@/domain'
 
 // Forward projection of daily "Due Now" load, split into Typed / Self-graded / Reverse / Total,
 // simulated on the live FSRS stability model by MONTE CARLO. Each card is played forward many times;
@@ -16,9 +22,15 @@ import { monteCarloSteps, percentile, measureRatingModel, mixForReps, driftLabel
 // and difficulty advance by the real engine, and the next interval is fuzzed like the live scheduler.
 // Averaging the runs gives an unbiased mean (the mean-field stepper under-counted load via Jensen's
 // inequality); the spread across runs gives a p10–p90 confidence band. Existing cards seed from their
-// own real difficulty/stability (accelerated cards modelled as-is); new cards from daily goals seed from
-// the per-language averages of NON-accelerated cards. New-card intake is capped at each language's
-// remaining unlearned cards (finite decks), so the long tail doesn't grow forever.
+// own real difficulty/stability (accelerated cards modelled as-is); new cards seed from the
+// per-language averages of NON-accelerated cards.
+//
+// NEW-CARD INTAKE FOLLOWS THE GOAL SYSTEM DAY BY DAY, not a flat average: a schedule contributes its
+// actual plan (re-spread from today's progress, days off included) and NOTHING after its deadline; a
+// pattern schedule contributes its per-day capacity; plain weekday goals contribute each weekday's own
+// number; and the combined daily ceiling caps the sum across languages. So when a deadline passes and
+// intake stops, the projected load visibly TAPERS — the dashed deadline markers on the chart are there
+// to say that's why.
 
 const HORIZON = 730          // 2 years
 const STEP = 14              // chart sampling / smoothing window (days)
@@ -38,19 +50,26 @@ interface PairCfg {
   typedCal: number; selfgCal: number; smartCal: number; reverseCal: number
   typedOn: boolean; selfgOn: boolean; smartOn: boolean; reverseOn: boolean
   smartThreshold: number
-  maxInt: number; dailyGoal: number
+  maxInt: number
   src: string; tgt: string
 }
 
 interface PairSeries { key: string; label: string; flag: string; typed: number[]; selfg: number[]; recog: number[] }
 interface PairModel { key: string; label: string; flag: string; days: number; difficulty: number; drift: string }
-interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairModel[]; hasGoals: boolean; bands: Record<string, { lo: number[]; hi: number[] }> }
+/** A schedule's deadline, drawn as a dashed vertical on the chart to explain the load drop after it. */
+interface GoalMarker { day: number; key: string; label: string }
+interface Forecast { pairs: PairSeries[]; sampleDays: number[]; models: PairModel[]; hasGoals: boolean; bands: Record<string, { lo: number[]; hi: number[] }>; markers: GoalMarker[] }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 function ordinal(n: number): string {
   const t = n % 100
   if (t >= 11 && t <= 13) return `${n}th`
   return `${n}${(['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`
+}
+/** Short calendar date `dayOffset` days out, e.g. "Mar 12" — fits beside a chart marker. */
+function shortForecastDate(dayOffset: number): string {
+  const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + dayOffset)
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 /** Calendar date `dayOffset` days from today, e.g. "July 13th, 2026". */
 function forecastDate(dayOffset: number): string {
@@ -75,13 +94,22 @@ export function DueForecastProjection() {
         if (!session) { setError('Not signed in'); return }
         const uid = session.user.id
 
-        void supabase.from('profiles').select('language_colors').eq('user_id', uid).single()
-          .then(r => { if (!cancelled) setLangColors((r.data?.language_colors as Record<string, string> | null) ?? {}) })
+        // Widest select first, narrowing on error — `daily_word_ceiling` needs migration 116, and a
+        // missing column errors the WHOLE query (the documented profiles landmine).
+        let profRes = await supabase.from('profiles').select('language_colors, timezone, day_turnover_hour, daily_word_ceiling').eq('user_id', uid).maybeSingle()
+        if (profRes.error) profRes = await supabase.from('profiles').select('language_colors, timezone, day_turnover_hour').eq('user_id', uid).maybeSingle()
+        const prof = profRes.data as Record<string, unknown> | null
+        if (!cancelled) setLangColors((prof?.language_colors as Record<string, string> | null) ?? {})
+        const tz = (prof?.timezone as string | null) ?? deviceTimeZone()
+        const turnover = (prof?.day_turnover_hour as number | null) ?? 0
+        const wordCeiling = (prof?.daily_word_ceiling as number | null) ?? null
+        const today = getToday(tz, turnover)
 
-        const [decks, paramRows, pairs] = await Promise.all([
+        const [decks, paramRows, pairs, schedules] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
           new SupabaseUserSchedulerParamsRepository().listForUser(uid),
           new SupabaseLanguagePairRepository().list(uid),
+          new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[]),
         ])
 
         // Per-pair config keyed `${src}|${tgt}`.
@@ -89,7 +117,7 @@ export function DueForecastProjection() {
         const ensure = (src: string, tgt: string): PairCfg => {
           const k = `${src}|${tgt}`
           let c = cfg.get(k)
-          if (!c) { c = { typedP: 0.85, selfgP: 0.9, smartP: 0.85, reverseP: 0.9, typedCal: 1, selfgCal: 1, smartCal: 1, reverseCal: 1, typedOn: true, selfgOn: true, smartOn: false, reverseOn: true, smartThreshold: 20, maxInt: 1460, dailyGoal: 0, src, tgt }; cfg.set(k, c) }
+          if (!c) { c = { typedP: 0.85, selfgP: 0.9, smartP: 0.85, reverseP: 0.9, typedCal: 1, selfgCal: 1, smartCal: 1, reverseCal: 1, typedOn: true, selfgOn: true, smartOn: false, reverseOn: true, smartThreshold: 20, maxInt: 1460, src, tgt }; cfg.set(k, c) }
           return c
         }
         for (const r of paramRows) {
@@ -106,16 +134,66 @@ export function DueForecastProjection() {
           if (r.answerField === 'forward_smart')  { c.smartOn = r.forwardSmartEnabled;  if (ret) c.smartP = ret; c.smartCal = cal }
           if (r.answerField === 'reverse_recall') { c.reverseOn = r.reverseRecallEnabled; if (ret) c.reverseP = ret; c.reverseCal = cal }
         }
-        let anyGoal = false
+        // ── New-word intake per pair, day by day over the horizon ──
+        // A live schedule OWNS its pair's intake (same supersedence rule as every goal surface):
+        // its re-spread plan for a target schedule — which is ZERO past the deadline — or its
+        // per-day capacity for an open-ended pattern. Pairs without a schedule fall back to their
+        // weekday goals, each weekday with its own number rather than a flattened sum/7.
+        const dates = eachDate(today, addScheduleDays(today, HORIZON))
+        const dateIndex = new Map(dates.map((d, i) => [d, i]))
+        const scheduleDone = schedules.length
+          ? await progressForSchedules({ userId: uid, schedules, timezone: tz, turnoverHour: turnover }).catch(() => new Map<string, number>())
+          : new Map<string, number>()
+
+        const intakeByPair = new Map<string, Float64Array>()
+        const markers: GoalMarker[] = []
+        for (const sc of schedules) {
+          const key = `${sc.sourceLanguage}|${sc.targetLanguage}`
+          ensure(sc.sourceLanguage, sc.targetLanguage)
+          const arr = new Float64Array(HORIZON + 1)
+          if (isPatternSchedule(sc)) {
+            dates.forEach((dt, i) => { const cap = dayCapacity(sc, dt); arr[i] = isFinite(cap) ? cap : 0 })
+          } else {
+            for (const day of schedulePlan(sc, today, scheduleDone.get(key) ?? 0)) {
+              const i = dateIndex.get(day.date)
+              if (i != null) arr[i] = day.words
+            }
+            const end = sc.deadline ? dateIndex.get(sc.deadline) : null
+            if (end != null) {
+              markers.push({ day: end, key, label: `${langFlag(sc.sourceLanguage)} ${sc.name?.trim() || `${langName(sc.sourceLanguage)} goal`}` })
+            }
+          }
+          intakeByPair.set(key, arr)
+        }
         for (const pr of pairs) {
-          const c = ensure(pr.sourceLanguage, pr.targetLanguage)
+          const key = `${pr.sourceLanguage}|${pr.targetLanguage}`
+          if (intakeByPair.has(key)) continue   // the schedule supersedes the weekday goals
           const g = pr.goals
-          if (g) {
-            const sum = [0, 1, 2, 3, 4, 5, 6].reduce((s, d) => s + (g[String(d)] ?? 0), 0)
-            c.dailyGoal = sum / 7
-            if (sum > 0) anyGoal = true
+          if (!g) continue
+          ensure(pr.sourceLanguage, pr.targetLanguage)
+          const arr = new Float64Array(HORIZON + 1)
+          let any = false
+          dates.forEach((dt, i) => {
+            const v = g[String(new Date(dt + 'T12:00:00Z').getUTCDay())] ?? 0
+            if (v > 0) { arr[i] = v; any = true }
+          })
+          if (any) intakeByPair.set(key, arr)
+        }
+
+        // The combined daily ceiling is cross-language by nature — three languages at 10 each is 30 —
+        // so it must cap the SUM, deferring overflow to the next day exactly as the goal surfaces do.
+        if (wordCeiling && wordCeiling > 0 && intakeByPair.size > 0) {
+          const demand = new Map([...intakeByPair].map(([k, arr]) => [k, new Map(dates.map((dt, i) => [dt, arr[i] ?? 0]))]))
+          const capped = applyDailyCeiling({ dates, demand, ceiling: wordCeiling })
+          for (const [k, arr] of intakeByPair) {
+            arr.fill(0)
+            for (const [dt, words] of capped.planned.get(k) ?? []) {
+              const i = dateIndex.get(dt)
+              if (i != null) arr[i] = words
+            }
           }
         }
+        const anyGoal = [...intakeByPair.values()].some(arr => arr.some(v => v > 0))
 
         const now = Date.now()
         const DAY = 86_400_000
@@ -297,42 +375,38 @@ export function DueForecastProjection() {
           }
         }
 
-        // ── New cards — renewal from daily goals, seeded at each language's measured initial interval
-        // and average difficulty, grown by Monte Carlo with its rating mix. A representative card's
-        // per-run cumulative reviews are superposed over daily cohorts (continuous intake), so daily
-        // load at age t = dailyGoal · cum(t). The daily goal is treated as ongoing learning. ──
+        // ── New cards — intake follows the goal system day by day, seeded at each language's
+        // measured initial interval and average difficulty, grown by Monte Carlo with its rating
+        // mix. Each cohort day c introduces intake[c] cards, so daily load is the superposition
+        // load(d) = Σ_c intake[c] · reviews(d − c). With flat intake that reduces to the old
+        // dailyGoal · cum(t); with a deadline the cohorts STOP and the load tapers — the drop the
+        // dashed markers on the chart explain. Iterates the trajectory's review days (sparse — a few
+        // dozen per run) against cohort days, rather than densifying to an O(HORIZON²) convolution. ──
         const emitNew = (
           targetArr: Float64Array, runs: Float64Array[], retention: number, i0: number, d0: number, model: RatingModel, maxInt: number,
-          dailyGoal: number, calibration: number, splitArr?: Float64Array, splitBelow?: number,
+          intake: Float64Array, calibration: number, splitArr?: Float64Array, splitBelow?: number,
         ) => {
           // A new card starts life at reps 0, so its ratings are drawn from the YOUNG end of the drift
           // model and mature as the trajectory advances.
           const { steps } = monteCarloSteps({ stability: stabilityForInterval(i0, retention), difficulty: d0, firstReviewDay: Math.max(1, Math.round(i0)), retention, maxInt, horizon: HORIZON, mix: mixForReps(model, 0), model, startReps: 0, calibration, K, fuzz: true }, mcSeed++)
-          const tRun = Array.from({ length: K }, () => new Float64Array(HORIZON + 1))
-          const gRun = splitBelow != null ? Array.from({ length: K }, () => new Float64Array(HORIZON + 1)) : null
           for (const st of steps) {
             if (st.day > HORIZON) continue
-            const useG = gRun && splitBelow != null && st.intervalDays >= splitBelow
-            ;(useG ? gRun! : tRun)[st.run!]![st.day]! += 1
-          }
-          for (let k = 0; k < K; k++) {   // per-run prefix sums
-            let ct = 0, cg = 0
-            for (let d = 0; d <= HORIZON; d++) { ct += tRun[k]![d]!; tRun[k]![d] = ct; if (gRun) { cg += gRun[k]![d]!; gRun[k]![d] = cg } }
-          }
-          for (let d = 0; d <= HORIZON; d++) {
-            let mt = 0, mg = 0
-            for (let k = 0; k < K; k++) {
-              const t = tRun[k]![d]!
-              const g = gRun ? gRun[k]![d]! : 0
-              mt += t; mg += g
-              runs[k]![d]! += dailyGoal * (t + g)
+            const useG = splitArr != null && splitBelow != null && st.intervalDays >= splitBelow
+            const runArr = runs[st.run!]!
+            const meanArr = useG ? splitArr! : targetArr
+            const lastCohort = HORIZON - st.day
+            for (let c = 0; c <= lastCohort; c++) {
+              const w = intake[c]!
+              if (w === 0) continue
+              const d = c + st.day
+              runArr[d]! += w
+              meanArr[d]! += w / K
             }
-            targetArr[d]! += dailyGoal * mt / K
-            if (splitArr && gRun) splitArr[d]! += dailyGoal * mg / K
           }
         }
         for (const [k, c] of cfg) {
-          if (c.dailyGoal <= 0) continue
+          const intake = intakeByPair.get(k)
+          if (!intake || !intake.some(v => v > 0)) continue
           const sr = seriesFor(k)
           // New cards seed at the language's MEASURED starting interval (freshest graduates) and climb
           // from there — so their early load is typed and grows realistically.
@@ -340,10 +414,10 @@ export function DueForecastProjection() {
           const d0 = diffByPair.get(k) ?? DEFAULT_DIFFICULTY
           const model = modelByPair.get(k) ?? []
           const runs = runsFor(k)
-          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, model, c.maxInt, c.dailyGoal, c.typedCal)
-          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, model, c.maxInt, c.dailyGoal, c.smartCal, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
-          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, model, c.maxInt, c.dailyGoal, c.selfgCal)
-          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, model, c.maxInt, c.dailyGoal, c.reverseCal)
+          if (c.typedOn)   emitNew(sr.typed, runs, c.typedP, i0, d0, model, c.maxInt, intake, c.typedCal)
+          if (c.smartOn)   emitNew(sr.typed, runs, c.smartP, i0, d0, model, c.maxInt, intake, c.smartCal, sr.selfg, Math.min(c.smartThreshold, c.maxInt))
+          if (c.selfgOn)   emitNew(sr.selfg, runs, c.selfgP, i0, d0, model, c.maxInt, intake, c.selfgCal)
+          if (c.reverseOn) emitNew(sr.recog, runs, c.reverseP, i0, d0, model, c.maxInt, intake, c.reverseCal)
         }
 
         // Downsample each pair's series to STEP-day points (windowed average).
@@ -381,7 +455,7 @@ export function DueForecastProjection() {
         }
         bands.__all__ = bandFrom(allRuns)
 
-        if (!cancelled) setData({ pairs: pairSeries, sampleDays, models, hasGoals: anyGoal, bands })
+        if (!cancelled) setData({ pairs: pairSeries, sampleDays, models, hasGoals: anyGoal, bands, markers })
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
       }
@@ -464,7 +538,7 @@ export function DueForecastProjection() {
         </div>
       )}
       {!data.hasGoals && (
-        <p className="text-xs text-warning">No daily goals set — the projection only reflects your existing cards. Set per-language goals in Settings to include future learning.</p>
+        <p className="text-xs text-warning">No goals or schedules set — the projection only reflects your existing cards. Set goals in Settings → Daily goals to include future learning.</p>
       )}
 
       <div className="relative">
@@ -484,6 +558,30 @@ export function DueForecastProjection() {
           {xTicks.map(t => (
             <text key={t.day} x={x(t.day)} y={H - mB + 16} textAnchor="middle" className="fill-ink-faint" fontSize={10}>{t.label}</text>
           ))}
+          {/* Goal deadlines — the days new-word intake for a language STOPS. Without these the load
+              tapering after a deadline looks like a bug in the curve rather than a goal being met.
+              Labels stagger vertically so adjacent deadlines stay readable. */}
+          {data.markers
+            .filter(m => !filterKey || m.key === filterKey)
+            .map((m, i) => {
+              const color = colorMap[m.key.split('|')[0]!] ?? '#888888'
+              const anchorEnd = x(m.day) > W - 120   // keep late-horizon labels inside the chart
+              return (
+                <g key={`${m.key}-${m.day}`}>
+                  <line x1={x(m.day)} y1={svg.mT} x2={x(m.day)} y2={H - mB}
+                    stroke={color} strokeWidth={1} strokeDasharray="5 4" opacity={0.7} />
+                  <text
+                    x={x(m.day) + (anchorEnd ? -4 : 4)}
+                    y={svg.mT + 9 + (i % 3) * 11}
+                    textAnchor={anchorEnd ? 'end' : 'start'}
+                    fontSize={9}
+                    fill={color}
+                  >
+                    {`${m.label} · ${shortForecastDate(m.day)}`}
+                  </text>
+                </g>
+              )
+            })}
           {/* hover guide */}
           {hoverPt && (
             <g>

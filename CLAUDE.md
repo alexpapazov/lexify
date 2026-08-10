@@ -2586,6 +2586,13 @@ when days off make them differ), pace, next checkpoint. `learnedSince` differs b
 total there would credit you for words you already knew. Sits below Today's goals and answers a
 different question ("is this on track" vs "what do I owe now"), the same split the two goal lists have.
 
+**The Future forecast follows the goal system** (`DueForecastProjection`): new-card intake is a
+per-day series — schedule plans (ZERO after the deadline), pattern capacity, weekday goals, then
+`applyDailyCeiling` across languages — via the superposition `load(d) = Σ_c intake[c]·reviews(d−c)`
+(reduces to the old `dailyGoal·cum(t)` when intake is flat; computed sparsely off the MC steps, never
+an O(H²) dense convolution). Dashed **deadline markers** in the language's colour explain the load
+taper after a goal is met; they respect the language filter.
+
 **Daily Goals is its own page now: `/settings/goals`** (linked from Language configuration, same
 pattern as `/settings/ladders`). It owns the mode toggle, the schedule editor, the **drag-select
 calendar** (`GoalScheduleCalendar` — drag days to mark time off or cap them, click one to add a
