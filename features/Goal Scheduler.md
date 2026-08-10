@@ -368,6 +368,17 @@ colour, labelled with the goal name and date. They exist because a met deadline 
 load taper — without the marker that taper reads as a bug in the curve rather than a goal being
 reached. Markers respect the language filter; labels stagger to stay readable.
 
+### Vocabulary growth follows the goal system too (Analytics → Future)
+
+`VocabGrowthProjection` used to draw `base + avgGoal · day` straight to the two-year horizon —
+quoting vocabulary sizes no goal actually asks for (the screenshot that prompted this showed 39,137
+words in 2 years). Now each language's curve is `base + cumulative intake`, built from the SAME
+per-day intake series as the due-load forecast: schedule plans (zero after the deadline — **the curve
+flattens there**), pattern capacity, weekday goals, the combined ceiling. Intake is summed per SOURCE
+LANGUAGE, since this chart is per language rather than per pair, and the same dashed deadline markers
+explain each plateau. The straight `<line>` became a sampled `<path>` (7-day steps) because the curve
+now bends.
+
 ### Still unbuilt
 
 - **Per-segment** checkpoint detail (each checkpoint's own feasibility). Only the binding one shows.

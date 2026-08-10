@@ -2591,7 +2591,10 @@ per-day series — schedule plans (ZERO after the deadline), pattern capacity, w
 `applyDailyCeiling` across languages — via the superposition `load(d) = Σ_c intake[c]·reviews(d−c)`
 (reduces to the old `dailyGoal·cum(t)` when intake is flat; computed sparsely off the MC steps, never
 an O(H²) dense convolution). Dashed **deadline markers** in the language's colour explain the load
-taper after a goal is met; they respect the language filter.
+taper after a goal is met; they respect the language filter. **`VocabGrowthProjection` uses the same
+intake series** (summed per source language): each curve is `base + cumulative intake`, so it
+FLATTENS at a deadline instead of quoting `avgGoal · 730` vocabulary sizes no goal asks for — the
+straight `<line>` became a sampled `<path>` because the curve now bends.
 
 **Daily Goals is its own page now: `/settings/goals`** (linked from Language configuration, same
 pattern as `/settings/ladders`). It owns the mode toggle, the schedule editor, the **drag-select
