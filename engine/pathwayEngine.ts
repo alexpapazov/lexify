@@ -30,6 +30,14 @@ export interface RouteState {
    * about how hard the card was to learn OVERALL. Optional for routes saved before it existed.
    */
   lifetimeErrors?:  number
+  /**
+   * Per-outcome tallies for THIS state sitting, keyed by raw outcome ('good', 'pass', …).
+   * `outcomeStreaks[x]` = length of the current run of consecutive x answers (any other outcome
+   * zeroes it); `outcomeTotals[x]` = occurrences since entering the state. Both feed the
+   * `ratedCount` predicate. Optional so routes saved before this load fine (absent ⇒ 0).
+   */
+  outcomeTotals?:   Partial<Record<string, number>>
+  outcomeStreaks?:  Partial<Record<string, number>>
   lastRating:       Rating | null
   lastErrorTypes:   ErrorType[]
   history:          string[]                 // stateIds visited, in order
@@ -86,6 +94,10 @@ function bumpCounters(route: RouteState, ev: PathwayEvent): RouteState {
   } else {                                           // hard — neutral, breaks both streaks
     r.consecutiveGood = 0; r.consecutiveAgain = 0
   }
+  // Exact-outcome tallies for `ratedCount` ("2 Goods in a row" where an Easy does NOT count).
+  // A streak is a run of identical outcomes, so every OTHER outcome's run resets to zero.
+  r.outcomeTotals = { ...route.outcomeTotals, [ev.outcome]: (route.outcomeTotals?.[ev.outcome] ?? 0) + 1 }
+  r.outcomeStreaks = { [ev.outcome]: (route.outcomeStreaks?.[ev.outcome] ?? 0) + 1 }
   return r
 }
 
@@ -101,6 +113,7 @@ function conditionMatches(cond: PathwayCondition, route: RouteState, ev: Pathway
       case 'correct':         return isSuccess(ev.outcome) === p.is
       case 'errorType':       return ev.errorTypes.includes(p.is)
       case 'counter':         return counterValue(route, p.name) >= p.gte
+      case 'ratedCount':      return ((p.inARow ? route.outcomeStreaks : route.outcomeTotals)?.[p.rating] ?? 0) >= p.times
       case 'attemptsInState': return route.attemptsInState >= p.gte
     }
   })
@@ -121,6 +134,7 @@ function enterState(route: RouteState, stateId: string, now: number): RouteState
   return {
     ...route, stateId, stateEnteredAt: now, attemptsInState: 0,
     consecutiveGood: 0, consecutiveAgain: 0, totalGood: 0, totalAgain: 0,
+    outcomeTotals: {}, outcomeStreaks: {},
     history: [...route.history, stateId],
   }
 }

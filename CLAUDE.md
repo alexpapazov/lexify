@@ -2407,6 +2407,23 @@ branch backwards indefinitely, so any percentage is a guess dressed up as a meas
 stalls or slides. The graduated COUNT (`1/8 graduated`) still shows in both modes — that's a fact, not
 a projection. The `pct` computation is left intact and simply unused in pathway mode.
 
+**`ratedCount` predicate (2026-08-10)** — "rated [Good] [2] times [in a row | in total]", the readable
+way to express "advance after two Goods". EXACT outcome match: an Easy does NOT count toward a Good
+streak, unlike the old `counter` kind whose success/failure aggregates lump pass/good/easy together
+(`consecutiveGood` really means "successes in a row"). Engine: `RouteState.outcomeTotals`/
+`outcomeStreaks` (optional — legacy routes evaluate as zero), bumped in `bumpCounters`, reset by
+`enterState` like every counter, evaluated in `conditionMatches`. Editor: the "rated N times" row in
+the predicate kind select; `rating: 'pass'` covers auto-checked states. It exists because the
+natural-looking alternative — "rating is Easy AND rating is Good" — can never fire (one answer has one
+rating), which is exactly what the user had built. 6 tests in pathwayEngine.test.ts.
+
+**Bulk card reset now busts the read cache (2026-08-10).** `handleBulkReset` on the deck page deletes
+`card_states` + `ladder_climb` with DIRECT supabase writes, which the 60s repo cache never sees — so
+reset-then-Study loaded the cached pre-reset rows and the ladder resumed cards mid-pipeline ("I reset
+these words and they didn't start over"). All six direct-write sites in `app/study/deck/page.tsx` now
+call `invalidateReads('states:'/'climb:'/'cards:')`. Standing rule: a DIRECT supabase write to a
+cached family must bust the cache, same as repo writes.
+
 **The trap that shaped it: a pathway self-transition RESETS the per-state counters.** `stepPathway`
 runs `enterState` on any taken transition, including one pointing back at the same state — so a
 "repeat this stage" self-loop wipes `consecutiveGood` and "two Goods in a row" can never be reached.

@@ -328,6 +328,13 @@ export type PathwayPredicate =
   | { kind: 'correct';         is: boolean }                     // clean success (pass/good/easy) vs not
   | { kind: 'errorType';       is: ErrorType }                   // this attempt's errors include `is`
   | { kind: 'counter';         name: PathwayCounter; gte: number }
+  /**
+   * "Rated Good 2× in a row" / "3 Agains in total (this state sitting)". EXACT outcome match — an
+   * Easy does not count toward a Good streak, unlike `counter`'s success/failure aggregates, which
+   * lump pass/good/easy together. `inARow` = the last N answers were all this outcome; total = N
+   * occurrences since entering the state (both reset when the state is entered, like every counter).
+   */
+  | { kind: 'ratedCount';      rating: RungOutcome | 'pass'; times: number; inARow: boolean }
   | { kind: 'attemptsInState'; gte: number }
 
 /** ALL predicates must hold (AND). An empty condition always matches (an unconditional edge). */

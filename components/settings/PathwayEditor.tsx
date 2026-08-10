@@ -203,11 +203,13 @@ export function PathwayEditor({ initial, onSave, onReset, onPersistLayout, savin
                         kind === 'correct' ? { kind, is: true } :
                         kind === 'errorType' ? { kind, is: 'accent' } :
                         kind === 'counter' ? { kind, name: 'consecutiveGood', gte: 2 } :
+                        kind === 'ratedCount' ? { kind, rating: 'good', times: 2, inARow: true } :
                         { kind: 'attemptsInState', gte: 2 }
                       patchPredicate(t.id, i, fresh)
                     }}>
                       <option value="correct">answer is</option>
                       <option value="rating">rating is</option>
+                      <option value="ratedCount">rated N times</option>
                       <option value="errorType">error is</option>
                       <option value="counter">count of</option>
                       <option value="attemptsInState">attempts ≥</option>
@@ -227,6 +229,25 @@ export function PathwayEditor({ initial, onSave, onReset, onPersistLayout, savin
                         {(Object.keys(ERROR_LABEL) as ErrorType[]).map(er => <option key={er} value={er}>{ERROR_LABEL[er]}</option>)}
                       </select>
                     )}
+                    {/* "rated [Good] [2] times [in a row]" — the readable way to say "advance after
+                        two Goods". EXACT rating match (an Easy doesn't count toward a Good streak),
+                        unlike "count of", whose success/failure aggregates lump pass/good/easy. This
+                        exists because the natural-looking alternative — "rating is Easy AND rating is
+                        Good" — can never fire: one answer has one rating. */}
+                    {pred.kind === 'ratedCount' && (<>
+                      <select className="input py-1 w-auto" value={pred.rating} onChange={e => patchPredicate(t.id, i, { ...pred, rating: e.target.value as RungOutcome | 'pass' })}>
+                        {(['again', 'hard', 'good', 'easy'] as RungOutcome[]).map(r => <option key={r} value={r}>{RATING_LABEL[r]}</option>)}
+                        <option value="pass">Correct (auto-checked)</option>
+                      </select>
+                      <input type="number" min={1} className="input py-1 w-16 tabular-nums" value={pred.times}
+                        onChange={e => patchPredicate(t.id, i, { ...pred, times: Math.max(1, Number(e.target.value)) })} />
+                      <span className="text-ink-faint">time{pred.times === 1 ? '' : 's'}</span>
+                      <select className="input py-1 w-auto" value={pred.inARow ? 'row' : 'total'}
+                        onChange={e => patchPredicate(t.id, i, { ...pred, inARow: e.target.value === 'row' })}>
+                        <option value="row">in a row</option>
+                        <option value="total">in total</option>
+                      </select>
+                    </>)}
                     {pred.kind === 'counter' && (<>
                       <select className="input py-1 w-auto" value={pred.name} onChange={e => patchPredicate(t.id, i, { kind: 'counter', name: e.target.value as PathwayCounter, gte: pred.gte })}>
                         {(Object.keys(COUNTER_LABEL) as PathwayCounter[]).map(c => <option key={c} value={c}>{COUNTER_LABEL[c]}</option>)}

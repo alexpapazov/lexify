@@ -20,6 +20,7 @@ function predText(p: PathwayPredicate): string {
     case 'correct':         return p.is ? 'correct' : 'wrong'
     case 'errorType':       return `${p.is.replace('_', ' ')} error`
     case 'counter':         return `${p.gte} ${COUNTER_LABEL[p.name] ?? p.name}`
+    case 'ratedCount':      return `${p.times}× ${p.rating === 'pass' ? 'correct' : (RATING_LABEL[p.rating] ?? p.rating)}${p.inARow ? ' in a row' : ''}`
     case 'attemptsInState': return `≥${p.gte} tries`
   }
 }

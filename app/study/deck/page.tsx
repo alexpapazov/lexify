@@ -26,6 +26,7 @@ import { SupabasePendingSynonymLinkRepository } from '@/lib/data/pendingSynonymL
 import type { Deck, Card, CardState, CardChoices, DeckPreferences, Folder, LanguagePair, LanguageSyncRule, SyncedCardLink } from '@/domain'
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { getToday } from '@/lib/dates'
+import { invalidateReads } from '@/lib/readCache'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { isCardStateDueNow } from '@/lib/dueStatus'
@@ -903,6 +904,8 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
       if (cardIds.length > 0) {
         const { error } = await supabase.from('cards').update({ choices: null }).in('id', cardIds)
         if (error) throw new Error(error.message)
+        // Direct write, so the repo cache doesn't know — bust it or reads serve stale choices for 60s.
+        invalidateReads('cards:')
       }
       setConfirmResetChoices(false)
       onClose()
@@ -1491,6 +1494,7 @@ export default function DeckDetailPage() {
           frontSynonyms: newFrontSyns.some(s => s.toLowerCase() === linkedCardFront.toLowerCase()) ? newFrontSyns : [...newFrontSyns, linkedCardFront],
         }
         await supabase.from('cards').update({ choices: newChoices }).eq('id', newCard.id)
+        invalidateReads('cards:')
         updatedNewCard = { ...updatedNewCard, choices: newChoices }
 
         // Update linked card: strip placeholder from frontSynonyms, add new card's front/back
@@ -1504,6 +1508,7 @@ export default function DeckDetailPage() {
           frontSynonyms: linkedFrontSyns.some(s => s.toLowerCase() === newCardFront.toLowerCase()) ? linkedFrontSyns : [...linkedFrontSyns, newCardFront],
         }
         await supabase.from('cards').update({ choices: linkedChoices }).eq('id', linkedCard.id)
+        invalidateReads('cards:')
         setCards(prev => prev.map(c => c.id === linkedCard.id ? { ...c, choices: linkedChoices } : c))
 
         await pendingRepo.deleteById(link.id)
@@ -1672,17 +1677,26 @@ export default function DeckDetailPage() {
     try {
       if (action === 'distractors' || action === 'all') {
         await supabase.from('cards').update({ choices: null }).in('id', ids)
+        invalidateReads('cards:')
         setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, choices: null } : c))
       }
       if (action === 'progress' || action === 'all') {
         await supabase.from('card_states').delete().in('card_id', ids).eq('user_id', userId)
         // Also clear ladder climb progress so the cards return to Unlearned.
         await supabase.from('ladder_climb').delete().in('card_id', ids).eq('user_id', userId)
+        // These are DIRECT writes, so the repo-layer 60s read cache has no idea they happened.
+        // Without busting it, pressing Study right after a reset loaded the CACHED pre-reset
+        // states + climb rows and the ladder resumed the cards mid-pipeline — the reported
+        // "I reset these words and they didn't start over". The deck page itself looked right
+        // because it patches its local state below; only the NEXT page's reads were stale.
+        invalidateReads('states:')
+        invalidateReads('climb:')
         setStates(prev => prev.filter(s => !selectedCardIds.has(s.cardId)))
         setClimb(prev => { const m = new Map(prev); ids.forEach(id => m.delete(id)); return m })
       }
       if (action === 'audio' || action === 'all') {
         await supabase.from('cards').update({ audio_generated: false, audio_data: null }).in('id', ids)
+        invalidateReads('cards:')
         setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, audioGenerated: false, audioData: null } : c))
       }
       setSelectedCardIds(new Set())

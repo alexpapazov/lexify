@@ -95,6 +95,78 @@ describe('stepPathway — counters & routing', () => {
   })
 })
 
+describe('stepPathway — ratedCount ("N Goods in a row / in total")', () => {
+  const good2InARow = { kind: 'ratedCount', rating: 'good', times: 2, inARow: true } as const
+
+  it('fires on the answer that completes the streak', () => {
+    const a = state({ selfRated: true }), g = terminal()
+    const p = make([a, g], [tr(a.id, g.id, [good2InARow])])
+    const r1 = stepPathway(p, initialRouteState(p), ev('good'), NOW)
+    expect(r1.moved).toBe(false)                                  // 1 of 2
+    const r2 = stepPathway(p, r1.route, ev('good'), NOW)
+    expect(r2.moved).toBe(true)                                   // 2 in a row → go
+  })
+
+  it('an Easy does NOT count toward a Good streak — exact outcome, unlike the success aggregates', () => {
+    const a = state({ selfRated: true }), g = terminal()
+    const p = make([a, g], [tr(a.id, g.id, [good2InARow])])
+    const r1 = stepPathway(p, initialRouteState(p), ev('good'), NOW)
+    const r2 = stepPathway(p, r1.route, ev('easy'), NOW)          // breaks the Good run
+    expect(r2.moved).toBe(false)
+    const r3 = stepPathway(p, r2.route, ev('good'), NOW)
+    expect(r3.moved).toBe(false)                                  // run restarted: 1 of 2
+    expect(stepPathway(p, r3.route, ev('good'), NOW).moved).toBe(true)
+  })
+
+  it('"in total" survives interruptions; "in a row" does not', () => {
+    const mk = (inARow: boolean) => {
+      const a = state({ selfRated: true }), g = terminal()
+      return make([a, g], [tr(a.id, g.id, [{ kind: 'ratedCount', rating: 'good', times: 2, inARow }])])
+    }
+    // Good, Again, Good — 2 Goods total but never 2 in a row.
+    for (const [inARow, shouldMove] of [[true, false], [false, true]] as const) {
+      const p = mk(inARow)
+      let route = initialRouteState(p)
+      route = stepPathway(p, route, ev('good'), NOW).route
+      route = stepPathway(p, route, ev('again'), NOW).route
+      expect(stepPathway(p, route, ev('good'), NOW).moved).toBe(shouldMove)
+    }
+  })
+
+  it('counts auto-checked correct answers via rating: "pass"', () => {
+    const a = state(), g = terminal()
+    const p = make([a, g], [tr(a.id, g.id, [{ kind: 'ratedCount', rating: 'pass', times: 2, inARow: true }])])
+    let route = initialRouteState(p)
+    route = stepPathway(p, route, ev('pass'), NOW).route
+    expect(stepPathway(p, route, ev('pass'), NOW).moved).toBe(true)
+  })
+
+  it('tallies reset when a state is entered, like every other counter', () => {
+    const a = state({ selfRated: true }), b = state({ selfRated: true }), g = terminal()
+    const p = make([a, b, g], [
+      tr(a.id, b.id, [{ kind: 'rating', is: 'again' }]),          // any Again hops to b
+      tr(b.id, g.id, [good2InARow]),
+    ])
+    let route = initialRouteState(p)
+    route = stepPathway(p, route, ev('good'), NOW).route          // 1 Good tallied in a
+    route = stepPathway(p, route, ev('again'), NOW).route         // → b (tallies reset)
+    route = stepPathway(p, route, ev('good'), NOW).route          // 1 of 2 in b — a's Good must not carry
+    expect(route.stateId).toBe(b.id)
+    expect(stepPathway(p, route, ev('good'), NOW).moved).toBe(true)
+  })
+
+  it('a route saved before the tallies existed evaluates as zero, not as a crash', () => {
+    const a = state({ selfRated: true }), g = terminal()
+    const p = make([a, g], [tr(a.id, g.id, [good2InARow])])
+    const legacy = { ...initialRouteState(p) }
+    delete (legacy as Record<string, unknown>).outcomeTotals
+    delete (legacy as Record<string, unknown>).outcomeStreaks
+    const r = stepPathway(p, legacy, ev('good'), NOW)
+    expect(r.moved).toBe(false)                                   // 1 of 2, counted from scratch
+    expect(stepPathway(p, r.route, ev('good'), NOW).moved).toBe(true)
+  })
+})
+
 describe('stepPathway — graduation intervals', () => {
   it('leaving an intervalInit state on Easy records that direction; the other defaults to 1 day', () => {
     const a = state({ selfRated: true, intervalInit: true, direction: 'produce_target' }), g = terminal()
