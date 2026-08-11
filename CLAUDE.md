@@ -2762,6 +2762,17 @@ playhead). All share one playback clock and the same `cardLevelAt` data. Pathway
 BEFORE 118 render with an explanatory note (all events at 0→0 — nothing can move). Ladder sessions
 keep the original `LadderReplay` unchanged.
 
+## Settings pages reformatted (2026-08-10)
+
+Both variants of `SettingsScreen` (`/settings` general + `/settings/language`) moved from one
+`max-w-lg` column of skinny panels to a `max-w-5xl` page with a two-column grid (`md:grid-cols-2`,
+two manual `space-y-5` column stacks so tall panels don't leave holes; stacks vertically on mobile).
+**Daily goals is now the FEATURED CARD at the top of Language configuration** (full-width, primary
+button) — the user asked for it first. Language variant columns: left = Study defaults +
+Redistribute; right = Learning ladders, Language colors, Language Sync, Vocabulary labels; Danger
+zone full-width at the bottom. General variant: left = Profile + Time zone; right = Appearance,
+Replay tutorial, Offline. Section markup unchanged (data-tour attributes intact) — only reflowed.
+
 ## Verifying changes
 
 ```

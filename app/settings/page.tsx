@@ -693,30 +693,12 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
 
   return (
-    <div className="space-y-8 max-w-lg mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
       <h1 className="text-2xl font-semibold text-ink">{variant === 'general' ? 'Settings' : 'Language configuration'}</h1>
 
       {variant === 'general' && (<>
-      {/* Appearance */}
-      <div className="panel space-y-4" data-tour="settings-theme">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Appearance</h2>
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <p className="text-sm text-ink-muted">Theme</p>
-          <ThemeToggle />
-        </div>
-      </div>
-
-      {/* Replay tutorial — its own section */}
-      {!offline && (
-        <div className="panel space-y-4">
-          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Replay tutorial</h2>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <p className="text-sm text-ink-muted">Take the guided product tour again.</p>
-            <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => startTour()}>Replay tutorial</button>
-          </div>
-        </div>
-      )}
-
+      <div className="grid gap-5 md:grid-cols-2 items-start">
+        <div className="space-y-5">
       {/* Profile */}
       <div className="panel space-y-4">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Profile</h2>
@@ -730,7 +712,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
           <p className="text-xs text-ink-faint">Password changes via Supabase email link — coming soon.</p>
         </div>
       </div>
-
       {/* Timezone — online only */}
       {!offline && (
       <div className="panel space-y-4" data-tour="settings-timezone">
@@ -780,9 +761,30 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
         </div>
       </div>
       )}
-
+        </div>
+        <div className="space-y-5">
+      {/* Appearance */}
+      <div className="panel space-y-4" data-tour="settings-theme">
+        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Appearance</h2>
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <p className="text-sm text-ink-muted">Theme</p>
+          <ThemeToggle />
+        </div>
+      </div>
+      {/* Replay tutorial — its own section */}
+      {!offline && (
+        <div className="panel space-y-4">
+          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Replay tutorial</h2>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <p className="text-sm text-ink-muted">Take the guided product tour again.</p>
+            <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => startTour()}>Replay tutorial</button>
+          </div>
+        </div>
+      )}
       {/* Offline */}
       <OfflinePanel />
+        </div>
+      </div>
 
       <div className="flex gap-3">
         <button className="btn-primary" onClick={handleSave}>{saved ? 'Saved ✓' : 'Save settings'}</button>
@@ -790,13 +792,21 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       </>)}
 
       {variant === 'language' && (<>
-      {/* Learning ladders */}
-      <div className="panel space-y-3" data-tour="settings-ladder">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Learning ladders</h2>
-        <p className="text-xs text-ink-faint">Build the sequence of exercises a card climbs before it graduates — set a default, and customize it per language.</p>
-        <a href="/settings/ladders" className="btn-ghost inline-block text-sm py-1.5 px-3">Edit learning ladders →</a>
+      {/* Daily goals — featured at the top: goals and schedules are the page's headline object. */}
+      <div className="panel md:flex md:items-center md:justify-between md:gap-6 space-y-3 md:space-y-0">
+        <div className="space-y-1.5 md:max-w-2xl">
+          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily goals</h2>
+          <p className="text-xs text-ink-faint">
+            How many words you aim to graduate per language — a fixed daily or weekly number (with
+            optional debt), or a long-term goal that works backwards from a deadline. Carryover
+            settings live there too.
+          </p>
+        </div>
+        <a href="/settings/goals" className="btn-primary inline-block text-sm py-2 px-4 shrink-0">Edit daily goals →</a>
       </div>
 
+      <div className="grid gap-5 md:grid-cols-2 items-start">
+        <div className="space-y-5">
       <div className="panel space-y-4">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Study defaults</h2>
 
@@ -871,7 +881,38 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
           })()}
         </div>
       </div>
-
+      {/* Global redistribute — online only */}
+      {!offline && userId && (
+        <div className="panel space-y-3">
+          <div>
+            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Redistribute cards</h2>
+            <p className="text-xs text-ink-faint mt-1">
+              Spreads all graduated cards evenly across their scheduling windows so no single day is overloaded.
+              Cards already at the edge of their window are left in place.
+            </p>
+          </div>
+          {redistributeMsg && (
+            <p className={`text-xs ${redistributeMsg.startsWith('Moved') || redistributeMsg.startsWith('Cards are') ? 'text-success' : 'text-danger'}`}>
+              {redistributeMsg}
+            </p>
+          )}
+          <button
+            onClick={handleGlobalRedistribute}
+            disabled={redistributing}
+            className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+          >
+            {redistributing ? 'Redistributing…' : '⟳ Redistribute all cards'}
+          </button>
+        </div>
+      )}
+        </div>
+        <div className="space-y-5">
+      {/* Learning ladders */}
+      <div className="panel space-y-3" data-tour="settings-ladder">
+        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Learning ladders</h2>
+        <p className="text-xs text-ink-faint">Build the sequence of exercises a card climbs before it graduates — set a default, and customize it per language.</p>
+        <a href="/settings/ladders" className="btn-ghost inline-block text-sm py-1.5 px-3">Edit learning ladders →</a>
+      </div>
       {/* Language colors */}
       {langPairs.length > 0 && (
         <div className="panel space-y-3">
@@ -898,18 +939,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
           })()}
         </div>
       )}
-
-      {/* Daily goals — its own page (like learning ladders): a goal is a configurable object now,
-          and a schedule needs room for its limits, checkpoints and plan preview. */}
-      <div className="panel space-y-3">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily goals</h2>
-        <p className="text-xs text-ink-faint">
-          How many words you aim to graduate per language — a fixed number that repeats, or an adaptive
-          schedule that works backwards from a deadline. Carryover settings live there too.
-        </p>
-        <a href="/settings/goals" className="btn-ghost inline-block text-sm py-1.5 px-3">Edit daily goals →</a>
-      </div>
-
       {/* Language Sync — online only */}
       {!offline && userId && (
         <div className="panel space-y-4" data-tour="settings-sync">
@@ -923,34 +952,10 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
           <LanguageSyncPanel userId={userId} />
         </div>
       )}
-
       {/* Vocabulary labels (practice-mode groundwork) — online only */}
       {!offline && userId && <VocabularyLabelsPanel userId={userId} />}
-
-      {/* Global redistribute — online only */}
-      {!offline && userId && (
-        <div className="panel space-y-3">
-          <div>
-            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Redistribute cards</h2>
-            <p className="text-xs text-ink-faint mt-1">
-              Spreads all graduated cards evenly across their scheduling windows so no single day is overloaded.
-              Cards already at the edge of their window are left in place.
-            </p>
-          </div>
-          {redistributeMsg && (
-            <p className={`text-xs ${redistributeMsg.startsWith('Moved') || redistributeMsg.startsWith('Cards are') ? 'text-success' : 'text-danger'}`}>
-              {redistributeMsg}
-            </p>
-          )}
-          <button
-            onClick={handleGlobalRedistribute}
-            disabled={redistributing}
-            className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
-          >
-            {redistributing ? 'Redistributing…' : '⟳ Redistribute all cards'}
-          </button>
         </div>
-      )}
+      </div>
 
       {/* Danger zone — online only */}
       {!offline && (
