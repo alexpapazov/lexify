@@ -327,6 +327,16 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       // A stored climb from the *other* mode has the wrong shape (rungIndex vs stateId) — restart it fresh.
       const rightShape = (cl: ClimbState | RouteState | undefined): boolean =>
         cl != null && (onPathway ? 'stateId' in cl : 'rungIndex' in cl)
+      // A climb can also be DEAD: right shape, but its position no longer exists because the
+      // pathway/ladder was edited mid-climb (a RouteState pointing at a deleted state id, or a
+      // rungIndex past the end of a shortened ladder). Those cards used to fall through every queue
+      // ("Nothing to study" on a deck full of learners). Treat them exactly like wrong-shape climbs:
+      // restart JUST those cards from the start of the current shape — everything else keeps its place.
+      const validPosition = (cl: ClimbState | RouteState | undefined): boolean => {
+        if (!rightShape(cl)) return false
+        if (onPathway) return effPathway!.states.some(st => st.id === (cl as RouteState).stateId)
+        return (cl as ClimbState).rungIndex < effLadder.rungs.length
+      }
 
       const climb = await new SupabaseLadderClimbRepository().listForCards(uid, allCards.map(c => c.id))
 
@@ -339,15 +349,31 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       const learning: string[] = []
       const fresh: string[] = []
       const reconciled = new Map<string, ClimbState | RouteState>(climb)
+      /** Cards whose stored climb was unusable and was restarted — repaired in the DB below. */
+      const repaired: string[] = []
       for (const c of allCards) {
         if (gradSet.has(c.id)) continue
         const cl = climb.get(c.id)
-        if (rightShape(cl) && !cl!.graduated) { learning.push(c.id); continue }
+        if (validPosition(cl) && !cl!.graduated) { learning.push(c.id); continue }
         const alreadyLearning = learningStateSet.has(c.id)
-        if (cl || alreadyLearning) reconciled.set(c.id, freshState())   // wrong-shape / graduated-orphan / restart
+        if (cl || alreadyLearning) {
+          reconciled.set(c.id, freshState())   // wrong-shape / dead-position / graduated-orphan / restart
+          if (cl && !cl.graduated) repaired.push(c.id)
+        }
         ;(alreadyLearning ? learning : fresh).push(c.id)
       }
       setStates(reconciled)
+
+      // Persist the repairs. Without this the broken row survives until the card is next ANSWERED,
+      // so every other surface (deck counts, the logs, another device) keeps reading the dead
+      // position. Only cards that were actually stuck are touched; a healthy climb is never rewritten.
+      if (repaired.length > 0) {
+        const climbRepo = new SupabaseLadderClimbRepository()
+        void Promise.all(repaired.map(id =>
+          // `cardDeck`, not the `deckByCard` STATE — setDeckByCard above hasn't flushed yet.
+          climbRepo.save(uid, id, cardDeck.get(id) ?? '', reconciled.get(id)!).catch(() => {}),
+        ))
+      }
 
       // Audio + timezone prefs (fired in the first wave). Per-deck intake caps only apply to
       // single-deck scope.

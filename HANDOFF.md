@@ -4,7 +4,7 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 848 passing tests (53 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
+- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 867 passing tests (54 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`118`, applied BY HAND. **`118` is
   PENDING** — pathway-aware session logging on `ladder_events` (`pathway`, `state_name`).
@@ -25,7 +25,7 @@ implementation notes + error log); this file is the map you read first.
   is the signal that nothing is pending** — put a new migration there, tell the user to run it, and
   move it into `archive/` once it's live. **`118_ladder_event_pathway.sql` needs running.** Next number = **119**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **53 suites / 848 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **54 suites / 867 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app
@@ -579,7 +579,7 @@ feature, and update it afterward.** Each carries its own error log.
 `Learning Pipeline.md` · `Due Now.md` · `Typed Grading.md` · `Confusion Handling.md` ·
 `Language Syncing.md` · `Card Data.md` · `Agent Platform.md` · `Vocabulary Onboarding.md` ·
 `Batch Deck Import.md` · **`Practice Mode.md`** · **`Starred Cards.md`** · **`Goal Scheduler.md`** ·
-`Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
+**`Card Organizer Agent.md`** · `Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
 `Configurable Pipeline (proposal).md` · `Card Connection Agent (proposal).md`
 
 **`Practice Mode.md` is the one to read before touching anything under `/practice`,

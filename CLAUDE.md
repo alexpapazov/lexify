@@ -48,6 +48,8 @@ Current feature files:
 - `features/Card Connection Agent (proposal).md` — PINNED, not built. Contains the
   synonym/confusion infrastructure audit — including a real `addMember` merge bug
   worth fixing independently of the agent.
+- `features/Card Organizer Agent.md` — the second agent: sorts existing cards into folders/decks
+  from a Word document's structure or a natural-language description. Moves are deck relinks.
 - `features/Goal Scheduler.md` — deadline-driven goals ("200 words by Dec 1"): the
   derived daily number, water-filled day limits, the drag-select calendar, checkpoints,
   feasibility remedies. **Never run against a real account.**
@@ -2795,6 +2797,51 @@ custom/default from LADDER rows alone, so a pathway-mode pair with a dormant cus
 rows — `SupabasePathwayRepository.listCustomPairKeys` (default ''/'' row and empty `{}` rows
 excluded) for pathway pairs, ladder rows for ladder pairs — and reads "pathway · default" /
 "ladder · custom" so the mode is visible at a glance.
+
+## Card organizer agent (2026-08-10, no migration)
+
+Second agent: `/agents/organizer`, picker chips at the top of both agent pages. Sorts EXISTING cards
+into folders/decks from either a Word document's structure (deterministic, no AI) or a natural-
+language description (batched model calls). **Read `features/Card Organizer Agent.md` before
+changing it.** The load-bearing points:
+
+- **A move is a `deck_cards` RELINK, never a card rewrite** — review state, climb rows, audio and
+  other decks the card is shared into are all untouched. **Link the destination FIRST, unlink the
+  source SECOND** (`lib/agents/organizerApply.ts`); a crash between them leaves the card in both
+  places (visible) rather than neither (looks like data loss). `undoMove` mirrors it.
+- **Document path**: reuses `lib/docx.ts`'s `readDeckPlanFromFile`, read as a destination map, matched
+  by `normalizeFrontKey` so articles/tags/case don't miss. **Cards the document doesn't mention are
+  LEFT ALONE** — a document describes where its own words go, nothing more. A word under two headings
+  keeps its FIRST placement.
+- **AI path**: `/api/agents/card-organizer` returns only `{cardId, path, reason}` — no edit/split/
+  delete verbs exist. Existing library paths are passed in so it reuses names instead of inventing
+  "Foods" beside "Food"; every id is re-validated locally against the sent batch.
+- Review is grouped BY DESTINATION; "Undo last" reverses the whole group just applied; "Accept all"
+  is confirmed and deliberately not undoable as a unit.
+- `ensureFolderPath`/`ensureDeck` reuse same-named folders/decks at their level — the same rule as
+  `BatchDeckImport`, so the two features can't fork each other's trees. Undo leaves created folders
+  in place on purpose.
+- **Known gap: one language pair per run** (the context takes its pair from the first scoped deck).
+- The card-editor page's scope tree + tri-state checkbox moved to
+  `components/agents/ScopeTreePicker.tsx` — shared, not duplicated.
+
+## Editing a ladder/pathway mid-climb bricked the deck (2026-08-10)
+
+**Bug (user report)**: editing the pathway/ladder while cards were climbing it made Study say
+"Nothing to study — all done" forever. `LadderStudy`'s reconcile only checked climb SHAPE
+(`rungIndex` vs `stateId`), not whether the stored position still EXISTS — so a RouteState pointing
+at a deleted state id, or a `rungIndex` past the end of a shortened ladder, passed the shape check,
+was pushed to `learning`, and then rendered nothing: the card was in the queue but had no state to
+present, so every queue came out empty.
+
+Fix: `validPosition` extends `rightShape` with an existence check (`effPathway.states.some(id)` /
+`rungIndex < effLadder.rungs.length`). A dead climb is restarted from the start of the CURRENT
+shape — **only those cards**; every healthy climb keeps its place. The repair is also PERSISTED
+(`climbRepo.save` for the repaired ids only), because otherwise the broken row survives until the
+card is next answered and every other surface keeps reading the dead position.
+
+Rule for future edits here: any check on a stored climb must validate the POSITION, not just the
+shape — a config edit can invalidate a position without changing its type.
 
 ## Verifying changes
 
