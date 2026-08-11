@@ -45,13 +45,20 @@ const WEEKDAYS: { day: number; label: string }[] = [
 const shortDate = (d: string) =>
   new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
 
+/** The three shapes a plan can take — the FIRST choice the editor asks for. */
+type PlanKind = 'longterm' | 'daily' | 'weekly'
+
 type Draft = {
+  planKind:       PlanKind
   name:           string
   targetKind:     GoalTargetKind
   targetCount:    string
   startDate:      string
   deadline:       string
   dailyCeiling:   string
+  weeklyTarget:   string
+  debtCarryMissed: boolean
+  debtCarryExtra:  boolean
   weekdayLimits:  Record<string, string>
   /** date → words allowed that day; 0 = time off. Keyed so the calendar can set/clear directly. */
   dateExceptions: Record<string, number>
@@ -62,20 +69,26 @@ type Draft = {
 function draftFrom(schedule: GoalSchedule | null, today: string): Draft {
   if (!schedule) {
     return {
-      name: '', targetKind: 'new_words', targetCount: '',
+      planKind: 'longterm', name: '', targetKind: 'new_words', targetCount: '',
       startDate: today, deadline: '',
-      dailyCeiling: '', weekdayLimits: {}, dateExceptions: {}, checkpoints: {},
+      dailyCeiling: '', weeklyTarget: '', debtCarryMissed: false, debtCarryExtra: false,
+      weekdayLimits: {}, dateExceptions: {}, checkpoints: {},
     }
   }
   const limits: Record<string, string> = {}
   for (const [k, v] of Object.entries(schedule.weekdayLimits ?? {})) limits[k] = v == null ? '' : String(v)
   return {
+    // The kind is derived, not stored: a target makes it long-term, a weekly number weekly, else daily.
+    planKind:      schedule.targetCount != null ? 'longterm' : schedule.weeklyTarget != null ? 'weekly' : 'daily',
     name:          schedule.name ?? '',
     targetKind:    schedule.targetKind,
     targetCount:   schedule.targetCount == null ? '' : String(schedule.targetCount),
     startDate:     schedule.startDate,
     deadline:      schedule.deadline ?? '',
     dailyCeiling:  schedule.dailyCeiling == null ? '' : String(schedule.dailyCeiling),
+    weeklyTarget:  schedule.weeklyTarget == null ? '' : String(schedule.weeklyTarget),
+    debtCarryMissed: schedule.debtCarryMissed,
+    debtCarryExtra:  schedule.debtCarryExtra,
     weekdayLimits: limits,
     dateExceptions: { ...(schedule.dateExceptions ?? {}) },
     checkpoints:    Object.fromEntries((schedule.checkpoints ?? []).map(c => [c.date, c.count])),
@@ -150,16 +163,22 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     let cancelled = false
     const timer = setTimeout(async () => {
       try {
+        // After a debt reset, progress counts from the reset date — same date-not-counter trick the
+        // engine's progressStart uses, so the preview matches what the study pages will show.
+        const resetAt = saved?.debtResetAt
+        const countFrom = (draft.debtCarryMissed || draft.debtCarryExtra) && resetAt && resetAt > draft.startDate
+          ? resetAt : draft.startDate
         const done = await scheduleProgress({
           userId,
-          schedule: { sourceLanguage, targetLanguage, targetKind: draft.targetKind, startDate: draft.startDate },
+          schedule: { sourceLanguage, targetLanguage, targetKind: draft.targetKind, startDate: countFrom },
           timezone, turnoverHour,
         })
         if (!cancelled) setDoneSoFar(done)
       } catch { /* the preview degrades to "nothing done yet"; never block editing on it */ }
     }, 350)   // debounced: the date input fires on every keystroke
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [userId, sourceLanguage, targetLanguage, timezone, turnoverHour, draft.targetKind, draft.startDate])
+  }, [userId, sourceLanguage, targetLanguage, timezone, turnoverHour, draft.targetKind, draft.startDate,
+      draft.debtCarryMissed, draft.debtCarryExtra, saved?.debtResetAt])
 
   // ── The live schedule object the engine reasons about ──
   const candidate = useMemo<GoalSchedule>(() => {
@@ -171,18 +190,29 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
       .map(([date, count]) => ({ date, count }))
       .sort((a, b) => a.date.localeCompare(b.date))
 
+    const isPattern = draft.planKind !== 'longterm'
     return {
       id: saved?.id ?? 'draft', userId, sourceLanguage, targetLanguage,
       name: draft.name.trim() || null,
       targetKind:  draft.targetKind,
-      targetCount: draft.targetCount.trim() === '' ? null : (parseInt(draft.targetCount, 10) || null),
+      // The plan kind decides which fields exist at all — a daily goal saved while an old target
+      // lingered in the form must not round-trip back into a long-term goal.
+      targetCount: isPattern ? null : draft.targetCount.trim() === '' ? null : (parseInt(draft.targetCount, 10) || null),
       startDate:   draft.startDate,
-      deadline:    draft.deadline.trim() === '' ? null : draft.deadline,
+      deadline:    isPattern ? null : draft.deadline.trim() === '' ? null : draft.deadline,
       baselineCount,
       dailyCeiling: draft.dailyCeiling.trim() === '' ? null : Math.max(0, parseInt(draft.dailyCeiling, 10) || 0),
+      weeklyTarget: draft.planKind === 'weekly'
+        ? (draft.weeklyTarget.trim() === '' ? null : (parseInt(draft.weeklyTarget, 10) || null))
+        : null,
+      // Debt is a pattern concept — a long-term goal re-spreads instead (debt on top would double-charge).
+      debtCarryMissed: isPattern && draft.debtCarryMissed,
+      debtCarryExtra:  isPattern && draft.debtCarryExtra,
+      // The reset date is written by the Reset button (persisted immediately), never typed.
+      debtResetAt: saved?.debtResetAt ?? null,
       weekdayLimits:  Object.keys(limits).length ? limits : null,
       dateExceptions: Object.keys(draft.dateExceptions).length ? draft.dateExceptions : null,
-      checkpoints,
+      checkpoints: isPattern ? [] : checkpoints,
       archivedAt: null,
       createdAt: saved?.createdAt ?? '', updatedAt: saved?.updatedAt ?? '',
     }
@@ -193,9 +223,11 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
    * moment it renders, but the moment ANY of the three ways to state a schedule has a value, the
    * schedule is real enough to validate and to draw a calendar for.
    */
-  const stated = draft.targetCount.trim() !== ''
-    || draft.dailyCeiling.trim() !== ''
-    || Object.values(draft.weekdayLimits).some(v => v.trim() !== '')
+  const stated = draft.planKind === 'weekly'
+    ? draft.weeklyTarget.trim() !== ''
+    : (draft.planKind === 'longterm' && draft.targetCount.trim() !== '')
+      || draft.dailyCeiling.trim() !== ''
+      || Object.values(draft.weekdayLimits).some(v => v.trim() !== '')
 
   const errors = useMemo(() => (stated ? validateSchedule(candidate) : []), [stated, candidate])
   const ready = stated && errors.length === 0 && !baselineUnknown
@@ -247,13 +279,41 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
         name: candidate.name, targetKind: candidate.targetKind, targetCount: candidate.targetCount,
         startDate: candidate.startDate, deadline: candidate.deadline, baselineCount: candidate.baselineCount,
         dailyCeiling: candidate.dailyCeiling, weekdayLimits: candidate.weekdayLimits,
-        dateExceptions: candidate.dateExceptions, checkpoints: candidate.checkpoints,
+        dateExceptions: candidate.dateExceptions, weeklyTarget: candidate.weeklyTarget,
+        debtCarryMissed: candidate.debtCarryMissed, debtCarryExtra: candidate.debtCarryExtra,
+        debtResetAt: candidate.debtResetAt, checkpoints: candidate.checkpoints,
       })
       setSaved(next)
       setNote('Schedule saved.')
       onChanged?.(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save the schedule.')
+    } finally { setBusy(false) }
+  }
+
+  /**
+   * "Reset it at that instant" — zeroes the debt balance by moving the counting window to today, the
+   * same date-not-counter trick the rest of the goal system uses. Persists immediately from the SAVED
+   * config, so pressing Reset never silently commits other unsaved edits sitting in the form.
+   */
+  async function resetDebt() {
+    if (!saved || busy) return
+    setBusy(true); setError(null); setNote(null)
+    try {
+      const s = saved
+      const next = await new SupabaseGoalScheduleRepository().save(userId, {
+        sourceLanguage, targetLanguage,
+        name: s.name, targetKind: s.targetKind, targetCount: s.targetCount,
+        startDate: s.startDate, deadline: s.deadline, baselineCount: s.baselineCount,
+        dailyCeiling: s.dailyCeiling, weekdayLimits: s.weekdayLimits,
+        dateExceptions: s.dateExceptions, weeklyTarget: s.weeklyTarget,
+        debtCarryMissed: s.debtCarryMissed, debtCarryExtra: s.debtCarryExtra,
+        debtResetAt: today, checkpoints: s.checkpoints,
+      })
+      setSaved(next)
+      setNote('Debt reset — the balance starts fresh from today.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reset the debt.')
     } finally { setBusy(false) }
   }
 
@@ -280,42 +340,87 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
   const checkpointList = Object.entries(draft.checkpoints).sort(([a], [b]) => a.localeCompare(b))
   const timeOffCount = Object.values(draft.dateExceptions).filter(v => v === 0).length
 
+  const isPattern = draft.planKind !== 'longterm'
+  const debtOn = isPattern && (draft.debtCarryMissed || draft.debtCarryExtra)
+
   return (
     <div className="space-y-5">
-      {/* ── Target ── */}
+      {/* ── What kind of plan? The first choice — it decides which fields below exist. ── */}
+      <div className="flex flex-wrap gap-1.5">
+        {([
+          { kind: 'longterm' as PlanKind, label: 'Long-term goal', hint: 'reach a number by a date' },
+          { kind: 'daily'    as PlanKind, label: 'Daily goal',     hint: 'a number every day' },
+          { kind: 'weekly'   as PlanKind, label: 'Weekly goal',    hint: 'a number every week' },
+        ]).map(({ kind, label: kl, hint }) => (
+          <button
+            key={kind}
+            type="button"
+            onClick={() => { set('planKind', kind); setNote(null) }}
+            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+              draft.planKind === kind
+                ? 'border-accent text-ink bg-accent/10'
+                : 'border-line/10 text-ink-faint hover:text-ink'
+            }`}
+            title={hint}
+          >
+            {kl}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Target / numbers ── */}
       <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1">
-          <label className="text-xs text-ink-faint block">I want to reach</label>
-          <div className="flex items-center gap-2">
-            <input
-              type="number" min={1} max={100000}
-              className="input text-center text-sm px-2 py-1.5 w-24"
-              placeholder="200"
-              value={draft.targetCount}
-              onChange={e => set('targetCount', e.target.value)}
-            />
-            <select
-              className="input text-sm px-2 py-1.5"
-              value={draft.targetKind}
-              onChange={e => set('targetKind', e.target.value as GoalTargetKind)}
-            >
-              <option value="new_words">new words</option>
-              <option value="total_words">words total</option>
-            </select>
+        {draft.planKind === 'longterm' && (
+          <div className="space-y-1">
+            <label className="text-xs text-ink-faint block">I want to reach</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={1} max={100000}
+                className="input text-center text-sm px-2 py-1.5 w-24"
+                placeholder="200"
+                value={draft.targetCount}
+                onChange={e => set('targetCount', e.target.value)}
+              />
+              <select
+                className="input text-sm px-2 py-1.5"
+                value={draft.targetKind}
+                onChange={e => set('targetKind', e.target.value as GoalTargetKind)}
+              >
+                <option value="new_words">new words</option>
+                <option value="total_words">words total</option>
+              </select>
+            </div>
           </div>
-        </div>
+        )}
+        {draft.planKind === 'weekly' && (
+          <div className="space-y-1">
+            <label className="text-xs text-ink-faint block">Each week</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={1} max={9999}
+                className="input text-center text-sm px-2 py-1.5 w-24"
+                placeholder="35"
+                value={draft.weeklyTarget}
+                onChange={e => set('weeklyTarget', e.target.value)}
+              />
+              <span className="text-xs text-ink-faint">words</span>
+            </div>
+          </div>
+        )}
         <div className="space-y-1">
           <label className="text-xs text-ink-faint block">Starting</label>
           <input type="date" className="input text-sm px-2 py-1.5" value={draft.startDate}
                  onChange={e => set('startDate', e.target.value)} />
         </div>
+        {draft.planKind === 'longterm' && (
+          <div className="space-y-1">
+            <label className="text-xs text-ink-faint block">By</label>
+            <input type="date" className="input text-sm px-2 py-1.5" value={draft.deadline}
+                   onChange={e => set('deadline', e.target.value)} />
+          </div>
+        )}
         <div className="space-y-1">
-          <label className="text-xs text-ink-faint block">By</label>
-          <input type="date" className="input text-sm px-2 py-1.5" value={draft.deadline}
-                 onChange={e => set('deadline', e.target.value)} />
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs text-ink-faint block">Never more than</label>
+          <label className="text-xs text-ink-faint block">{isPattern ? 'Cap' : 'Never more than'}</label>
           <div className="flex items-center gap-2">
             <input
               type="number" min={1} max={999}
@@ -335,19 +440,25 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
       </div>
 
       <p className="text-xs text-ink-faint">
-        {draft.targetKind === 'total_words'
-          ? `Counts your whole ${(label.split('→')[0] ?? label).trim()} vocabulary, including words you onboarded as already known.${baselineUnknown ? '' : ` You have ${baselineCount} now.`}`
-          : 'Counts only words you learn through the ladder during the schedule. Onboarded "already known" words don’t count.'}
-        {span > 0
-          ? ` ${span} day${span === 1 ? '' : 's'} from start to deadline.`
-          : ' Leave the target and deadline blank to just set a daily or weekly number that runs on indefinitely.'}
+        {draft.planKind === 'longterm' ? (
+          <>
+            {draft.targetKind === 'total_words'
+              ? `Counts your whole ${(label.split('→')[0] ?? label).trim()} vocabulary, including words you onboarded as already known.${baselineUnknown ? '' : ` You have ${baselineCount} now.`}`
+              : 'Counts only words you learn through the ladder during the schedule. Onboarded "already known" words don’t count.'}
+            {span > 0 ? ` ${span} day${span === 1 ? '' : 's'} from start to deadline.` : ''}
+          </>
+        ) : draft.planKind === 'weekly'
+          ? 'Your weekly number is spread over the week (Monday to Sunday), respecting days off and per-day limits. Anything above the cap pushes onto the following days.'
+          : 'Your daily number comes from the weekday row below (or the cap when a day is blank). Anything above the cap pushes onto the following days.'}
       </p>
 
       {/* ── The usual week ── the calendar below handles one-off days; this is for "every weekend". */}
       <div className="space-y-2 pt-3 border-t border-line/10">
         <p className="text-xs text-ink-faint">
-          Your usual week — blank follows the ceiling, <span className="text-ink">0 is a day off every week</span>.
-          Use the calendar for one-off days.
+          {draft.planKind === 'daily'
+            ? <>Your daily numbers, weekday by weekday — blank follows the cap, <span className="text-ink">0 is a day off every week</span>.</>
+            : <>Your usual week — blank follows the {isPattern ? 'cap' : 'ceiling'}, <span className="text-ink">0 is a day off every week</span>.</>}
+          {' '}Use the calendar for one-off days.
         </p>
         <div className="grid grid-cols-7 gap-2 max-w-md">
           {WEEKDAYS.map(({ day, label: wd }) => (
@@ -364,6 +475,46 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
           ))}
         </div>
       </div>
+
+      {/* ── Debt ── patterns only: a long-term goal re-spreads what's left instead of keeping a tab. */}
+      {isPattern && (
+        <div className="space-y-2 pt-3 border-t border-line/10">
+          <p className="text-xs text-ink-faint">
+            Debt — choose whether days carry over into each other. Off means every day starts clean.
+          </p>
+          <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+            <label className="flex items-center gap-2 text-xs text-ink cursor-pointer">
+              <input type="checkbox" checked={draft.debtCarryMissed}
+                     onChange={e => set('debtCarryMissed', e.target.checked)} />
+              Missed words carry over (added to later days, up to the cap)
+            </label>
+            <label className="flex items-center gap-2 text-xs text-ink cursor-pointer">
+              <input type="checkbox" checked={draft.debtCarryExtra}
+                     onChange={e => set('debtCarryExtra', e.target.checked)} />
+              Extra words carry over (worked off later days)
+            </label>
+          </div>
+          {debtOn && (
+            <div className="flex flex-wrap items-center gap-3">
+              {status && (
+                <span className={`text-xs ${status.debtBalance > 0 ? 'text-danger' : status.debtBalance < 0 ? 'text-success' : 'text-ink-faint'}`}>
+                  {status.debtBalance === 0 ? 'Balance: level'
+                    : status.debtBalance > 0 ? `Balance: ${status.debtBalance} word${status.debtBalance === 1 ? '' : 's'} behind`
+                    : `Balance: ${-status.debtBalance} word${status.debtBalance === -1 ? '' : 's'} ahead`}
+                </span>
+              )}
+              {saved && (saved.debtCarryMissed || saved.debtCarryExtra) && (
+                <button className="btn-ghost text-xs py-1" disabled={busy} onClick={resetDebt}>
+                  Reset balance
+                </button>
+              )}
+              {saved?.debtResetAt && (
+                <span className="text-xs text-ink-faint">{`last reset ${shortDate(saved.debtResetAt)}`}</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {baselineUnknown && (
         <p className="text-xs text-danger">

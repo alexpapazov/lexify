@@ -18,7 +18,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { schedulePlan, dayCapacity, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
+import { schedulePlan, patternPlanForDate, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
 import { applyDailyCeiling } from '@/lib/dailyCeiling'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { getToday } from '@/lib/dates'
@@ -115,7 +115,9 @@ export function VocabGrowthProjection() {
           const key = `${sc.sourceLanguage}|${sc.targetLanguage}`
           const arr = new Float64Array(HORIZON + 1)
           if (isPatternSchedule(sc)) {
-            dates.forEach((dt, i) => { const cap = dayCapacity(sc, dt); arr[i] = isFinite(cap) ? cap : 0 })
+            // patternPlanForDate, not raw dayCapacity: a weekly goal spreads its number over the week
+            // rather than projecting every day at its cap.
+            dates.forEach((dt, i) => { const n = patternPlanForDate(sc, dt); arr[i] = isFinite(n) ? n : 0 })
           } else {
             for (const day of schedulePlan(sc, today, scheduleDone.get(key) ?? 0)) {
               const i = dateIndex.get(day.date)

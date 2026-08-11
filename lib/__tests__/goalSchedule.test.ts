@@ -2,7 +2,7 @@ import {
   addScheduleDays, weekdayOfDate, daysBetween, eachDate, MAX_SCHEDULE_DAYS,
   dayCapacity, capacityWindow, waterFill, distributeIntegers, activeSegments,
   scheduleStatus, schedulePace, scheduleRemedies, schedulePlan, plannedForDate, assignedPlan, validateSchedule,
-  isPatternSchedule, planEnd, PATTERN_HORIZON_DAYS,
+  isPatternSchedule, planEnd, PATTERN_HORIZON_DAYS, patternPlanForDate, progressStart,
 } from '../goalSchedule'
 import type { GoalSchedule } from '@/domain'
 
@@ -13,6 +13,7 @@ function makeSchedule(over: Partial<GoalSchedule> = {}): GoalSchedule {
     targetKind: 'new_words', targetCount: 100,
     startDate: '2026-09-01', deadline: '2026-09-20',
     baselineCount: 0, dailyCeiling: null, weekdayLimits: null, dateExceptions: null,
+    weeklyTarget: null, debtCarryMissed: false, debtCarryExtra: false, debtResetAt: null,
     checkpoints: [], archivedAt: null,
     createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
     ...over,
@@ -528,5 +529,147 @@ describe('capacityWindow', () => {
     expect(w.dates).toHaveLength(12)
     expect(w.caps.filter(c => c > 0)).toHaveLength(10)
     expect(w.total).toBe(50)
+  })
+})
+
+// ─── Weekly patterns + debt (migration 117) ───────────────────────────────────
+
+describe('patternPlanForDate — weekly framing', () => {
+  /** Open-ended weekly pattern from Tuesday 2026-09-01. Week under test: Mon 2026-09-07 → Sun 09-13. */
+  const weekly = (over: Partial<GoalSchedule> = {}) =>
+    makeSchedule({ targetCount: null, deadline: null, weeklyTarget: 35, ...over })
+  const WEEK = ['2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-12', '2026-09-13']
+
+  it('splits the weekly number evenly across an unconstrained week', () => {
+    const s = weekly()
+    for (const d of WEEK) expect(patternPlanForDate(s, d)).toBe(5)
+  })
+
+  it('respects days off and still delivers the full weekly number', () => {
+    const s = weekly({ weekdayLimits: { '6': 0, '0': 0 } })   // weekends off
+    expect(patternPlanForDate(s, '2026-09-12')).toBe(0)       // Saturday
+    expect(patternPlanForDate(s, '2026-09-13')).toBe(0)       // Sunday
+    expect(WEEK.reduce((a, d) => a + patternPlanForDate(s, d), 0)).toBe(35)
+    expect(patternPlanForDate(s, '2026-09-07')).toBe(7)       // 35 over the 5 remaining days
+  })
+
+  it('rounds to integers without losing a word', () => {
+    const s = weekly({ weeklyTarget: 33 })
+    const days = WEEK.map(d => patternPlanForDate(s, d))
+    expect(days.reduce((a, b) => a + b, 0)).toBe(33)
+    for (const n of days) expect([4, 5]).toContain(n)
+  })
+
+  it('gives partial start weeks the whole number over the days that exist', () => {
+    // The week containing the start date reaches back to Monday 2026-08-31, which is BEFORE the
+    // schedule — that day has capacity 0, so Tue–Sun absorb all 35.
+    const s = weekly()
+    const firstWeek = eachDate('2026-08-31', '2026-09-06').map(d => patternPlanForDate(s, d))
+    expect(firstWeek[0]).toBe(0)
+    expect(firstWeek.reduce((a, b) => a + b, 0)).toBe(35)
+  })
+})
+
+describe('scheduleStatus — pattern debt', () => {
+  /** 5 words every day (weekday numbers), capped at 12, both carry directions on. */
+  const daily = (over: Partial<GoalSchedule> = {}) => makeSchedule({
+    targetCount: null, deadline: null,
+    weekdayLimits: { '0': 5, '1': 5, '2': 5, '3': 5, '4': 5, '5': 5, '6': 5 },
+    dailyCeiling: 12,
+    debtCarryMissed: true, debtCarryExtra: true,
+    ...over,
+  })
+
+  it('is inert when both carry flags are off — every day starts clean', () => {
+    const s = daily({ debtCarryMissed: false, debtCarryExtra: false })
+    const st = scheduleStatus({ schedule: s, today: '2026-09-03', doneSoFar: 0 })
+    expect(st.goal).toBe(5)
+    expect(st.debtBalance).toBe(0)
+  })
+
+  it('adds missed words onto today, capped by the ceiling', () => {
+    // Two days missed entirely: 10 owed + 5 base = 15, but the cap holds today at 12.
+    const st = scheduleStatus({ schedule: daily(), today: '2026-09-03', doneSoFar: 0 })
+    expect(st.debtBalance).toBe(10)
+    expect(st.goal).toBe(12)
+    expect(st.pace).toBe(-10)
+  })
+
+  it('NEVER discards what the cap withheld — it reappears the next day (statelessness)', () => {
+    // Still nothing done a day later: the balance regrows from history, so the withheld words are
+    // simply asked for again, capped again. Nothing was stored, so nothing could be lost.
+    const st = scheduleStatus({ schedule: daily(), today: '2026-09-04', doneSoFar: 0 })
+    expect(st.debtBalance).toBe(15)
+    expect(st.goal).toBe(12)
+  })
+
+  it('banks extra words and works them off later days', () => {
+    // 20 done in the first two days (planned 10): 10 banked → today asks for nothing.
+    const st = scheduleStatus({ schedule: daily(), today: '2026-09-03', doneSoFar: 20 })
+    expect(st.debtBalance).toBe(-10)
+    expect(st.goal).toBe(0)
+    expect(st.pace).toBe(10)
+  })
+
+  it('carry-missed alone ignores surplus; carry-extra alone ignores deficit', () => {
+    const missedOnly = daily({ debtCarryExtra: false })
+    expect(scheduleStatus({ schedule: missedOnly, today: '2026-09-03', doneSoFar: 20 }).goal).toBe(5)
+    expect(scheduleStatus({ schedule: missedOnly, today: '2026-09-03', doneSoFar: 0 }).goal).toBe(12)
+    const extraOnly = daily({ debtCarryMissed: false })
+    expect(scheduleStatus({ schedule: extraOnly, today: '2026-09-03', doneSoFar: 0 }).goal).toBe(5)
+    expect(scheduleStatus({ schedule: extraOnly, today: '2026-09-03', doneSoFar: 20 }).goal).toBe(0)
+  })
+
+  it("excludes TODAY's work from the balance — studying must not both fill and shrink the goal", () => {
+    // 5 done, all of it today. Yesterday (Sep 1) is still fully owed: goal = 5 base + 5 owed.
+    const st = scheduleStatus({ schedule: daily(), today: '2026-09-02', doneSoFar: 5, doneToday: 5 })
+    expect(st.debtBalance).toBe(5)
+    expect(st.goal).toBe(10)
+  })
+
+  it('starts the balance over from the reset date', () => {
+    const s = daily({ debtResetAt: '2026-09-04' })
+    expect(progressStart(s)).toBe('2026-09-04')
+    // Only Sep 4 is owed now — the missed Sep 1–3 were forgiven by the reset.
+    const st = scheduleStatus({ schedule: s, today: '2026-09-05', doneSoFar: 0 })
+    expect(st.debtBalance).toBe(5)
+    expect(st.goal).toBe(10)
+  })
+
+  it('ignores the reset date when debt is off, and before the start date', () => {
+    expect(progressStart(daily({ debtCarryMissed: false, debtCarryExtra: false, debtResetAt: '2026-09-04' })))
+      .toBe('2026-09-01')
+    expect(progressStart(daily({ debtResetAt: '2026-08-01' }))).toBe('2026-09-01')
+  })
+
+  it('defaults the cap to 2.5x the day when no ceiling is set', () => {
+    const s = daily({ dailyCeiling: null })
+    const st = scheduleStatus({ schedule: s, today: '2026-09-10', doneSoFar: 0 })   // 45 owed by now
+    expect(st.goal).toBe(12)   // floor(5 * 2.5)
+  })
+
+  it('debts a WEEKLY pattern against the weekly spread, not the raw caps', () => {
+    const s = makeSchedule({
+      targetCount: null, deadline: null, weeklyTarget: 35,
+      debtCarryMissed: true, debtCarryExtra: true,
+    })
+    // Week one asks 35 over Tue–Sun (Mon 08-31 predates the start). By Monday 09-07 with nothing
+    // done, all 35 is owed; base Monday is 5, capped at floor(5 * 2.5) = 12.
+    const st = scheduleStatus({ schedule: s, today: '2026-09-07', doneSoFar: 0 })
+    expect(st.debtBalance).toBe(35)
+    expect(st.goal).toBe(12)
+  })
+})
+
+describe('validateSchedule — weekly rules', () => {
+  it('rejects a weekly number of 0 and a weekly number alongside a target', () => {
+    expect(validateSchedule(makeSchedule({ targetCount: null, deadline: null, weeklyTarget: 0 }))
+      .some(e => /weekly/.test(e))).toBe(true)
+    expect(validateSchedule(makeSchedule({ weeklyTarget: 35 }))
+      .some(e => /pick one/.test(e))).toBe(true)
+  })
+
+  it('accepts a bare weekly number as a complete schedule', () => {
+    expect(validateSchedule(makeSchedule({ targetCount: null, deadline: null, weeklyTarget: 35 }))).toEqual([])
   })
 })

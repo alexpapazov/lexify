@@ -4,10 +4,11 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 819 passing tests (52 suites).
+- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 848 passing tests (53 suites).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`116`, applied BY HAND. **`116` is
-  PENDING** — pattern schedules (nullable target/deadline) and the combined daily ceiling.
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`117`, applied BY HAND. **`117` is
+  PENDING** — weekly patterns + per-pattern debt on `goal_schedules` (`weekly_target`,
+  `debt_carry_missed`, `debt_carry_extra`, `debt_reset_at`).
 
 ---
 
@@ -23,9 +24,9 @@ implementation notes + error log); this file is the map you read first.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
   `001`–`113` are all applied and all live in `supabase/migrations/archive/`. **An empty top level
   is the signal that nothing is pending** — put a new migration there, tell the user to run it, and
-  move it into `archive/` once it's live. **`116_goal_schedule_patterns.sql` needs running.** Next number = **117**.
+  move it into `archive/` once it's live. **`117_pattern_debt.sql` needs running.** Next number = **118**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
-  **52 suites / 819 tests** pass). `npx tsc --noEmit` also reports 8 errors in
+  **53 suites / 848 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev
   artifacts** from the old dynamic routes, present at baseline, and not something you introduced.
 - **The user studies on desktop web AND an iPhone.** The PWA gets changes on push; the **native app

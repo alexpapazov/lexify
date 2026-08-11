@@ -10,7 +10,7 @@ import { createClient } from '@/lib/supabase/client'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 import { monteCarloSteps, percentile, measureRatingModel, mixForReps, driftLabel, estimateInitialInterval, seedStability, seedDifficulty, DEFAULT_DIFFICULTY, stabilityForInterval, type RatingModel } from '@/lib/forecastFsrs'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { schedulePlan, dayCapacity, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
+import { schedulePlan, patternPlanForDate, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { getToday } from '@/lib/dates'
 import { applyDailyCeiling } from '@/lib/dailyCeiling'
@@ -152,7 +152,9 @@ export function DueForecastProjection() {
           ensure(sc.sourceLanguage, sc.targetLanguage)
           const arr = new Float64Array(HORIZON + 1)
           if (isPatternSchedule(sc)) {
-            dates.forEach((dt, i) => { const cap = dayCapacity(sc, dt); arr[i] = isFinite(cap) ? cap : 0 })
+            // patternPlanForDate, not raw dayCapacity: a weekly goal spreads its number over the week
+            // rather than projecting every day at its cap.
+            dates.forEach((dt, i) => { const n = patternPlanForDate(sc, dt); arr[i] = isFinite(n) ? n : 0 })
           } else {
             for (const day of schedulePlan(sc, today, scheduleDone.get(key) ?? 0)) {
               const i = dateIndex.get(day.date)

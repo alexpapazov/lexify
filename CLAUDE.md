@@ -2630,6 +2630,51 @@ checkpoint; past days render `plannedForDate`, future days the live plan), and t
 which now saves itself with a TARGETED profile update — the settings page's omnibus `handleSave` no
 longer writes the `goal_*` columns, so don't put them back.
 
+
+## Plan kinds + pattern debt (2026-08-10, migration 117 — PENDING)
+
+The study-plan editor now leads with **Long-term goal / Daily goal / Weekly goal**. The kind is
+DERIVED, never stored: `targetCount != null` → long-term, `weeklyTarget != null` → weekly, else
+daily; the candidate builder nulls the fields the chosen kind doesn't own so a stale target in the
+form can't round-trip a daily goal back into a long-term one. Migration `117_pattern_debt.sql` adds
+`weekly_target`, `debt_carry_missed`, `debt_carry_extra`, `debt_reset_at` to `goal_schedules`.
+
+- **`patternPlanForDate(schedule, date)`** (lib/goalSchedule.ts) is the ONE way to ask what a
+  pattern day plans: daily = `dayCapacity`; weekly = the `weeklyTarget` water-filled across that
+  Monday-week's capacities + `distributeIntegers` (per-week deterministic, always sums to the
+  target). `schedulePlan`/`assignedPlan` and BOTH Future charts go through it — raw `dayCapacity`
+  would project a weekly pattern at its cap every day.
+- **Pattern debt is derived, never stored**: balance = planned-since-`progressStart` minus
+  done-through-YESTERDAY; `carryMissed` keeps the deficit side, `carryExtra` the surplus, either
+  alone clips the other to 0. goal = clamp(base + balance, 0, cap) where cap = `dailyCeiling` else
+  `floor(base × 2.5)`. The cap DEFERS by construction — nothing is stored, so the withheld words
+  regrow from history tomorrow. Debt is pattern-only: a long-term goal re-spreads, debt on top
+  double-charges.
+- **`scheduleStatus` takes optional `doneToday`** — without it, today's work both fills the goal and
+  shrinks the balance. Dashboard passes `todayGradCounts`, PresentSnapshot `gradToday`, LadderStudy
+  `gradTodayPair`; the editor preview omits it (accepted deflation).
+- **Reset button** = `debtResetAt: today`, persisted immediately FROM THE SAVED CONFIG (not the
+  candidate) so it can't commit unsaved form edits. `progressStart(schedule)` returns the reset
+  date when debt is on and it's later than `startDate`; `progressForSchedules` and the editor's
+  progress fetch both count from it. A reset is a DATE, not a zeroed counter.
+- `-debtBalance` for a zero balance is `-0` — `pace: -debtBalance || 0` normalizes it (a test
+  caught `expect(0).toBe(-0)` failing).
+
+## Folder counts blind to climbing cards (2026-08-10)
+
+**Bug (user screenshot)**: decks showed cards in Learning while the parent folder showed 0 —
+"impossible". `app/library/folder/page.tsx` had its own inline `countDeck` that classified purely
+from `card_states` rows, but a card mid-climb (ladder OR pathway) has **no card_states row until
+graduation** — only a climb row — so the folder counted it Unlearned. The deck page and
+`lib/folderStats.ts` already used `climbInProgress`. Fix: the folder page loads
+`SupabaseLadderClimbRepository.listAllForUser` alongside its per-deck fetches and mirrors the shared
+`statusOf` rule in its counts, its stat-box card filter, and the card status labels. **Any surface
+that classifies cards New/Learning must consult `climbInProgress(climb.get(cardId))` — card_states
+alone cannot see pre-graduation progress.** Same pass fixed the two remaining stale
+`rungIndex >= 1` checks (`app/study/page.tsx` dashboard rollup, `PresentSnapshot` card lists) and
+the deck page's **"Rung NaN"** badge — a pathway `RouteState` has no `rungIndex`, so pathway
+learning cards now read "Learning" while ladder cards keep "Rung N".
+
 ## Verifying changes
 
 ```

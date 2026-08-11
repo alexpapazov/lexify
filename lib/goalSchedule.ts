@@ -125,6 +125,41 @@ export function dayCapacity(schedule: GoalSchedule, date: string): number {
   return Math.min(ceiling, Math.max(0, limit))
 }
 
+/**
+ * A PATTERN schedule's planned words for one date — the number the day actually asks for.
+ *
+ * Daily framing (no `weeklyTarget`): identical to `dayCapacity` — the weekday number, clamped by the
+ * ceiling, with date exceptions winning outright.
+ *
+ * Weekly framing: `weeklyTarget` is water-filled across that Monday-week's capacities, so days off
+ * take nothing and the rest split evenly — the same cap-not-weight rule as everywhere else. The
+ * spread is per-week deterministic: every week asks for the same total, shaped by that week's days.
+ */
+export function patternPlanForDate(schedule: GoalSchedule, date: string): number {
+  if (schedule.weeklyTarget == null) {
+    const cap = dayCapacity(schedule, date)
+    return isFinite(cap) ? cap : 0
+  }
+  // Monday of the week containing `date` (JS getDay: 0 = Sunday → Monday-first column index).
+  const monday = addScheduleDays(date, -((weekdayOfDate(date) + 6) % 7))
+  const week = eachDate(monday, addScheduleDays(monday, 6))
+  const caps = week.map(d => dayCapacity(schedule, d))
+  const { values } = waterFill(schedule.weeklyTarget, caps)
+  const whole = distributeIntegers(values, caps)
+  return whole[week.indexOf(date)] ?? 0
+}
+
+/**
+ * Where a schedule's PROGRESS window starts. For a pattern schedule with debt on, the Reset button
+ * moves it forward (`debtResetAt`) — the balance is derived from planned-vs-done since this date, so
+ * "reset the debt" can only mean "start counting from today", exactly like the full-debt resets.
+ */
+export function progressStart(schedule: GoalSchedule): string {
+  const usesDebt = schedule.targetCount == null && (schedule.debtCarryMissed || schedule.debtCarryExtra)
+  if (usesDebt && schedule.debtResetAt && schedule.debtResetAt > schedule.startDate) return schedule.debtResetAt
+  return schedule.startDate
+}
+
 /** Capacity for each date in [from, to], and their total. `Infinity` propagates to the total. */
 export function capacityWindow(schedule: GoalSchedule, from: string, to: string): { dates: string[]; caps: number[]; total: number } {
   const dates = eachDate(from, to)
@@ -286,6 +321,11 @@ export interface ScheduleStatus {
   remedies: ScheduleRemedies | null
   /** True for a schedule with no finish line — `remaining`/`pace`/`feasible` carry no meaning. */
   isPattern: boolean
+  /**
+   * Pattern debt: planned-since-start minus done-through-yesterday, filtered by the carry flags
+   * (>0 = words owed, <0 = banked surplus). Always 0 for target schedules and debt-off patterns.
+   */
+  debtBalance: number
 }
 
 export interface ScheduleStatusArgs {
@@ -299,26 +339,55 @@ export interface ScheduleStatusArgs {
    * Both are cumulative, which is what lets checkpoint counts be cumulative too.
    */
   doneSoFar: number
+  /**
+   * Today's portion of `doneSoFar`. Only pattern DEBT needs it — the balance must compare planned
+   * against done-through-YESTERDAY, or studying today would both fill the goal and shrink it.
+   * Omitting it makes the debt goal deflate as you study today; harmless for previews.
+   */
+  doneToday?: number
 }
 
 /**
  * Everything a surface needs to render a schedule: today's number, why it's that number, whether the
  * schedule is still possible, and what to do about it if not.
  */
-export function scheduleStatus({ schedule, today, doneSoFar }: ScheduleStatusArgs): ScheduleStatus {
+export function scheduleStatus({ schedule, today, doneSoFar, doneToday }: ScheduleStatusArgs): ScheduleStatus {
   const end = planEnd(schedule, today)
   const from = today > schedule.startDate ? today : schedule.startDate
 
-  // ── Pattern schedule: no finish line, so today's goal IS today's capacity ──
-  // Everything downstream of a target (remaining, pace, feasibility, re-spreading) is inapplicable
-  // rather than zero-by-accident, so it reports neutral values instead of pretending to measure.
+  // ── Pattern schedule: no finish line, so today's goal IS today's planned number ──
+  // Everything downstream of a target (remaining, feasibility, re-spreading) is inapplicable rather
+  // than zero-by-accident, so it reports neutral values instead of pretending to measure.
   if (schedule.targetCount == null) {
-    const cap = dayCapacity(schedule, today)
+    const base = patternPlanForDate(schedule, today)
+    let goal = base
+    let debtBalance = 0
+
+    // ── Debt (opt-in, per flag) — the ONE pattern measure with a cumulative memory ──
+    // Derived, never stored: planned-since-start minus done-through-yesterday. carryMissed keeps
+    // the deficit side, carryExtra the surplus side; either alone clips the other to zero. The
+    // ceiling caps the adjusted goal and — because the balance is recomputed from history each
+    // day — whatever the cap withholds simply reappears tomorrow, capped again. Exactly the
+    // deferral contract `capGoal` documents; do not turn this into a stored counter.
+    if (schedule.debtCarryMissed || schedule.debtCarryExtra) {
+      const start = progressStart(schedule)
+      const yesterday = addScheduleDays(today, -1)
+      let planned = 0
+      if (yesterday >= start) for (const d of eachDate(start, yesterday)) planned += patternPlanForDate(schedule, d)
+      const doneThroughYesterday = Math.max(0, doneSoFar - (doneToday ?? 0))
+      let balance = planned - doneThroughYesterday
+      if (!schedule.debtCarryMissed) balance = Math.min(balance, 0)
+      if (!schedule.debtCarryExtra)  balance = Math.max(balance, 0)
+      debtBalance = balance
+      // The cap: the schedule's own ceiling, else 2.5× the day's base — the same multiple the
+      // carryover system uses, so debt can never pile an unclearable wall onto one day.
+      const cap = schedule.dailyCeiling ?? Math.floor(base * 2.5)
+      goal = Math.min(Math.max(0, base + balance), Math.max(cap, 0))
+    }
+
     const window = capacityWindow(schedule, from, end)
     return {
-      // An uncapped day in a pattern schedule asks for nothing: with no target and no ceiling there
-      // is no number to derive. That's a schedule waiting to be filled in, not an infinite goal.
-      goal: isFinite(cap) ? cap : 0,
+      goal,
       binding: null,
       segments: [],
       remaining: 0,
@@ -328,9 +397,12 @@ export function scheduleStatus({ schedule, today, doneSoFar }: ScheduleStatusArg
       shortfall: 0,
       done: false,
       expired: !!schedule.deadline && today > schedule.deadline,
-      pace: 0,
+      // Ahead/behind IS meaningful once debt gives the pattern a memory: negative balance = banked.
+      // (`|| 0` normalizes the -0 that negating a zero balance produces.)
+      pace: -debtBalance || 0,
       remedies: null,
       isPattern: true,
+      debtBalance,
     }
   }
 
@@ -387,6 +459,7 @@ export function scheduleStatus({ schedule, today, doneSoFar }: ScheduleStatusArg
     pace: schedulePace(schedule, today, doneSoFar),
     remedies: feasible ? null : scheduleRemedies(schedule, today, doneSoFar),
     isPattern: false,
+    debtBalance: 0,
   }
 }
 
@@ -503,16 +576,14 @@ export function schedulePlan(schedule: GoalSchedule, today: string, doneSoFar: n
 
   const { dates, caps } = capacityWindow(schedule, from, end)
 
-  // No finish line: each day simply carries what it can hold. An uncapped day contributes nothing,
-  // since there is no number to derive from a schedule that states neither a total nor a limit.
+  // No finish line: each day carries its planned number (daily = capacity; weekly = the spread).
   if (schedule.targetCount == null) {
     let running = doneSoFar
     const milestones = new Map(activeSegments(schedule, today).map(c => [c.date, c]))
     return dates.map((date, i) => {
-      const cap = caps[i] ?? 0
-      const words = isFinite(cap) ? cap : 0
+      const words = patternPlanForDate(schedule, date)
       running += words
-      return { date, words, cumulative: running, capacity: cap, milestone: milestones.get(date) ?? null }
+      return { date, words, cumulative: running, capacity: caps[i] ?? 0, milestone: milestones.get(date) ?? null }
     })
   }
 
@@ -558,12 +629,9 @@ export function schedulePlan(schedule: GoalSchedule, today: string, doneSoFar: n
 export function assignedPlan(schedule: GoalSchedule, today?: string): Map<string, number> {
   const end = schedule.deadline ?? planEnd(schedule, today ?? schedule.startDate)
   const { dates, caps } = capacityWindow(schedule, schedule.startDate, end)
-  // Pattern schedule: the assignment was always just "whatever that day holds".
+  // Pattern schedule: the assignment was always just that day's planned number.
   if (schedule.targetCount == null) {
-    return new Map(dates.map((d, i) => {
-      const cap = caps[i] ?? 0
-      return [d, isFinite(cap) ? cap : 0]
-    }))
+    return new Map(dates.map(d => [d, patternPlanForDate(schedule, d)]))
   }
   const { values } = waterFill(Math.max(0, schedule.targetCount - schedule.baselineCount), caps)
   const whole = distributeIntegers(values, caps)
@@ -614,8 +682,12 @@ export function validateSchedule(schedule: GoalSchedule): string[] {
       errors.push('Every day is set to 0 — there is nowhere to put any words.')
     }
   }
-  // Without a target OR a ceiling OR any weekday number, a pattern schedule states nothing at all.
-  if (target == null && schedule.dailyCeiling == null && !schedule.weekdayLimits) {
+  if (schedule.weeklyTarget != null) {
+    if (schedule.weeklyTarget <= 0) errors.push('Set a weekly number of at least 1 word.')
+    if (target != null) errors.push('A weekly number and a long-term target are different kinds of goal — pick one.')
+  }
+  // Without a target OR a weekly number OR a ceiling OR any weekday number, it states nothing at all.
+  if (target == null && schedule.weeklyTarget == null && schedule.dailyCeiling == null && !schedule.weekdayLimits) {
     errors.push('Set a target and deadline, or a daily number, or per-weekday numbers.')
   }
 

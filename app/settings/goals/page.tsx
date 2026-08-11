@@ -250,7 +250,9 @@ export default function GoalsPage() {
           name: next.name, targetKind: next.targetKind, targetCount: next.targetCount,
           startDate: next.startDate, deadline: next.deadline, baselineCount: next.baselineCount,
           dailyCeiling: next.dailyCeiling, weekdayLimits: next.weekdayLimits,
-          dateExceptions: next.dateExceptions, checkpoints: next.checkpoints,
+          dateExceptions: next.dateExceptions, weeklyTarget: next.weeklyTarget,
+          debtCarryMissed: next.debtCarryMissed, debtCarryExtra: next.debtCarryExtra,
+          debtResetAt: next.debtResetAt, checkpoints: next.checkpoints,
         }).catch(() => {})
       }
     } finally { setOverviewBusy(false) }

@@ -14,6 +14,7 @@ import { cachedRead, invalidateReads } from '@/lib/readCache'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { localDateWithTurnover } from '@/lib/dates'
 import { isAutoGraduated } from '@/lib/goalCarryover'
+import { progressStart } from '@/lib/goalSchedule'
 import type { GoalSchedule, GoalScheduleCheckpoint, GoalTargetKind, UserId } from '@/domain'
 
 function rowToSchedule(row: Record<string, unknown>): GoalSchedule {
@@ -32,6 +33,10 @@ function rowToSchedule(row: Record<string, unknown>): GoalSchedule {
     dailyCeiling:   (row.daily_ceiling as number | null) ?? null,
     weekdayLimits:  (row.weekday_limits as Record<string, number | null> | null) ?? null,
     dateExceptions: (row.date_exceptions as Record<string, number> | null) ?? null,
+    weeklyTarget:   (row.weekly_target as number | null) ?? null,
+    debtCarryMissed: (row.debt_carry_missed as boolean | null) ?? false,
+    debtCarryExtra:  (row.debt_carry_extra as boolean | null) ?? false,
+    debtResetAt:    (row.debt_reset_at as string | null) ?? null,
     checkpoints:    (row.checkpoints as GoalScheduleCheckpoint[] | null) ?? [],
     archivedAt:     (row.archived_at as string | null) ?? null,
     createdAt:      row.created_at as string,
@@ -44,7 +49,8 @@ export type GoalScheduleInput = Pick<
   GoalSchedule,
   'sourceLanguage' | 'targetLanguage' | 'name' | 'targetKind' | 'targetCount' |
   'startDate' | 'deadline' | 'baselineCount' | 'dailyCeiling' | 'weekdayLimits' |
-  'dateExceptions' | 'checkpoints'
+  'dateExceptions' | 'weeklyTarget' | 'debtCarryMissed' | 'debtCarryExtra' | 'debtResetAt' |
+  'checkpoints'
 >
 
 export class SupabaseGoalScheduleRepository {
@@ -99,6 +105,10 @@ export class SupabaseGoalScheduleRepository {
       daily_ceiling:   input.dailyCeiling,
       weekday_limits:  input.weekdayLimits,
       date_exceptions: input.dateExceptions,
+      weekly_target:   input.weeklyTarget,
+      debt_carry_missed: input.debtCarryMissed,
+      debt_carry_extra:  input.debtCarryExtra,
+      debt_reset_at:   input.debtResetAt,
       checkpoints:     input.checkpoints,
       updated_at:      new Date().toISOString(),
     }
@@ -218,7 +228,10 @@ export async function progressForSchedules({ userId, schedules, timezone, turnov
   }))
 
   if (newWord.length > 0) {
-    const earliest = newWord.reduce((min, s) => (s.startDate < min ? s.startDate : min), newWord[0]!.startDate)
+    // A debt reset moves a pattern schedule's counting window forward — same date-not-counter trick
+    // as the full-debt resets, so the fetch starts from the earliest EFFECTIVE start.
+    const starts = newWord.map(s => progressStart(s))
+    const earliest = starts.reduce((min, d) => (d < min ? d : min), starts[0]!)
     const rows = await fetchAllRows<Record<string, unknown>>(
       (from, to) => db.from('card_states')
         .select('graduated_at, accelerated_mode, cards(source_language, target_language)')
@@ -229,7 +242,7 @@ export async function progressForSchedules({ userId, schedules, timezone, turnov
         .order('graduated_at', { ascending: true }).range(from, to),
     ).catch(() => [] as Record<string, unknown>[])
 
-    const startByPair = new Map(newWord.map(s => [`${s.sourceLanguage}|${s.targetLanguage}`, s.startDate]))
+    const startByPair = new Map(newWord.map(s => [`${s.sourceLanguage}|${s.targetLanguage}`, progressStart(s)]))
     for (const key of startByPair.keys()) out.set(key, 0)
 
     for (const row of rows) {

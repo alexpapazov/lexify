@@ -1,9 +1,9 @@
 # Goal Scheduler
 
-**Status (2026-08-08): complete and wired.** Data model, engine, calendar editor, its own settings
-page, and all four goal consumers read it. Migration **114 is applied; 115 is PENDING** (it only
-stores the mode toggle — everything else works without it). **Never verified against a real
-account** (§7). Migration **116 is PENDING** (pattern schedules + the combined daily ceiling).
+**Status (2026-08-10): complete and wired.** Data model, engine, calendar editor, its own settings
+page, and all four goal consumers read it. Migrations **114–116 are applied; 117 is PENDING**
+(weekly patterns + per-pattern debt: `weekly_target`, `debt_carry_missed`, `debt_carry_extra`,
+`debt_reset_at`). **Never verified against a real account** (§7).
 
 A schedule answers the opposite question to a daily goal. `language_pairs.goals` says *"I want to do
 8 words a day"*; a schedule says *"I want 200 words by December 1st"* and works the daily number out
@@ -444,3 +444,38 @@ caught during the build, kept because they're easy to reintroduce.)*
   `AuthWall`, so it could not be exercised here. Unexercised: the save/update/retire round-trip, drag
   selection on a real pointer/touch device, both progress queries, the live preview against real
   graduation data, and every one of the four consumer branches in §5.
+
+---
+
+## 12. Plan kinds: long-term / daily / weekly, and pattern debt (2026-08-10, migration 117)
+
+The editor now leads with a three-way choice — **Long-term goal / Daily goal / Weekly goal** — and
+derives it rather than storing it: `targetCount != null` → long-term, `weeklyTarget != null` →
+weekly, else daily. The candidate builder nulls out whichever fields the chosen kind doesn't own, so
+a stale target lingering in the form can't round-trip a daily goal back into a long-term one.
+
+**Weekly goals** (`weekly_target`): `patternPlanForDate` water-fills the weekly number across that
+Monday-week's `dayCapacity` caps and integerizes with `distributeIntegers` — days off take nothing,
+the rest split evenly, and the week always sums to the target. The week containing the start date
+reaches back to a Monday with capacity 0, so the full number lands on the days that exist. All
+pattern consumers (schedulePlan, assignedPlan, both Future charts) go through `patternPlanForDate`
+now, NOT raw `dayCapacity` — raw capacity would project a weekly pattern at its cap every day.
+
+**Pattern debt** (`debt_carry_missed` / `debt_carry_extra`, patterns ONLY): the one pattern measure
+with cumulative memory, and it is still **derived, never stored** — balance = planned-since-start
+minus done-through-YESTERDAY. `carryMissed` keeps the deficit side, `carryExtra` the surplus side;
+either alone clips the other to zero. Today's goal = base + balance, clamped to the cap
+(`dailyCeiling`, else `floor(base × 2.5)` — the same multiple the carryover system uses). Whatever
+the cap withholds is not stored anywhere: the balance regrows from history tomorrow, so deferral is
+conservation by construction. `scheduleStatus` takes an optional `doneToday` so today's work doesn't
+both fill the goal and shrink the balance — all three study consumers pass it; the editor preview
+omits it (documented as harmless deflation).
+
+Debt stays pattern-only because a long-term goal RE-SPREADS (§1): its re-derived number has already
+absorbed the miss, and debt on top would charge for it twice.
+
+**Reset button** (`debt_reset_at`): "reset the balance at this instant" = move the counting window
+to today — a date, not a zeroed counter, exactly like the full-debt resets. `progressStart(schedule)`
+returns `debtResetAt` when debt is on and it's later than `startDate`; `progressForSchedules` and the
+editor's progress fetch both count from it. The editor's Reset persists immediately **from the SAVED
+config**, so pressing it never silently commits other unsaved edits sitting in the form.

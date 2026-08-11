@@ -12,6 +12,8 @@ import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseCardOnboardingRepository } from '@/lib/data/cardOnboarding'
 import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
+import { climbInProgress } from '@/lib/climbProgress'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { isCardStateDueNow } from '@/lib/dueStatus'
@@ -156,6 +158,9 @@ function FolderPageInner() {
   // Due-now context (enabled tracks per pair + tz + turnover-adjusted today) so counts match the
   // dashboard/session via the shared helper. Set in load(), read by both countDeck and the card filter.
   const [dueCtx, setDueCtx] = useState<{ enabledByPair: Map<string, EnabledTracks>; tz: string; today: string } | null>(null)
+  // Climb rows for every card in the folder — a pathway/ladder card mid-climb has NO card_states row
+  // yet, so without these the counts here call it Unlearned while the deck page calls it Learning.
+  const [climbMap, setClimbMap] = useState<Map<string, unknown>>(new Map())
   const [deckStats,    setDeckStats]    = useState<DeckWithCards[]>([])
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
   const [searchQuery,  setSearchQuery]  = useState('')
@@ -213,14 +218,19 @@ function FolderPageInner() {
       return true
     })
 
-    const stats = await Promise.all(relevantDecks.map(async deck => {
-      const [cards, states] = await Promise.all([
-        cardRepo.listByDeck(deck.id),
-        stateRepo.listByDeck(session.user.id, deck.id),
-      ])
-      return { deck, cards, states }
-    }))
+    const [stats, climb] = await Promise.all([
+      Promise.all(relevantDecks.map(async deck => {
+        const [cards, states] = await Promise.all([
+          cardRepo.listByDeck(deck.id),
+          stateRepo.listByDeck(session.user.id, deck.id),
+        ])
+        return { deck, cards, states }
+      })),
+      new SupabaseLadderClimbRepository().listAllForUser(session.user.id)
+        .catch(() => new Map<string, unknown>()),
+    ])
     setDeckStats(stats)
+    setClimbMap(climb)
 
     // Due-now context: enabled tracks per pair + tz + turnover-adjusted today, so the count matches
     // the dashboard/session via the shared helper (lib/dueStatus.ts). Small extra fetches; cheap.
@@ -247,13 +257,22 @@ function FolderPageInner() {
       const forwardStates = states.filter(s => s.reviewDirection !== 'reverse')
       const fwdMap = new Map(forwardStates.map(s => [s.cardId, s]))
       const activeCardIds = new Set(cards.map(cd => cd.id))
-      const activeFwd = forwardStates.filter(s => activeCardIds.has(s.cardId))
       const tracks = enabledByPair.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
+      // The SAME statusOf rule as the deck page / lib/folderStats: a card mid-climb has no state row
+      // until graduation, so classifying from card_states alone called it Unlearned here while the
+      // deck page said Learning — the counts have to walk CARDS, with climbInProgress as a source.
+      const statusOf = (cardId: string): 'graduated' | 'dormant' | 'learning' | 'new' => {
+        const st = fwdMap.get(cardId)
+        if (st?.dormant) return 'dormant'
+        if (st?.graduated) return 'graduated'
+        if (climbInProgress(climb.get(cardId)) || (st && !st.graduated)) return 'learning'
+        return 'new'
+      }
       return {
-        unlearned: cards.filter(cd => !fwdMap.has(cd.id)).length,
-        learning:  activeFwd.filter(s => !s.graduated).length,
-        graduated: activeFwd.filter(s => s.graduated && !s.dormant).length,
-        dormant:   activeFwd.filter(s => s.dormant).length,
+        unlearned: cards.filter(cd => statusOf(cd.id) === 'new').length,
+        learning:  cards.filter(cd => statusOf(cd.id) === 'learning').length,
+        graduated: cards.filter(cd => statusOf(cd.id) === 'graduated').length,
+        dormant:   cards.filter(cd => statusOf(cd.id) === 'dormant').length,
         dueNow:    states.filter(s =>
           activeCardIds.has(s.cardId) &&
           isCardStateDueNow(s, { tracks, tz: dTz, today: dToday, forwardState: fwdMap.get(s.cardId) })
@@ -316,11 +335,14 @@ function FolderPageInner() {
     // via the shared helper, so this matches the stat-box count exactly.
     const cardIsDue = (cardId: string) => !!dueCtx && states.some(s =>
       s.cardId === cardId && isCardStateDueNow(s, { tracks, tz: dueCtx.tz, today: dueCtx.today, forwardState: stateMap.get(cardId) }))
+    // Same climb-aware classification as the counts above, so clicking a stat box lists exactly the
+    // cards it counted (a mid-climb card has no state row but is still Learning, not New).
+    const inProgress = (cardId: string) => climbInProgress(climbMap.get(cardId))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)
-        if (activeFilter === 'new')       return !s
-        if (activeFilter === 'learning')  return s && !s.graduated
+        if (activeFilter === 'new')       return !s && !inProgress(card.id)
+        if (activeFilter === 'learning')  return (s && !s.graduated && !s.dormant) || (!s && inProgress(card.id))
         if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
         if (activeFilter === 'dormant')   return !!s?.dormant
         if (activeFilter === 'due')       return cardIsDue(card.id)
@@ -329,7 +351,8 @@ function FolderPageInner() {
       })
       .map(card => {
         const s = stateMap.get(card.id)
-        const status = !s ? 'New' : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+        const status = !s ? (inProgress(card.id) ? 'Learning' : 'New')
+          : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
         return { card, state: s, deckName: deck.name, deckId: deck.id, status }
       })
   }) : []

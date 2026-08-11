@@ -434,7 +434,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           const done = await progressForSchedules({
             userId: uid, schedules: [sched], timezone: tzRef.current, turnoverHour: turnoverRef.current,
           }).then(m => m.get(`${src}|${tgt}`) ?? 0).catch(() => 0)
-          goalToday = scheduleStatus({ schedule: sched, today: todayStr, doneSoFar: done }).goal
+          goalToday = scheduleStatus({ schedule: sched, today: todayStr, doneSoFar: done, doneToday: gradTodayPair }).goal
         } else if (fullDebtOn && fullDebtSince) {
           // Unbounded: the whole running deficit/surplus since the enable date lands on today's goal.
           const lower = new Date(new Date(fullDebtSince + 'T00:00:00Z').getTime() - 48 * 3600 * 1000).toISOString()

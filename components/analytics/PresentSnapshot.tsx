@@ -8,6 +8,7 @@
  *   3. Time tracking — time spent on Lexify today, and a projected time-to-finish split into clearing
  *      today's Due Now reviews and learning the remaining new-word goal.
  */
+import { climbInProgress } from '@/lib/climbProgress'
 import { useEffect, useMemo, useState } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { fetchAnalyticsProfile, fetchGraduationsWindow, fetchLadderEventsWindow, fetchReviewEventsWindow, fetchGraduationsSince } from '@/lib/analyticsData'
@@ -355,7 +356,7 @@ export function PresentSnapshot() {
               if (fwdProd || fwdRecall || revDue) lists.due.push(entry(card))
               continue
             }
-            if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) lists.learning.push(entry(card))
+            if (climbInProgress(cl) || (s && !s.graduated)) lists.learning.push(entry(card))
             else lists.new.push(entry(card))
           }
         })
@@ -416,7 +417,7 @@ export function PresentSnapshot() {
               .catch(() => new Map<string, number>())
         const statusFor = (key: string) => {
           const sc = scheduleByPair.get(key)
-          return sc ? scheduleStatus({ schedule: sc, today, doneSoFar: scheduleDone.get(key) ?? 0 }) : null
+          return sc ? scheduleStatus({ schedule: sc, today, doneSoFar: scheduleDone.get(key) ?? 0, doneToday: gradToday.get(key) ?? 0 }) : null
         }
 
         const goals = pairs
@@ -680,14 +681,16 @@ export function PresentSnapshot() {
             learnedSince: sc ? (scheduleDone.get(key) ?? 0) : (gradToday.get(key) ?? 0),
             span: 0,
             remaining: 0,
-            todayGoal: week[0] ?? 0,
+            // The status's goal, not the plan's first day — with debt on they differ (carry + cap).
+            todayGoal: st ? st.goal : week[0] ?? 0,
             studyDaysLeft: week.filter(w => w > 0).length,
             calendarDaysLeft: null,
             // A pattern schedule knows when it began; plain weekday goals don't, so "learned since"
             // falls back to today's count and says so.
             startDate: sc?.startDate ?? null,
             deadline: null,
-            pace: 0,
+            // Debt gives a pattern a real ahead/behind position; debt-off patterns report 0 as before.
+            pace: st?.pace ?? 0,
             feasible: true,
             shortfall: 0,
             done: false,

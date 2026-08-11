@@ -567,6 +567,18 @@ export interface GoalSchedule {
   weekdayLimits:  Record<string, number | null> | null
   /** Per-date caps (YYYY-MM-DD → words). Overrides BOTH the weekday limit and the ceiling. */
   dateExceptions: Record<string, number> | null
+  /**
+   * "N words a WEEK", spread across the week's study days — the weekly framing of a pattern
+   * schedule. Mutually exclusive with `targetCount` (a weekly number and a finish line are
+   * different kinds of goal); null = the daily framing.
+   */
+  weeklyTarget:   number | null
+  /** Pattern-schedule DEBT: roll a missed day's shortfall into the next day's goal. */
+  debtCarryMissed: boolean
+  /** Pattern-schedule debt: bank a surplus against the next day's goal. */
+  debtCarryExtra:  boolean
+  /** Start the derived debt balance from this date (the Reset button). Null = from `startDate`. */
+  debtResetAt:    string | null
   checkpoints:    GoalScheduleCheckpoint[]
   /** Non-null once retired; the pair falls back to its weekday goals. */
   archivedAt:     string | null

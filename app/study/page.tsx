@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
+import { climbInProgress } from '@/lib/climbProgress'
 import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { routes } from '@/lib/routes'
@@ -472,10 +473,10 @@ export default function StudyPage() {
         const s = stateMap.get(cardId)
         if (s?.dormant) return 'dormant'
         if (s?.graduated) return 'graduated'
-        const cl = climb.get(cardId) as { rungIndex: number; graduated: boolean } | undefined
-        // Any non-graduated forward state = in the pipeline (matches the deck page). A card climbing the
-        // ladder (rung ≥ 1) also counts even without a state row.
-        if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) return 'learning'
+        // Any non-graduated forward state = in the pipeline (matches the deck page). A card climbing
+        // also counts even without a state row — climbInProgress reads BOTH climb shapes (ladder
+        // rungIndex/rungHistory, pathway history) and survives drop-backs to the start.
+        if (climbInProgress(climb.get(cardId)) || (s && !s.graduated)) return 'learning'
         return 'new'
       }
       const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
@@ -926,7 +927,7 @@ export default function StudyPage() {
       // absorbed any missed day. Running carryover on top would charge for that day a second time.
       const sched = schedules.get(key)
       if (sched) {
-        const st = scheduleStatus({ schedule: sched, today: todayStr, doneSoFar: scheduleDone.get(key) ?? 0 })
+        const st = scheduleStatus({ schedule: sched, today: todayStr, doneSoFar: scheduleDone.get(key) ?? 0, doneToday: todayGradCounts.get(key) ?? 0 })
         // Nothing owed today (a scheduled day off, or the target is already met) → off the list.
         if (st.goal <= 0) return []
         return [{ pair: p, key, goal: st.goal, delta: 0 }]
@@ -963,7 +964,7 @@ export default function StudyPage() {
     return raw
       .map(r => ({ ...r, goal: share.get(r.key) ?? r.goal }))
       .filter(r => r.goal > 0)
-  }, [langPairs, dailyCeiling, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, fullDebtResets, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals, schedules, scheduleDone])
+  }, [langPairs, dailyCeiling, todayWeekday, yesterdayWeekday, yesterdayGradCounts, carryShortfall, carrySurplus, fullDebt, fullDebtSince, fullDebtResets, sinceGradCounts, todayStr, skipShortfallDays, skipSurplusDays, exemptDayGrads, deferrals, schedules, scheduleDone, todayGradCounts])
 
   // "Move today's load to tomorrow" for one language: record today's study-day as deferred for that pair.
   // owedGoalForDate then zeroes it today and adds it to tomorrow; the row drops off the list immediately.
