@@ -1,6 +1,16 @@
 # Learning Pipeline
 
-This document covers how a card moves from **unlearned to graduated** — the structured teaching phase that runs before long-term spaced repetition begins. Everything here lives in `engine/pipeline.ts` and the pre-graduation branch of `progressAfterReview()`. For what happens after graduation, see `features/Due Now.md`.
+> **RETIRED AS A STUDY FLOW (2026-08-10).** No session page can build a pre-graduation
+> step-pipeline queue anymore: learning happens exclusively through the pair's configured
+> **ladder/pathway** (`components/ladder/LadderStudy.tsx`). The three review-session pages accept
+> only graduated categories (`graduated | due | dormant | starred`); bare URLs and the removed
+> `new`/`learning` categories redirect to the matching ladder page. What REMAINS in use from this
+> document: `engine/pipeline.ts` itself — `initialCardState` (boot-backs / "Move to learning"
+> resets), the graduated branch of `progressAfterReview()` (scheduling + the relearn loop), and
+> `fastTrackCardState` (bulk graduation). The step-walking teaching phase below is historical
+> reference only. Do not add new callers.
+
+This document covers how a card moves from **unlearned to graduated** — the structured teaching phase that ran before long-term spaced repetition begins. Everything here lives in `engine/pipeline.ts` and the pre-graduation branch of `progressAfterReview()`. For what happens after graduation, see `features/Due Now.md`.
 
 ---
 

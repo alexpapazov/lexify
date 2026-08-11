@@ -748,13 +748,12 @@ function SynonymScanModal({ deckId, userId, candidates, deckCards, sourceLanguag
 
 // ─── Gear settings panel ──────────────────────────────────────────────────────
 
-function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, defaultSpillover, maxCards, cards, sourceLanguage, targetLanguage, onboardableIds, pendingOnboarding, onClose }: {
+function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, maxCards, cards, sourceLanguage, targetLanguage, onboardableIds, pendingOnboarding, onClose }: {
   deckId:           string
   userId:           string
   deck:             Deck
   initialPrefs:     DeckPreferences | null
   defaultLimit:     number
-  defaultSpillover: boolean
   maxCards:         number
   cards:            Card[]
   sourceLanguage:   string
@@ -784,7 +783,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
   const [dailyLimit,        setDailyLimit]        = useState(Math.min(initialPrefs?.dailyNewCards ?? defaultLimit, maxCards))
   const [onlyToday,         setOnlyToday]         = useState(false)
   const [todayOverride,     setTodayOverride]     = useState(initialPrefs?.dailyOverride ?? defaultLimit)
-  const [spillover,         setSpillover]         = useState(initialPrefs?.spilloverDue  ?? defaultSpillover)
   const [cardsPerSessionOn,  setCardsPerSessionOn]  = useState((initialPrefs?.cardsPerSession ?? 0) > 0)
   const [cardsPerSession,    setCardsPerSession]    = useState(initialPrefs?.cardsPerSession || 12)
   // Free-typed draft for "Max cards in pipeline" — clamp only on commit (Enter/blur), not while typing.
@@ -807,7 +805,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
 
   // Reset menu + confirm states
   const [showResetMenu,        setShowResetMenu]        = useState(false)
-  const [confirmReset,         setConfirmReset]         = useState(false)
   const [confirmResetChoices,  setConfirmResetChoices]  = useState(false)
   const [confirmFullReset,     setConfirmFullReset]     = useState(false)
   const [resetting,            setResetting]            = useState(false)
@@ -861,7 +858,7 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
           dailyNewCards:     dailyLimit,
           dailyOverride:     onlyToday ? todayOverride : null,
           dailyOverrideDate: onlyToday ? today         : null,
-          spilloverDue:      spillover,
+          spilloverDue:      initialPrefs?.spilloverDue ?? false,
           cardsPerSession:      cardsPerSessionOn ? clampCards(cardsDraft) : null,
           electiveSessionLimit: cardsPerSessionOn ? clampCards(cardsDraft) : 0,
           learningBatchMode:    cardsPerSessionOn ? learningBatchMode : false,
@@ -880,19 +877,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
     }
   }
 
-  async function handleResetBacklog() {
-    setResetting(true)
-    setResetError(null)
-    try {
-      await prefRepo.resetDeckBacklog(userId, deckId)
-      setConfirmReset(false)
-      onClose()
-    } catch (err: unknown) {
-      setResetError(err instanceof Error ? err.message : 'Reset failed')
-    } finally {
-      setResetting(false)
-    }
-  }
 
   async function handleResetChoices() {
     setResetting(true)
@@ -944,13 +928,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
 
   return (
     <>
-      {confirmReset && (
-        <ConfirmDialog
-          message="This will clear the backlog for this deck — only today's cards will be due. Study progress is kept."
-          onConfirm={handleResetBacklog}
-          onCancel={() => setConfirmReset(false)}
-        />
-      )}
       {confirmResetChoices && (
         <ConfirmDialog
           message="This will clear all cached distractor choices for every card in this deck. New distractors will be generated in the background. Study progress is kept."
@@ -984,10 +961,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
               >↺</button>
               {showResetMenu && (
                 <div className="absolute right-0 top-full mt-1 z-10 bg-surface-raised border border-line/10 rounded-lg py-1 w-52 shadow-xl">
-                  <button
-                    onClick={() => { setShowResetMenu(false); setConfirmReset(true) }}
-                    className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-line/5 transition-colors"
-                  >Reset backlog</button>
                   <button
                     onClick={() => { setShowResetMenu(false); setConfirmResetChoices(true) }}
                     className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-line/5 transition-colors"
@@ -1029,19 +1002,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, d
                   <p className="text-xs text-ink-faint">Tomorrow reverts to {dailyLimit} cards/day.</p>
                 </div>
               )}
-            </div>
-
-            {/* Spillover toggle */}
-            <div className="space-y-1">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input type="checkbox" checked={spillover} onChange={e => setSpillover(e.target.checked)} className="accent-accent w-4 h-4" />
-                <span className="text-sm text-ink">Due cards spill over</span>
-              </label>
-              <p className="text-xs text-ink-faint pl-6">
-                {spillover
-                  ? 'Cards you miss accumulate — tomorrow you may see more than your daily limit.'
-                  : 'Missed cards count toward tomorrow\'s limit — total stays at ' + dailyLimit + '/day.'}
-              </p>
             </div>
 
             {/* Learning pipeline cap — also controls elective/study-ahead cap */}
@@ -1266,7 +1226,6 @@ export default function DeckDetailPage() {
   const [prefs,            setPrefs]            = useState<DeckPreferences | null>(null)
   const [userId,           setUserId]           = useState('')
   const [defaultLimit,     setDefaultLimit]     = useState(DEFAULT_DAILY_NEW_CARDS)
-  const [defaultSpillover, setDefaultSpillover] = useState(false)
   const [tz,               setTz]               = useState('UTC')
   const [turnoverHour,     setTurnoverHour]     = useState(0)
   const [enabledTracks,    setEnabledTracks]    = useState<EnabledTracks | undefined>(undefined)
@@ -1306,11 +1265,10 @@ export default function DeckDetailPage() {
     ])
 
     const { data: profile } = await supabase.from('profiles')
-      .select('default_daily_new_cards, spillover_due, timezone, day_turnover_hour')
+      .select('default_daily_new_cards, timezone, day_turnover_hour')
       .eq('user_id', uid).single()
 
     if (profile?.default_daily_new_cards) setDefaultLimit(profile.default_daily_new_cards)
-    if (profile?.spillover_due !== undefined) setDefaultSpillover(profile.spillover_due)
     setTz((profile?.timezone as string | null) ?? deviceTimeZone())
     setTurnoverHour((profile?.day_turnover_hour as number | null) ?? 0)
 
@@ -1724,7 +1682,7 @@ export default function DeckDetailPage() {
       {showGear && (
         <DeckSettingsPanel
           deckId={deckId} userId={userId} deck={deck} initialPrefs={prefs}
-          defaultLimit={defaultLimit} defaultSpillover={defaultSpillover}
+          defaultLimit={defaultLimit}
           maxCards={cards.length}
           cards={cards} sourceLanguage={deck.sourceLanguage} targetLanguage={deck.targetLanguage}
           // Only never-studied cards may be onboarded: rating one writes a fresh graduated state, which
@@ -1770,7 +1728,6 @@ export default function DeckDetailPage() {
           )}
           <p className="text-ink-muted text-sm mt-1">
             {cards.length} cards · {deck.targetLanguage.toUpperCase()} · {activeLimit} new/day
-            {(prefs?.spilloverDue ?? defaultSpillover) && <span className="text-warning ml-1">· spillover on</span>}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0 flex-wrap">

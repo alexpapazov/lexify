@@ -21,7 +21,6 @@ import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
 import { SupabaseReviewEventRepository } from '@/lib/data/reviewEvents'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabasePipelineRepository }    from '@/lib/data/pipelines'
-import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { SupabaseCardConfusionRepository }   from '@/lib/data/cardConfusions'
 import { SupabaseTypingErrorMarkRepository } from '@/lib/data/typingErrorMarks'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
@@ -38,7 +37,7 @@ import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange, nextDifficulty } from '@/engine/fsr
 import { decideProductionMode, type ProductionMode } from '@/engine/productionMode'
 import type { Card, CardState, Pipeline, Rating, GradingSettings, Folder, CardConfusion, SchedulerParams, GradingIssueType, TypedErrorCategory, TypedStrictness } from '@/domain'
 import { DEFAULT_TYPED_STRICTNESS } from '@/domain'
-import { DEFAULT_DAILY_NEW_CARDS, DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
+import { DEFAULT_GRADING_SETTINGS, DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
@@ -48,7 +47,7 @@ import { setAudioSourceDefault, setAudioSourceByLanguage } from '@/lib/speak'
 import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
 import { markReverseDormant } from '@/lib/dormancy'
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
-import { computeActiveLearningSet, dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, buildCalibrationMap, calibrationFor, buildRetentionMap, retentionFor, type EnabledTracks } from '@/lib/sessionLimits'
+import { dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, buildCalibrationMap, calibrationFor, buildRetentionMap, retentionFor, type EnabledTracks } from '@/lib/sessionLimits'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { interleaveConfusablePairs } from '@/engine/confusion'
@@ -98,7 +97,7 @@ function shuffle<T>(arr: T[]): T[] {
 /** Cards-per-elective-batch for folder/all sessions (no per-deck pref available). */
 const FOLDER_ELECTIVE_LIMIT = 20
 
-type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
+type StudyCategory = 'graduated' | 'due' | 'dormant' | 'starred'
 
 export default function FolderSessionPage() {
   return (
@@ -114,9 +113,21 @@ function FolderSessionInner() {
   const searchParams = useSearchParams()
   const folderId = searchParams.get('folder') ?? ''
   const categoryParam = searchParams.get('category')
+  // This page ONLY reviews graduated cards; learning happens on the folder's ladder/pathway.
   const category: StudyCategory | null =
-    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
+    categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
       ? categoryParam : null
+
+  // The legacy step-pipeline learning flow is gone: a bare URL (the old "new + due" folder session)
+  // and the removed new/learning categories land on the folder's ladder/pathway instead.
+  const legacyLearningUrl = !category
+  useEffect(() => {
+    if (legacyLearningUrl) {
+      router.replace(routes.ladderFolder(folderId,
+        categoryParam === 'new' || categoryParam === 'learning' ? { category: categoryParam } : {}))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legacyLearningUrl, folderId, categoryParam])
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
   const [index,           setIndex]           = useState(0)
@@ -211,13 +222,13 @@ function FolderSessionInner() {
     async function load() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth'); return }
+      if (!category) return   // legacy URL — the redirect effect is already navigating to the ladder
       setUserId(session.user.id)
 
       const deckRepo     = new SupabaseDeckRepository()
       const cardRepo     = new SupabaseCardRepository()
       const stateRepo    = new SupabaseCardStateRepository()
       const pipelineRepo = new SupabasePipelineRepository()
-      const prefRepo     = new SupabaseDeckPreferencesRepository()
       const folderRepo   = new SupabaseFolderRepository()
 
       // One wave for everything that needs only the user id — the overrides, scheduler-params and
@@ -301,10 +312,9 @@ function FolderSessionInner() {
       // 2-3 per deck (the old per-deck for…of serialized round trips across the whole folder).
       // Cards come back WITHOUT audio blobs (SESSION_CARD_COLUMNS); queued clips hydrate below.
       const folderDeckIds = decks.map(d => d.id)
-      const [cardsByDeck, allStatesList, prefsByDeck] = await Promise.all([
+      const [cardsByDeck, allStatesList] = await Promise.all([
         cardRepo.listForDecks(folderDeckIds),
         stateRepo.listAllForUser(session.user.id),
-        prefRepo.listForDecks(session.user.id, folderDeckIds),
       ])
       const statesByCard = new Map<string, typeof allStatesList>()
       for (const s of allStatesList) {
@@ -346,11 +356,7 @@ function FolderSessionInner() {
           const common = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
           for (const card of cards) {
             const state = stateMap.get(card.id)
-            if (category === 'new' && !state) {
-              categoryCards.push({ ...common, card, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
-            } else if (category === 'learning' && state && !state.graduated) {
-              categoryCards.push({ ...common, card, state, productionMode: null })
-            } else if (category === 'graduated' && state?.graduated && !state.dormant) {
+            if (category === 'graduated' && state?.graduated && !state.dormant) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'starred' && card.starred && state?.graduated) {
               // GRADUATED starred only. Non-graduated starred cards belong to the ladder/pathway
@@ -388,136 +394,8 @@ function FolderSessionInner() {
         return
       }
 
-      const allCards: SessionCard[] = []
-
-      for (const deck of decks) {
-        const cards  = cardsByDeck.get(deck.id) ?? []
-        const states = statesForDeck(cards)
-        const prefs  = prefsByDeck.get(deck.id) ?? null
-
-        const forwardStates     = states.filter(s => s.reviewDirection !== 'reverse')
-        const reverseStatesList = states.filter(s => s.reviewDirection === 'reverse')
-        const stateMap = forwardStateMap(forwardStates)
-        const cardsPerSession   = prefs?.cardsPerSession   ?? null
-        const learningBatchMode = prefs?.learningBatchMode ?? false
-
-        // When a per-session limit is set, cap BOTH new intros and the
-        // in-pipeline backlog to the active learning set; otherwise use the
-        // daily new-card budget.
-        let limitedLearningSet: Set<string> | null = null
-        let newCardBudget = 0
-        if (cardsPerSession && cardsPerSession > 0) {
-          limitedLearningSet = computeActiveLearningSet(
-            cards, id => stateMap.get(id), cardsPerSession, learningBatchMode,
-          )
-        } else {
-          const dailyLimit = Math.min(
-            prefs ? prefRepo.effectiveDailyLimit(prefs) : DEFAULT_DAILY_NEW_CARDS,
-            cards.length,
-          )
-          const introducedToday = forwardStates.filter(s => s.introducedDate === today).length
-          newCardBudget = Math.max(0, dailyLimit - introducedToday)
-        }
-
-        for (const card of cards) {
-          const state = stateMap.get(card.id)
-
-          const common = {
-            card,
-            pipeline,
-            gradingSettings: deck.gradingSettings,
-            deckId:          deck.id,
-            deckName:        deck.name,
-            deckCards:       cards,
-            sourceLanguage:  deck.sourceLanguage,
-            targetLanguage:  deck.targetLanguage,
-          }
-
-          if (!state) {
-            if (limitedLearningSet) {
-              if (!limitedLearningSet.has(card.id)) continue
-            } else {
-              if (newCardBudget <= 0) continue
-              newCardBudget--
-            }
-            allCards.push({ ...common, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
-          } else if (!state.graduated) {
-            // In pipeline — include only if within the active learning set.
-            if (limitedLearningSet && !limitedLearningSet.has(card.id)) continue
-            allCards.push({ ...common, state, productionMode: null })
-          } else if (state.graduated && state.dormant) {
-            // Dormant cards never become due automatically.
-          } else if (state.graduated) {
-            const en = tracksFor(deck.sourceLanguage, deck.targetLanguage)
-            const prodTrack = activeProductionTrack(en)
-            const prodDueDate = state.smartDueAt ?? state.typedDueAt ?? state.dueAt
-            if (prodTrack && isDueByDate(prodDueDate)) allCards.push({ ...common, state, reviewTrack: prodTrack, productionMode: forwardProductionMode(state, prodTrack, smartThresholdFor(deck.sourceLanguage, deck.targetLanguage)) })
-            if (isDueByDate(state.recallDueAt) && trackEnabled(en, 'recall', false)) allCards.push({ ...common, state, productionMode: 'self-graded', reviewTrack: 'recall' })
-          }
-        }
-
-        // Add due reverse-direction rows for this deck (unless the reverse track is disabled)
-        const reverseEnabled = trackEnabled(tracksFor(deck.sourceLanguage, deck.targetLanguage), 'recall', true)
-        for (const reverseState of reverseStatesList) {
-          if (!reverseEnabled) break
-          if (reverseState.dormant) continue   // recognition paused (per-direction dormancy)
-          if (!isDueByDate(reverseState.recallDueAt ?? reverseState.dueAt)) continue
-          const card = cards.find(c => c.id === reverseState.cardId)
-          if (card) {
-            const common = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
-            allCards.push({ ...common, card, state: reverseState, productionMode: 'self-graded', reviewTrack: 'recall', isReverse: true })
-          }
-        }
-      }
-
-      if (allCards.length === 0) { setDone(true); setLoading(false); return }
-
-      // Collapse multiple due tracks for the same card+direction into one review.
-      const dedupedAll = dedupeDueReviews(allCards)
-
-      // Shuffle all seen cards; keep new cards in order at the start
-      const newCards  = dedupedAll.filter(c => !c.state.lastReviewedAt)
-      const seenCards = shuffle(dedupedAll.filter(c => c.state.lastReviewedAt))
-      const finalQueue = interleaveConfusablePairs([...newCards, ...seenCards], intraLinks)
-      await hydrateQueueAudio(finalQueue)
-      setQueue(finalQueue)
-      setLoading(false)
-
-      // Pre-generate multiple-choice distractors for upcoming recognition
-      // steps in the background, so cards rarely show "Loading choices…".
-      // Skip index 0 — that card's own component will fetch on mount.
-      const prefetchItems: PrefetchItem[] = finalQueue
-        .slice(1)
-        .map(item => {
-          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
-          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
-          if (item.state.graduated || step.stepType !== 'recognition') return null
-          return { card: item.card, side: step.answerSide, deckCards: item.deckCards, sourceLanguage: item.sourceLanguage, targetLanguage: item.targetLanguage }
-        })
-        .filter((x): x is PrefetchItem => x !== null)
-      void prefetchChoices(prefetchItems, handleChoicesCached, 2)
-      void prefetchAudio(finalQueue.map(item => ({ card: item.card, sourceLanguage: item.sourceLanguage })), handleAudioCached)
-
-      // Promote frequently-confused words into cached distractors for
-      // upcoming recognition steps (all of them — this is cheap, no AI
-      // calls), so the next time these cards come up the mix-up is offered
-      // as one of the options.
-      const confusions = await new SupabaseCardConfusionRepository().listForUser(session.user.id)
-      const confusionsByCard = new Map<string, CardConfusion[]>()
-      for (const c of confusions) {
-        const arr = confusionsByCard.get(c.cardId) ?? []
-        arr.push(c)
-        confusionsByCard.set(c.cardId, arr)
-      }
-      const promotionItems: ConfusionPromotionItem[] = finalQueue
-        .map(item => {
-          const sortedSteps = [...item.pipeline.steps].sort((a, b) => a.stepOrder - b.stepOrder)
-          const step = sortedSteps.find(s => s.stepOrder === item.state.currentStepOrder) ?? sortedSteps[0]!
-          if (item.state.graduated || step.stepType !== 'recognition') return null
-          return { card: item.card, side: step.answerSide }
-        })
-        .filter((x): x is ConfusionPromotionItem => x !== null)
-      void promoteConfusionDistractors(promotionItems, confusionsByCard, handleChoicesCached)
+      // No non-category flow: every reachable session names a graduated category (see the legacy
+      // redirect above).
     }
     load()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1504,7 +1382,7 @@ function FolderSessionInner() {
   const backHref = folder ? routes.library(folder.id) : '/library'
 
   if (done) {
-    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant', starred: 'Starred' }
+    const CATEGORY_LABELS: Record<StudyCategory, string> = { graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant', starred: 'Starred' }
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
         <div className="text-5xl">🎉</div>
@@ -1597,7 +1475,7 @@ function FolderSessionInner() {
       </div>
       {electiveSession && category && (
         <p className="text-xs text-accent text-center">
-          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : category === 'dormant' ? 'Reviewing dormant cards (they stay dormant).' : category === 'starred' ? 'Reviewing your starred graduated cards.' : 'Studying cards due now.'}
+          {category === 'graduated' ? 'Studying graduated cards.' : category === 'dormant' ? 'Reviewing dormant cards (they stay dormant).' : category === 'starred' ? 'Reviewing your starred graduated cards.' : 'Studying cards due now.'}
         </p>
       )}
       {answerError && (

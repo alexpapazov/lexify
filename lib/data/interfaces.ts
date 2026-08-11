@@ -118,8 +118,6 @@ export interface DeckPreferencesRepository {
   get(userId: UserId, deckId: DeckId): Promise<DeckPreferences | null>
   upsert(prefs: DeckPreferences): Promise<DeckPreferences>
   effectiveDailyLimit(prefs: DeckPreferences): number
-  resetDeckBacklog(userId: UserId, deckId: DeckId): Promise<void>
-  resetAllBacklogs(userId: UserId): Promise<void>
 }
 
 export interface PipelineRepository {

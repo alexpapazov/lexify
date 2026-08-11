@@ -1329,7 +1329,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       .map(card => {
         const s = stateMap.get(card.id)
         const status = !s ? (inProgress(card.id) ? 'Learning' : 'New')
-          : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+          : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : 'Learning'
         return { card, state: s, deckName: deck.name, deckId: deck.id, status }
       })
   }) : []

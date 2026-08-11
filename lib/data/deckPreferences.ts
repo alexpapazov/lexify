@@ -103,43 +103,4 @@ export class SupabaseDeckPreferencesRepository implements DeckPreferencesReposit
     return prefs.dailyNewCards
   }
 
-  /**
-   * Resets the spillover backlog for a deck by setting introduced_date = today
-   * on all in-pipeline (non-graduated) cards for this user+deck.
-   * Effect: the budget calc treats them as introduced today, clearing the backlog.
-   */
-  async resetDeckBacklog(userId: UserId, deckId: DeckId): Promise<void> {
-    invalidateReads('states:')  // writes card_states.introduced_date, not prefs
-    const today = new Date().toISOString().slice(0, 10)
-    // Get all card IDs in this deck
-    const { data: cards } = await this.db
-      .from('cards')
-      .select('id')
-      .eq('deck_id', deckId)
-      .is('deleted_at', null)
-
-    if (!cards || cards.length === 0) return
-
-    const cardIds = cards.map(c => c.id as string)
-
-    await this.db
-      .from('card_states')
-      .update({ introduced_date: today })
-      .eq('user_id', userId)
-      .eq('graduated', false)
-      .in('card_id', cardIds)
-  }
-
-  /**
-   * Resets the backlog across ALL decks for this user.
-   */
-  async resetAllBacklogs(userId: UserId): Promise<void> {
-    invalidateReads('states:')  // writes card_states.introduced_date, not prefs
-    const today = new Date().toISOString().slice(0, 10)
-    await this.db
-      .from('card_states')
-      .update({ introduced_date: today })
-      .eq('user_id', userId)
-      .eq('graduated', false)
-  }
 }

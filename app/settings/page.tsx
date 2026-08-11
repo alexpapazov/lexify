@@ -459,7 +459,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [displayName,   setDisplayName]   = useState('')
   const [selectedLangs, setSelectedLangs] = useState<string[]>([])
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
-  const [spilloverDue,        setSpilloverDue]        = useState(false)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
@@ -468,8 +467,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
   const [turnoverHour,        setTurnoverHour]        = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [saved,         setSaved]         = useState(false)
-  const [confirmReset,      setConfirmReset]      = useState(false)
-  const [resetDone,         setResetDone]         = useState(false)
   const [tzList,            setTzList]            = useState<string[]>([])
   const [redistributing,    setRedistributing]    = useState(false)
   const [redistributeMsg,   setRedistributeMsg]   = useState<string | null>(null)
@@ -531,7 +528,7 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       const [{ data: profile }, pairs] = await Promise.all([
         supabase
           .from('profiles')
-          .select('display_name, default_daily_new_cards, spillover_due, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors')
+          .select('display_name, default_daily_new_cards, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
@@ -540,7 +537,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       if (profile) {
         setDisplayName(profile.display_name ?? '')
         setDailyNewCards(profile.default_daily_new_cards ?? DEFAULT_DAILY_NEW_CARDS)
-        setSpilloverDue(profile.spillover_due ?? false)
         setSelectedLangs((profile.learning_languages as string[]) ?? [])
         setTimezone((profile.timezone as string | null) ?? detectBrowserTimezone())
         setTurnoverHour((profile.day_turnover_hour as number | null) ?? 0)
@@ -563,7 +559,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
     await supabase.from('profiles').update({
       display_name:              displayName,
       default_daily_new_cards:   dailyNewCards,
-      spillover_due:             spilloverDue,
       learning_languages:        selectedLangs,
       timezone:                  timezone || null,
       day_turnover_hour:         turnoverHour,
@@ -576,15 +571,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
     setTimeout(() => setSaved(false), 2000)
   }
 
-  async function handleGlobalReset() {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) return
-    const prefRepo = new SupabaseDeckPreferencesRepository()
-    await prefRepo.resetAllBacklogs(session.user.id)
-    setConfirmReset(false)
-    setResetDone(true)
-    setTimeout(() => setResetDone(false), 3000)
-  }
 
   async function handleGlobalRedistribute() {
     if (redistributing || !userId) return
@@ -708,14 +694,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
 
   return (
     <div className="space-y-8 max-w-lg mx-auto">
-      {confirmReset && (
-        <ConfirmDialog
-          message="Are you sure you want to reset and stray from your study routine? This will clear the backlog across ALL decks and treat all in-progress cards as starting fresh today."
-          onConfirm={handleGlobalReset}
-          onCancel={() => setConfirmReset(false)}
-        />
-      )}
-
       <h1 className="text-2xl font-semibold text-ink">{variant === 'general' ? 'Settings' : 'Language configuration'}</h1>
 
       {variant === 'general' && (<>
@@ -828,18 +806,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
             onChange={e => setDailyNewCards(Math.max(1, parseInt(e.target.value) || 1))} />
           <p className="text-xs text-ink-faint">
             Applied to any deck without its own setting (configure per-deck via the ⚙ icon in deck view).
-          </p>
-        </div>
-
-        <div className="space-y-1">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input type="checkbox" checked={spilloverDue} onChange={e => setSpilloverDue(e.target.checked)} className="accent-accent w-4 h-4" />
-            <span className="text-sm text-ink">Due cards spill over (global default)</span>
-          </label>
-          <p className="text-xs text-ink-faint pl-6">
-            {spilloverDue
-              ? 'Cards you miss accumulate — you may see more than your daily limit if you fall behind.'
-              : 'Missed cards count toward tomorrow\'s limit — your daily total stays fixed at ' + dailyNewCards + '.'}
           </p>
         </div>
 
@@ -990,18 +956,6 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
       {!offline && (
       <div className="panel border-danger/20 space-y-2">
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Danger zone</h2>
-        <p className="text-xs text-ink-muted">
-          Reset the study backlog across <strong className="text-ink">all decks</strong>.
-          Cards you missed will no longer pile up — only today&apos;s limit will be due.
-        </p>
-        {resetDone && <p className="text-success text-xs">✓ Backlog cleared across all decks.</p>}
-        <button
-          onClick={() => setConfirmReset(true)}
-          className="text-sm border border-danger/30 text-danger/80 hover:text-danger hover:border-danger/60 px-4 py-2 rounded-lg transition-colors"
-        >
-          ↺ Global reset — clear all backlogs
-        </button>
-
         {langPairs.length > 0 && (
           <div className="border-t border-danger/20 pt-4 mt-4 space-y-3">
             <p className="text-xs text-ink-muted">

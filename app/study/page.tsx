@@ -833,7 +833,7 @@ export default function StudyPage() {
       })
       .map(card => {
         const s = stateMap.get(card.id)
-        const status = !s ? (inProgress(card.id) ? 'Learning' : 'New') : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+        const status = !s ? (inProgress(card.id) ? 'Learning' : 'New') : s.graduated ? 'Graduated' : 'Learning'
         return { card, state: s, deckName: deck.name, deckId: deck.id, status, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, reviewDirection: 'forward' }
       })
   }) : []

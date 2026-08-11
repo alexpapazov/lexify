@@ -2713,6 +2713,31 @@ Neither starred session is capped (starring is explicit). Also fixed the deck pa
 showing a "Study Due Now" button with the due count — starred fell through the count/label
 ternaries.
 
+## Legacy step-pipeline study flow eradicated (2026-08-10)
+
+The "old old ladder" — session pages walking non-graduated cards through `pipeline_steps`
+("Step 1 · recognition") — is gone as a study flow. Learning happens ONLY via the pair's configured
+ladder/pathway (`LadderStudy`).
+
+- The three session pages (`/study/deck/session`, `/study/folder/session`, `/study/all/session`)
+  accept only `category=graduated|due|dormant|starred`. Bare URLs (the old "new + due" sessions) and
+  `category=new|learning` **redirect** to the matching ladder page (`routes.ladderDeck` /
+  `routes.ladderFolder` / `/study/ladder/all`, carrying the category through; pairless
+  `/study/all/session` falls back to `/study`).
+- Deleted with it: the new/learning elective branches, every no-category queue-builder (new-card
+  budgets, in-pipeline buckets, `limitedLearningSet`), the deck session's elective picker
+  (unlearned + early-review), `computeActiveLearningSet` in lib/sessionLimits.ts, the spillover
+  toggles (deck gear + settings; the `spillover_due` columns stay, values preserved), and the
+  backlog-reset buttons + `resetDeckBacklog`/`resetAllBacklogs` (nothing read `introducedDate` for
+  budgeting anymore).
+- "Step N" status labels on the Study/Library/folder card lists became "Learning" — step order is a
+  legacy concept no session surfaces.
+- KEPT (still current behavior): `engine/pipeline.ts` — `initialCardState` for boot-backs and
+  "Move to learning", the graduated branch of `progressAfterReview` (scheduling + relearn loop),
+  `fastTrackCardState` for bulk graduation. `features/Learning Pipeline.md` carries the retirement
+  banner. Sanity check when touching sessions: `grep "productionMode: null" app/` must stay empty —
+  that was the marker of a step-learning queue item.
+
 ## Verifying changes
 
 ```
