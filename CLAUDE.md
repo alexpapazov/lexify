@@ -2417,6 +2417,16 @@ the predicate kind select; `rating: 'pass'` covers auto-checked states. It exist
 natural-looking alternative — "rating is Easy AND rating is Good" — can never fire (one answer has one
 rating), which is exactly what the user had built. 6 tests in pathwayEngine.test.ts.
 
+**"Learning" classification reads BOTH climb shapes (2026-08-10)** — `lib/climbProgress.ts:
+climbInProgress` (pure, 7 tests), used by the deck page's `statusOf` AND `lib/folderStats.ts:
+computeDeckCounts`. The old inline check was `cl.rungIndex >= 1`, which (1) never matched a PATHWAY
+route (`RouteState` has `stateId`/`history`, no `rungIndex` — so an advanced pathway card stayed
+"New" forever, since pre-graduation there's no card_state row either), and (2) called a ladder card
+dropped back to rung 0 "New" again. The rule now: **a card that has EVER left its first state is
+Learning** — read from `rungHistory`/`history`, which survive drop-backs; live `rungIndex` is only
+the fallback for climbs saved before rungHistory existed. If you add another surface that classifies
+Learning-vs-New from a climb row, use this helper — do not re-inline the rungIndex check.
+
 **Bulk card reset now busts the read cache (2026-08-10).** `handleBulkReset` on the deck page deletes
 `card_states` + `ladder_climb` with DIRECT supabase writes, which the 60s repo cache never sees — so
 reset-then-Study loaded the cached pre-reset rows and the ladder resumed cards mid-pipeline ("I reset

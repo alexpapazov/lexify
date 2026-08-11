@@ -27,6 +27,7 @@ import type { Deck, Card, CardState, CardChoices, DeckPreferences, Folder, Langu
 import { DEFAULT_DAILY_NEW_CARDS } from '@/domain'
 import { getToday } from '@/lib/dates'
 import { invalidateReads } from '@/lib/readCache'
+import { climbInProgress } from '@/lib/climbProgress'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { isCardStateDueNow } from '@/lib/dueStatus'
@@ -1731,8 +1732,9 @@ export default function DeckDetailPage() {
     const s = stateMap.get(cardId)
     if (s?.dormant) return 'dormant'
     if (s?.graduated) return 'graduated'
-    const cl = climb.get(cardId)
-    if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) return 'learning'
+    // `climbInProgress` reads both climb shapes (ladder rungIndex/rungHistory, pathway history):
+    // a card that has EVER left the first state is Learning, including after a drop-back to it.
+    if (climbInProgress(climb.get(cardId)) || (s && !s.graduated)) return 'learning'
     return 'new'
   }
   const unlearned = cards.filter(c => statusOf(c.id) === 'new').length

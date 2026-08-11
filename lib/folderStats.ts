@@ -1,4 +1,5 @@
 import type { Folder, Deck, UserId, Card, CardState } from '@/domain'
+import { climbInProgress } from '@/lib/climbProgress'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import type { CardRepository, CardStateRepository } from '@/lib/data/interfaces'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
@@ -148,16 +149,16 @@ export async function computeDeckCounts(
     // callers (Library, folder view) always pass bulk.
     const tracks = bulk ? bulk.enabledByPair.get(bulk.pairByDeck.get(deckId) ?? '') : undefined
     const tz = bulk?.tz ?? 'UTC', today = bulk?.today ?? ''
-    // Mirror the deck-detail page's statusOf: a card climbing the ladder (rung ≥ 1,
-    // not graduated) counts as Learning even without a card_state row.
+    // Mirror the deck-detail page's statusOf. `climbInProgress` reads BOTH climb shapes (ladder
+    // rungIndex/rungHistory, pathway history) and treats "ever left the start" as Learning — so a
+    // pathway card counts, and a drop-back to the first state stays Learning.
     const statusOf = (cardId: string): 'graduated' | 'dormant' | 'learning' | 'new' => {
       const s = stateMap.get(cardId)
       if (s?.dormant) return 'dormant'
       if (s?.graduated) return 'graduated'
-      const cl = climb.get(cardId)
       // Any non-graduated forward state = in the pipeline (matches the deck page + Study dashboard), so a
-      // booted-back / restored card is studyable via "Study Learning". A card climbing the ladder counts too.
-      if ((cl && cl.rungIndex >= 1 && !cl.graduated) || (s && !s.graduated)) return 'learning'
+      // booted-back / restored card is studyable via "Study Learning". A card climbing counts too.
+      if (climbInProgress(climb.get(cardId)) || (s && !s.graduated)) return 'learning'
       return 'new'
     }
     return {
