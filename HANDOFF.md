@@ -4,7 +4,7 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 848 passing tests (53 suites).
+- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 848 passing tests (53 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list).
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`117`, applied BY HAND. **`117` is
   PENDING** — weekly patterns + per-pattern debt on `goal_schedules` (`weekly_target`,

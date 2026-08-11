@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { climbInProgress } from '@/lib/climbProgress'
+import { CardBulkPanel } from '@/components/CardBulkPanel'
 import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { routes } from '@/lib/routes'
@@ -273,6 +274,10 @@ function buildForecastDays(
 
 export default function StudyPage() {
   const [deckStats,    setDeckStats]    = useState<DeckWithStats[]>([])
+  /** Climb rows for the render-time card filter — mid-climb cards have no card_states row yet. */
+  const [climbAll,     setClimbAll]     = useState<Map<string, unknown>>(new Map())
+  /** Selection inside the filtered card list, for the shared bulk-action panel. */
+  const [selectedFilterIds, setSelectedFilterIds] = useState<Set<string>>(new Set())
   const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dormant: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
   const [forecast,     setForecast]     = useState<ForecastDay[]>([])
   const [enabledTracks, setEnabledTracks] = useState<Map<string, EnabledTracks>>(new Map())
@@ -445,6 +450,7 @@ export default function StudyPage() {
       cardsP, statesP, climbP,
       cardRepo.deckIdsByCard(decks.map(d => d.id)),
     ])
+    setClimbAll(allClimb)
     const cardsByDeck = new Map<string, typeof allCards>()
     for (const c of allCards) {
       const dId = deckIdByCard.get(c.id)
@@ -814,18 +820,20 @@ export default function StudyPage() {
   const now = new Date()
   const filteredCards: FilteredCard[] = activeFilter ? deckStats.flatMap(({ deck, cards, states }) => {
     const stateMap = new Map(states.filter(s => s.reviewDirection !== 'reverse').map(s => [s.cardId, s]))
+    // Climb-aware like every other card list: a card mid-climb has no state row but is Learning.
+    const inProgress = (cardId: string) => climbInProgress(climbAll.get(cardId))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)
-        if (activeFilter === 'new')       return !s
-        if (activeFilter === 'learning')  return s && !s.graduated
+        if (activeFilter === 'new')       return !s && !inProgress(card.id)
+        if (activeFilter === 'learning')  return (s && !s.graduated) || (!s && inProgress(card.id))
         if (activeFilter === 'graduated') return !!s?.graduated
         if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
         return false
       })
       .map(card => {
         const s = stateMap.get(card.id)
-        const status = !s ? 'New' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+        const status = !s ? (inProgress(card.id) ? 'Learning' : 'New') : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
         return { card, state: s, deckName: deck.name, deckId: deck.id, status, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, reviewDirection: 'forward' }
       })
   }) : []
@@ -1060,30 +1068,65 @@ export default function StudyPage() {
                 <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
                   {COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {filteredCards.length} card{filteredCards.length !== 1 ? 's' : ''}
                 </h2>
-                <button onClick={() => setActiveFilter(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
-                  Show all ✕
-                </button>
+                <div className="flex items-center gap-3">
+                  {filteredCards.length > 0 && (
+                    <button
+                      onClick={() => setSelectedFilterIds(prev =>
+                        prev.size === filteredCards.length ? new Set() : new Set(filteredCards.map(f => f.card.id)))}
+                      className="text-xs text-ink-faint hover:text-ink transition-colors"
+                    >
+                      {selectedFilterIds.size === filteredCards.length ? 'Deselect all' : 'Select all'}
+                    </button>
+                  )}
+                  <button onClick={() => { setActiveFilter(null); setSelectedFilterIds(new Set()) }} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                    Show all ✕
+                  </button>
+                </div>
               </div>
+
+              {userId && (
+                <CardBulkPanel
+                  userId={userId}
+                  cards={filteredCards.map(f => f.card)}
+                  states={deckStats.flatMap(ds => ds.states)}
+                  selectedIds={selectedFilterIds}
+                  onClear={() => setSelectedFilterIds(new Set())}
+                  onApplied={() => { setSelectedFilterIds(new Set()); void load() }}
+                />
+              )}
 
               {filteredCards.length === 0 ? (
                 <div className="panel text-ink-muted text-sm text-center py-6">No cards in this category.</div>
               ) : (
                 <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
                   {filteredCards.map(({ card, deckName, deckId, status, sourceLanguage, targetLanguage }) => (
-                    <Link
-                      key={card.id}
-                      href={routes.deck(deckId, { filter: activeFilter })}
-                      className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
-                    >
-                      <div className="flex gap-6 text-sm min-w-0">
-                        <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
-                        <span className="text-ink-muted truncate">{card.back}</span>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0 ml-2">
-                        <span className="text-xs text-ink-faint hidden sm:block">{langName(targetLanguage)} → {langName(sourceLanguage)} · {deckName}</span>
-                        <span className="chip">{status}</span>
-                      </div>
-                    </Link>
+                    // Checkbox OUTSIDE the Link — inside it, stopPropagation would suppress Next's
+                    // client-side handler but leave the anchor's native navigation intact.
+                    <div key={card.id} className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={selectedFilterIds.has(card.id)}
+                        onChange={() => setSelectedFilterIds(prev => {
+                          const next = new Set(prev)
+                          if (next.has(card.id)) next.delete(card.id); else next.add(card.id)
+                          return next
+                        })}
+                        className="accent-accent w-4 h-4 shrink-0 cursor-pointer"
+                      />
+                      <Link
+                        href={routes.deck(deckId, { filter: activeFilter })}
+                        className="flex items-center justify-between flex-1 min-w-0"
+                      >
+                        <div className="flex gap-6 text-sm min-w-0">
+                          <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
+                          <span className="text-ink-muted truncate">{card.back}</span>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0 ml-2">
+                          <span className="text-xs text-ink-faint hidden sm:block">{langName(targetLanguage)} → {langName(sourceLanguage)} · {deckName}</span>
+                          <span className="chip">{status}</span>
+                        </div>
+                      </Link>
+                    </div>
                   ))}
                 </div>
               )}

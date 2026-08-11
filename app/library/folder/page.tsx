@@ -20,6 +20,7 @@ import { isCardStateDueNow } from '@/lib/dueStatus'
 import { getToday } from '@/lib/dates'
 import { langName } from '@/lib/languages'
 import { StarFilterButton } from '@/components/StarFilterButton'
+import { CardBulkPanel } from '@/components/CardBulkPanel'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
@@ -164,6 +165,8 @@ function FolderPageInner() {
   const [deckStats,    setDeckStats]    = useState<DeckWithCards[]>([])
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null)
   const [searchQuery,  setSearchQuery]  = useState('')
+  /** Selection inside the filtered card list, for the shared bulk-action panel. */
+  const [selectedFilterIds, setSelectedFilterIds] = useState<Set<string>>(new Set())
 
   // Drag state
   const [dragging,    setDragging]    = useState<DragItem | null>(null)
@@ -787,12 +790,46 @@ function FolderPageInner() {
                 <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
                   {activeFilter === 'starred' ? 'Starred' : COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {filteredCards.length} card{filteredCards.length !== 1 ? 's' : ''}
                 </h2>
-                <button onClick={() => setActiveFilter(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
-                  Show all ✕
-                </button>
+                <div className="flex items-center gap-3">
+                  {filteredCards.length > 0 && (
+                    <button
+                      onClick={() => setSelectedFilterIds(prev =>
+                        prev.size === filteredCards.length ? new Set() : new Set(filteredCards.map(f => f.card.id)))}
+                      className="text-xs text-ink-faint hover:text-ink transition-colors"
+                    >
+                      {selectedFilterIds.size === filteredCards.length ? 'Deselect all' : 'Select all'}
+                    </button>
+                  )}
+                  <button onClick={() => { setActiveFilter(null); setSelectedFilterIds(new Set()) }} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                    Show all ✕
+                  </button>
+                </div>
               </div>
 
+              {userId && (
+                <CardBulkPanel
+                  userId={userId}
+                  cards={filteredCards.map(f => f.card)}
+                  states={deckStats.flatMap(ds => ds.states)}
+                  selectedIds={selectedFilterIds}
+                  onClear={() => setSelectedFilterIds(new Set())}
+                  onApplied={() => { setSelectedFilterIds(new Set()); void load() }}
+                />
+              )}
+
               {(() => {
+                // Starred has no stat-box config (it's a flag, not a graduation state) but is still
+                // studyable — as an elective session that takes each card in whatever state it's in.
+                if (activeFilter === 'starred') {
+                  return filteredCards.length > 0 ? (
+                    <Link
+                      href={routes.folderSession(folderId, { category: 'starred' })}
+                      className="btn-primary block w-full text-center"
+                    >
+                      Study Starred
+                    </Link>
+                  ) : null
+                }
                 const cfg = COUNTER_CONFIG.find(c => c.key === activeFilter)
                 return cfg && cfg.value > 0 ? (
                   <Link
@@ -811,20 +848,33 @@ function FolderPageInner() {
               ) : (
                 <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
                   {filteredCards.map(({ card, deckName, deckId, status }) => (
-                    <Link
-                      key={card.id}
-                      href={routes.deck(deckId, { filter: activeFilter })}
-                      className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
-                    >
-                      <div className="flex gap-6 text-sm min-w-0">
-                        <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
-                        <span className="text-ink-muted truncate">{card.back}</span>
-                      </div>
-                      <div className="flex items-center gap-3 shrink-0 ml-2">
-                        <span className="text-xs text-ink-faint hidden sm:block">{deckName}</span>
-                        <span className="chip">{status}</span>
-                      </div>
-                    </Link>
+                    // Checkbox OUTSIDE the Link — inside it, stopPropagation would suppress Next's
+                    // client-side handler but leave the anchor's native navigation intact.
+                    <div key={card.id} className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={selectedFilterIds.has(card.id)}
+                        onChange={() => setSelectedFilterIds(prev => {
+                          const next = new Set(prev)
+                          if (next.has(card.id)) next.delete(card.id); else next.add(card.id)
+                          return next
+                        })}
+                        className="accent-accent w-4 h-4 shrink-0 cursor-pointer"
+                      />
+                      <Link
+                        href={routes.deck(deckId, { filter: activeFilter })}
+                        className="flex items-center justify-between flex-1 min-w-0"
+                      >
+                        <div className="flex gap-6 text-sm min-w-0">
+                          <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
+                          <span className="text-ink-muted truncate">{card.back}</span>
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0 ml-2">
+                          <span className="text-xs text-ink-faint hidden sm:block">{deckName}</span>
+                          <span className="chip">{status}</span>
+                        </div>
+                      </Link>
+                    </div>
                   ))}
                 </div>
               )}

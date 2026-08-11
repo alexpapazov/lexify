@@ -2675,6 +2675,41 @@ alone cannot see pre-graduation progress.** Same pass fixed the two remaining st
 the deck page's **"Rung NaN"** badge — a pathway `RouteState` has no `rungIndex`, so pathway
 learning cards now read "Learning" while ladder cards keep "Rung N".
 
+## Shared bulk-action panel + Make dormant (2026-08-10)
+
+The deck page's "N cards selected" bar was extracted into **`components/CardBulkPanel.tsx`** and now
+also appears on the stat-box filtered card lists of the **Library root, folder view, and Study
+dashboard** — select cards anywhere you can see them, without entering the deck. The panel OWNS the
+writes (reset/star/move-to-learning/dormant/delete/graduate, plus the accelerated-track checkbox);
+pages react through `onApplied(change)`: the deck page patches its local copies (the old inline
+logic, moved into `applyBulkChange`), the three list pages just clear selection and refetch (their
+repo reads are invalidated by the operations themselves).
+
+- **New: "Make dormant"** — pauses BOTH directions via `setDormancy(userId, cardId, {dormant}, 'all')`,
+  matching the card editor's "Make dormant now". Adaptive like the star button (any non-dormant
+  selected → pause all, else wake all). Cards with **no state row are skipped** — dormancy lives on
+  card_states — and the button's tooltip says how many will be skipped.
+- **Checkbox placement on the list pages**: rows there are `<Link>`s. The checkbox sits OUTSIDE the
+  Link in a wrapping div — inside it, `stopPropagation` suppresses Next's client-side handler but
+  leaves the anchor's NATIVE navigation intact, and `preventDefault` would stop the checkbox from
+  toggling. Don't move it back inside.
+- Ghost-selection safety, 14-day due-date spread on graduate, bulk_known vs import_known, and the
+  cache-busting on reset (direct `card_states`/`ladder_climb` deletes + `invalidateReads`) all moved
+  into the panel unchanged — one implementation now.
+- Same pass made the Library-root and Study-dashboard filtered lists **climb-aware**
+  (`climbInProgress`), closing the last two lists where a mid-climb card filtered as New.
+
+## Study Starred (2026-08-10)
+
+`category=starred` joined the elective-session categories on all three session pages (deck /
+folder / all), and every starred filter list (deck page, Library pair view, folder view) got a
+**Study Starred** button. A starred session is MIXED by design — a star cuts across graduation
+states — so each card is taken as it is: no state row → `initialCardState` (enters the pipeline),
+learning → continues (`productionMode: null`), graduated (even dormant, elective override) →
+`decideProductionMode`. Never capped, like the explicit 'learning' category. This also fixed the
+deck page's starred filter showing a "Study Due Now" button with the due count — starred fell
+through the count/label ternaries.
+
 ## Verifying changes
 
 ```

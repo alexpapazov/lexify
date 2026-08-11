@@ -92,7 +92,7 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 const ALL_ELECTIVE_LIMIT = 20
-type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
+type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
 
 export default function AllDueSessionPage() {
   return (
@@ -108,7 +108,7 @@ function AllDueSessionInner() {
   const searchParams = useSearchParams()
   const categoryParam = searchParams.get('category')
   const category: StudyCategory | null =
-    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant'
+    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
       ? categoryParam : null
   const sourceLang = searchParams.get('source')
   const targetLang = searchParams.get('target')
@@ -375,6 +375,12 @@ function AllDueSessionInner() {
               categoryCards.push({ ...common, card, state, productionMode: null })
             } else if (category === 'graduated' && state?.graduated && !state.dormant) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+            } else if (category === 'starred' && card.starred) {
+              // Mixed by design — a star cuts across graduation states: unstarted cards enter the
+              // pipeline, learning cards continue, graduated (even dormant) get an elective review.
+              if (!state) categoryCards.push({ ...common, card, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
+              else if (!state.graduated) categoryCards.push({ ...common, card, state, productionMode: null })
+              else categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'dormant' && state?.dormant) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated && !state.dormant && dirParam !== 'reverse') {
@@ -1586,7 +1592,7 @@ function AllDueSessionInner() {
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (done) {
-    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant' }
+    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant', starred: 'Starred' }
     const pairLabel = sourceLang && targetLang ? `${langName(sourceLang)} / ${langName(targetLang)}` : null
     const backLabel = pairLabel ? `Back to ${pairLabel}` : 'Back to study'
     return (
@@ -1698,7 +1704,7 @@ function AllDueSessionInner() {
       </div>
       {electiveSession && category && (
         <p className="text-xs text-accent text-center">
-          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : 'Studying cards due now.'}
+          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : category === 'starred' ? 'Studying your starred cards.' : 'Studying cards due now.'}
         </p>
       )}
       {answerError && (

@@ -98,7 +98,7 @@ function shuffle<T>(arr: T[]): T[] {
 /** Cards-per-elective-batch for folder/all sessions (no per-deck pref available). */
 const FOLDER_ELECTIVE_LIMIT = 20
 
-type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
+type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
 
 export default function FolderSessionPage() {
   return (
@@ -115,7 +115,7 @@ function FolderSessionInner() {
   const folderId = searchParams.get('folder') ?? ''
   const categoryParam = searchParams.get('category')
   const category: StudyCategory | null =
-    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant'
+    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
       ? categoryParam : null
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
@@ -352,6 +352,12 @@ function FolderSessionInner() {
               categoryCards.push({ ...common, card, state, productionMode: null })
             } else if (category === 'graduated' && state?.graduated && !state.dormant) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+            } else if (category === 'starred' && card.starred) {
+              // Mixed by design — a star cuts across graduation states: unstarted cards enter the
+              // pipeline, learning cards continue, graduated (even dormant) get an elective review.
+              if (!state) categoryCards.push({ ...common, card, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
+              else if (!state.graduated) categoryCards.push({ ...common, card, state, productionMode: null })
+              else categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'dormant' && state?.dormant) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated && !state.dormant) {
@@ -1499,7 +1505,7 @@ function FolderSessionInner() {
   const backHref = folder ? routes.library(folder.id) : '/library'
 
   if (done) {
-    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant' }
+    const CATEGORY_LABELS: Record<StudyCategory, string> = { new: 'Unlearned', learning: 'Learning', graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant', starred: 'Starred' }
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
         <div className="text-5xl">🎉</div>
@@ -1592,7 +1598,7 @@ function FolderSessionInner() {
       </div>
       {electiveSession && category && (
         <p className="text-xs text-accent text-center">
-          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : category === 'dormant' ? 'Reviewing dormant cards (they stay dormant).' : 'Studying cards due now.'}
+          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : category === 'dormant' ? 'Reviewing dormant cards (they stay dormant).' : category === 'starred' ? 'Studying your starred cards.' : 'Studying cards due now.'}
         </p>
       )}
       {answerError && (

@@ -14,7 +14,6 @@ import { SupabaseCardStateRepository }       from '@/lib/data/cardStates'
 import { SupabaseDeckPreferencesRepository } from '@/lib/data/deckPreferences'
 import { setAudioPlaybackRate, setAudioVolume } from '@/lib/speak'
 import { SupabaseFolderRepository }          from '@/lib/data/folders'
-import { SupabasePipelineRepository }        from '@/lib/data/pipelines'
 import { SupabaseSynonymGroupRepository }    from '@/lib/data/synonymGroups'
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
 import { SupabaseSyncedCardLinkRepository }  from '@/lib/data/syncedCardLinks'
@@ -38,8 +37,7 @@ import type { ClimbState } from '@/engine/ladderEngine'
 import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
-import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
-import { batchFastTrackDueDates } from '@/engine/density'
+import { CardBulkPanel, type BulkChange } from '@/components/CardBulkPanel'
 import { CardEditModal } from '@/components/CardEditModal'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
@@ -1279,15 +1277,6 @@ export default function DeckDetailPage() {
   const [onboardedIds, setOnboardedIds] = useState<Set<string>>(new Set())
   const [loading,          setLoading]          = useState(true)
   const [selectedCardIds,  setSelectedCardIds]  = useState<Set<string>>(new Set())
-  const [bulkGraduating,      setBulkGraduating]      = useState(false)
-  const [bulkGraduateError,   setBulkGraduateError]   = useState<string | null>(null)
-  const [bulkAccelerated,     setBulkAccelerated]     = useState(false)
-  const [bulkMovingToLearning,setBulkMovingToLearning]= useState(false)
-  const [bulkStarring,      setBulkStarring]      = useState(false)
-  const [bulkDeleting,        setBulkDeleting]        = useState(false)
-  const [bulkDeleteConfirm,setBulkDeleteConfirm]= useState(false)
-  const [bulkResetting,    setBulkResetting]    = useState<string | null>(null)
-  const [showBulkResetMenu,setShowBulkResetMenu]= useState(false)
   const [showGear,         setShowGear]         = useState(false)
   const [renamingDeck,     setRenamingDeck]     = useState(false)
   const [deckNameValue,    setDeckNameValue]    = useState('')
@@ -1532,179 +1521,53 @@ export default function DeckDetailPage() {
   }
 
   /**
-   * Star or unstar every selected card. Chunked writes rather than one call per card, and the flag
-   * is chosen from the selection: if any selected card is unstarred, the action stars them all —
-   * otherwise it clears them. That makes one button do both without a mode toggle.
+   * Patch the page's copies after a CardBulkPanel operation — the panel owns the writes, the page
+   * owns its state. Merges key by (cardId, reviewDirection) so a card's reverse row isn't collapsed
+   * into its forward row (which would make the card look unlearned until refresh).
    */
-  async function handleBulkStar() {
-    if (selectedCardIds.size === 0 || bulkStarring) return
-    const ids = [...selectedCardIds]
-    const next = cards.some(c => selectedCardIds.has(c.id) && !c.starred)
-    setBulkStarring(true)
-    try {
-      const repo = new SupabaseCardRepository()
-      for (const id of ids) await repo.setStarred(id, next)
-      setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, starred: next } : c))
-      setSelectedCardIds(new Set())
-    } catch (err) {
-      console.error('Bulk star failed:', err)
-    } finally {
-      setBulkStarring(false)
-    }
-  }
-
-  async function handleBulkMoveToLearning() {
-    if (selectedCardIds.size === 0 || bulkMovingToLearning) return
-    setBulkMovingToLearning(true)
-    try {
-      const stateRepo      = new SupabaseCardStateRepository()
-      const pipelineRepo   = new SupabasePipelineRepository()
-      const defaultPipeline = await pipelineRepo.getDefault()
-      const updates = await Promise.all(
-        [...selectedCardIds].map(cardId => {
-          const existing = states.find(s => s.cardId === cardId)
-          const base     = existing ?? initialCardState(userId, cardId, defaultPipeline.id)
-          const learning: CardState = {
-            ...base,
-            graduated:              false,
-            currentStepOrder:       0,
-            correctInStep:          0,
-            dueAt:                  null,
-            intervalDays:           0,
-            scheduledIntervalDays:  0,
-            lastRating:             null,
-            relearningStep:         0,
-            typingMistakeStreak:    0,
-            typingFailCycles:       0,
-            stage3EnteredDate:      null,
-          }
-          return stateRepo.upsert(learning)
-        })
-      )
-      setStates(prev => {
-        const keyOf = (s: CardState) => `${s.cardId}:${s.reviewDirection ?? 'forward'}`
-        const map = new Map(prev.map(s => [keyOf(s), s]))
-        for (const s of updates) map.set(keyOf(s), s)
-        return [...map.values()]
-      })
-      setSelectedCardIds(new Set())
-    } catch (err) {
-      console.error('Bulk move to learning failed:', err)
-    } finally {
-      setBulkMovingToLearning(false)
-    }
-  }
-
-  async function handleBulkGraduate() {
-    if (selectedCardIds.size === 0 || bulkGraduating) return
-    setBulkGraduating(true)
-    setBulkGraduateError(null)
-    try {
-      const stateRepo    = new SupabaseCardStateRepository()
-      const pipelineRepo = new SupabasePipelineRepository()
-      const defaultPipeline = await pipelineRepo.getDefault()
-      const now    = new Date()
-      const nowIso = now.toISOString()
-      // Filter to card IDs still present in the deck — ghost IDs (selected
-      // then deleted) would violate the card_states → cards FK and fail the
-      // whole batch.
-      const existingCardIds = new Set(cards.map(c => c.id))
-      const cardIds = [...selectedCardIds].filter(id => existingCardIds.has(id))
-      if (cardIds.length === 0) { setBulkGraduateError('No valid cards to graduate.'); return }
-
-      // Both paths spread due dates across a 14-day window so a large batch
-      // doesn't pile up on one day. The accelerated path puts cards on the
-      // accelerated-multiplier track (import_known); the default path marks
-      // them bulk_known — "I already knew these" — so they use normal
-      // scheduling and never count toward daily goals.
-      const dueDates = await batchFastTrackDueDates(userId, cardIds.length, now, stateRepo)
-      const updates: CardState[] = cardIds.map((cardId, i) => {
-        const dueAt = dueDates[i] ?? nowIso
-        const base  = fastTrackCardState(userId, cardId, defaultPipeline.id, dueAt, now)
-        if (bulkAccelerated) return base
-        return {
-          ...base,
-          acceleratedMode:        'bulk_known',
-          acceleratedLocked:      false,
-          acceleratedWrongStreak: 0,
-          acceleratedPenalty:     0,
+  function applyBulkChange(change: BulkChange) {
+    const keyOf = (s: CardState) => `${s.cardId}:${s.reviewDirection ?? 'forward'}`
+    const mergeStates = (updates: CardState[]) => setStates(prev => {
+      const map = new Map(prev.map(s => [keyOf(s), s]))
+      for (const s of updates) map.set(keyOf(s), s)
+      return [...map.values()]
+    })
+    switch (change.type) {
+      case 'starred': {
+        const ids = new Set(change.ids)
+        setCards(prev => prev.map(c => ids.has(c.id) ? { ...c, starred: change.value } : c))
+        break
+      }
+      case 'learning':
+      case 'graduated':
+        mergeStates(change.states)
+        break
+      case 'dormant': {
+        const ids = new Set(change.ids)
+        // 'all' scope: both directions were paused/woken in the write.
+        setStates(prev => prev.map(s => ids.has(s.cardId) ? { ...s, dormant: change.value } : s))
+        break
+      }
+      case 'deleted': {
+        const ids = new Set(change.ids)
+        setCards(prev => prev.filter(c => !ids.has(c.id)))
+        setStates(prev => prev.filter(s => !ids.has(s.cardId)))
+        break
+      }
+      case 'reset': {
+        const ids = new Set(change.ids)
+        if (change.action === 'distractors' || change.action === 'all') {
+          setCards(prev => prev.map(c => ids.has(c.id) ? { ...c, choices: null } : c))
         }
-      })
-      await stateRepo.upsertBatch(updates)
-      setStates(prev => {
-        // Key by (cardId, reviewDirection) so a card's reverse-direction row
-        // isn't collapsed into its forward row (which would drop the forward
-        // state and make the card look unlearned until refresh).
-        const keyOf = (s: CardState) => `${s.cardId}:${s.reviewDirection ?? 'forward'}`
-        const map = new Map(prev.map(s => [keyOf(s), s]))
-        for (const s of updates) map.set(keyOf(s), s)
-        return [...map.values()]
-      })
-      setSelectedCardIds(new Set())
-    } catch (err) {
-      console.error('Bulk graduate failed:', err)
-      setBulkGraduateError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBulkGraduating(false)
-    }
-  }
-
-  async function handleBulkDelete() {
-    if (selectedCardIds.size === 0 || bulkDeleting) return
-    setBulkDeleting(true)
-    setBulkDeleteConfirm(false)
-    try {
-      const cardRepo = new SupabaseCardRepository()
-      // Filter to IDs still present in the card list — ghost IDs (already-deleted
-      // cards whose ID stayed in selectedCardIds) would cause the RPC to error.
-      const existingCardIds = new Set(cards.map(c => c.id))
-      const ids = [...selectedCardIds].filter(id => existingCardIds.has(id))
-      await Promise.all(ids.map(id => cardRepo.softDelete(id)))
-      setCards(prev => prev.filter(c => !selectedCardIds.has(c.id)))
-      setStates(prev => prev.filter(s => !selectedCardIds.has(s.cardId)))
-      setSelectedCardIds(new Set())
-    } catch (err) {
-      console.error('Bulk delete failed:', err)
-    } finally {
-      setBulkDeleting(false)
-    }
-  }
-
-  async function handleBulkReset(action: 'distractors' | 'progress' | 'audio' | 'all') {
-    if (selectedCardIds.size === 0 || bulkResetting) return
-    setBulkResetting(action)
-    setShowBulkResetMenu(false)
-    const ids = [...selectedCardIds]
-    try {
-      if (action === 'distractors' || action === 'all') {
-        await supabase.from('cards').update({ choices: null }).in('id', ids)
-        invalidateReads('cards:')
-        setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, choices: null } : c))
+        if (change.action === 'progress' || change.action === 'all') {
+          setStates(prev => prev.filter(s => !ids.has(s.cardId)))
+          setClimb(prev => { const m = new Map(prev); ids.forEach(id => m.delete(id)); return m })
+        }
+        if (change.action === 'audio' || change.action === 'all') {
+          setCards(prev => prev.map(c => ids.has(c.id) ? { ...c, audioGenerated: false, audioData: null } : c))
+        }
+        break
       }
-      if (action === 'progress' || action === 'all') {
-        await supabase.from('card_states').delete().in('card_id', ids).eq('user_id', userId)
-        // Also clear ladder climb progress so the cards return to Unlearned.
-        await supabase.from('ladder_climb').delete().in('card_id', ids).eq('user_id', userId)
-        // These are DIRECT writes, so the repo-layer 60s read cache has no idea they happened.
-        // Without busting it, pressing Study right after a reset loaded the CACHED pre-reset
-        // states + climb rows and the ladder resumed the cards mid-pipeline — the reported
-        // "I reset these words and they didn't start over". The deck page itself looked right
-        // because it patches its local state below; only the NEXT page's reads were stale.
-        invalidateReads('states:')
-        invalidateReads('climb:')
-        setStates(prev => prev.filter(s => !selectedCardIds.has(s.cardId)))
-        setClimb(prev => { const m = new Map(prev); ids.forEach(id => m.delete(id)); return m })
-      }
-      if (action === 'audio' || action === 'all') {
-        await supabase.from('cards').update({ audio_generated: false, audio_data: null }).in('id', ids)
-        invalidateReads('cards:')
-        setCards(prev => prev.map(c => selectedCardIds.has(c.id) ? { ...c, audioGenerated: false, audioData: null } : c))
-      }
-      setSelectedCardIds(new Set())
-    } catch (err) {
-      console.error('Bulk reset failed:', err)
-    } finally {
-      setBulkResetting(null)
     }
   }
 
@@ -2008,10 +1871,12 @@ export default function DeckDetailPage() {
         </div>
 
         {activeFilter && (() => {
-          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : activeFilter === 'dormant' ? dormant : dueNow
-          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : activeFilter === 'dormant' ? 'Dormant' : 'Due Now'
+          const starredCount = cards.filter(c => c.starred).length
+          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : activeFilter === 'dormant' ? dormant : activeFilter === 'starred' ? starredCount : dueNow
+          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : activeFilter === 'dormant' ? 'Dormant' : activeFilter === 'starred' ? 'Starred' : 'Due Now'
           // Learning-phase categories climb the ladder; post-graduation ones
-          // (graduated / due / dormant) stay on the long-term review flow.
+          // (graduated / due / dormant) stay on the long-term review flow. Starred is MIXED, so it
+          // runs as an elective review session that takes each card in whatever state it's in.
           const isLearningPhase = activeFilter === 'new' || activeFilter === 'learning'
           const studyHref = isLearningPhase
             ? routes.ladderDeck(deckId, { category: activeFilter })
@@ -2030,105 +1895,14 @@ export default function DeckDetailPage() {
           )
         })()}
 
-        {selectedCardIds.size > 0 && (
-          <div className="flex flex-col gap-2 px-3 py-2 rounded-card border border-accent/30 bg-accent/5 text-sm">
-            {bulkDeleteConfirm ? (
-              <div className="flex items-center justify-between">
-                <span className="text-ink-muted text-xs">Delete {selectedCardIds.size} card{selectedCardIds.size !== 1 ? 's' : ''}? This cannot be undone.</span>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setBulkDeleteConfirm(false)} className="text-xs text-ink-faint hover:text-ink transition-colors">Cancel</button>
-                  <button onClick={handleBulkDelete} disabled={bulkDeleting} className="text-xs px-3 py-1 rounded bg-danger/80 hover:bg-danger text-white transition-colors">
-                    {bulkDeleting ? 'Deleting…' : 'Yes, delete'}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-ink-muted">{selectedCardIds.size} card{selectedCardIds.size !== 1 ? 's' : ''} selected</span>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button onClick={() => setSelectedCardIds(new Set())} className="text-xs text-ink-faint hover:text-ink transition-colors">
-                    Clear
-                  </button>
-                  {/* Reset dropdown */}
-                  {showBulkResetMenu && (
-                    <div className="fixed inset-0 z-40" onClick={() => setShowBulkResetMenu(false)} />
-                  )}
-                  <div className="relative">
-                    <button
-                      onClick={() => setShowBulkResetMenu(v => !v)}
-                      disabled={!!bulkResetting}
-                      className="text-xs px-3 py-1 rounded border border-line/10 hover:border-line/20 text-ink-muted hover:text-ink transition-colors"
-                    >
-                      {bulkResetting ? 'Resetting…' : 'Reset ▾'}
-                    </button>
-                    {showBulkResetMenu && (
-                      <div className="absolute right-0 top-full mt-1 z-50 bg-surface-raised border border-line/10 rounded-card shadow-lg py-1 min-w-[200px]">
-                        {([
-                          ['distractors', 'Reset distractors',  'Clears cached multiple-choice options.'],
-                          ['progress',    'Reset progress',     'Erases reps, lapses, schedule.'],
-                          ['audio',       'Reset audio',        'Clears cached audio.'],
-                          ['all',         'Reset entirely',     'Resets progress, distractors, and audio.'],
-                        ] as const).map(([action, label, desc]) => (
-                          <button
-                            key={action}
-                            onClick={() => handleBulkReset(action)}
-                            className={`w-full text-left px-3 py-2 hover:bg-line/5 transition-colors ${action === 'all' ? 'text-danger' : 'text-ink'}`}
-                          >
-                            <span className="block text-sm">{label}</span>
-                            <span className="block text-xs text-ink-faint">{desc}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    onClick={handleBulkStar}
-                    disabled={bulkStarring}
-                    className="text-xs px-3 py-1 rounded border border-warning/30 text-warning hover:bg-warning/10 transition-colors disabled:opacity-40"
-                  >
-                    {bulkStarring
-                      ? 'Starring…'
-                      : cards.some(c => selectedCardIds.has(c.id) && !c.starred) ? '★ Star' : '★ Unstar'}
-                  </button>
-                  <button
-                    onClick={handleBulkMoveToLearning}
-                    disabled={bulkMovingToLearning}
-                    className="text-xs px-3 py-1 rounded border border-line/10 hover:border-line/20 text-ink-muted hover:text-ink transition-colors disabled:opacity-40"
-                  >
-                    {bulkMovingToLearning ? 'Moving…' : 'Move to learning'}
-                  </button>
-                  <button
-                    onClick={() => setBulkDeleteConfirm(true)}
-                    className="text-xs px-3 py-1 rounded border border-danger/30 text-danger hover:bg-danger/10 transition-colors"
-                  >
-                    Delete
-                  </button>
-                  <button
-                    onClick={handleBulkGraduate}
-                    disabled={bulkGraduating}
-                    className="btn-primary text-xs px-3 py-1"
-                  >
-                    {bulkGraduating ? 'Graduating…' : 'Graduate selected'}
-                  </button>
-                </div>
-              </div>
-            )}
-            {!bulkDeleteConfirm && (
-              <label className="flex items-center gap-2 cursor-pointer select-none w-fit">
-                <input
-                  type="checkbox"
-                  checked={bulkAccelerated}
-                  onChange={e => setBulkAccelerated(e.target.checked)}
-                  className="accent-accent w-3.5 h-3.5"
-                />
-                <span className="text-xs text-ink-muted">Accelerated track — spread due dates across 14 days</span>
-              </label>
-            )}
-            {bulkGraduateError && (
-              <p className="text-xs text-danger break-words">Graduation failed: {bulkGraduateError}</p>
-            )}
-          </div>
-        )}
+        <CardBulkPanel
+          userId={userId}
+          cards={cards}
+          states={states}
+          selectedIds={selectedCardIds}
+          onClear={() => setSelectedCardIds(new Set())}
+          onApplied={applyBulkChange}
+        />
 
         <div className="flex items-center justify-between px-1 mb-1">
           <span className="text-xs text-ink-faint">{visibleCards.length} card{visibleCards.length !== 1 ? 's' : ''}</span>

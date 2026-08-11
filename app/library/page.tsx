@@ -12,6 +12,8 @@ import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { climbInProgress } from '@/lib/climbProgress'
+import { CardBulkPanel } from '@/components/CardBulkPanel'
 import { isCardStateDueNow } from '@/lib/dueStatus'
 import type { EnabledTracks } from '@/lib/sessionLimits'
 
@@ -176,6 +178,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   // Due-now context (from the bulk load) so the card-list "Due" filter matches the counts.
   const [dueCtx, setDueCtx] = useState<{ enabledByPair: Map<string, EnabledTracks>; tz: string; today: string } | null>(null)
   const [activeFilter,  setActiveFilter]  = useState<FilterKey | null>(null)
+  /** Selection inside the filtered card list, for the shared bulk-action panel. */
+  const [selectedFilterIds, setSelectedFilterIds] = useState<Set<string>>(new Set())
+  /** Climb rows from the bulk load — a mid-climb card has no card_states row but is still Learning. */
+  const [climbMap, setClimbMap] = useState<Map<string, unknown>>(new Map())
   const [searchQuery,   setSearchQuery]   = useState('')
   // Flat card list for root-page card search (loaded lazily on first query)
   const [allCardsFlat,  setAllCardsFlat]  = useState<{ card: Card; deck: Deck }[]>([])
@@ -255,6 +261,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     // dozens of round-trips finished.
     const bulk = await loadLibraryBulk(session.user.id, decks, cardRepo, stateRepo)
     setDueCtx({ enabledByPair: bulk.enabledByPair, tz: bulk.tz, today: bulk.today })
+    setClimbMap(bulk.climb)
     const entries = await Promise.all(rootFolders.map(async folder => {
       let deckIds = descendantDeckIds(folder.id, folders, decks)
       if (pairSource && pairTarget) {
@@ -1306,11 +1313,13 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     // rows is due — forward production/recall or reverse).
     const cardIsDue = (cardId: string) => !!dueCtx && states.some(s =>
       s.cardId === cardId && isCardStateDueNow(s, { tracks, tz: dueCtx.tz, today: dueCtx.today, forwardState: stateMap.get(cardId) }))
+    // Climb-aware like the deck/folder pages: a card mid-climb has no state row but is Learning.
+    const inProgress = (cardId: string) => climbInProgress(climbMap.get(cardId))
     return cards
       .filter(card => {
         const s = stateMap.get(card.id)
-        if (activeFilter === 'new')       return !s
-        if (activeFilter === 'learning')  return s && !s.graduated
+        if (activeFilter === 'new')       return !s && !inProgress(card.id)
+        if (activeFilter === 'learning')  return (s && !s.graduated && !s.dormant) || (!s && inProgress(card.id))
         if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
         if (activeFilter === 'dormant')   return !!s?.dormant
         if (activeFilter === 'starred')   return !!card.starred
@@ -1319,7 +1328,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       })
       .map(card => {
         const s = stateMap.get(card.id)
-        const status = !s ? 'New' : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
+        const status = !s ? (inProgress(card.id) ? 'Learning' : 'New')
+          : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : `Step ${s.currentStepOrder + 1}`
         return { card, state: s, deckName: deck.name, deckId: deck.id, status }
       })
   }) : []
@@ -1416,12 +1426,46 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">
               {activeFilter === 'starred' ? 'Starred' : PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)?.label} — {groupedCards.length} card{groupedCards.length !== 1 ? 's' : ''}
             </h2>
-            <button onClick={() => setActiveFilter(null)} className="text-xs text-accent hover:text-accent-soft transition-colors">
-              Show all ✕
-            </button>
+            <div className="flex items-center gap-3">
+              {groupedCards.length > 0 && (
+                <button
+                  onClick={() => setSelectedFilterIds(prev =>
+                    prev.size === groupedCards.length ? new Set() : new Set(groupedCards.map(g => g.card.id)))}
+                  className="text-xs text-ink-faint hover:text-ink transition-colors"
+                >
+                  {selectedFilterIds.size === groupedCards.length ? 'Deselect all' : 'Select all'}
+                </button>
+              )}
+              <button onClick={() => { setActiveFilter(null); setSelectedFilterIds(new Set()) }} className="text-xs text-accent hover:text-accent-soft transition-colors">
+                Show all ✕
+              </button>
+            </div>
           </div>
 
+          {userId && (
+            <CardBulkPanel
+              userId={userId}
+              cards={groupedCards.map(g => g.card)}
+              states={pairDeckStats.flatMap(ds => ds.states)}
+              selectedIds={selectedFilterIds}
+              onClear={() => setSelectedFilterIds(new Set())}
+              onApplied={() => { setSelectedFilterIds(new Set()); void load() }}
+            />
+          )}
+
           {(() => {
+            // Starred has no stat-box config (it's a flag, not a graduation state) but is still
+            // studyable — as an elective session that takes each card in whatever state it's in.
+            if (activeFilter === 'starred') {
+              return groupedCards.length > 0 ? (
+                <Link
+                  href={`/study/all/session?category=starred&source=${pairSource}&target=${pairTarget}`}
+                  className="btn-primary block w-full text-center"
+                >
+                  Study Starred
+                </Link>
+              ) : null
+            }
             const cfg = PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)
             return cfg && cfg.value > 0 ? (
               <Link
@@ -1440,22 +1484,35 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           ) : (
             <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
               {groupedCards.map(({ card, decks, status }) => (
-                <Link
-                  key={card.id}
-                  href={routes.deck(decks[0]?.id ?? '', { filter: activeFilter })}
-                  className="flex items-center justify-between px-4 py-3 hover:bg-surface-raised/50 transition-colors"
-                >
-                  <div className="flex gap-6 text-sm min-w-0">
-                    <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
-                    <span className="text-ink-muted truncate">{card.back}</span>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0 ml-2">
-                    <span className="text-xs text-ink-faint hidden sm:block truncate max-w-xs">
-                      {decks.map(d => d.name).join(', ')}
-                    </span>
-                    <span className="chip">{status}</span>
-                  </div>
-                </Link>
+                // Checkbox OUTSIDE the Link — inside it, stopPropagation would suppress Next's
+                // client-side handler but leave the anchor's native navigation intact.
+                <div key={card.id} className="flex items-center gap-3 px-4 py-3 hover:bg-surface-raised/50 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={selectedFilterIds.has(card.id)}
+                    onChange={() => setSelectedFilterIds(prev => {
+                      const next = new Set(prev)
+                      if (next.has(card.id)) next.delete(card.id); else next.add(card.id)
+                      return next
+                    })}
+                    className="accent-accent w-4 h-4 shrink-0 cursor-pointer"
+                  />
+                  <Link
+                    href={routes.deck(decks[0]?.id ?? '', { filter: activeFilter })}
+                    className="flex items-center justify-between flex-1 min-w-0"
+                  >
+                    <div className="flex gap-6 text-sm min-w-0">
+                      <span className="text-ink font-medium w-36 truncate shrink-0">{card.front}</span>
+                      <span className="text-ink-muted truncate">{card.back}</span>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0 ml-2">
+                      <span className="text-xs text-ink-faint hidden sm:block truncate max-w-xs">
+                        {decks.map(d => d.name).join(', ')}
+                      </span>
+                      <span className="chip">{status}</span>
+                    </div>
+                  </Link>
+                </div>
               ))}
             </div>
           )}

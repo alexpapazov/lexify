@@ -77,7 +77,7 @@ interface SessionCard {
 }
 
 /** A single elective study category, chosen either via a deck-stat "Study" button (?category=) or the elective picker. */
-type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
+type StudyCategory = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
 
 /** Cards available for elective study once the normal due/new queue is empty, offered via a picker. */
 interface ElectivePickerData {
@@ -91,6 +91,7 @@ const CATEGORY_BANNER: Record<StudyCategory, string> = {
   graduated: 'Studying graduated cards for early review.',
   due:       'Studying cards that are due now.',
   dormant:   'Reviewing dormant cards (they stay dormant).',
+  starred:   'Studying your starred cards.',
 }
 
 const CATEGORY_EMPTY_MESSAGE: Record<StudyCategory, string> = {
@@ -98,6 +99,7 @@ const CATEGORY_EMPTY_MESSAGE: Record<StudyCategory, string> = {
   learning:  'You have no cards currently in the learning pipeline.',
   graduated: 'You have no graduated cards yet.',
   due:       'You have no cards due right now.',
+  starred:   'You have no starred cards in this deck.',
   dormant:   'You have no dormant cards.',
 }
 
@@ -123,7 +125,7 @@ export default function SessionPage() {
   // normal new/due queue-building below entirely.
   const categoryParam = searchParams.get('category')
   const category: StudyCategory | null =
-    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant'
+    categoryParam === 'new' || categoryParam === 'learning' || categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
       ? categoryParam
       : null
 
@@ -562,6 +564,19 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
                 .map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
             )
             break
+          case 'starred':
+            // Mixed by design — a star cuts across graduation states, so the session takes each
+            // card as it is: unstarted cards enter the pipeline, learning cards continue, graduated
+            // (even dormant) get an elective review.
+            categoryQueue = shuffle(
+              cards.filter(c => c.starred).map(card => {
+                const state = stateMap.get(card.id)
+                if (!state) return { card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline, productionMode: null }
+                if (!state.graduated) return { card, state, pipeline, productionMode: null }
+                return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) }
+              })
+            )
+            break
           case 'due':
             categoryQueue = shuffle(
               cards.flatMap(card => {
@@ -587,7 +602,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         // Exception: when the learner explicitly picks the "learning" category,
         // run through every in-pipeline card (no cap) and never pull in
         // unlearned cards — they asked to clear what's already in learning.
-        const capThisCategory = batchLimit != null && category !== 'learning'
+        const capThisCategory = batchLimit != null && category !== 'learning' && category !== 'starred'
         const batch = capThisCategory ? categoryQueue.slice(0, batchLimit!) : categoryQueue
         const rest  = capThisCategory ? categoryQueue.slice(batchLimit!)    : []
         setRemainingElective(rest)

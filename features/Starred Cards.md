@@ -49,6 +49,7 @@ toggle that filters the card list.
 | Deck page | ★ toggle beside the "Cards" heading; drives `?filter=starred` via the router |
 | Library (pair view) and folder page | ★ toggle beside the search box; sets the local `activeFilter` |
 | Practice | `{ type: 'starred' }` target source + its own tab. Never capped — starring is explicit — but still passes the drillable gate, so a starred phrase is reported as dropped rather than silently missing |
+| Study sessions | `category=starred` (2026-08-10) on all three elective session pages (deck / folder / all). A **Study Starred** button sits atop each starred filter list. MIXED by design — a star cuts across graduation states, so the session takes each card as it is: no state → enters the pipeline, learning → continues, graduated (even dormant) → elective review. Never capped, like the learning category |
 
 `'starred'` is part of each page's `FilterKey` union but has no counter entry, so the filtered-list
 heading falls back to a literal `'Starred'` label rather than a config lookup.
@@ -72,7 +73,7 @@ this yet); fine for a hand-made selection, worth revisiting if it's ever pointed
   entry, so starring while offline fails silently (the star reverts). Every other mid-session write
   has the same shape, so this matches — but it's the first thing to fix if starring becomes
   load-bearing offline.
-- **Bulk starring is deck-page only.** The library and folder views have no multi-select, so there's
-  no "star everything in this filter" there.
+- ~~Bulk starring is deck-page only.~~ Fixed 2026-08-10: the shared `CardBulkPanel` (with ★ Star)
+  now sits on the filtered card lists of the Library, folder, and Study pages too.
 - **Not exposed to the card-editor agent**, so an agent can't star cards it thinks are worth
   revisiting.
