@@ -26,7 +26,7 @@ function LaddersInner() {
   const [userId, setUserId] = useState<string | null>(null)
   const [ladder, setLadder] = useState<Ladder | null>(null)
   const [customized, setCustomized] = useState(false)
-  const [pairs, setPairs] = useState<{ source: string; target: string; custom: boolean }[]>([])
+  const [pairs, setPairs] = useState<{ source: string; target: string; custom: boolean; mode: LearningMode }[]>([])
   const [saving, setSaving] = useState(false)
   const [version, setVersion] = useState(0)
   const [mode, setMode] = useState<LearningMode>('ladder')
@@ -60,12 +60,25 @@ function LaddersInner() {
         setMode(list.find(p => p.sourceLanguage === source && p.targetLanguage === target)?.learningMode ?? 'ladder')
       } else {
         const { data: prof } = await createClient().from('profiles').select('default_learning_mode').eq('user_id', uid).maybeSingle()
-        setMode((prof?.default_learning_mode as LearningMode | null) ?? 'ladder')
-        const decks = await new SupabaseDeckRepository().list(uid)
-        const saved = await repo.list(uid)
-        const customKeys = new Set(saved.filter(s => s.source && s.target).map(s => `${s.source}|${s.target}`))
+        const defMode = (prof?.default_learning_mode as LearningMode | null) ?? 'ladder'
+        setMode(defMode)
+        // The custom/default chip must reflect the pair's ACTIVE mode: a custom LADDER row on a
+        // pathway-mode pair is dormant data and must not label the pair "custom" (user-reported —
+        // Korean showed "custom" right after its pathway was reverted to default).
+        const [decks, saved, customPathKeys, pairList] = await Promise.all([
+          new SupabaseDeckRepository().list(uid),
+          repo.list(uid),
+          pathRepo.listCustomPairKeys(uid).catch(() => new Set<string>()),
+          new SupabaseLanguagePairRepository().list(uid).catch(() => []),
+        ])
+        const modeByPair = new Map(pairList.map(pr => [`${pr.sourceLanguage}|${pr.targetLanguage}`, pr.learningMode ?? defMode]))
+        const customLadderKeys = new Set(saved.filter(s => s.source && s.target).map(s => `${s.source}|${s.target}`))
         const uniq = Array.from(new Set(decks.map(d => `${d.sourceLanguage}|${d.targetLanguage}`)))
-        setPairs(uniq.map(k => { const [s, t] = k.split('|'); return { source: s!, target: t!, custom: customKeys.has(k) } }))
+        setPairs(uniq.map(k => {
+          const [s, t] = k.split('|')
+          const m = modeByPair.get(k) ?? defMode
+          return { source: s!, target: t!, mode: m, custom: m === 'pathway' ? customPathKeys.has(k) : customLadderKeys.has(k) }
+        }))
       }
       setVersion(v => v + 1)
     })()
@@ -175,7 +188,7 @@ function LaddersInner() {
             <a key={`${p.source}|${p.target}`} href={`/settings/ladders?source=${p.source}&target=${p.target}`}
               className="panel flex items-center justify-between py-3 hover:border-line/10">
               <span className="text-sm text-ink">{langName(p.source)} → {langName(p.target)}</span>
-              <span className="chip">{p.custom ? 'custom' : 'default'}</span>
+              <span className="chip">{p.mode} · {p.custom ? 'custom' : 'default'}</span>
             </a>
           ))}
         </div>

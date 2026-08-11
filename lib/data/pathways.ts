@@ -35,6 +35,20 @@ export class SupabasePathwayRepository {
     return this.getForPair(userId, DEFAULT_KEY.source, DEFAULT_KEY.target)
   }
 
+  /** `source|target` keys of every pair with its OWN pathway (the ''/'' default row excluded). */
+  async listCustomPairKeys(userId: UserId): Promise<Set<string>> {
+    const { data, error } = await this.db.from('learning_pathways')
+      .select('source_language, target_language, pathway').eq('user_id', userId)
+    if (error) throw new Error(error.message)
+    const keys = new Set<string>()
+    for (const r of data ?? []) {
+      const src = r.source_language as string, tgt = r.target_language as string
+      if (!src || !tgt) continue                 // the default row
+      if (rowToPathway(r)) keys.add(`${src}|${tgt}`)   // empty {} rows are "not set", not custom
+    }
+    return keys
+  }
+
   async saveForPair(userId: UserId, source: string, target: string, pathway: Pathway): Promise<void> {
     const { error } = await this.db.from('learning_pathways').upsert(
       { user_id: userId, source_language: source, target_language: target, pathway, updated_at: new Date().toISOString() },

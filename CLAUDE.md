@@ -2788,6 +2788,14 @@ Also: the pair-page subtitle now says custom-vs-default for pathways like it alw
 Note the standing trap: `persistPathwayLayout` auto-saves on node drag, silently forking a
 default-following pair into a custom one — the always-visible revert button is the recovery path.
 
+**Per-language chips (same day, user-reported):** the default page's pair list labeled pairs
+custom/default from LADDER rows alone, so a pathway-mode pair with a dormant custom ladder read
+"custom" even when its pathway followed the default. The chip now resolves the pair's ACTIVE mode
+(`language_pairs.learningMode`, falling back to the profile default) and checks that mode's own
+rows — `SupabasePathwayRepository.listCustomPairKeys` (default ''/'' row and empty `{}` rows
+excluded) for pathway pairs, ladder rows for ladder pairs — and reads "pathway · default" /
+"ladder · custom" so the mode is visible at a glance.
+
 ## Verifying changes
 
 ```
