@@ -79,7 +79,7 @@ function backHref(scope: LadderScope): string {
 }
 
 export function LadderStudy({ scope }: { scope: LadderScope }) {
-  const category = useSearchParams().get('category') // 'new' | 'learning' | null
+  const category = useSearchParams().get('category') // 'new' | 'learning' | 'starred' | null
   const [userId, setUserId] = useState<string | null>(null)
   const [decksById, setDecksById] = useState<Map<string, Deck>>(new Map())
   const [deckByCard, setDeckByCard] = useState<Map<string, string>>(new Map())
@@ -500,6 +500,12 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           .filter(c => { const cl = climb.get(c.id); return !gradSet.has(c.id) && (pipelineStateSet.has(c.id) || (!!cl && !cl.graduated)) })
           .map(c => c.id)
       }
+      else if (category === 'starred') {
+        // Every non-graduated starred card — fresh or mid-climb — through the pair's CURRENT
+        // ladder/pathway. (Graduated starred cards are the review session's half of the split.)
+        // Not budget-capped: starring is explicit.
+        q = allCards.filter(c => c.starred && !gradSet.has(c.id)).map(c => c.id)
+      }
       else {
         const cap = prefs?.cardsPerSession ?? null
         if (cap != null && cap > 0) {
@@ -909,7 +915,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       )}
       {category && (
         <p className="text-xs text-accent text-center">
-          {category === 'new' ? 'Studying unlearned cards.' : 'Studying cards still in the learning pipeline.'}
+          {category === 'new' ? 'Studying unlearned cards.' : category === 'starred' ? 'Studying your starred cards.' : 'Studying cards still in the learning pipeline.'}
         </p>
       )}
 

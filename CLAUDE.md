@@ -2701,14 +2701,17 @@ repo reads are invalidated by the operations themselves).
 
 ## Study Starred (2026-08-10)
 
-`category=starred` joined the elective-session categories on all three session pages (deck /
-folder / all), and every starred filter list (deck page, Library pair view, folder view) got a
-**Study Starred** button. A starred session is MIXED by design — a star cuts across graduation
-states — so each card is taken as it is: no state row → `initialCardState` (enters the pipeline),
-learning → continues (`productionMode: null`), graduated (even dormant, elective override) →
-`decideProductionMode`. Never capped, like the explicit 'learning' category. This also fixed the
-deck page's starred filter showing a "Study Due Now" button with the due count — starred fell
-through the count/label ternaries.
+Every starred filter list (deck page, Library pair view, folder view) got study buttons, SPLIT BY
+PHASE: **"Study Starred (n)"** sends non-graduated starred cards through `LadderStudy`
+(`category=starred` on the ladder pages) — the pair's CURRENT ladder/pathway — and **"Review
+Starred (m)"** sends graduated ones through the elective review sessions (`category=starred`,
+graduated-matching only). The first cut ran everything through the review pages' elective branches,
+which build LEGACY step-pipeline queues (`initialCardState` + steps) and ignore the configured
+ladder — the user hit it immediately ("Step 1 · recognition" on a pathway pair). Rule: the review
+session pages must never build queues for non-graduated cards' learning; that's the ladder's job.
+Neither starred session is capped (starring is explicit). Also fixed the deck page's starred filter
+showing a "Study Due Now" button with the due count — starred fell through the count/label
+ternaries.
 
 ## Verifying changes
 

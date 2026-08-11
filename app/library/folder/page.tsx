@@ -818,16 +818,25 @@ function FolderPageInner() {
               )}
 
               {(() => {
-                // Starred has no stat-box config (it's a flag, not a graduation state) but is still
-                // studyable — as an elective session that takes each card in whatever state it's in.
+                // Starred is MIXED (a star cuts across graduation states) and each half has its
+                // own flow: non-graduated cards climb the ladder/pathway, graduated ones get an
+                // elective review. One button per half — never the legacy step pipeline.
                 if (activeFilter === 'starred') {
+                  const starredLearn = filteredCards.filter(f => !f.state?.graduated).length
+                  const starredGrad  = filteredCards.length - starredLearn
                   return filteredCards.length > 0 ? (
-                    <Link
-                      href={routes.folderSession(folderId, { category: 'starred' })}
-                      className="btn-primary block w-full text-center"
-                    >
-                      Study Starred
-                    </Link>
+                    <div className="flex gap-2">
+                      {starredLearn > 0 && (
+                        <Link href={routes.ladderFolder(folderId, { category: 'starred' })} className="btn-primary block flex-1 text-center">
+                          Study Starred ({starredLearn})
+                        </Link>
+                      )}
+                      {starredGrad > 0 && (
+                        <Link href={routes.folderSession(folderId, { category: 'starred' })} className="btn-primary block flex-1 text-center">
+                          Review Starred ({starredGrad})
+                        </Link>
+                      )}
+                    </div>
                   ) : null
                 }
                 const cfg = COUNTER_CONFIG.find(c => c.key === activeFilter)

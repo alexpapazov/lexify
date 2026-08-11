@@ -1454,16 +1454,25 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
           )}
 
           {(() => {
-            // Starred has no stat-box config (it's a flag, not a graduation state) but is still
-            // studyable — as an elective session that takes each card in whatever state it's in.
+            // Starred is MIXED (a star cuts across graduation states) and each half has its own
+            // flow: non-graduated cards climb the pair's ladder/pathway, graduated ones get an
+            // elective review. One button per half — never the legacy step pipeline.
             if (activeFilter === 'starred') {
+              const starredLearn = groupedCards.filter(g => !g.state?.graduated).length
+              const starredGrad  = groupedCards.length - starredLearn
               return groupedCards.length > 0 ? (
-                <Link
-                  href={`/study/all/session?category=starred&source=${pairSource}&target=${pairTarget}`}
-                  className="btn-primary block w-full text-center"
-                >
-                  Study Starred
-                </Link>
+                <div className="flex gap-2">
+                  {starredLearn > 0 && (
+                    <Link href={`/study/ladder/all?source=${pairSource}&target=${pairTarget}&category=starred`} className="btn-primary block flex-1 text-center">
+                      Study Starred ({starredLearn})
+                    </Link>
+                  )}
+                  {starredGrad > 0 && (
+                    <Link href={`/study/all/session?category=starred&source=${pairSource}&target=${pairTarget}`} className="btn-primary block flex-1 text-center">
+                      Review Starred ({starredGrad})
+                    </Link>
+                  )}
+                </div>
               ) : null
             }
             const cfg = PAIR_COUNTER_CONFIG.find(c => c.key === activeFilter)

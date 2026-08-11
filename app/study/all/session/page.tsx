@@ -375,12 +375,11 @@ function AllDueSessionInner() {
               categoryCards.push({ ...common, card, state, productionMode: null })
             } else if (category === 'graduated' && state?.graduated && !state.dormant) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
-            } else if (category === 'starred' && card.starred) {
-              // Mixed by design — a star cuts across graduation states: unstarted cards enter the
-              // pipeline, learning cards continue, graduated (even dormant) get an elective review.
-              if (!state) categoryCards.push({ ...common, card, state: initialCardState(session.user.id, card.id, pipeline.id), productionMode: null })
-              else if (!state.graduated) categoryCards.push({ ...common, card, state, productionMode: null })
-              else categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
+            } else if (category === 'starred' && card.starred && state?.graduated) {
+              // GRADUATED starred only. Non-graduated starred cards belong to the ladder/pathway
+              // flow (LadderStudy category=starred) — this page's legacy step pipeline would ignore
+              // the pair's configured ladder.
+              categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'dormant' && state?.dormant) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'due' && state?.graduated && !state.dormant && dirParam !== 'reverse') {
@@ -1704,7 +1703,7 @@ function AllDueSessionInner() {
       </div>
       {electiveSession && category && (
         <p className="text-xs text-accent text-center">
-          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : category === 'starred' ? 'Studying your starred cards.' : 'Studying cards due now.'}
+          {category === 'new' ? 'Studying unlearned cards.' : category === 'learning' ? 'Studying cards in the learning pipeline.' : category === 'graduated' ? 'Studying graduated cards.' : category === 'starred' ? 'Reviewing your starred graduated cards.' : 'Studying cards due now.'}
         </p>
       )}
       {answerError && (

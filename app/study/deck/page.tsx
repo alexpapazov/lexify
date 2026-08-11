@@ -1871,12 +1871,36 @@ export default function DeckDetailPage() {
         </div>
 
         {activeFilter && (() => {
-          const starredCount = cards.filter(c => c.starred).length
-          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : activeFilter === 'dormant' ? dormant : activeFilter === 'starred' ? starredCount : dueNow
-          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : activeFilter === 'dormant' ? 'Dormant' : activeFilter === 'starred' ? 'Starred' : 'Due Now'
+          // Starred is MIXED (a star cuts across graduation states) and each half has its own flow:
+          // non-graduated cards climb the pair's ladder/pathway, graduated ones get an elective
+          // review. One button per half — never the legacy step pipeline.
+          if (activeFilter === 'starred') {
+            const starredLearn = cards.filter(c => c.starred && !stateMap.get(c.id)?.graduated).length
+            const starredGrad  = cards.filter(c => c.starred && !!stateMap.get(c.id)?.graduated).length
+            if (starredLearn + starredGrad === 0) return (
+              <span className="block w-full text-center text-sm py-2 text-ink-faint/40 select-none">
+                Study Starred
+              </span>
+            )
+            return (
+              <div className="flex gap-2">
+                {starredLearn > 0 && (
+                  <Link href={routes.ladderDeck(deckId, { category: 'starred' })} className="btn-primary block flex-1 text-center">
+                    Study Starred ({starredLearn})
+                  </Link>
+                )}
+                {starredGrad > 0 && (
+                  <Link href={routes.deckSession(deckId, { category: 'starred' })} className="btn-primary block flex-1 text-center">
+                    Review Starred ({starredGrad})
+                  </Link>
+                )}
+              </div>
+            )
+          }
+          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : activeFilter === 'dormant' ? dormant : dueNow
+          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : activeFilter === 'dormant' ? 'Dormant' : 'Due Now'
           // Learning-phase categories climb the ladder; post-graduation ones
-          // (graduated / due / dormant) stay on the long-term review flow. Starred is MIXED, so it
-          // runs as an elective review session that takes each card in whatever state it's in.
+          // (graduated / due / dormant) stay on the long-term review flow.
           const isLearningPhase = activeFilter === 'new' || activeFilter === 'learning'
           const studyHref = isLearningPhase
             ? routes.ladderDeck(deckId, { category: activeFilter })

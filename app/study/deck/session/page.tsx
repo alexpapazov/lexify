@@ -91,7 +91,7 @@ const CATEGORY_BANNER: Record<StudyCategory, string> = {
   graduated: 'Studying graduated cards for early review.',
   due:       'Studying cards that are due now.',
   dormant:   'Reviewing dormant cards (they stay dormant).',
-  starred:   'Studying your starred cards.',
+  starred:   'Reviewing your starred graduated cards.',
 }
 
 const CATEGORY_EMPTY_MESSAGE: Record<StudyCategory, string> = {
@@ -99,7 +99,7 @@ const CATEGORY_EMPTY_MESSAGE: Record<StudyCategory, string> = {
   learning:  'You have no cards currently in the learning pipeline.',
   graduated: 'You have no graduated cards yet.',
   due:       'You have no cards due right now.',
-  starred:   'You have no starred cards in this deck.',
+  starred:   'You have no starred graduated cards in this deck.',
   dormant:   'You have no dormant cards.',
 }
 
@@ -565,16 +565,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             )
             break
           case 'starred':
-            // Mixed by design — a star cuts across graduation states, so the session takes each
-            // card as it is: unstarted cards enter the pipeline, learning cards continue, graduated
-            // (even dormant) get an elective review.
+            // GRADUATED starred only. Non-graduated starred cards belong to the ladder/pathway flow
+            // (LadderStudy category=starred) — routing them through this page's legacy step pipeline
+            // ignored the pair's configured ladder (the "Step 1 · recognition" ghost).
             categoryQueue = shuffle(
-              cards.filter(c => c.starred).map(card => {
-                const state = stateMap.get(card.id)
-                if (!state) return { card, state: initialCardState(session.user.id, card.id, pipeline.id), pipeline, productionMode: null }
-                if (!state.graduated) return { card, state, pipeline, productionMode: null }
-                return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) }
-              })
+              cards.filter(c => c.starred && stateMap.get(c.id)?.graduated)
+                .map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
             )
             break
           case 'due':
