@@ -2816,6 +2816,10 @@ changing it.** The load-bearing points:
 - **AI path**: `/api/agents/card-organizer` returns only `{cardId, path, reason}` — no edit/split/
   delete verbs exist. Existing library paths are passed in so it reuses names instead of inventing
   "Foods" beside "Food"; every id is re-validated locally against the sent batch.
+- **Both inputs combine.** An instruction can accompany documents: the documents stay authoritative
+  for every word they list, and the instruction handles only the LEFTOVERS — with the document's own
+  paths added to the destination vocabulary (`pathsFromPlan`) and `leftovers: true` telling the route
+  not to propose a competing tree. Instructions are optional in document mode, required otherwise.
 - Review is grouped BY DESTINATION; "Undo last" reverses the whole group just applied; "Accept all"
   is confirmed and deliberately not undoable as a unit.
 - `ensureFolderPath`/`ensureDeck` reuse same-named folders/decks at their level — the same rule as

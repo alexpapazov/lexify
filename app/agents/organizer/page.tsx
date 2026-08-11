@@ -3,12 +3,16 @@
 /**
  * app/agents/organizer/page.tsx — the card-organizer agent.
  *
- * Two ways in, one review queue out:
+ * Two ways in — usable together — one review queue out:
  *   • **Word documents** — drop one or more `.docx` files whose headings describe a folder tree.
  *     Every scoped card whose word appears in a document is proposed for the folder/deck it sits
  *     under there, subfolders and all. Deterministic, NO AI.
- *   • **Natural language** — "put the food words in Food/Ingredients". Batched model calls that
- *     return a destination per card; every id is re-validated locally.
+ *   • **Instructions** — "put the food words in Food/Ingredients". Batched model calls that return a
+ *     destination per card; every id is re-validated locally.
+ *
+ * With BOTH, the documents win for every word they list (a deliberate placement is never
+ * second-guessed by a model) and the instruction handles the leftovers, with the document's own
+ * folder names offered as destinations.
  *
  * Nothing moves until you approve it, one destination group at a time. A move is a deck relink, so
  * review history and audio ride along untouched.
@@ -23,7 +27,7 @@ import { ScopeTreePicker } from '@/components/agents/ScopeTreePicker'
 import { gatherScopedCards, chunk } from '@/lib/agents/cardEditor'
 import type { ScopedCard } from '@/lib/agents/cardEditor'
 import {
-  planMovesFromDocument, assignBatch, groupByDestination, destinationKey,
+  planMovesFromDocument, assignBatch, groupByDestination, destinationKey, pathsFromPlan,
   type MoveProposal,
 } from '@/lib/agents/cardOrganizer'
 import { applyMove, undoMove, type AppliedMove, type OrganizerContext } from '@/lib/agents/organizerApply'
@@ -38,6 +42,8 @@ type Source = 'document' | 'prompt'
 
 const PLACEHOLDER =
   'e.g. "Group these by topic — food, travel, work — with a deck per topic", "Split the verbs out into Verbs/Regular and Verbs/Irregular", "Put anything about family into Family"…'
+const DOC_PLACEHOLDER =
+  'e.g. "Put anything not in the documents into an Unsorted deck", "Sort the leftovers into whichever of these folders fits best", "Leave the rest alone"…'
 
 export default function OrganizerPage() {
   const [userId, setUserId] = useState<string | null>(null)
@@ -170,28 +176,46 @@ export default function OrganizerPage() {
       if (cards.length === 0) { setError('No cards in the selected decks.'); setPhase('setup'); return }
       ctxRef.current = makeContext(cards)
 
+      const instruction = task.trim()
+      const msgs: string[] = []
+      const all: MoveProposal[] = []
+
       if (source === 'document') {
         if (files.length === 0) { setError('Add at least one Word document first.'); setPhase('setup'); return }
         // Documents are merged into one plan; earlier files win a conflict, matching the
         // first-occurrence rule inside a single document.
         const merged: DeckPlan = { decks: files.flatMap(f => f.plan.decks), unparsed: files.flatMap(f => f.plan.unparsed) }
         const { moves, unmatched, duplicates } = planMovesFromDocument(cards, merged, deckPathOf)
-        const msgs: string[] = []
-        if (unmatched.length > 0) msgs.push(`${unmatched.length} card${unmatched.length === 1 ? '' : 's'} in scope aren’t in the document — left where they are.`)
+        all.push(...moves)
         if (duplicates.length > 0) msgs.push(`${duplicates.length} word${duplicates.length === 1 ? '' : 's'} appear under more than one heading; the first placement was used.`)
         if (merged.unparsed.length > 0) msgs.push(`${merged.unparsed.length} document line${merged.unparsed.length === 1 ? '' : 's'} had no separator and were ignored.`)
+
+        if (instruction && unmatched.length > 0) {
+          // The instruction governs ONLY what the document didn't place — the document is the
+          // explicit statement and must not be re-litigated by a model. The document's own paths
+          // join the destination vocabulary so leftovers land inside the structure it defined.
+          const vocabulary = [...new Set([...existingPaths, ...pathsFromPlan(merged)])]
+          const batches = chunk(unmatched, BATCH_SIZE)
+          for (let i = 0; i < batches.length; i++) {
+            setProgress({ done: i, total: batches.length })
+            all.push(...await assignBatch(batches[i]!, instruction, vocabulary, deckPathOf, true))
+          }
+          setProgress({ done: batches.length, total: batches.length })
+          msgs.push(`${moves.length} placed by the document; the instruction was applied to the ${unmatched.length} card${unmatched.length === 1 ? '' : 's'} it didn’t list.`)
+        } else if (unmatched.length > 0) {
+          msgs.push(`${unmatched.length} card${unmatched.length === 1 ? '' : 's'} in scope aren’t in the document — left where they are. Add an instruction to say what should happen to them.`)
+        }
         setNotes(msgs)
-        setQueue(moves)
-        setPhase(moves.length > 0 ? 'review' : 'done')
+        setQueue(all)
+        setPhase(all.length > 0 ? 'review' : 'done')
         return
       }
 
-      if (!task.trim()) { setError('Say how you want them organized.'); setPhase('setup'); return }
+      if (!instruction) { setError('Say how you want them organized.'); setPhase('setup'); return }
       const batches = chunk(cards, BATCH_SIZE)
-      const all: MoveProposal[] = []
       for (let i = 0; i < batches.length; i++) {
         setProgress({ done: i, total: batches.length })
-        all.push(...await assignBatch(batches[i]!, task.trim(), existingPaths, deckPathOf))
+        all.push(...await assignBatch(batches[i]!, instruction, existingPaths, deckPathOf))
       }
       setProgress({ done: batches.length, total: batches.length })
       setQueue(all)
@@ -314,8 +338,8 @@ export default function OrganizerPage() {
             <label className="text-xs text-ink-faint">How should it decide?</label>
             <div className="flex flex-wrap gap-2">
               {([
-                ['document', '📄 From Word documents', 'Match the folders and decks the document’s headings describe'],
-                ['prompt',   '💬 From a description',  'Tell it how to group them'],
+                ['document', '📄 From Word documents', 'Match the folders and decks the document’s headings describe — add instructions for anything it doesn’t list'],
+                ['prompt',   '💬 From instructions only',  'Tell it how to group them'],
               ] as [Source, string, string][]).map(([val, label, hint]) => (
                 <button key={val} type="button" onClick={() => setSource(val)} title={hint}
                   className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
@@ -360,12 +384,23 @@ export default function OrganizerPage() {
                 </div>
               )}
             </div>
-          ) : (
-            <div className="space-y-1">
-              <label className="text-xs text-ink-faint">How should the cards be grouped?</label>
-              <textarea className="input min-h-[90px]" value={task} onChange={e => setTask(e.target.value)} placeholder={PLACEHOLDER} />
-            </div>
-          )}
+          ) : null}
+
+          <div className="space-y-1">
+            <label className="text-xs text-ink-faint">
+              {source === 'document'
+                ? <>Instructions <span className="text-ink-faint/70">(optional — applied to cards the documents don’t list)</span></>
+                : 'How should the cards be grouped?'}
+            </label>
+            <textarea className="input min-h-[90px]" value={task} onChange={e => setTask(e.target.value)}
+              placeholder={source === 'document' ? DOC_PLACEHOLDER : PLACEHOLDER} />
+            {source === 'document' && (
+              <p className="text-[10px] text-ink-faint">
+                The documents decide every word they list — an instruction can’t override a placement you
+                wrote down. It handles the leftovers, and can put them into the same folders.
+              </p>
+            )}
+          </div>
 
           <div className="space-y-1">
             <div className="flex items-baseline justify-between">
@@ -379,7 +414,11 @@ export default function OrganizerPage() {
           <button type="button" onClick={() => void run()}
             disabled={!userId || busy || selected.size === 0 || (source === 'document' ? files.length === 0 : !task.trim())}
             className="btn-primary text-sm py-2 px-4 disabled:opacity-40">
-            {busy ? 'Working…' : source === 'document' ? 'Match against the document' : 'Plan the reorganization'}
+            {busy
+              ? 'Working…'
+              : source === 'document'
+                ? (task.trim() ? 'Match the documents, then apply the instructions' : 'Match against the documents')
+                : 'Plan the reorganization'}
           </button>
         </div>
       )}

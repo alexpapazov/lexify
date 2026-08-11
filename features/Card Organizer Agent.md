@@ -57,6 +57,22 @@ that's where its card belongs".
   An invented id, an out-of-scope card, an empty path, or a no-op (card already there) is dropped
   rather than trusted.
 
+### They combine
+
+Instructions are available in BOTH modes. With documents **and** an instruction:
+
+- the documents are **authoritative for every word they list** — a placement you wrote down is never
+  re-litigated by a model;
+- the instruction governs only the **leftovers** (cards no document mentioned), so "put anything not
+  in these documents into Unsorted" or "sort the rest into whichever of these folders fits" works;
+- the document's own folder/deck paths join the destination vocabulary (`pathsFromPlan`) alongside
+  the library's, so leftovers land INSIDE the structure the document just described rather than in a
+  parallel tree the model invented. The route is also told these are leftovers (`leftovers: true`),
+  without which it assumes it's organizing the whole library.
+
+With documents and NO instruction, unlisted cards are left alone and the note says so, pointing at
+the instruction box.
+
 Both paths converge on `MoveProposal[]` and the same review queue.
 
 ---

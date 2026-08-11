@@ -12,6 +12,11 @@
  *   2. **Natural language** ("put all the food words in Food/Ingredients"). The model only ever
  *      chooses a DESTINATION PATH per card; it never touches card text and never invents an id.
  *
+ * **They combine.** With documents AND an instruction, the documents are authoritative for every
+ * word they list — a deliberate placement must never be second-guessed by a model — and the
+ * instruction governs the LEFTOVERS, with the document's own folder/deck names offered as
+ * destinations so "put the rest where they fit" lands inside the structure you just described.
+ *
  * Both paths converge on the same `MoveProposal[]`, which the review UI approves one by one and
  * `applyMove` executes. Nothing here writes; nothing is applied without approval.
  *
@@ -162,6 +167,17 @@ export function plannedTree(plan: DeckPlan): PlannedDeck[] {
   return plan.decks
 }
 
+/**
+ * The folder/deck paths a document describes, as the review UI and the model see them.
+ *
+ * Handed to the AI pass alongside the library's existing paths when an instruction accompanies
+ * documents: the leftovers should land in the structure the document just defined, not in a parallel
+ * tree the model invented for them.
+ */
+export function pathsFromPlan(plan: DeckPlan): string[] {
+  return [...new Set(plan.decks.map(d => [...d.path, d.name].join(' / ')))]
+}
+
 // ─── AI path: one batch → destination assignments ────────────────────────────
 
 /**
@@ -175,11 +191,13 @@ export async function assignBatch(
   task: string,
   existingPaths: string[],
   deckPathOf: (deckId: string) => string[],
+  /** True when these are the cards a Word document didn't place — changes how the model is framed. */
+  leftovers = false,
 ): Promise<MoveProposal[]> {
   const res = await fetch(apiUrl('/api/agents/card-organizer'), {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      task, existingPaths,
+      task, existingPaths, leftovers,
       cards: batch.map(c => ({
         cardId: c.cardId, front: c.front, back: c.back,
         currentPath: deckPathOf(c.deckId).join(' / '),

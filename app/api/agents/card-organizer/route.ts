@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return NextResponse.json({ ok: false, error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 })
 
-  let body: { cards: InCard[]; task: string; existingPaths?: string[] }
+  let body: { cards: InCard[]; task: string; existingPaths?: string[]; leftovers?: boolean }
   try { body = await req.json() } catch { return NextResponse.json({ ok: false, error: 'bad json' }, { status: 400 }) }
   const { cards, task } = body
   if (!Array.isArray(cards) || cards.length === 0) return NextResponse.json({ ok: true, assignments: [] })
@@ -69,13 +69,19 @@ export async function POST(req: NextRequest) {
   const existingBlock = existing.length > 0
     ? `\n\nFolders and decks that already exist (reuse these names exactly where they fit):\n${existing.map(p => `- ${p}`).join('\n')}`
     : ''
+  // When documents were also given, these cards are the ones the documents did NOT list. Saying so
+  // matters: without it the model assumes it is organizing the whole library and proposes a tree
+  // that competes with the structure the document just established.
+  const leftoverBlock = body.leftovers
+    ? `\n\nThese are the cards a Word document did NOT place. The document's structure is listed above and is already decided — fit these cards into it where the instruction calls for it, rather than inventing a parallel structure.`
+    : ''
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({
       model: MODEL, max_tokens: 4096, system: SYSTEM,
-      messages: [{ role: 'user', content: `INSTRUCTION: ${task.trim()}${existingBlock}\n\nCards:\n${list}` }],
+      messages: [{ role: 'user', content: `INSTRUCTION: ${task.trim()}${existingBlock}${leftoverBlock}\n\nCards:\n${list}` }],
     }),
   })
   if (!res.ok) {
