@@ -7,6 +7,7 @@ import { groupSessions, type SessionSummary } from '@/lib/ladderLog'
 import { reconstructEvents, type ClimbRecord } from '@/lib/ladderReconstruct'
 import { langName, langFlag } from '@/lib/languages'
 import { LadderReplay } from './LadderReplay'
+import { PathwayReplay } from './PathwayReplay'
 
 function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000)
@@ -96,7 +97,7 @@ export function LadderLogs() {
     <div className="panel p-5 space-y-3">
       <div>
         <h2 className="text-sm font-semibold text-ink">Logs</h2>
-        <p className="text-xs text-ink-faint">Every learning-ladder session, with how long it took, time spent per card, and a replay of your cards climbing the ladder.</p>
+        <p className="text-xs text-ink-faint">Every ladder and pathway session, with how long it took, time spent per card, and a replay of your cards moving through it.</p>
       </div>
 
       {error && <p className="text-sm text-danger">Couldn&apos;t load logs: {error}</p>}
@@ -143,7 +144,20 @@ export function LadderLogs() {
                     <Stat label="Avg / card" value={fmtDuration(s.cardCount ? s.activeMs / s.cardCount : 0)} />
                   </div>
 
-                  <LadderReplay session={s} />
+                  {s.isPathway ? (
+                    <>
+                      {/* Pathway events logged before migration 118 all sit at state 0 — the replay
+                          renders but nothing moves; say so instead of looking broken. */}
+                      {s.events.every(e => e.fromRung === 0 && e.toRung === 0) && (
+                        <p className="text-[11px] text-ink-faint">
+                          This session predates pathway position logging — attempts and times are real, but the replay can&apos;t show movement.
+                        </p>
+                      )}
+                      <PathwayReplay session={s} />
+                    </>
+                  ) : (
+                    <LadderReplay session={s} />
+                  )}
 
                   {/* Per-card breakdown */}
                   <div className="rounded-lg border border-line/10 overflow-hidden">
@@ -156,7 +170,9 @@ export function LadderLogs() {
                           <span className="text-ink truncate">{c.label}</span>
                           <span className="text-ink-muted text-center">{c.attempts}</span>
                           <span className="text-ink-muted tabular-nums">{fmtDuration(c.activeMs)}</span>
-                          <span className={c.graduated ? 'text-success' : 'text-ink-muted'}>{c.graduated ? '✓ Grad' : `Rung ${c.maxRung + 1}`}</span>
+                          <span className={c.graduated ? 'text-success' : 'text-ink-muted'}>
+                            {c.graduated ? '✓ Grad' : s.isPathway ? (s.stateNames[c.maxRung] ?? `State ${c.maxRung + 1}`) : `Rung ${c.maxRung + 1}`}
+                          </span>
                         </div>
                       ))}
                     </div>

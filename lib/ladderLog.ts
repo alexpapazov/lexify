@@ -29,6 +29,10 @@ export interface SessionSummary {
   source:         string | null
   target:         string | null
   reconstructed?: boolean  // rebuilt from rungHistory (no per-attempt timing / colours)
+  /** True when the session ran the branched pathway engine (positions are state indices). */
+  isPathway:      boolean
+  /** Lane label per state index, from the landed-state names the events recorded (null = unknown). */
+  stateNames:     (string | null)[]
 }
 
 const ms = (iso: string) => new Date(iso).getTime()
@@ -68,6 +72,14 @@ export function groupSessions(events: LadderEvent[]): SessionSummary[] {
       wallMs:         ms(sorted[sorted.length - 1]!.createdAt) - ms(sorted[0]!.createdAt),
       source:         sorted.find(e => e.sourceLanguage)?.sourceLanguage ?? null,
       target:         sorted.find(e => e.targetLanguage)?.targetLanguage ?? null,
+      isPathway:      sorted.some(e => e.pathway),
+      stateNames:     (() => {
+        const n = Math.max(1, ...sorted.map(e => e.rungCount))
+        const names: (string | null)[] = new Array(n).fill(null)
+        // Latest name wins per index — historically accurate even if the pathway was edited mid-window.
+        for (const e of sorted) if (e.stateName && e.toRung < n) names[e.toRung] = e.stateName
+        return names
+      })(),
     })
   }
   return summaries.sort((a, b) => b.start - a.start)

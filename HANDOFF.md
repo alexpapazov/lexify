@@ -6,9 +6,8 @@ implementation notes + error log); this file is the map you read first.
 
 - **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 848 passing tests (53 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`117`, applied BY HAND. **`117` is
-  PENDING** — weekly patterns + per-pattern debt on `goal_schedules` (`weekly_target`,
-  `debt_carry_missed`, `debt_carry_extra`, `debt_reset_at`).
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`118`, applied BY HAND. **`118` is
+  PENDING** — pathway-aware session logging on `ladder_events` (`pathway`, `state_name`).
 
 ---
 
@@ -24,7 +23,7 @@ implementation notes + error log); this file is the map you read first.
 - **Migrations are applied by hand** in the Supabase SQL editor. Numbering is sequential.
   `001`–`113` are all applied and all live in `supabase/migrations/archive/`. **An empty top level
   is the signal that nothing is pending** — put a new migration there, tell the user to run it, and
-  move it into `archive/` once it's live. **`117_pattern_debt.sql` needs running.** Next number = **118**.
+  move it into `archive/` once it's live. **`118_ladder_event_pathway.sql` needs running.** Next number = **119**.
 - **Verify before proposing a commit**: `npm run build` + `npm test` (green = build exits 0 and
   **53 suites / 848 tests** pass). `npx tsc --noEmit` also reports 8 errors in
   `.next/dev/types/validator.ts` about missing `app/**/[id]/page.js` modules — those are **stale dev

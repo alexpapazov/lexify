@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client'
+import { fetchAllRows } from '@/lib/supabasePaged'
 import type { UserId } from '@/domain'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { localLogLadderEvent, localDeleteLadderEvent } from '@/lib/offline/localRepos'
@@ -20,6 +21,10 @@ export interface LadderEventInput {
   graduated:       boolean
   overridden:      boolean
   durationMs:      number | null
+  /** True when this attempt ran the branched pathway engine (from/to are STATE indices). */
+  pathway?:        boolean
+  /** Display name of the state the card landed in (pathway only) — lane labels in the replay. */
+  stateName?:      string | null
 }
 
 export interface LadderEvent extends LadderEventInput {
@@ -45,6 +50,8 @@ function rowToEvent(r: Record<string, unknown>): LadderEvent {
     graduated:      !!r.graduated,
     overridden:     !!r.overridden,
     durationMs:     (r.duration_ms as number | null) ?? null,
+    pathway:        !!r.pathway,
+    stateName:      (r.state_name as string | null) ?? null,
     createdAt:      r.created_at as string,
   }
 }
@@ -59,6 +66,7 @@ export class SupabaseLadderEventRepository {
       source_language: e.sourceLanguage, target_language: e.targetLanguage,
       from_rung: e.fromRung, to_rung: e.toRung, rung_count: e.rungCount, rung_type: e.rungType,
       outcome: e.outcome, advanced: e.advanced, graduated: e.graduated, overridden: e.overridden, duration_ms: e.durationMs,
+      pathway: e.pathway ?? false, state_name: e.stateName ?? null,
     }))
     const { error } = await this.db.from('ladder_events').insert(rows)
     if (error) throw new Error(error.message)
@@ -72,6 +80,7 @@ export class SupabaseLadderEventRepository {
       source_language: e.sourceLanguage, target_language: e.targetLanguage,
       from_rung: e.fromRung, to_rung: e.toRung, rung_count: e.rungCount, rung_type: e.rungType,
       outcome: e.outcome, advanced: e.advanced, graduated: e.graduated, overridden: e.overridden, duration_ms: e.durationMs,
+      pathway: e.pathway ?? false, state_name: e.stateName ?? null,
     }).select('id').single()
     if (error) throw new Error(error.message)
     return (data?.id as string) ?? null
@@ -83,11 +92,17 @@ export class SupabaseLadderEventRepository {
     if (error) throw new Error(error.message)
   }
 
-  /** All of a user's ladder events, oldest-first (for grouping into sessions client-side). */
-  async listForUser(userId: UserId, limit = 8000): Promise<LadderEvent[]> {
-    const { data, error } = await this.db.from('ladder_events')
-      .select('*').eq('user_id', userId).order('created_at', { ascending: true }).limit(limit)
-    if (error) throw new Error(error.message)
-    return (data ?? []).map(rowToEvent)
+  /**
+   * All of a user's ladder events, oldest-first (for grouping into sessions client-side).
+   *
+   * PAGED — the old `.limit(8000)` never lifted PostgREST's 1000-row cap, so this silently returned
+   * the OLDEST thousand events forever: once a user's history passed 1000 attempts, every newer
+   * session was invisible ("the logs stopped in July"). `fetchAllRows` walks `.range()` windows.
+   */
+  async listForUser(userId: UserId): Promise<LadderEvent[]> {
+    const rows = await fetchAllRows<Record<string, unknown>>((from, to) =>
+      this.db.from('ladder_events')
+        .select('*').eq('user_id', userId).order('created_at', { ascending: true }).range(from, to))
+    return rows.map(rowToEvent)
   }
 }

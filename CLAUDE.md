@@ -2738,6 +2738,30 @@ ladder/pathway (`LadderStudy`).
   banner. Sanity check when touching sessions: `grep "productionMode: null" app/` must stay empty —
   that was the marker of a step-learning queue item.
 
+## Ladder logs frozen + pathway replays (2026-08-10, migration 118 — PENDING)
+
+**Bug (user report: "the learning pipeline logs no longer work")** — two independent failures:
+
+1. **The list was frozen at the OLDEST 1000 events.** `SupabaseLadderEventRepository.listForUser`
+   ordered ascending with `.limit(8000)` — but PostgREST's 1000-row cap is NOT lifted by a
+   client-side limit (documented landmine), so once lifetime attempts passed 1000 (~Jul 20) every
+   newer session was invisible. Fixed with `fetchAllRows` paging. `lib/analyticsData.ts` already
+   paged correctly; only the Logs list had the bad query.
+2. **Pathway attempts logged no position.** `onOutcomePathway` wrote `fromRung: 0, toRung: 0`
+   (a RouteState has no rung index), so pathway sessions had nothing to animate. Events now log the
+   STATE INDEX in `pathway.states` (graduated = one past the end), `pathway: true`, and the landed
+   state's display name (`state_name` — lane labels stay historically accurate after pathway edits).
+   Migration `118_ladder_event_pathway.sql` adds the two columns.
+
+**Pathway replay animations** — `components/analytics/PathwayReplay.tsx`, used by `LadderLogs` when
+`session.isPathway` (any event has `pathway: true`; `SessionSummary` gained `isPathway` +
+`stateNames`). Three switchable styles, persisted in localStorage (`pathway_replay_style`):
+`map` (state nodes on a track, cards cluster/hop between them), `climb` (the ladder lanes metaphor
+with named state lanes), `trails` (per-card step-trail over session time with outcome ticks + a
+playhead). All share one playback clock and the same `cardLevelAt` data. Pathway sessions logged
+BEFORE 118 render with an explanatory note (all events at 0→0 — nothing can move). Ladder sessions
+keep the original `LadderReplay` unchanged.
+
 ## Verifying changes
 
 ```

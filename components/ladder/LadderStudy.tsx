@@ -667,13 +667,21 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     const res = stepPathway(pathway, currentRoute, { outcome: outcome as PathwayEvent['outcome'], errorTypes }, now)
     const loggedOutcome: RungAttemptOutcome = almost && outcome === 'miss' ? 'almost' : outcome
     const logDeck = deckFor(currentId)
+    // Position = STATE INDEX in the pathway's state list (graduated = one past the end), so the
+    // Analytics replay has real movement to animate — 0→0 on every event gave it nothing.
+    const fromIdx = Math.max(0, pathway.states.findIndex(st => st.id === currentRoute.stateId))
+    const toIdx = res.graduated
+      ? pathway.states.length
+      : Math.max(0, pathway.states.findIndex(st => st.id === res.route.stateId))
     const eventIdP = new SupabaseLadderEventRepository().log(userId, {
       sessionId: sessionIdRef.current, cardId: currentId, deckId: deckByCard.get(currentId) ?? null,
       label: cardsById.get(currentId)?.front ?? null,
       sourceLanguage: logDeck?.sourceLanguage ?? null, targetLanguage: logDeck?.targetLanguage ?? null,
-      fromRung: 0, toRung: 0, rungCount: pathway.states.length, rungType: currentPathState?.type ?? null,
+      fromRung: fromIdx, toRung: toIdx, rungCount: pathway.states.length, rungType: currentPathState?.type ?? null,
       outcome: loggedOutcome, advanced: res.moved, graduated: res.graduated, overridden,
       durationMs: reviewTimer.current?.read() ?? 0,
+      pathway: true,
+      stateName: res.graduated ? null : (pathway.states[toIdx]?.name ?? null),
     }).catch(() => null)
     touchSession()
     const overrideAdd = pendingOverrideAddRef.current?.cardId === currentId ? pendingOverrideAddRef.current : null
