@@ -108,8 +108,14 @@ function LaddersInner() {
   async function resetPathway() {
     if (!userId || !isPair) return
     setSaving(true)
-    await new SupabasePathwayRepository().resetPair(userId, source!, target!)
-    setPathway(ladderToPathway(ladder ?? DEFAULT_LADDER)); setPathwayCustom(false); setVersion(v => v + 1); setSaving(false)
+    const pathRepo = new SupabasePathwayRepository()
+    await pathRepo.resetPair(userId, source!, target!)
+    // The pair now FOLLOWS the default, so show the CURRENT default pathway. The old code loaded
+    // `ladderToPathway(ladder)` — a conversion of the LADDER — so "Revert to default" showed a
+    // pathway that matched nothing the pair would actually study.
+    const defPath = await pathRepo.getDefault(userId)
+    setPathway(defPath ?? ladderToPathway(ladder ?? DEFAULT_LADDER))
+    setPathwayCustom(false); setVersion(v => v + 1); setSaving(false)
   }
 
   if (!ladder) return <p className="p-6 text-sm text-ink-faint">Loading…</p>
@@ -136,7 +142,9 @@ function LaddersInner() {
         </h1>
         <p className="text-sm text-ink-muted mt-1">
           {isPair
-            ? (mode === 'pathway' ? 'This language learns via a branched pathway.' : (customized ? 'This language has its own ladder.' : 'Using the default ladder — saving here gives this language its own.'))
+            ? (mode === 'pathway'
+                ? (pathwayCustom ? 'This language has its own pathway.' : 'Using the default pathway — saving here gives this language its own.')
+                : (customized ? 'This language has its own ladder.' : 'Using the default ladder — saving here gives this language its own.'))
             : `Applies to any newly added language${mode === 'pathway' ? ' set to pathway mode' : ''}. A language’s own ${mode} overrides it.`}
         </p>
       </div>
@@ -157,7 +165,7 @@ function LaddersInner() {
       )}
 
       {mode === 'pathway'
-        ? <PathwayEditor key={version} initial={pathway ?? emptyPathway()} onSave={savePathway} onReset={isPair && pathwayCustom ? resetPathway : undefined} onPersistLayout={persistPathwayLayout} saving={saving} />
+        ? <PathwayEditor key={version} initial={pathway ?? emptyPathway()} onSave={savePathway} onReset={isPair ? resetPathway : undefined} onPersistLayout={persistPathwayLayout} saving={saving} />
         : <LadderEditor key={version} initial={ladder} onSave={save} onReset={isPair && customized ? reset : undefined} saving={saving} />}
 
       {!isPair && pairs.length > 0 && (

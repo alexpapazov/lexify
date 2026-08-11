@@ -2773,6 +2773,21 @@ Redistribute; right = Learning ladders, Language colors, Language Sync, Vocabula
 zone full-width at the bottom. General variant: left = Profile + Time zone; right = Appearance,
 Replay tutorial, Offline. Section markup unchanged (data-tour attributes intact) — only reflowed.
 
+## Pathway "Revert to default" (2026-08-10)
+
+Two defects on `/settings/ladders?source=..&target=..` in pathway mode:
+1. The button only rendered when `pathwayCustom` — a pair following the default (or with a stale
+   flag) had no button at all. Now `onReset` is passed whenever `isPair`; pressing it on a
+   default-following pair just reloads the default, harmless.
+2. `resetPathway` loaded `ladderToPathway(ladder)` into the editor — a conversion of the LADDER,
+   not the saved default pathway — so "revert" showed a pathway the pair would never study. It now
+   deletes the pair row and loads `pathRepo.getDefault()` (falling back to the ladder conversion
+   only when no default pathway exists). Semantics unchanged otherwise: reverting DELETES the pair
+   row, so the pair follows the live default from then on.
+Also: the pair-page subtitle now says custom-vs-default for pathways like it always did for ladders.
+Note the standing trap: `persistPathwayLayout` auto-saves on node drag, silently forking a
+default-following pair into a custom one — the always-visible revert button is the recovery path.
+
 ## Verifying changes
 
 ```
