@@ -441,7 +441,7 @@ export default function DeckEditPage() {
   const saveLabel  = saved ? 'Saved ✓' : saving ? 'Saving…' : (dupChecked && flaggedCount > 0) ? 'Confirm & save' : 'Save'
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">

@@ -420,7 +420,7 @@ function PracticeInner() {
   )
 
   return (
-    <div className="space-y-6 max-w-2xl mx-auto pb-12">
+    <div className="space-y-6 max-w-4xl mx-auto pb-12">
       <div>
         <h1 className="text-2xl font-semibold text-ink">Practice</h1>
         <p className="text-sm text-ink-muted mt-1">

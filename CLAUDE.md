@@ -2962,6 +2962,29 @@ ask was purely size and width.
   the bar specifically — but if the sessions should follow, they need the same treatment via
   `MainContainer`'s `FULL_BLEED` list.
 
+## Pages fill the screen (2026-08-11)
+
+Follow-up to the full-bleed top bar: `<main>` was `max-w-5xl mx-auto px-4` (a 1024px column under a
+full-width bar, which left most of a laptop screen empty). It is now
+`w-full px-5 md:px-8` — **the same gutters as the navbar**, so page content lines up with the Lexify
+logo and the avatar. Verified: nav and main both report a 32px gutter at desktop, 20px at mobile, no
+horizontal overflow.
+
+**The rule inverted: width is now opt-IN to NARROW.** A page that wants a reading measure sets its
+own `max-w-* mx-auto`; everything else fills the screen. `MainContainer` lost its `FULL_BLEED` list
+and its `usePathname` — every route is full-bleed now, so the special case for settings is gone (and
+`SettingsShell` dropped its own `px-*`, which would otherwise double up).
+
+Per-page caps raised at the same time: analytics pages (`max-w-4xl` → none — charts want width),
+card editor / deck-add / create (`3xl` → `5xl`), agents (`2xl`/`3xl` → `4xl`/`5xl`, and their stray
+`p-6` removed now that main pads). The agent pages' `p-6` had been doubling with main's padding.
+
+**Deliberately still narrow** — stretching these would be worse, not better; change them only if
+asked: the auth form, the "nothing here" empty-state panels (`max-w-2xl` centred cards), Practice
+(`2xl` → `4xl`, not full — a fill-in-the-blank sentence spanning 1200px is unreadable), and deck
+onboarding (`2xl` → `3xl`, one card at a time). Due Now sessions were already uncapped and so now
+fill the screen, which also restores the logo alignment the 2026-07-27 note wanted.
+
 ## Verifying changes
 
 ```

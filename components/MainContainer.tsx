@@ -1,32 +1,21 @@
-'use client'
-
 /**
- * components/MainContainer.tsx — the page container, which is `max-w-5xl` centred everywhere EXCEPT
- * the routes that own their own width.
+ * components/MainContainer.tsx — the page container.
  *
- * Settings is the exception: its section rail is pinned to the left edge of the viewport and the
- * content pane takes everything else, so a centred 1024px column would put the rail in the middle of
- * the screen and squeeze the wide editors (the goal calendar renders three months side by side).
+ * Pages run EDGE TO EDGE, using the same gutters as the navbar (`px-5 md:px-8`) so a page's content
+ * lines up with the Lexify logo and the avatar. There is no width cap: the top bar is full-bleed, and
+ * a centred 1024px column under a full-width bar left most of the screen empty.
  *
- * This is a component rather than a CSS breakout (`w-screen; margin-left: -50vw`) on purpose: `100vw`
- * includes the scrollbar width, so that trick overflows by ~15px on desktop and adds a horizontal
- * scrollbar to every settings page.
+ * Pages that genuinely want a narrow measure — a single study card, an empty state, a short form —
+ * set their own `max-w-* mx-auto` inside this. Width is opt-IN to narrow rather than opt-in to wide,
+ * which is the opposite of how it worked before.
+ *
+ * This is a component (not a CSS breakout like `w-screen; margin-left:-50vw`) because `100vw`
+ * includes the scrollbar and that trick overflows by ~15px on desktop.
  */
 
-import { usePathname } from 'next/navigation'
-
-/** Routes that lay themselves out edge to edge. Prefixes, so sub-routes inherit it. */
-const FULL_BLEED = ['/settings']
-
 export function MainContainer({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname()
-  const fullBleed = FULL_BLEED.some(p => pathname === p || pathname.startsWith(p + '/'))
-
   return (
-    <main className={[
-      'flex-1 w-full pb-[calc(2rem+env(safe-area-inset-bottom))]',
-      fullBleed ? 'py-6' : 'px-4 py-8 max-w-5xl mx-auto',
-    ].join(' ')}>
+    <main className="flex-1 w-full px-5 md:px-8 py-6 pb-[calc(2rem+env(safe-area-inset-bottom))]">
       {children}
     </main>
   )

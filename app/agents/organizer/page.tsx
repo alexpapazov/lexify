@@ -311,7 +311,7 @@ export default function OrganizerPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex flex-wrap gap-2">
         <a href="/agents"
           className="text-xs px-3 py-1.5 rounded-full border border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">

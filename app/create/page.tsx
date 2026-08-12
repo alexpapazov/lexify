@@ -832,7 +832,7 @@ function OnlineCreatePage() {
     const saveLabel = !dupChecked || flaggedCount === 0 ? 'Save deck' : 'Confirm & save deck'
 
     return (
-      <div className="space-y-6 max-w-3xl mx-auto pb-12">
+      <div className="space-y-6 max-w-5xl mx-auto pb-12">
         <div>
           <h1 className="text-2xl font-semibold text-ink">Preview deck</h1>
           <p className="text-ink-muted mt-1">
@@ -1048,7 +1048,7 @@ function OnlineCreatePage() {
   // ── Edit stage ────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="space-y-6 max-w-5xl mx-auto">
       <div>
         <h1 className="text-2xl font-semibold text-ink">Create</h1>
         <ModeSwitch2 value={mode} onChange={setMode} />
