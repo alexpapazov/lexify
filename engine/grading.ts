@@ -194,7 +194,7 @@ function unifyApostrophes(s: string): string {
  * languages where it carries information (German nouns), so it stays worth surfacing.
  */
 export function sameWording(a: string, b: string): boolean {
-  const canon = (s: string) => unifyApostrophes(s).normalize('NFC').replace(/\s+/g, ' ').trim()
+  const canon = (s: string) => stripTrailingPeriod(unifyApostrophes(s).normalize('NFC').replace(/\s+/g, ' ').trim())
   return canon(a) === canon(b)
 }
 
@@ -503,17 +503,34 @@ export function stripGrammaticalTags(text: string): string {
   return cleaned || text.trim()
 }
 
+/**
+ * Removes ONE sentence-final period (ASCII `.` or CJK `。`) — a trailing period carries no meaning
+ * for a vocabulary answer, so typing "단어가 섞여요." against a card storing "단어가 섞여요" (or the
+ * reverse) must grade correct (user-reported). Applied to BOTH sides, so a card that stores the
+ * period matches an answer without one too.
+ *
+ * Deliberately narrow: an ellipsis ("...") is content and is left alone, and `!`/`?` are NOT
+ * stripped — they can carry real meaning ("¿Cuándo?"). The learner can still "Override as
+ * incorrect" if they want the period enforced on a particular card.
+ */
+export function stripTrailingPeriod(text: string): string {
+  const t = text.trim()
+  if (/(?:^|[^.。])[.。]$/.test(t)) return t.slice(0, -1).trim()
+  return t
+}
+
 export function gradeTyping(
   userAnswer: string,
   expected:   string,
   settings:   GradingSettings,
 ): GradingResult {
-  userAnswer = stripGrammaticalTags(userAnswer)
+  userAnswer = stripTrailingPeriod(stripGrammaticalTags(userAnswer))
   expected   = stripGrammaticalTags(expected)
   // Strip surrounding quotes — quoted backs are literal phrases (no comma/slash splitting).
-  const eff = expected.length >= 2 && expected.startsWith('"') && expected.endsWith('"')
+  const quoted = expected.length >= 2 && expected.startsWith('"') && expected.endsWith('"')
     ? expected.slice(1, -1)
     : expected
+  const eff = stripTrailingPeriod(quoted)
   const mode = settings.gradingMode ?? 'flexible'
   if (mode === 'strict')   return gradeStrict(userAnswer, eff, settings)
   if (mode === 'smart_ai') return gradeSmartAI(userAnswer, eff, settings)

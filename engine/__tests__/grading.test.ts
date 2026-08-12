@@ -115,6 +115,25 @@ describe('gradeTyping — slash/comma/semicolon alternatives are decided by SIDE
   })
 })
 
+describe('gradeTyping — trailing period is never required (user-reported)', () => {
+  const s: GradingSettings = { ...FLEX_BASE, ignoreCapitalization: true }
+  it('accepts an answer WITH a period when the card has none', () => {
+    expect(gradeTyping('단어가 섞여요.', '단어가 섞여요', s).correct).toBe(true)
+  })
+  it('accepts an answer WITHOUT a period when the card has one', () => {
+    expect(gradeTyping('단어가 섞여요', '단어가 섞여요.', s).correct).toBe(true)
+  })
+  it('handles the CJK full stop the same way', () => {
+    expect(gradeTyping('単語が混ざる。', '単語が混ざる', s).correct).toBe(true)
+  })
+  it('leaves an ellipsis alone — it is content, not punctuation noise', () => {
+    expect(gradeTyping('so', 'so...', s).correct).toBe(false)
+  })
+  it('sameWording ignores the trailing period too (no "Card says:" nag)', () => {
+    expect(sameWording('단어가 섞여요.', '단어가 섞여요')).toBe(true)
+  })
+})
+
 describe('gradeTyping — parentheticals', () => {
   it('accepts without parens when requireParentheticalContent=false', () => {
     const s: GradingSettings = { ...FLEX_BASE, ignoreCapitalization: true, requireParentheticalContent: false }

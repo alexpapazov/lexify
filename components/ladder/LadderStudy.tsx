@@ -98,8 +98,6 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const isPathway = pathway !== null
   const [graduated, setGraduated] = useState(0)
   const [answered, setAnswered] = useState(0)
-  const [paused, setPaused] = useState(false)
-  const [pauseKind, setPauseKind] = useState<'round' | 'lastcard'>('round')
   const [hasMore, setHasMore] = useState(false)
   const progressPctRef = useRef(0)
   const startStepsRef  = useRef(0)
@@ -127,8 +125,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const [overrides, setOverrides] = useState<Map<string, Set<string>>>(new Map())
   const [undoStack, setUndoStack] = useState<Array<{
     cardId: string; prevClimb: ClimbState | RouteState | undefined; prevQueueItem: QueueItem | undefined
-    wasGraduated: boolean; prevAnswered: number; prevPaused: boolean
+    wasGraduated: boolean; prevAnswered: number
     eventIdP: Promise<string | null> | null   // the logged ladder_event (deleted on undo)
+    /** The in-flight graduation write. Undo AWAITS it before deleting card_states — deleting first
+     *  would let the still-landing upserts resurrect the graduation as ghost rows. */
+    gradP: Promise<unknown> | null
     overrideAdd: { cardId: string; answerSide: CardSide; answerText: string } | null  // override to roll back
   }>>([])
 
@@ -555,7 +556,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       const ladderLen0 = Math.max(1, effLadder.rungs.length)
       startStepsRef.current = items.reduce((s, it) => s + Math.min((reconciled.get(it.cardId) as ClimbState | undefined)?.rungIndex ?? 0, ladderLen0), 0)
       progressPctRef.current = 0
-      setAnswered(0); setPaused(false)
+      setAnswered(0)
       setQueue(items); setTotal(rollingRef.current ? items.length + pendingFreshRef.current.length : items.length)
       // Rolling mode already holds the whole set (queue + pending) → nothing more to load afterwards.
       setHasMore(rollingRef.current ? false : (eligibleFresh.length + learning.length) > items.length)
@@ -712,17 +713,20 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     touchSession()
     const overrideAdd = pendingOverrideAddRef.current?.cardId === currentId ? pendingOverrideAddRef.current : null
     pendingOverrideAddRef.current = null
+    // Graduation persists in the BACKGROUND. Awaiting it between the state updates left the
+    // graduated card remounted blank for two round trips — the "flash" the user reported. Undo
+    // awaits this promise before deleting card_states, so the write can't race the undo.
+    const gradP = res.graduated
+      ? graduate(currentId, res.route.targetInterval, res.route.nativeInterval).catch(console.error)
+      : null
     setUndoStack(prev => [...prev.slice(-19), {
       cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
-      wasGraduated: res.graduated, prevAnswered: answered, prevPaused: paused, eventIdP, overrideAdd,
+      wasGraduated: res.graduated, prevAnswered: answered, eventIdP, overrideAdd, gradP,
     }])
     await new SupabaseLadderClimbRepository().save(userId, currentId, deckByCard.get(currentId) ?? '', res.route).catch(console.error)
-    setStates(prev => new Map(prev).set(currentId, res.route))
 
     let nextQueue: QueueItem[]
     if (res.graduated) {
-      await graduate(currentId, res.route.targetInterval, res.route.nativeInterval)
-      setGraduated(g => g + 1)
       nextQueue = queue.filter(e => e.cardId !== currentId)
       if (rollingRef.current && pendingFreshRef.current.length > 0) {
         const nextFresh = pendingFreshRef.current.shift()!
@@ -734,13 +738,12 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         ? { cardId: currentId, readyAt: delay > 0 ? now + delay : 0, ratedAt: delay > 0 ? now : 0 }
         : e)
     }
+    // ONE synchronous batch — React renders the next card directly, never the graduated card alone.
+    if (res.graduated) setGraduated(g => g + 1)
+    setStates(prev => new Map(prev).set(currentId, res.route))
     setQueue(nextQueue)
-    const nextId = pickNextCard(nextQueue, now, currentId)?.cardId ?? null
-    setCurrentId(nextId)
-    const nextAnswered = answered + 1
-    setAnswered(nextAnswered)
-    if (nextId && !res.graduated && nextQueue.length === 1) { setPauseKind('lastcard'); setPaused(true) }
-    else if (nextId && total > 0 && nextAnswered % total === 0) { setPauseKind('round'); setPaused(true) }
+    setCurrentId(pickNextCard(nextQueue, now, currentId)?.cardId ?? null)
+    setAnswered(a => a + 1)
   }
 
   async function onOutcome(outcome: RungAttemptOutcome, overridden = false, almost = false, errorTypes: ErrorType[] = []) {
@@ -772,17 +775,18 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
     const overrideAdd = pendingOverrideAddRef.current?.cardId === currentId ? pendingOverrideAddRef.current : null
     pendingOverrideAddRef.current = null
+    // Graduation persists in the BACKGROUND — see the pathway branch note. Undo awaits gradP.
+    const gradP = res.state.graduated
+      ? graduate(currentId, res.state.targetInterval, res.state.nativeInterval).catch(console.error)
+      : null
     setUndoStack(prev => [...prev.slice(-19), {
       cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
-      wasGraduated: res.state.graduated, prevAnswered: answered, prevPaused: paused, eventIdP, overrideAdd,
+      wasGraduated: res.state.graduated, prevAnswered: answered, eventIdP, overrideAdd, gradP,
     }])
     await new SupabaseLadderClimbRepository().save(userId, currentId, deckByCard.get(currentId) ?? '', res.state).catch(console.error)
-    setStates(prev => new Map(prev).set(currentId, res.state))
 
     let nextQueue: QueueItem[]
     if (res.state.graduated) {
-      await graduate(currentId, res.state.targetInterval, res.state.nativeInterval)
-      setGraduated(g => g + 1)
       nextQueue = queue.filter(e => e.cardId !== currentId)
       // Rolling pipeline: as this card graduates, pull in the next fresh card so the pipeline stays full
       // (≤ cap) and we keep flowing through the whole set instead of stopping at a batch of `cap`.
@@ -797,24 +801,20 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         ? { cardId: currentId, readyAt: delay > 0 ? now + delay : 0, ratedAt: delay > 0 ? now : 0 }
         : e)
     }
+    // ONE synchronous batch — React renders the next card directly, never the graduated card alone.
+    // No pauses: the session runs until the group graduates (whole deck, or the deck-settings batch).
+    if (res.state.graduated) setGraduated(g => g + 1)
+    setStates(prev => new Map(prev).set(currentId, res.state))
     setQueue(nextQueue)
-    const nextId = pickNextCard(nextQueue, now, currentId)?.cardId ?? null
-    setCurrentId(nextId)
-
-    const nextAnswered = answered + 1
-    setAnswered(nextAnswered)
-    // When only the just-rated card is left, pickNextCard has no other card to switch to
-    // and re-shows it immediately — which reads as "the rating didn't register". Break to a
-    // short interstitial so the rating clearly lands before the card comes back.
-    if (nextId && !res.state.graduated && nextQueue.length === 1) { setPauseKind('lastcard'); setPaused(true) }
-    else if (nextId && total > 0 && nextAnswered % total === 0) { setPauseKind('round'); setPaused(true) }
+    setCurrentId(pickNextCard(nextQueue, now, currentId)?.cardId ?? null)
+    setAnswered(a => a + 1)
   }
 
   const handleUndo = useCallback(async () => {
     const entry = undoStack[undoStack.length - 1]
     if (!entry || !userId) return
     setUndoStack(prev => prev.slice(0, -1))
-    const { cardId, prevClimb, prevQueueItem, wasGraduated, prevAnswered, prevPaused, eventIdP, overrideAdd } = entry
+    const { cardId, prevClimb, prevQueueItem, wasGraduated, prevAnswered, eventIdP, overrideAdd, gradP } = entry
     const fallbackItem: QueueItem = prevQueueItem ?? { cardId, readyAt: 0, ratedAt: 0 }
     // Delete the logged attempt (so undo+redo is one attempt) and roll back a just-added override.
     if (eventIdP) eventIdP.then(id => { if (id) new SupabaseLadderEventRepository().deleteById(id).catch(() => {}) })
@@ -828,6 +828,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       setStates(prev => { const m = new Map(prev); m.delete(cardId); return m })
     }
     if (wasGraduated) {
+      // The graduation upserts run in the background; deleting before they land would let them
+      // re-create the rows we just deleted. Wait for the write, then remove it.
+      if (gradP) await gradP
       const stateRepo = new SupabaseCardStateRepository()
       await stateRepo.delete(userId, cardId, 'forward').catch(() => {})
       await stateRepo.delete(userId, cardId, 'reverse').catch(() => {})
@@ -837,7 +840,6 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       setQueue(prev => prev.map(e => e.cardId === cardId ? fallbackItem : e))
     }
     setAnswered(prevAnswered)
-    setPaused(prevPaused)
     setCurrentId(cardId)
   }, [undoStack, userId, deckByCard, handleOverrideAnswer])
 
@@ -881,35 +883,6 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           <a href={back} className="btn-ghost">Back</a>
           {hasMore && <button onClick={() => window.location.reload()} className="btn-primary">Continue</button>}
         </div>
-      </div>
-    )
-  }
-
-  if (paused) {
-    return (
-      <div className="max-w-md mx-auto pt-16 text-center space-y-6">
-        <h1 className="text-xl font-semibold text-ink">{pauseKind === 'lastcard' ? 'Answer saved' : 'Round complete'}</h1>
-        <p className="text-ink-muted">
-          {pauseKind === 'lastcard'
-            ? 'Just this last card left — keep going to see it again.'
-            : `${graduated}/${total} card${total === 1 ? '' : 's'} graduated so far. Keep going?`}
-        </p>
-        <div className="flex flex-wrap justify-center gap-3">
-          <a href={back} className="btn-ghost">Back</a>
-          <button onClick={() => setPaused(false)} className="btn-primary">Continue</button>
-        </div>
-        {undoStack.length > 0 && (
-          <button
-            onClick={() => void handleUndo()}
-            title="Undo last answer (⌘Z)"
-            className="mx-auto flex items-center gap-2 rounded-full border border-line/10 bg-surface-raised/95 px-4 py-2 text-sm font-medium text-ink-muted transition active:scale-95 hover:text-ink"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
-              <path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-1" />
-            </svg>
-            Undo last answer
-          </button>
-        )}
       </div>
     )
   }

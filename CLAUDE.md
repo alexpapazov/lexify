@@ -3013,6 +3013,32 @@ Callers that grade TARGET text with no flag (SynonymDueNowMode, practice cloze) 
 require-all behavior by default. Quoted-literal backs still just strip their quotes.
 Tests: the "decided by SIDE" describe block in `engine/__tests__/grading.test.ts`.
 
+**Trailing periods are never required (same day, user-reported):** typing "단어가 섞여요." against a
+card storing "단어가 섞여요" graded incorrect. `stripTrailingPeriod` (engine/grading.ts) removes ONE
+sentence-final `.` or `。` from BOTH sides at the `gradeTyping` entry (after grammatical tags, after
+quote-stripping on the expected side), and `sameWording` applies it too so the "Card says:" note
+doesn't nag about a period the grader just ignored. Deliberately narrow: ellipses are content and
+stay; `!`/`?` are NOT stripped (they can carry meaning). Override-as-incorrect remains the per-card
+escape hatch for anyone who wants the period enforced.
+
+## Ladder: no graduation flash, no pause interstitials (2026-08-11)
+
+Two user-reported behaviors in `components/ladder/LadderStudy.tsx`:
+
+1. **The graduation flash.** When a card graduated, both outcome handlers ran
+   `setStates(graduated)` … `await graduate(…)` (TWO card_states upserts) … `setQueue/setCurrentId`.
+   The state update remounted `LadderStudyCard` (its key includes the climb position) while the
+   awaits ran, so the just-graduated card flashed BLANK for two round trips before the next card
+   appeared. Fix: `graduate()` now runs in the BACKGROUND (`gradP`, tracked on the undo entry), and
+   states/queue/currentId/graduated are applied in ONE synchronous batch — React renders the next
+   card directly. **Undo must `await gradP` before deleting card_states** — deleting first would let
+   the still-landing upserts resurrect the graduation as ghost rows. Keep that ordering.
+2. **Pause interstitials are GONE** ("Round complete", "Answer saved" + Continue). The session now
+   runs until the group graduates — the whole deck, or the deck-settings batch. The 'lastcard' pause
+   existed because `pickNextCard` falls back to re-showing the only remaining card immediately; that
+   immediate re-show is now accepted behavior (continuous flow was the explicit ask). The main view's
+   `UndoFab` still provides undo; `prevPaused` left the undo entries.
+
 ## Verifying changes
 
 ```
