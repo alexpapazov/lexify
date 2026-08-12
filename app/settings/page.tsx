@@ -829,10 +829,10 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
       </>)}
 
       {section === 'colors' && (
-        <SettingsSection title="Language colours"
-          description="Each language’s colour in the analytics charts and the combined goal calendar.">
+        <SettingsSection title="Language colors"
+          description="Each language’s color in the analytics charts and the combined goal calendar.">
           {codes.length === 0
-            ? <p className="text-sm text-ink-faint">Add a language pairing first and its colour will appear here.</p>
+            ? <p className="text-sm text-ink-faint">Add a language pairing first and its color will appear here.</p>
             : (() => {
                 const colorMap = assignLanguageColors(codes, langColors)   // distinct defaults + overrides
                 return (

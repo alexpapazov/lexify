@@ -2912,6 +2912,15 @@ owns the frame and exports its building blocks (`SettingsPane` / `SettingsSectio
   so they never resolved.
 - `.no-scrollbar` was added to `globals.css` for the mobile chip strip (the global 6px bar rendered
   as a stray pill under it).
+- **Settings is FULL-BLEED** (2026-08-11, follow-up): the rail is pinned to the left edge of the
+  viewport — left of the Lexify logo — and the pane takes all remaining width, because a centred
+  column put the rail mid-screen and squeezed the wide editors (the combined goal calendar renders
+  three months side by side). `<main>`'s `max-w-5xl` is applied by **`components/MainContainer.tsx`**,
+  which drops it for the paths in `FULL_BLEED`. That is a component and NOT the CSS breakout trick
+  (`w-screen; margin-left:-50vw`) on purpose: `100vw` includes the scrollbar, so the trick overflows
+  ~15px and adds a horizontal scrollbar. To make another route full-bleed, add its prefix there.
+- **Use AMERICAN spellings in UI copy** — "Language colors", not "colours". The app was consistently
+  American before; a redesign pass introduced British ones and the user corrected it.
 
 ## Verifying changes
 

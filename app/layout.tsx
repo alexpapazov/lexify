@@ -3,6 +3,7 @@ import './globals.css'
 import { Navbar } from '@/components/nav/Navbar'
 import { AuthWall } from '@/components/AuthWall'
 import { Tour } from '@/components/Tour'
+import { MainContainer } from '@/components/MainContainer'
 import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister'
 
 export const metadata: Metadata = {
@@ -45,9 +46,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen flex flex-col">
         <ServiceWorkerRegister />
         <Navbar />
-        <main className="flex-1 px-4 py-8 max-w-5xl mx-auto w-full pb-[calc(2rem+env(safe-area-inset-bottom))]">
+        <MainContainer>
           <AuthWall>{children}</AuthWall>
-        </main>
+        </MainContainer>
         <Tour />
       </body>
     </html>

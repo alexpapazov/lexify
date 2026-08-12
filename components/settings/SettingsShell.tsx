@@ -58,7 +58,7 @@ export const SETTINGS_GROUPS: SectionGroup[] = [
   {
     title: 'Languages',
     items: [
-      { id: 'colors', label: 'Language colours' },
+      { id: 'colors', label: 'Language colors' },
       { id: 'sync',   label: 'Language sync', online: true, tour: 'settings-sync' },
       { id: 'labels', label: 'Vocabulary labels', online: true },
     ],
@@ -99,7 +99,7 @@ export function SettingsShell({ active, children }: {
     .filter(g => g.items.length > 0)
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6">
+    <div className="px-4 md:px-6">
       <div className="flex items-center gap-3 mb-6">
         <Link href="/study" aria-label="Back to study"
           className="p-1.5 -ml-1.5 rounded-md text-ink-muted hover:text-ink hover:bg-surface/60 transition-colors">
@@ -110,9 +110,9 @@ export function SettingsShell({ active, children }: {
         <h1 className="text-xl font-medium text-ink">Settings</h1>
       </div>
 
-      <div className="md:flex md:gap-8 md:items-start">
+      <div className="md:flex md:gap-10 md:items-start">
         {/* Rail — desktop. `md:sticky` keeps it in place while a long section scrolls past. */}
-        <nav className="hidden md:block w-52 shrink-0 md:sticky md:top-20 space-y-5">
+        <nav className="hidden md:block w-48 lg:w-56 shrink-0 md:sticky md:top-20 space-y-5">
           {groups.map(group => (
             <div key={group.title} className="space-y-0.5">
               <p className="px-3 pb-1 text-[10px] uppercase tracking-wider text-ink-faint">{group.title}</p>
