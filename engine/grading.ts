@@ -4,7 +4,7 @@
  * No imports from React, Next.js, Supabase, or any I/O layer.
  *
  * Three grading modes:
- *   strict    — case-insensitive only; slash alternatives accepted; no accent/
+ *   strict    — case-insensitive only; native-side slash alternatives accepted; no accent/
  *               article/typo leniency; no "almost" state.
  *   flexible  — user-configured toggles; produces "almost" for near-misses.
  *   smart_ai  — scaffolded; falls back to flexible until AI backend is wired.
@@ -258,14 +258,33 @@ function detectIssueType(normUser: string, normExpected: string, lang?: string):
   return 'none'
 }
 
+/**
+ * The acceptable renderings of `expected`, given which SIDE is being typed.
+ *
+ * Slash/comma/semicolon alternatives are a property of the side, not a setting (the old per-deck
+ * `slashAlternativesMode` toggle is gone):
+ *
+ *   NATIVE side  — "to visit/tour" means either gloss shows understanding, so each alternative is
+ *                  accepted on its own. The full string is ALWAYS also accepted: typing everything
+ *                  must never grade worse than typing part of it.
+ *   TARGET side  — the word being learned must be produced exactly as stored; alternatives are part
+ *                  of the answer, not options. No splitting.
+ */
+function alternativeCandidates(expected: string, isNativeAnswer: boolean): string[] {
+  if (!isNativeAnswer) return [expected]
+  return [expected, ...expected.split(/\s*[\/,;]\s*/)].filter(p => p.trim() !== '')
+}
+
 // ─── Strict grading ────────────────────────────────────────────────────────────
 
 function gradeStrict(userAnswer: string, expected: string, settings?: GradingSettings): GradingResult {
   const userNorm = normalizeStrict(userAnswer)
 
-  // Split on slash/comma/semicolon alternatives unless the setting says to keep whole.
-  const splitAlts = !settings || settings.slashAlternativesMode !== 'require_all'
-  const slashParts = splitAlts ? expected.split(/\s*[\/,;]\s*/) : [expected]
+  // Alternatives split by SIDE, not by setting: a native-side answer ("to visit/tour") accepts any
+  // one alternative; a target-side answer must be typed in full. The WHOLE string is always a
+  // candidate too — typing everything can never be wrong (typing "to visit/tour" verbatim used to
+  // FAIL, because splitting produced only the parts).
+  const slashParts = alternativeCandidates(expected, settings?.isNativeAnswer === true)
   const candidates = [...new Set(slashParts.map(part =>
     normalizeStrict(part.replace(/\(([^)]+)\)/g, '$1').replace(/\s+/g, ' ').trim())
   ))]
@@ -284,9 +303,7 @@ function gradeStrict(userAnswer: string, expected: string, settings?: GradingSet
 // ─── Flexible grading ──────────────────────────────────────────────────────────
 
 function buildFlexibleCandidates(expected: string, settings: GradingSettings): string[] {
-  const slashParts = settings.slashAlternativesMode === 'accept_any'
-    ? expected.split(/\s*[\/,;]\s*/)
-    : [expected]
+  const slashParts = alternativeCandidates(expected, settings.isNativeAnswer === true)
 
   const candidates: string[] = []
   for (const part of slashParts) {
@@ -331,9 +348,7 @@ function gradeFlexible(userAnswer: string, expected: string, settings: GradingSe
   // Missing required parenthetical content — must run before the article check so
   // '(el) camello' is diagnosed as 'parenthetical' rather than 'article'.
   if (settings.requireParentheticalContent && /\(/.test(expected)) {
-    const slashParts = settings.slashAlternativesMode === 'accept_any'
-      ? expected.split(/\s*[\/,;]\s*/)
-      : [expected]
+    const slashParts = alternativeCandidates(expected, settings.isNativeAnswer === true)
     for (const part of slashParts) {
       if (!/\(/.test(part)) continue
       const withoutParen = part.replace(/\([^)]+\)/g, '').replace(/\s+/g, ' ').trim()

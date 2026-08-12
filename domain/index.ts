@@ -67,7 +67,6 @@ export interface GradingSettings {
   ignoreDefiniteArticles:      boolean
   /** When true, content inside parens is required in the typed answer. */
   requireParentheticalContent: boolean
-  slashAlternativesMode:       'accept_any' | 'require_all'
   commaAlternativesMode:       'accept_any' | 'require_all' | 'split_into_cards'
   // ── Smart AI mode ─────────────────────────────────────────────────────────
   /** Optional per-deck instructions for the AI grader (≤250 chars). */
@@ -400,7 +399,6 @@ export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
   ignoreMinorTypos:            false,
   ignoreDefiniteArticles:      false,
   requireParentheticalContent: true,
-  slashAlternativesMode:       'accept_any',
   commaAlternativesMode:       'split_into_cards',
   autoPlayAudio:               true,
 }

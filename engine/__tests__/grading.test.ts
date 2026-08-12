@@ -6,7 +6,7 @@ const STRICT: GradingSettings = {
   gradingMode: 'strict',
   ignoreAccents: false, ignoreCapitalization: false, ignoreMinorTypos: false,
   ignoreDefiniteArticles: false, requireParentheticalContent: true,
-  slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards',
+  commaAlternativesMode: 'split_into_cards',
   autoPlayAudio: false,
 }
 
@@ -15,7 +15,7 @@ const FLEX_BASE: GradingSettings = {
   gradingMode: 'flexible',
   ignoreAccents: false, ignoreCapitalization: false, ignoreMinorTypos: false,
   ignoreDefiniteArticles: false, requireParentheticalContent: true,
-  slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards',
+  commaAlternativesMode: 'split_into_cards',
   autoPlayAudio: false,
 }
 
@@ -54,8 +54,12 @@ describe('gradeTyping — strict mode', () => {
   it('rejects wrong answer', () => {
     expect(gradeTyping('pillow', 'mattress', STRICT).status).toBe('incorrect')
   })
-  it('accepts slash alternative in strict mode', () => {
-    expect(gradeTyping('drug dealer', 'camel / drug dealer', STRICT).status).toBe('correct')
+  it('accepts slash alternative in strict mode on the NATIVE side', () => {
+    expect(gradeTyping('drug dealer', 'camel / drug dealer', { ...STRICT, isNativeAnswer: true }).status).toBe('correct')
+  })
+  it('requires the full string in strict mode on the TARGET side', () => {
+    expect(gradeTyping('drug dealer', 'camel / drug dealer', STRICT).status).toBe('incorrect')
+    expect(gradeTyping('camel / drug dealer', 'camel / drug dealer', STRICT).status).toBe('correct')
   })
   it('accent difference is incorrect in strict mode (no almost)', () => {
     expect(gradeTyping('corazon', 'corazón', STRICT).status).toBe('incorrect')
@@ -84,16 +88,30 @@ describe('gradeTyping — flexible accent handling', () => {
   })
 })
 
-describe('gradeTyping — slash alternatives (flexible)', () => {
-  const s: GradingSettings = { ...FLEX_BASE, ignoreCapitalization: true, slashAlternativesMode: 'accept_any' }
-  it('accepts first alternative', () => {
-    expect(gradeTyping('camel', 'camel / drug dealer', s).correct).toBe(true)
+describe('gradeTyping — slash/comma/semicolon alternatives are decided by SIDE', () => {
+  const native: GradingSettings = { ...FLEX_BASE, ignoreCapitalization: true, isNativeAnswer: true }
+  const target: GradingSettings = { ...FLEX_BASE, ignoreCapitalization: true }
+
+  it('NATIVE side: accepts either alternative', () => {
+    expect(gradeTyping('camel', 'camel / drug dealer', native).correct).toBe(true)
+    expect(gradeTyping('drug dealer', 'camel / drug dealer', native).correct).toBe(true)
   })
-  it('accepts second alternative', () => {
-    expect(gradeTyping('drug dealer', 'camel / drug dealer', s).correct).toBe(true)
+  it('NATIVE side: typing EVERYTHING is also correct (user-reported: it used to fail)', () => {
+    // Dictation showed "to visit/tour" typed verbatim graded wrong — splitting produced only the
+    // parts, never the whole string. The whole string must always be a candidate.
+    expect(gradeTyping('to visit/tour', 'to visit/tour', native).correct).toBe(true)
+    expect(gradeTyping('camel / drug dealer', 'camel / drug dealer', native).correct).toBe(true)
   })
-  it('rejects unrelated answer', () => {
-    expect(gradeTyping('horse', 'camel / drug dealer', s).correct).toBe(false)
+  it('NATIVE side: rejects an unrelated answer', () => {
+    expect(gradeTyping('horse', 'camel / drug dealer', native).correct).toBe(false)
+  })
+  it('NATIVE side: splits on comma and semicolon too', () => {
+    expect(gradeTyping('quick', 'quick, fast; rapid', native).correct).toBe(true)
+    expect(gradeTyping('rapid', 'quick, fast; rapid', native).correct).toBe(true)
+  })
+  it('TARGET side: one alternative alone is NOT enough — type everything', () => {
+    expect(gradeTyping('견학하다', '견학하다/방문하다', target).correct).toBe(false)
+    expect(gradeTyping('견학하다/방문하다', '견학하다/방문하다', target).correct).toBe(true)
   })
 })
 

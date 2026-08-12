@@ -2991,6 +2991,28 @@ asked: the auth form, the "nothing here" empty-state panels (`max-w-2xl` centred
 onboarding (`2xl` → `3xl`, one card at a time). Due Now sessions were already uncapped and so now
 fill the screen, which also restores the logo alignment the 2026-07-27 note wanted.
 
+## Slash/comma/semicolon alternatives are decided by SIDE, not a setting (2026-08-11)
+
+The per-deck `slashAlternativesMode` toggle ('accept_any' | 'require_all') is GONE — domain field,
+default, deck-gear checkbox, all deleted (stored `grading_settings` JSONB rows keeping the old key
+are harmless). The rule is now fixed, per the user:
+
+- **NATIVE side** (typing the gloss): "to visit/tour" accepts either alternative — split on
+  `/ , ;` — AND the whole string. **The whole string was never a candidate before**, which was the
+  dictation bug the user screenshotted: typing "to visit/tour" VERBATIM graded incorrect, because
+  splitting produced only the parts. `alternativeCandidates(expected, isNativeAnswer)` in
+  `engine/grading.ts` is the one place this logic lives; typing everything must never grade worse
+  than typing part of it.
+- **TARGET side** (typing the word being learned): no splitting — the stored text must be produced
+  in full, punctuation and all.
+
+The side comes from `GradingSettings.isNativeAnswer`, which `TypingMode` already set
+(`promptSide === 'front'`); the dictation rung (`LadderStudyCard.check`) now sets it too
+(`isNativeAnswer: native`, and `false` for its transcription-echo check against `card.front`).
+Callers that grade TARGET text with no flag (SynonymDueNowMode, practice cloze) get the correct
+require-all behavior by default. Quoted-literal backs still just strip their quotes.
+Tests: the "decided by SIDE" describe block in `engine/__tests__/grading.test.ts`.
+
 ## Verifying changes
 
 ```

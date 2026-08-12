@@ -4,7 +4,7 @@ import type { GradingSettings } from '@/domain'
 const settings = (over: Partial<GradingSettings> = {}): GradingSettings => ({
   gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false,
   ignoreDefiniteArticles: false, requireParentheticalContent: true,
-  slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards',
+  commaAlternativesMode: 'split_into_cards',
   autoPlayAudio: false, answerLanguage: 'bg', ...over,
 })
 

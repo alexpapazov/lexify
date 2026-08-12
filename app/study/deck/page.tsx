@@ -776,7 +776,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, m
   const [ignoreMinorTypos,     setIgnoreMinorTypos]     = useState(gs.ignoreMinorTypos)
   const [ignoreDefiniteArticles, setIgnoreDefiniteArticles] = useState(gs.ignoreDefiniteArticles)
   const [requireParenContent,  setRequireParenContent]  = useState(gs.requireParentheticalContent)
-  const [slashMode,            setSlashMode]            = useState(gs.slashAlternativesMode)
   const [autoPlayAudio,        setAutoPlayAudio]        = useState(gs.autoPlayAudio ?? true)
   const [aiInstructions,       setAiInstructions]       = useState(gs.aiGradingInstructions ?? '')
 
@@ -848,7 +847,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, m
         ignoreMinorTypos,
         ignoreDefiniteArticles,
         requireParentheticalContent: requireParenContent,
-        slashAlternativesMode: slashMode,
         autoPlayAudio,
         aiGradingInstructions: aiInstructions.trim() || undefined,
       }
@@ -1066,22 +1064,6 @@ function DeckSettingsPanel({ deckId, userId, deck, initialPrefs, defaultLimit, m
                   </label>
                 ))}
               </div>
-
-              {/* Slash/comma splitting — applies to all grading modes */}
-              <label className="flex items-start gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={slashMode === 'accept_any'}
-                  onChange={e => setSlashMode(e.target.checked ? 'accept_any' : 'require_all')}
-                  className="accent-accent w-4 h-4 mt-0.5"
-                />
-                <span className="text-sm text-ink">
-                  Split slash / comma / semicolon alternatives
-                  <span className="block text-xs text-ink-faint mt-0.5">
-                    When on: "word / other" accepts either part. When off: the full text must be typed as-is.
-                  </span>
-                </span>
-              </label>
 
               {gradingMode === 'flexible' && (
                 <div className="pl-4 space-y-2 border-l border-line/10">

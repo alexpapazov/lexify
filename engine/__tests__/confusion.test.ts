@@ -4,7 +4,7 @@ import type { GradingSettings } from '@/domain'
 const settings = (): GradingSettings => ({
   gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false,
   ignoreDefiniteArticles: false, requireParentheticalContent: false,
-  slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards',
+  commaAlternativesMode: 'split_into_cards',
   autoPlayAudio: false, answerLanguage: 'bg',
 })
 

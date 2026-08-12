@@ -207,14 +207,16 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
   useEffect(() => { setInput(''); setResult(null); setEchoed(false); play(); setTimeout(() => inputRef.current?.focus(), 60) }, [card.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function check() {
-    const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: false, slashAlternativesMode: 'accept_any', commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: answerLang }
+    // `isNativeAnswer` drives alternative splitting: "type the translation" answers the NATIVE side
+    // (either gloss accepted), transcription answers the TARGET side (must be typed in full).
+    const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: false, commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: answerLang, isNativeAnswer: native }
     // Grade against the answer side without its "(f)"/"(m)" annotation.
     const res = gradeTyping(input, stripAnnotations(answerText), settings)
 
     // "Type the translation" answered with the word you just heard → transcription, not translation.
     // Accept it and re-ask for the native side rather than scoring a miss.
     if (native && !echoed && res.status !== 'correct' && res.status !== 'almost') {
-      const heard = gradeTyping(input, stripAnnotations(card.front), { ...settings, answerLanguage: card.sourceLanguage })
+      const heard = gradeTyping(input, stripAnnotations(card.front), { ...settings, answerLanguage: card.sourceLanguage, isNativeAnswer: false })
       if (heard.status === 'correct' || heard.status === 'almost') {
         setEchoed(true); setInput('')
         setTimeout(() => inputRef.current?.focus(), 60)
