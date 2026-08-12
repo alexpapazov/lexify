@@ -2159,7 +2159,19 @@ from `AuthWall`). It writes the localStorage memo AND invalidates the cached rea
 gate keeps serving its cached "not onboarded" answer for up to 60s and bounces the user straight back
 into setup. Both call sites in `app/onboarding/page.tsx` do this.
 
-## Calibration ceiling raised 1.5 → 2.0 (2026-07-28)
+## Calibration ceiling LOWERED 2.0 → 1.3 (2026-08-11) — 2.0 failed in the field
+
+The 2.0 ceiling (raised 2026-07-28, below) let every track's multiplier climb until intervals
+genuinely outran the user's memory ("I am really forgetting way too much"). Recovery was: user
+raised target retention to 0.88, a one-off SQL divided every calibrated interval by its track's
+multiplier (onboarded/import-known rows and relearning rows excluded; due dates shifted earlier by
+the days removed so the review anchor stayed put) and reset stored multipliers > 1.0 back to 1.0.
+`CAL_MAX` is now **1.3** — the stretch is a correction, not a regime. `CAL_MIN` stays 0.7 (the
+shrink direction is the one that helps a struggling learner). If stretching ever feels too weak, the
+lever is LOWER TARGET RETENTION per track, not a higher ceiling; do not raise it again without
+evidence measured retention held at 1.3.
+
+## Calibration ceiling raised 1.5 → 2.0 (2026-07-28) — superseded above
 
 `CAL_MAX` in `lib/retentionCalibration.ts` went from 1.5 to **2.0** (band is now 0.7–2.0). Reason:
 every track on the user's account had pinned at exactly ×1.50 — the damped controller wanted to

@@ -43,11 +43,11 @@ describe('retentionCalibrationFactor', () => {
   it('is <1 when measured trails target (shorten intervals)', () => {
     expect(retentionCalibrationFactor(0.82, 0.90)).toBeLessThan(1)
   })
-  it('clamps to [0.7, 2.0]', () => {
-    expect(retentionCalibrationFactor(0.995, 0.90)).toBeLessThanOrEqual(2.0)
+  it('clamps to [0.7, 1.3]', () => {
+    expect(retentionCalibrationFactor(0.995, 0.90)).toBeLessThanOrEqual(1.3)
     expect(retentionCalibrationFactor(0.50, 0.90)).toBeGreaterThanOrEqual(0.7)
     expect(CAL_MIN).toBe(0.7)
-    expect(CAL_MAX).toBe(2.0)
+    expect(CAL_MAX).toBe(1.3)
   })
 })
 
@@ -63,12 +63,12 @@ describe('dampedCalibration (slew-rate limiter)', () => {
     expect(dampedCalibration(1.0, 0.99)).toBeCloseTo(0.99)
   })
   it('never leaves the [CAL_MIN, CAL_MAX] band', () => {
-    expect(dampedCalibration(1.98, 2.0)).toBeLessThanOrEqual(CAL_MAX)
+    expect(dampedCalibration(1.28, 2.0)).toBeLessThanOrEqual(CAL_MAX)
     expect(dampedCalibration(0.72, 0.7)).toBeGreaterThanOrEqual(CAL_MIN)
   })
   it('takes several passes to fully traverse the band (no whipsaw)', () => {
     let cal = 1.0
     for (let i = 0; i < 3; i++) cal = dampedCalibration(cal, 2.0)
-    expect(cal).toBeCloseTo(1.0 + 3 * CAL_MAX_STEP_PER_DAY) // 1.24, still climbing — not 2.0 in one go
+    expect(cal).toBeCloseTo(1.0 + 3 * CAL_MAX_STEP_PER_DAY) // 1.24, still climbing — not at the ceiling in one go
   })
 })
