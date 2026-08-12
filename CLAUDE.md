@@ -2859,6 +2859,24 @@ card is next answered and every other surface keeps reading the dead position.
 Rule for future edits here: any check on a stored climb must validate the POSITION, not just the
 shape — a config edit can invalidate a position without changing its type.
 
+## Practice moved under Study in the nav (2026-08-11)
+
+`/practice` left the top-level nav row and became a **hover sub-item of Study** (`StudyMenu` in
+`components/nav/Navbar.tsx`), the same pattern Analytics and Settings already used — drilling your own
+vocabulary is a mode of studying, not a separate destination. Three details:
+
+- **The parent lights up for its children.** `active = pathname === '/study' || subs.some(s =>
+  pathname.startsWith(s.href))`, so being on /practice still shows Study highlighted. Without that,
+  nothing in the top bar indicates where you are on the Practice page.
+- **Offline hiding moved.** Practice is online-only and used to be hidden via the `OFFLINE_HIDDEN`
+  top-level filter; it's no longer in `NAV_LINKS`, so that filter can't reach it. It's now hidden by
+  passing an EMPTY `studySubs` array offline — and `StudyMenu` renders no dropdown when `subs` is
+  empty, so Study behaves as a plain link. If you add another Study child, filter it the same way.
+- **The mobile drawer got the matching parent + indented children block**, mirroring Analytics and
+  Settings, so the two layouts don't drift.
+
+Migration 118 was applied and archived this session; nothing is pending.
+
 ## Verifying changes
 
 ```

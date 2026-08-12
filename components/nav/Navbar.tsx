@@ -15,7 +15,6 @@ import { setOfflineMode } from '@/lib/offline/mode'
 const NAV_LINKS = [
   { href: '/study',     label: 'Study'    },
   { href: '/library',   label: 'Library'  },
-  { href: '/practice',  label: 'Practice' },
   { href: '/browse',    label: 'Browse'   },
   { href: '/create',    label: 'Create'   },
   { href: '/agents',    label: 'Agents'   },
@@ -67,8 +66,10 @@ export function Navbar() {
   const offline = useOfflineMode()
   // Offline: hide destinations that need a connection (AI agent, community browse, full analytics).
   // Upload stays — it offers a manual, no-AI entry mode offline. Study/Library/Settings remain.
-  const OFFLINE_HIDDEN = new Set(['/agents', '/browse', '/progress', '/practice'])
+  // Practice is online-only too, but it's a Study sub-item now, so it's filtered via `studySubs`.
+  const OFFLINE_HIDDEN = new Set(['/agents', '/browse', '/progress'])
   const navLinks = offline ? NAV_LINKS.filter(l => !OFFLINE_HIDDEN.has(l.href)) : NAV_LINKS
+  const studySubs = offline ? [] : STUDY_SUBS
 
   return (
     <>
@@ -83,6 +84,7 @@ export function Navbar() {
             </Link>
 
             {navLinks.map(({ href, label }) => {
+              if (href === '/study')    return <StudyMenu key={href} pathname={pathname} subs={studySubs} />
               if (href === '/progress') return <AnalyticsMenu key={href} pathname={pathname} />
               if (href === '/settings') return <SettingsMenu key={href} pathname={pathname} />
               const isActive = pathname === href
@@ -161,6 +163,20 @@ export function Navbar() {
             onClick={e => e.stopPropagation()}
           >
             {navLinks.map(({ href, label }) => {
+              if (href === '/study') return (
+                <div key={href} className="space-y-1">
+                  <Link href="/study" className={[
+                    'block px-3 py-2.5 rounded-md text-sm font-medium transition-colors',
+                    pathname === '/study' ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
+                  ].join(' ')}>Study</Link>
+                  {studySubs.map(sub => (
+                    <Link key={sub.href} href={sub.href} className={[
+                      'block px-5 py-2 rounded-md text-sm font-medium transition-colors',
+                      pathname === sub.href ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
+                    ].join(' ')}>{sub.label}</Link>
+                  ))}
+                </div>
+              )
               if (href === '/progress') return (
                 <div key={href} className="space-y-1">
                   <Link href="/progress" className={[
@@ -228,6 +244,36 @@ export function Navbar() {
         </div>
       )}
     </>
+  )
+}
+
+// "Study" itself links to the dashboard; Practice hangs under it (drilling your own vocabulary is a
+// mode of studying, not a separate destination). Offline the list is emptied — Practice needs AI.
+const STUDY_SUBS = [
+  { href: '/practice', label: 'Practice' },
+]
+
+/** Desktop nav "Study" item — a hover dropdown to its sub-pages. */
+function StudyMenu({ pathname, subs }: { pathname: string; subs: { href: string; label: string }[] }) {
+  const [open, setOpen] = useState(false)
+  // The parent lights up for its children too, so being in Practice still shows where you are.
+  const active = pathname === '/study' || subs.some(s => pathname.startsWith(s.href))
+  return (
+    <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <Link href="/study" className={[
+        'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150 whitespace-nowrap inline-flex items-center gap-1',
+        active ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
+      ].join(' ')}>Study</Link>
+      {open && subs.length > 0 && (
+        <div className="absolute top-full left-0 pt-1 z-50">
+          <div className="bg-surface-deep border border-line/10 rounded-lg py-1 min-w-[150px] shadow-lg">
+            {subs.map(s => (
+              <Link key={s.href} href={s.href} className={`block px-3 py-1.5 text-sm ${pathname === s.href ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50'}`}>{s.label}</Link>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
