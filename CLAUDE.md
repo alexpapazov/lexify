@@ -2921,6 +2921,10 @@ owns the frame and exports its building blocks (`SettingsPane` / `SettingsSectio
   ~15px and adds a horizontal scrollbar. To make another route full-bleed, add its prefix there.
 - **Use AMERICAN spellings in UI copy** — "Language colors", not "colours". The app was consistently
   American before; a redesign pass introduced British ones and the user corrected it.
+- **The nav's Settings dropdown is GONE** (2026-08-11): `SettingsMenu`/`SETTINGS_SUBS` were deleted
+  and Settings is a plain link again. Once inside, the rail navigates everything, so a dropdown was a
+  second, partial copy of it that could drift. Do not re-add one. `StudyMenu` (Practice) and
+  `AnalyticsMenu` remain — those genuinely point at separate pages.
 
 ## Verifying changes
 
