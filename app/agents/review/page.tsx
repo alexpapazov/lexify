@@ -78,7 +78,7 @@ function ReviewInner() {
   const approvedCount = cs.items.filter(i => statuses[i.id] === 'approved').length
 
   return (
-    <div className="max-w-4xl mx-auto space-y-5">
+    <div className="max-w-2xl mx-auto p-6 space-y-5">
       <div>
         <a href="/agents" className="text-xs text-ink-faint hover:text-ink">← Agents</a>
         <h1 className="text-xl font-semibold text-ink mt-1">Review proposed changes</h1>

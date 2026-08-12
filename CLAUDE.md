@@ -2945,6 +2945,24 @@ before. Generation is deliberately left running: the user said "they can still g
 not be used", and other rungs / Due Now may want them. 4 tests in
 `lib/__tests__/buildOptionsSource.test.ts`.
 
+## Widths: the top bar is full-bleed, PAGES ARE NOT (2026-08-11, settled)
+
+**This went back and forth — read the whole note before changing any width.** The bar was widened,
+then pages were widened to match, then a shared 80px gutter was applied to both; the user tried all
+of it and reverted everything except the bar: *"I hate the resizing in everything… I love the new bar
+after we enlarged it and made it end-to-end the first time, but I want everything else to be like it
+was."* The settled state:
+
+- **Navbar**: `w-full px-5 md:px-8 h-16`, edge to edge, with the larger logo/links/avatar. KEEP.
+- **Pages**: `max-w-5xl mx-auto px-4 py-8` — a centred 1024px column, as before. `MainContainer`
+  applies it to every route EXCEPT `/settings`, which stays full-bleed because its section rail needs
+  the width (the user asked for that separately and kept it).
+- **Per-page caps restored**: analytics `max-w-4xl`, agents `2xl`/`3xl` with their own `p-6`, create
+  and the deck edit/add pages `3xl`, practice/onboarding `2xl`.
+- **Library pair tiles restored**: `grid-cols-2 sm:grid-cols-3`, `py-6`, `text-2xl` flag.
+
+The bar being wider than the content is INTENTIONAL — don't "fix" the alignment by widening pages.
+
 ## Top bar: full-bleed and larger (2026-08-11)
 
 The navbar was `max-w-5xl mx-auto px-4 h-14`; it is now `w-full px-5 md:px-8 h-16` — edge to edge and
@@ -2963,35 +2981,6 @@ ask was purely size and width.
   `<main>` is still `max-w-5xl`, so that alignment no longer holds. Left as-is — the user asked for
   the bar specifically — but if the sessions should follow, they need the same treatment via
   `MainContainer`'s `FULL_BLEED` list.
-
-## Pages fill the screen (2026-08-11)
-
-Follow-up to the full-bleed top bar: `<main>` was `max-w-5xl mx-auto px-4` (a 1024px column under a
-full-width bar, which left most of a laptop screen empty). It is now `w-full` with a **shared gutter,
-`px-5 md:px-10 lg:px-20`, that the navbar carries too** — so the logo, the nav row and every page's
-content sit on the same two vertical lines and nothing reaches past them. **Change the gutter in BOTH
-`components/MainContainer.tsx` AND `components/nav/Navbar.tsx` or the alignment silently breaks.**
-
-The 80px desktop value came from the user marking the band they wanted on a screenshot (measured
-against the 36px avatar for scale). It is PADDING, not a `max-w-*` cap, so the band tracks the window
-instead of stranding a fixed column on a large display. Verified at 1512px: both report an 80px
-gutter, the logo starts at exactly 80 and the last nav item ends at 1432 (= 1512 − 80); at 375px the
-gutter is 20px with no horizontal overflow.
-
-**The rule inverted: width is now opt-IN to NARROW.** A page that wants a reading measure sets its
-own `max-w-* mx-auto`; everything else fills the screen. `MainContainer` lost its `FULL_BLEED` list
-and its `usePathname` — every route is full-bleed now, so the special case for settings is gone (and
-`SettingsShell` dropped its own `px-*`, which would otherwise double up).
-
-Per-page caps raised at the same time: analytics pages (`max-w-4xl` → none — charts want width),
-card editor / deck-add / create (`3xl` → `5xl`), agents (`2xl`/`3xl` → `4xl`/`5xl`, and their stray
-`p-6` removed now that main pads). The agent pages' `p-6` had been doubling with main's padding.
-
-**Deliberately still narrow** — stretching these would be worse, not better; change them only if
-asked: the auth form, the "nothing here" empty-state panels (`max-w-2xl` centred cards), Practice
-(`2xl` → `4xl`, not full — a fill-in-the-blank sentence spanning 1200px is unreadable), and deck
-onboarding (`2xl` → `3xl`, one card at a time). Due Now sessions were already uncapped and so now
-fill the screen, which also restores the logo alignment the 2026-07-27 note wanted.
 
 ## Slash/comma/semicolon alternatives are decided by SIDE, not a setting (2026-08-11)
 
@@ -3040,19 +3029,6 @@ Two user-reported behaviors in `components/ladder/LadderStudy.tsx`:
    existed because `pickNextCard` falls back to re-showing the only remaining card immediately; that
    immediate re-show is now accepted behavior (continuous flow was the explicit ask). The main view's
    `UndoFab` still provides undo; `prevPaused` left the undo entries.
-
-## Library pair tiles reproportioned for the full-bleed page (2026-08-11)
-
-Going full-bleed stretched the language tiles into letterboxes — three columns across ~1400px made
-each one ~620x160 (a 3.9:1 ratio). Two changes in `app/library/page.tsx`:
-`grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5` (narrower columns on wide screens) and
-`py-8 sm:py-12 min-h-[10rem] sm:min-h-[13.5rem]` with a larger flag (`text-2xl`→`text-4xl`) and
-labels to fill the extra height. Measured at 1512px: 329x216, a 1.52:1 card.
-
-**The min-height is responsive on purpose.** Phones still show TWO columns, so the flat 13.5rem made
-tiles 162x216 — taller than wide. The `sm:` split keeps them square (162x162) on a phone and
-card-shaped on a laptop. If you change the column counts, re-check both breakpoints rather than only
-the desktop one.
 
 ## Library gear menu + export (2026-08-11, no migration)
 

@@ -18,7 +18,7 @@ export default function AnalyticsPage() {
   if (offline) return <OfflineUnavailable feature="Analytics" />
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6">
       <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
       <Segmented<View>
         value={view}

@@ -403,7 +403,7 @@ export default function AgentsPage() {
   const current = queue[0]
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
+    <div className="max-w-2xl mx-auto p-6 space-y-6">
       {/* Agent picker — this page is the card editor; siblings link out. Every agent proposes and
           waits for approval, so switching between them is never destructive. */}
       <div className="flex flex-wrap gap-2">

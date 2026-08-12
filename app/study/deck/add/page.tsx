@@ -348,7 +348,7 @@ export default function AddCardsPage() {
   const exactCount    = items.filter(it => it.duplicate.tier === 'exact').length
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto pb-12">
+    <div className="space-y-6 max-w-3xl mx-auto pb-12">
       <div className="flex items-center gap-3">
         <Link href={routes.deck(deckId)} className="text-ink-muted hover:text-ink text-sm shrink-0">← Back</Link>
         <h1 className="text-xl font-semibold text-ink">Add cards · {deck.name}</h1>

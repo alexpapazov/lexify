@@ -99,7 +99,7 @@ export function SettingsShell({ active, children }: {
     .filter(g => g.items.length > 0)
 
   return (
-    <div>
+    <div className="px-4 md:px-6">
       <div className="flex items-center gap-3 mb-6">
         <Link href="/study" aria-label="Back to study"
           className="p-1.5 -ml-1.5 rounded-md text-ink-muted hover:text-ink hover:bg-surface/60 transition-colors">

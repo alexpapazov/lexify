@@ -1,25 +1,32 @@
+'use client'
+
 /**
- * components/MainContainer.tsx — the page container.
+ * components/MainContainer.tsx — the page container, which is `max-w-5xl` centred everywhere EXCEPT
+ * the routes that own their own width.
  *
- * Pages span the full window inside a **shared gutter** (`px-5 md:px-10 lg:px-20`) that the navbar
- * uses too — so the logo, the nav row and every page's content sit on the same two vertical lines,
- * with nothing reaching past them. The gutter is padding rather than a `max-w-*` cap so the band
- * tracks the window instead of stranding a fixed-width column in the middle of a large display.
+ * Settings is the exception: its section rail is pinned to the left edge of the viewport and the
+ * content pane takes everything else, so a centred 1024px column would put the rail in the middle of
+ * the screen and squeeze the wide editors (the goal calendar renders three months side by side).
  *
- * **Change the gutter in BOTH places or the alignment silently breaks** — `components/nav/Navbar.tsx`
- * carries the same classes.
- *
- * Pages that genuinely want a narrow measure — a single study card, an empty state, a short form —
- * set their own `max-w-* mx-auto` inside this. Width is opt-IN to narrow rather than opt-in to wide,
- * which is the opposite of how it worked before.
- *
- * This is a component (not a CSS breakout like `w-screen; margin-left:-50vw`) because `100vw`
- * includes the scrollbar and that trick overflows by ~15px on desktop.
+ * This is a component rather than a CSS breakout (`w-screen; margin-left: -50vw`) on purpose: `100vw`
+ * includes the scrollbar width, so that trick overflows by ~15px on desktop and adds a horizontal
+ * scrollbar to every settings page.
  */
 
+import { usePathname } from 'next/navigation'
+
+/** Routes that lay themselves out edge to edge. Prefixes, so sub-routes inherit it. */
+const FULL_BLEED = ['/settings']
+
 export function MainContainer({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
+  const fullBleed = FULL_BLEED.some(p => pathname === p || pathname.startsWith(p + '/'))
+
   return (
-    <main className="flex-1 w-full px-5 md:px-10 lg:px-20 py-6 pb-[calc(2rem+env(safe-area-inset-bottom))]">
+    <main className={[
+      'flex-1 w-full pb-[calc(2rem+env(safe-area-inset-bottom))]',
+      fullBleed ? 'py-6' : 'px-4 py-8 max-w-5xl mx-auto',
+    ].join(' ')}>
       {children}
     </main>
   )

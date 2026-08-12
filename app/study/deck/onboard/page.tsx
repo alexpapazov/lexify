@@ -409,7 +409,7 @@ function OnboardInner() {
   const { card, deck } = queue[index]!
 
   return (
-    <div className="space-y-8 pb-12 max-w-3xl mx-auto">
+    <div className="space-y-8 pb-12 max-w-2xl mx-auto">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold text-ink">How well do you know this?</h1>
