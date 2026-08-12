@@ -3039,6 +3039,19 @@ Two user-reported behaviors in `components/ladder/LadderStudy.tsx`:
    immediate re-show is now accepted behavior (continuous flow was the explicit ask). The main view's
    `UndoFab` still provides undo; `prevPaused` left the undo entries.
 
+## Library pair tiles reproportioned for the full-bleed page (2026-08-11)
+
+Going full-bleed stretched the language tiles into letterboxes — three columns across ~1400px made
+each one ~620x160 (a 3.9:1 ratio). Two changes in `app/library/page.tsx`:
+`grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5` (narrower columns on wide screens) and
+`py-8 sm:py-12 min-h-[10rem] sm:min-h-[13.5rem]` with a larger flag (`text-2xl`→`text-4xl`) and
+labels to fill the extra height. Measured at 1512px: 329x216, a 1.52:1 card.
+
+**The min-height is responsive on purpose.** Phones still show TWO columns, so the flat 13.5rem made
+tiles 162x216 — taller than wide. The `sm:` split keeps them square (162x162) on a phone and
+card-shaped on a laptop. If you change the column counts, re-check both breakpoints rather than only
+the desktop one.
+
 ## Verifying changes
 
 ```

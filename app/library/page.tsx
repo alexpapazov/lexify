@@ -864,7 +864,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             No languages yet. Press &quot;+ New language&quot; to start a new vocabulary collection.
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" data-tour="library-pairs">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-5 gap-3" data-tour="library-pairs">
             {allPairs.map(p => {
               const key        = `${p.sourceLanguage}|${p.targetLanguage}`
               const isDragging = draggingPairKey === key
@@ -908,7 +908,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                     setPairDropTarget(null)
                     if (fromKey && fromKey !== key) commitPairDrop(fromKey, key, pos)
                   }}
-                  className={`panel flex flex-col items-center justify-center gap-1 py-6 text-center transition-all cursor-grab active:cursor-grabbing select-none relative group ${
+                  className={`panel flex flex-col items-center justify-center gap-1.5 py-8 sm:py-12 min-h-[10rem] sm:min-h-[13.5rem] text-center transition-all cursor-grab active:cursor-grabbing select-none relative group ${
                     isDragging ? 'opacity-40' : 'hover:bg-surface-raised/50'
                   } ${pdt?.pos === 'before' ? 'border-l-2 border-l-accent' : pdt?.pos === 'after' ? 'border-r-2 border-r-accent' : ''}`}
                 >
@@ -926,8 +926,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                     ⚙
                   </button>
                   {/* Flag — click to change */}
-                  <div className="relative group/flag mb-1">
-                    <span className="text-2xl leading-none">{flag}</span>
+                  <div className="relative group/flag mb-1.5">
+                    <span className="text-4xl leading-none">{flag}</span>
                     <button
                       className="absolute inset-0 opacity-0 group-hover/flag:opacity-100 bg-black/50 rounded text-white text-xs flex items-center justify-center transition-opacity"
                       onClick={e => { e.stopPropagation(); e.preventDefault(); setEditFlagFor(key) }}
@@ -946,8 +946,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                     }}
                     className="flex flex-col items-center gap-0.5 w-full"
                   >
-                    <span className="text-sm font-semibold text-ink">{langNativeName(p.sourceLanguage)}</span>
-                    <span className="text-xs text-ink-muted">{langNativeName(p.targetLanguage)}</span>
+                    <span className="text-base font-semibold text-ink">{langNativeName(p.sourceLanguage)}</span>
+                    <span className="text-sm text-ink-muted">{langNativeName(p.targetLanguage)}</span>
                   </Link>
                 </div>
               )
