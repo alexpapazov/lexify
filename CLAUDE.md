@@ -2965,10 +2965,16 @@ ask was purely size and width.
 ## Pages fill the screen (2026-08-11)
 
 Follow-up to the full-bleed top bar: `<main>` was `max-w-5xl mx-auto px-4` (a 1024px column under a
-full-width bar, which left most of a laptop screen empty). It is now
-`w-full px-5 md:px-8` — **the same gutters as the navbar**, so page content lines up with the Lexify
-logo and the avatar. Verified: nav and main both report a 32px gutter at desktop, 20px at mobile, no
-horizontal overflow.
+full-width bar, which left most of a laptop screen empty). It is now `w-full` with a **shared gutter,
+`px-5 md:px-10 lg:px-20`, that the navbar carries too** — so the logo, the nav row and every page's
+content sit on the same two vertical lines and nothing reaches past them. **Change the gutter in BOTH
+`components/MainContainer.tsx` AND `components/nav/Navbar.tsx` or the alignment silently breaks.**
+
+The 80px desktop value came from the user marking the band they wanted on a screenshot (measured
+against the 36px avatar for scale). It is PADDING, not a `max-w-*` cap, so the band tracks the window
+instead of stranding a fixed column on a large display. Verified at 1512px: both report an 80px
+gutter, the logo starts at exactly 80 and the last nav item ends at 1432 (= 1512 − 80); at 375px the
+gutter is 20px with no horizontal overflow.
 
 **The rule inverted: width is now opt-IN to NARROW.** A page that wants a reading measure sets its
 own `max-w-* mx-auto`; everything else fills the screen. `MainContainer` lost its `FULL_BLEED` list
