@@ -2877,6 +2877,42 @@ vocabulary is a mode of studying, not a separate destination. Three details:
 
 Migration 118 was applied and archived this session; nothing is pending.
 
+## Settings rebuilt as one page with a section rail (2026-08-11)
+
+Replaced the two-page, stacked-panel settings with a single `/settings` in the Google-Drive-settings
+shape the user asked for: back arrow + title, a left rail of grouped sections, and a FLAT content
+pane — headings, generous spacing, hairline dividers, no cards. `components/settings/SettingsShell.tsx`
+owns the frame and exports its building blocks (`SettingsPane` / `SettingsSection` / `SettingsRow`);
+`SETTINGS_GROUPS` is the single source of truth for the rail.
+
+- **Sections are a QUERY PARAM (`?section=…`), never a route segment.** Hard constraint: the
+  Capacitor build is a static export and cannot serve dynamic segments (see the routes note).
+  `parseSection` falls back to `profile` on anything unknown, so a stale link can't render an empty
+  pane.
+- **The old routes still work.** `/settings/language`, `/settings/goals` and `/settings/ladders` are
+  now thin redirects into the matching section — the ladders one forwards `?source=&target=` so
+  per-language deep links survive. Keep them; the native app ships a cached shell with old URLs in it.
+- **Daily goals and Learning ladders render IN the pane** (`components/settings/GoalsSettings.tsx`,
+  `LaddersSettings.tsx`, moved out of their page files). They keep their own data loading, mode
+  toggles and Suspense; what was stripped is only page chrome (outer padding, back link, `<h1>` →
+  `<h2>`). The page renders one or the other INSTEAD of `SettingsScreen`, so viewing goals doesn't
+  load the whole settings profile state.
+- **`SettingsScreen` takes `section`, not `variant`**, and renders exactly one section. The Save
+  button appears only on the four sections whose controls feed `handleSave`'s single profile write
+  (profile / time / study / colors) — everywhere else saves itself, and a Save button there would be
+  a lie.
+- **Offline hiding moved into the rail**: `SectionDef.online` marks the sections needing a
+  connection, and `SettingsShell` filters them, so a hidden section is unreachable rather than
+  reachable-but-empty.
+- **The product tour was made resolution-agnostic.** Its anchors now sit on rail items, which exist
+  TWICE (desktop list + mobile chip strip, one always `display:none`) — and a hidden element measures
+  0×0, which would have parked the spotlight in the corner. `visibleAnchor()` in `components/Tour.tsx`
+  picks the first anchor with a real box. Incidentally this FIXED two long-broken steps: `settings-ladder`
+  and `settings-sync` were anchored on `/settings/language` while the tour navigated to `/settings`,
+  so they never resolved.
+- `.no-scrollbar` was added to `globals.css` for the mobile chip strip (the global 6px bar rendered
+  as a stray pill under it).
+
 ## Verifying changes
 
 ```

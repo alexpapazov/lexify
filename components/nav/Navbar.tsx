@@ -306,15 +306,21 @@ function AnalyticsMenu({ pathname }: { pathname: string }) {
   )
 }
 
-// "Settings" itself links to the general settings; hovering reveals the language-configuration sub-page.
+// "Settings" itself opens the first section; hovering reveals the sections worth jumping straight to.
+// The full list lives in the settings rail (components/settings/SettingsShell.tsx) — this is a
+// shortcut, not a mirror, so it deliberately names only the destinations people ask for by name.
 const SETTINGS_SUBS = [
-  { href: '/settings/language', label: 'Language configuration' },
+  { href: '/settings?section=goals',   label: 'Daily goals'      },
+  { href: '/settings?section=ladders', label: 'Learning ladders' },
+  { href: '/settings?section=study',   label: 'Study defaults'   },
 ]
 
 /** Desktop nav "Settings" item — a hover dropdown to its sub-pages. */
 function SettingsMenu({ pathname }: { pathname: string }) {
   const [open, setOpen] = useState(false)
   const active = pathname.startsWith('/settings')
+  // `pathname` has no query string, so a section sub-item can't be "current" by path alone — the
+  // rail inside the page shows which section you're on, and this just marks the parent.
   return (
     <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <Link href="/settings" className={[

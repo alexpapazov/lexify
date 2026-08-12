@@ -58,6 +58,11 @@
 }
 .animate-shake { animation: shake-x 0.4s ease-in-out; }
 
+/* Horizontal chip strips (e.g. the settings section rail on mobile) scroll by swipe; the global
+   6px scrollbar renders under them as a stray pill, so hide the bar without losing the scroll. */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
 @layer components {
   .panel       { @apply bg-surface rounded-card border border-line/5 p-6; }
   .btn-primary { @apply bg-accent hover:bg-accent-muted text-white font-medium px-5 py-2.5 rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed; }

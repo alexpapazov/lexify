@@ -1,202 +1,23 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
-import { SupabaseLadderRepository } from '@/lib/data/ladders'
-import { SupabasePathwayRepository } from '@/lib/data/pathways'
-import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
-import { SupabaseDeckRepository } from '@/lib/data/decks'
-import { LadderEditor } from '@/components/settings/LadderEditor'
-import { PathwayEditor } from '@/components/settings/PathwayEditor'
-import { ConfigLibrary } from '@/components/settings/ConfigLibrary'
-import { ladderToPathway, emptyPathway } from '@/lib/pathway'
-import { DEFAULT_LADDER } from '@/domain'
-import type { Ladder, Pathway, LearningMode } from '@/domain'
-import { langName } from '@/lib/languages'
+// Learning ladders moved into the unified Settings page (2026-08-11). Kept as a redirect so old links
+// — including per-language ones carrying ?source=&target= — still resolve.
 
-function LaddersInner() {
+import { Suspense, useEffect } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+
+function LaddersRedirect() {
+  const router = useRouter()
   const params = useSearchParams()
   const source = params.get('source')
   const target = params.get('target')
-  const isPair = !!(source && target)
-  const effSrc = source ?? ''   // '' = the default (applies to new languages)
-  const effTgt = target ?? ''
-
-  const [userId, setUserId] = useState<string | null>(null)
-  const [ladder, setLadder] = useState<Ladder | null>(null)
-  const [customized, setCustomized] = useState(false)
-  const [pairs, setPairs] = useState<{ source: string; target: string; custom: boolean; mode: LearningMode }[]>([])
-  const [saving, setSaving] = useState(false)
-  const [version, setVersion] = useState(0)
-  const [mode, setMode] = useState<LearningMode>('ladder')
-  const [pathway, setPathway] = useState<Pathway | null>(null)
-  const [pathwayCustom, setPathwayCustom] = useState(false)
-
   useEffect(() => {
-    ;(async () => {
-      const { data: { session } } = await createClient().auth.getSession()
-      if (!session) return
-      const uid = session.user.id
-      setUserId(uid)
-      const repo = new SupabaseLadderRepository()
-      const pathRepo = new SupabasePathwayRepository()
-      const def = await repo.getDefault(uid)
-
-      const [savedLadder, savedPath, defPath] = await Promise.all([
-        isPair ? repo.getForPair(uid, source!, target!) : Promise.resolve(def),
-        pathRepo.getForPair(uid, effSrc, effTgt),
-        pathRepo.getDefault(uid),
-      ])
-      const eff = savedLadder ?? def ?? DEFAULT_LADDER
-      setLadder(eff)
-      setCustomized(isPair ? !!savedLadder : true)
-      setPathwayCustom(!!savedPath)
-      setPathway(savedPath ?? (isPair ? defPath : null) ?? ladderToPathway(eff))
-
-      // Mode: per-pair flag for a language, or the per-user default on the default page.
-      if (isPair) {
-        const list = await new SupabaseLanguagePairRepository().list(uid)
-        setMode(list.find(p => p.sourceLanguage === source && p.targetLanguage === target)?.learningMode ?? 'ladder')
-      } else {
-        const { data: prof } = await createClient().from('profiles').select('default_learning_mode').eq('user_id', uid).maybeSingle()
-        const defMode = (prof?.default_learning_mode as LearningMode | null) ?? 'ladder'
-        setMode(defMode)
-        // The custom/default chip must reflect the pair's ACTIVE mode: a custom LADDER row on a
-        // pathway-mode pair is dormant data and must not label the pair "custom" (user-reported —
-        // Korean showed "custom" right after its pathway was reverted to default).
-        const [decks, saved, customPathKeys, pairList] = await Promise.all([
-          new SupabaseDeckRepository().list(uid),
-          repo.list(uid),
-          pathRepo.listCustomPairKeys(uid).catch(() => new Set<string>()),
-          new SupabaseLanguagePairRepository().list(uid).catch(() => []),
-        ])
-        const modeByPair = new Map(pairList.map(pr => [`${pr.sourceLanguage}|${pr.targetLanguage}`, pr.learningMode ?? defMode]))
-        const customLadderKeys = new Set(saved.filter(s => s.source && s.target).map(s => `${s.source}|${s.target}`))
-        const uniq = Array.from(new Set(decks.map(d => `${d.sourceLanguage}|${d.targetLanguage}`)))
-        setPairs(uniq.map(k => {
-          const [s, t] = k.split('|')
-          const m = modeByPair.get(k) ?? defMode
-          return { source: s!, target: t!, mode: m, custom: m === 'pathway' ? customPathKeys.has(k) : customLadderKeys.has(k) }
-        }))
-      }
-      setVersion(v => v + 1)
-    })()
-  }, [source, target]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function save(l: Ladder) {
-    if (!userId) return
-    setSaving(true)
-    await new SupabaseLadderRepository().saveForPair(userId, effSrc, effTgt, l)
-    setCustomized(true); setSaving(false)
-  }
-  async function reset() {
-    if (!userId || !isPair) return
-    setSaving(true)
-    const repo = new SupabaseLadderRepository()
-    await repo.resetPair(userId, source!, target!)
-    const def = await repo.getDefault(userId)
-    setLadder(def ?? DEFAULT_LADDER); setCustomized(false); setVersion(v => v + 1); setSaving(false)
-  }
-
-  async function switchMode(next: LearningMode) {
-    if (!userId || next === mode) return
-    setMode(next)
-    if (isPair) await new SupabaseLanguagePairRepository().updateLearningMode(source!, target!, next).catch(() => {})
-    else await createClient().from('profiles').update({ default_learning_mode: next }).eq('user_id', userId).then(() => {}, () => {})
-    if (next === 'pathway' && !pathway) setPathway(ladderToPathway(ladder ?? DEFAULT_LADDER))
-  }
-  async function savePathway(p: Pathway) {
-    if (!userId) return
-    setSaving(true)
-    await new SupabasePathwayRepository().saveForPair(userId, effSrc, effTgt, p)
-    setPathwayCustom(true); setSaving(false)
-  }
-  // Node rearrangement auto-persists (quietly, no spinner / no remount) so the layout survives a reload.
-  async function persistPathwayLayout(p: Pathway) {
-    if (!userId) return
-    setPathway(p); setPathwayCustom(true)
-    await new SupabasePathwayRepository().saveForPair(userId, effSrc, effTgt, p).catch(() => {})
-  }
-  async function resetPathway() {
-    if (!userId || !isPair) return
-    setSaving(true)
-    const pathRepo = new SupabasePathwayRepository()
-    await pathRepo.resetPair(userId, source!, target!)
-    // The pair now FOLLOWS the default, so show the CURRENT default pathway. The old code loaded
-    // `ladderToPathway(ladder)` — a conversion of the LADDER — so "Revert to default" showed a
-    // pathway that matched nothing the pair would actually study.
-    const defPath = await pathRepo.getDefault(userId)
-    setPathway(defPath ?? ladderToPathway(ladder ?? DEFAULT_LADDER))
-    setPathwayCustom(false); setVersion(v => v + 1); setSaving(false)
-  }
-
-  if (!ladder) return <p className="p-6 text-sm text-ink-faint">Loading…</p>
-
-  return (
-    <div className="max-w-6xl mx-auto p-6 space-y-5">
-      <div>
-        <a href={isPair ? '/settings/ladders' : '/settings/language'} className="inline-block text-xs text-ink-faint hover:text-ink">
-          ← {isPair ? 'Learning ladders' : 'Language configuration'}
-        </a>
-
-        {/* Mode toggle — at the very top so it's the first thing you set */}
-        <div className="flex w-fit rounded-lg border border-line/10 p-0.5 text-sm mt-3 mb-3">
-          {(['ladder', 'pathway'] as LearningMode[]).map(m => (
-            <button key={m} onClick={() => switchMode(m)}
-              className={`px-4 py-1.5 rounded-md capitalize transition-colors ${mode === m ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'}`}>
-              {m}
-            </button>
-          ))}
-        </div>
-
-        <h1 className="text-2xl font-semibold text-ink">
-          {isPair ? `${langName(source!)} → ${langName(target!)}` : `Default learning ${mode}`}
-        </h1>
-        <p className="text-sm text-ink-muted mt-1">
-          {isPair
-            ? (mode === 'pathway'
-                ? (pathwayCustom ? 'This language has its own pathway.' : 'Using the default pathway — saving here gives this language its own.')
-                : (customized ? 'This language has its own ladder.' : 'Using the default ladder — saving here gives this language its own.'))
-            : `Applies to any newly added language${mode === 'pathway' ? ' set to pathway mode' : ''}. A language’s own ${mode} overrides it.`}
-        </p>
-      </div>
-
-      {userId && (
-        <ConfigLibrary
-          kind={mode === 'pathway' ? 'pathway' : 'ladder'}
-          userId={userId}
-          current={mode === 'pathway' ? (pathway ?? emptyPathway()) : ladder}
-          onLoad={config => {
-            // Fill the editor only. `version` remounts it so the loaded shape actually shows;
-            // persisting is still the editor's own Save, so trying a preset is never destructive.
-            if (mode === 'pathway') setPathway(config as Pathway)
-            else setLadder(config as Ladder)
-            setVersion(v => v + 1)
-          }}
-        />
-      )}
-
-      {mode === 'pathway'
-        ? <PathwayEditor key={version} initial={pathway ?? emptyPathway()} onSave={savePathway} onReset={isPair ? resetPathway : undefined} onPersistLayout={persistPathwayLayout} saving={saving} />
-        : <LadderEditor key={version} initial={ladder} onSave={save} onReset={isPair && customized ? reset : undefined} saving={saving} />}
-
-      {!isPair && pairs.length > 0 && (
-        <div className="space-y-2 pt-2">
-          <p className="text-xs text-ink-faint uppercase tracking-wider">Per-language</p>
-          {pairs.map(p => (
-            <a key={`${p.source}|${p.target}`} href={`/settings/ladders?source=${p.source}&target=${p.target}`}
-              className="panel flex items-center justify-between py-3 hover:border-line/10">
-              <span className="text-sm text-ink">{langName(p.source)} → {langName(p.target)}</span>
-              <span className="chip">{p.mode} · {p.custom ? 'custom' : 'default'}</span>
-            </a>
-          ))}
-        </div>
-      )}
-    </div>
-  )
+    const pair = source && target ? `&source=${source}&target=${target}` : ''
+    router.replace(`/settings?section=ladders${pair}`)
+  }, [router, source, target])
+  return <p className="p-6 text-sm text-ink-faint">Opening learning ladders…</p>
 }
 
 export default function LaddersPage() {
-  return <Suspense fallback={<p className="p-6 text-sm text-ink-faint">Loading…</p>}><LaddersInner /></Suspense>
+  return <Suspense fallback={<p className="p-6 text-sm text-ink-faint">Loading…</p>}><LaddersRedirect /></Suspense>
 }

@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckPreferencesRepository }  from '@/lib/data/deckPreferences'
 import { SupabaseCardStateRepository }        from '@/lib/data/cardStates'
@@ -16,6 +16,12 @@ import { fsrsFuzzRange } from '@/engine/fsrs'
 import { getToday } from '@/lib/dates'
 import { ThemeToggle } from '@/components/ThemeToggle'
 import { OfflinePanel } from '@/components/settings/OfflinePanel'
+import {
+  SettingsShell, SettingsPane, SettingsSection, SettingsRow, parseSection,
+  type SettingsSectionId,
+} from '@/components/settings/SettingsShell'
+import { GoalsSettings } from '@/components/settings/GoalsSettings'
+import { LaddersSettings } from '@/components/settings/LaddersSettings'
 import { startTour } from '@/components/Tour'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { voiceNameFor } from '@/lib/speak'
@@ -454,7 +460,12 @@ function LanguageSyncPanel({ userId }: { userId: string }) {
   )
 }
 
-export function SettingsScreen({ variant }: { variant: 'general' | 'language' }) {
+/**
+ * The settings sections that are driven by the shared profile/language state loaded here. Daily goals
+ * and Learning ladders are their own components (own data, own editors) and are rendered by the page
+ * beside this one — see `app/settings/page.tsx`'s default export.
+ */
+export function SettingsScreen({ section }: { section: SettingsSectionId }) {
   const [userId,        setUserId]        = useState('')
   const [displayName,   setDisplayName]   = useState('')
   const [selectedLangs, setSelectedLangs] = useState<string[]>([])
@@ -690,344 +701,259 @@ export function SettingsScreen({ variant }: { variant: 'general' | 'language' })
     }
   }
 
-  if (loading) return <div className="text-ink-muted pt-16 text-center">Loading…</div>
+  if (loading) return <p className="text-sm text-ink-faint">Loading…</p>
+
+  // Sections whose controls are part of the one profile write `handleSave` performs. Everything else
+  // saves itself (theme, offline, sync rules, labels, deletes), so a Save button there would be a lie.
+  const needsSave = section === 'profile' || section === 'time' || section === 'study' || section === 'colors'
+  const codes = [...new Set(langPairs.map(p => p.sourceLanguage))]
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-semibold text-ink">{variant === 'general' ? 'Settings' : 'Language configuration'}</h1>
-
-      {variant === 'general' && (<>
-      <div className="grid gap-5 md:grid-cols-2 items-start">
-        <div className="space-y-5">
-      {/* Profile */}
-      <div className="panel space-y-4">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Profile</h2>
-        <div className="space-y-1.5">
-          <label className="text-sm text-ink-muted">Display name</label>
-          <input className="input" placeholder="Your display name" value={displayName} onChange={e => setDisplayName(e.target.value)} />
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-sm text-ink-muted">Password</label>
-          <input type="password" className="input" placeholder="••••••••" disabled />
-          <p className="text-xs text-ink-faint">Password changes via Supabase email link — coming soon.</p>
-        </div>
-      </div>
-      {/* Timezone — online only */}
-      {!offline && (
-      <div className="panel space-y-4" data-tour="settings-timezone">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Time zone</h2>
-        <div className="space-y-1.5">
-          <label className="text-sm text-ink-muted">Your time zone</label>
-          {tzList.length > 0 ? (
-            <select
-              className="input"
-              value={timezone}
-              onChange={e => setTimezone(e.target.value)}
-            >
-              {tzList.map(tz => (
-                <option key={tz} value={tz}>{tz}</option>
-              ))}
-            </select>
-          ) : (
-            <input
-              className="input"
-              placeholder="e.g. America/New_York"
-              value={timezone}
-              onChange={e => setTimezone(e.target.value)}
-            />
-          )}
-          <p className="text-xs text-ink-faint">
-            Used to determine when &ldquo;today&rdquo; starts for daily study limits and card scheduling.
-          </p>
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-sm text-ink-muted">Day turnover time</label>
-          <select
-            className="input"
-            value={turnoverHour}
-            onChange={e => setTurnoverHour(parseInt(e.target.value, 10))}
-          >
-            {Array.from({ length: 13 }, (_, h) => (
-              <option key={h} value={h}>
-                {h === 0 ? '12:00 AM — midnight (default)' : h < 12 ? `${h}:00 AM` : '12:00 PM — noon'}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-ink-faint">
-            If you study past midnight, cards completed before this time count toward the previous day&rsquo;s session.
-            E.g. set to 4:00 AM and studying at 3 AM is part of yesterday.
-          </p>
-        </div>
-      </div>
-      )}
-        </div>
-        <div className="space-y-5">
-      {/* Appearance */}
-      <div className="panel space-y-4" data-tour="settings-theme">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Appearance</h2>
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <p className="text-sm text-ink-muted">Theme</p>
-          <ThemeToggle />
-        </div>
-      </div>
-      {/* Replay tutorial — its own section */}
-      {!offline && (
-        <div className="panel space-y-4">
-          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Replay tutorial</h2>
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <p className="text-sm text-ink-muted">Take the guided product tour again.</p>
-            <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => startTour()}>Replay tutorial</button>
+    <SettingsPane>
+      {section === 'profile' && (
+        <SettingsSection title="Profile">
+          <div className="space-y-1.5 max-w-md">
+            <label className="text-sm text-ink-muted">Display name</label>
+            <input className="input" placeholder="Your display name" value={displayName} onChange={e => setDisplayName(e.target.value)} />
           </div>
-        </div>
+          <div className="space-y-1.5 max-w-md">
+            <label className="text-sm text-ink-muted">Password</label>
+            <input type="password" className="input" placeholder="••••••••" disabled />
+            <p className="text-xs text-ink-faint">Password changes via Supabase email link — coming soon.</p>
+          </div>
+        </SettingsSection>
       )}
-      {/* Offline */}
-      <OfflinePanel />
-        </div>
-      </div>
 
-      <div className="flex gap-3">
-        <button className="btn-primary" onClick={handleSave}>{saved ? 'Saved ✓' : 'Save settings'}</button>
-      </div>
+      {section === 'appearance' && (<>
+        <SettingsSection title="Appearance">
+          <SettingsRow label="Theme"><ThemeToggle /></SettingsRow>
+        </SettingsSection>
+        {!offline && (
+          <SettingsSection title="Tutorial">
+            <SettingsRow label="Guided product tour" hint="Walks through the main screens again from the beginning.">
+              <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => startTour()}>Replay tutorial</button>
+            </SettingsRow>
+          </SettingsSection>
+        )}
       </>)}
 
-      {variant === 'language' && (<>
-      {/* Daily goals — featured at the top: goals and schedules are the page's headline object. */}
-      <div className="panel md:flex md:items-center md:justify-between md:gap-6 space-y-3 md:space-y-0">
-        <div className="space-y-1.5 md:max-w-2xl">
-          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Daily goals</h2>
-          <p className="text-xs text-ink-faint">
-            How many words you aim to graduate per language — a fixed daily or weekly number (with
-            optional debt), or a long-term goal that works backwards from a deadline. Carryover
-            settings live there too.
-          </p>
-        </div>
-        <a href="/settings/goals" className="btn-primary inline-block text-sm py-2 px-4 shrink-0">Edit daily goals →</a>
-      </div>
+      {section === 'time' && (
+        <SettingsSection title="Time zone">
+          <div className="space-y-1.5 max-w-md">
+            <label className="text-sm text-ink-muted">Your time zone</label>
+            {tzList.length > 0 ? (
+              <select className="input" value={timezone} onChange={e => setTimezone(e.target.value)}>
+                {tzList.map(tz => <option key={tz} value={tz}>{tz}</option>)}
+              </select>
+            ) : (
+              <input className="input" placeholder="e.g. America/New_York" value={timezone} onChange={e => setTimezone(e.target.value)} />
+            )}
+            <p className="text-xs text-ink-faint">
+              Used to determine when &ldquo;today&rdquo; starts for daily study limits and card scheduling.
+            </p>
+          </div>
+          <div className="space-y-1.5 max-w-md">
+            <label className="text-sm text-ink-muted">Day turnover time</label>
+            <select className="input" value={turnoverHour} onChange={e => setTurnoverHour(parseInt(e.target.value, 10))}>
+              {Array.from({ length: 13 }, (_, h) => (
+                <option key={h} value={h}>
+                  {h === 0 ? '12:00 AM — midnight (default)' : h < 12 ? `${h}:00 AM` : '12:00 PM — noon'}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-ink-faint">
+              If you study past midnight, cards completed before this time count toward the previous day&rsquo;s session.
+              E.g. set to 4:00 AM and studying at 3 AM is part of yesterday.
+            </p>
+          </div>
+        </SettingsSection>
+      )}
 
-      <div className="grid gap-5 md:grid-cols-2 items-start">
-        <div className="space-y-5">
-      <div className="panel space-y-4">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Study defaults</h2>
+      {section === 'offline' && <div className="py-6 first:pt-0"><OfflinePanel /></div>}
 
-        <div className="space-y-1.5">
-          <label className="text-sm text-ink-muted">Default new cards per day</label>
-          <input type="number" min={1} max={500} className="input" value={dailyNewCards}
-            onChange={e => setDailyNewCards(Math.max(1, parseInt(e.target.value) || 1))} />
-          <p className="text-xs text-ink-faint">
-            Applied to any deck without its own setting (configure per-deck via the ⚙ icon in deck view).
-          </p>
-        </div>
+      {section === 'study' && (<>
+        <SettingsSection title="New cards"
+          description="Applied to any deck without its own setting — configure a single deck from the ⚙ icon in deck view.">
+          <div className="space-y-1.5">
+            <label className="text-sm text-ink-muted block">Default new cards per day</label>
+            <input type="number" min={1} max={500} className="input w-32" value={dailyNewCards}
+              onChange={e => setDailyNewCards(Math.max(1, parseInt(e.target.value) || 1))} />
+          </div>
+        </SettingsSection>
 
-        <div className="space-y-1">
-          <label className="flex items-center gap-2 cursor-pointer select-none">
+        <SettingsSection title="Audio"
+          description={<>The voice used for new cards. <strong className="text-ink">Robotic</strong> uses your device&apos;s built-in speech and generates nothing. <strong className="text-ink">AI voice</strong> and <strong className="text-ink">Forvo</strong> pre-generate real clips (Forvo falls back to AI when it has no recording). You can still override the source per card from its ℹ panel; existing cards keep their current audio until you clear it.</>}>
+          <SettingsRow label="Auto-play audio in Study mode"
+            hint="Target-language audio plays automatically during Due Now sessions.">
             <input type="checkbox" checked={studyModeAutoplay} onChange={e => setStudyModeAutoplay(e.target.checked)} className="accent-accent w-4 h-4" />
-            <span className="text-sm text-ink">Auto-play audio in Study mode</span>
-          </label>
-          <p className="text-xs text-ink-faint pl-6">
-            When on, target language audio plays automatically during Study sessions (due now cards from the Study page).
-          </p>
-        </div>
-
-        <div className="space-y-1">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-ink">Default audio source</span>
+          </SettingsRow>
+          <SettingsRow label="Default audio source">
             <select value={audioSourceDefault} onChange={e => setAudioSourceDefaultState(e.target.value as 'browser' | 'elevenlabs' | 'forvo' | 'standard')}
-              className="input text-sm w-44">
+              className="input text-sm w-52">
               <option value="browser">Robotic (device voice)</option>
               <option value="standard">Standard voice (same for everyone)</option>
               <option value="elevenlabs">AI voice (ElevenLabs)</option>
               <option value="forvo">Forvo (real recordings)</option>
             </select>
-          </div>
-          <p className="text-xs text-ink-faint">
-            The voice used for new cards. <strong>Robotic</strong> uses your device&apos;s built-in speech (no generation).
-            <strong> AI voice</strong> and <strong>Forvo</strong> pre-generate real clips (Forvo falls back to AI when it
-            has no recording). You can still override the source per card from its ℹ panel. Existing cards keep their
-            current audio until you clear/refetch it.
-          </p>
+          </SettingsRow>
 
           {/* Which device voice is actually being used. Apple ships a low-quality "compact" voice per
               language and offers a much better Enhanced/Premium download — this readout is how you tell
               whether the good one is installed and picked up. */}
-          <DeviceVoiceReadout codes={[...new Set(langPairs.map(p => p.sourceLanguage))]} />
+          <DeviceVoiceReadout codes={codes} />
 
-          {langPairs.length > 0 && (() => {
-            const codes = [...new Set(langPairs.map(p => p.sourceLanguage))]
-            return (
-              <div className="pt-2 space-y-1.5">
-                <div className="text-xs text-ink-muted">Per-language override</div>
-                {codes.map(code => (
-                  <div key={code} className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-ink">{langFlag(code)} {langName(code)}</span>
-                    <select
-                      value={audioSourceByLang[code] ?? ''}
-                      onChange={e => setAudioSourceByLangState(prev => {
-                        const next = { ...prev }
-                        if (e.target.value) next[code] = e.target.value; else delete next[code]
-                        return next
-                      })}
-                      className="input text-sm w-44">
-                      <option value="">Use default</option>
-                      <option value="browser">Robotic (device voice)</option>
-              <option value="standard">Standard voice (same for everyone)</option>
-                      <option value="elevenlabs">AI voice (ElevenLabs)</option>
-                      <option value="forvo">Forvo (real recordings)</option>
-                    </select>
+          {codes.length > 0 && (
+            <div className="pt-2 space-y-1">
+              <p className="text-xs uppercase tracking-wider text-ink-faint">Per-language override</p>
+              {codes.map(code => (
+                <SettingsRow key={code} label={`${langFlag(code)} ${langName(code)}`}>
+                  <select
+                    value={audioSourceByLang[code] ?? ''}
+                    onChange={e => setAudioSourceByLangState(prev => {
+                      const next = { ...prev }
+                      if (e.target.value) next[code] = e.target.value; else delete next[code]
+                      return next
+                    })}
+                    className="input text-sm w-52">
+                    <option value="">Use default</option>
+                    <option value="browser">Robotic (device voice)</option>
+                    <option value="standard">Standard voice (same for everyone)</option>
+                    <option value="elevenlabs">AI voice (ElevenLabs)</option>
+                    <option value="forvo">Forvo (real recordings)</option>
+                  </select>
+                </SettingsRow>
+              ))}
+            </div>
+          )}
+        </SettingsSection>
+      </>)}
+
+      {section === 'colors' && (
+        <SettingsSection title="Language colours"
+          description="Each language’s colour in the analytics charts and the combined goal calendar.">
+          {codes.length === 0
+            ? <p className="text-sm text-ink-faint">Add a language pairing first and its colour will appear here.</p>
+            : (() => {
+                const colorMap = assignLanguageColors(codes, langColors)   // distinct defaults + overrides
+                return (
+                  <div className="flex flex-col gap-3">
+                    {codes.map(code => (
+                      <div key={code} className="flex items-center gap-3 text-sm">
+                        <LanguageColorPicker value={colorMap[code]!}
+                          onChange={hex => setLangColors(prev => ({ ...prev, [code]: hex }))} />
+                        <span className="text-ink">{langFlag(code)} {langName(code)}</span>
+                        {langColors[code] && (
+                          <button onClick={() => setLangColors(prev => { const n = { ...prev }; delete n[code]; return n })}
+                            className="text-xs text-ink-faint hover:text-ink underline">Reset to default</button>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )
-          })()}
-        </div>
-      </div>
-      {/* Global redistribute — online only */}
-      {!offline && userId && (
-        <div className="panel space-y-3">
-          <div>
-            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Redistribute cards</h2>
-            <p className="text-xs text-ink-faint mt-1">
-              Spreads all graduated cards evenly across their scheduling windows so no single day is overloaded.
-              Cards already at the edge of their window are left in place.
-            </p>
-          </div>
+                )
+              })()}
+        </SettingsSection>
+      )}
+
+      {section === 'sync' && !offline && userId && (
+        <SettingsSection title="Language sync"
+          description="Sync rules generate linked vocabulary in another language pair when you study — e.g. a French card you study can auto-generate the Korean equivalent.">
+          <LanguageSyncPanel userId={userId} />
+        </SettingsSection>
+      )}
+
+      {section === 'labels' && !offline && userId && <VocabularyLabelsPanel userId={userId} />}
+
+      {section === 'data' && !offline && userId && (
+        <SettingsSection title="Redistribute cards"
+          description="Spreads all graduated cards evenly across their scheduling windows so no single day is overloaded. Cards already at the edge of their window are left in place.">
           {redistributeMsg && (
-            <p className={`text-xs ${redistributeMsg.startsWith('Moved') || redistributeMsg.startsWith('Cards are') ? 'text-success' : 'text-danger'}`}>
+            <p className={`text-sm ${redistributeMsg.startsWith('Moved') || redistributeMsg.startsWith('Cards are') ? 'text-success' : 'text-danger'}`}>
               {redistributeMsg}
             </p>
           )}
-          <button
-            onClick={handleGlobalRedistribute}
-            disabled={redistributing}
-            className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
-          >
+          <button onClick={handleGlobalRedistribute} disabled={redistributing}
+            className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-4 py-2 rounded-lg transition-colors disabled:opacity-50">
             {redistributing ? 'Redistributing…' : '⟳ Redistribute all cards'}
           </button>
-        </div>
+        </SettingsSection>
       )}
-        </div>
-        <div className="space-y-5">
-      {/* Learning ladders */}
-      <div className="panel space-y-3" data-tour="settings-ladder">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Learning ladders</h2>
-        <p className="text-xs text-ink-faint">Build the sequence of exercises a card climbs before it graduates — set a default, and customize it per language.</p>
-        <a href="/settings/ladders" className="btn-ghost inline-block text-sm py-1.5 px-3">Edit learning ladders →</a>
-      </div>
-      {/* Language colors */}
-      {langPairs.length > 0 && (
-        <div className="panel space-y-3">
-          <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Language colors</h2>
-          <p className="text-xs text-ink-faint">Each language&apos;s color in the analytics charts (pie + filters). Changes save with the button below.</p>
-          {(() => {
-            const codes = [...new Set(langPairs.map(p => p.sourceLanguage))]
-            const colorMap = assignLanguageColors(codes, langColors)   // distinct defaults + overrides
-            return (
-              <div className="flex flex-col gap-2">
-                {codes.map(code => (
-                  <div key={code} className="flex items-center gap-3 text-sm">
-                    <LanguageColorPicker value={colorMap[code]!}
-                      onChange={hex => setLangColors(prev => ({ ...prev, [code]: hex }))} />
-                    <span className="text-ink">{langFlag(code)} {langName(code)}</span>
-                    {langColors[code] && (
-                      <button onClick={() => setLangColors(prev => { const n = { ...prev }; delete n[code]; return n })}
-                        className="text-xs text-ink-faint hover:text-ink underline">Reset to default</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )
-          })()}
-        </div>
-      )}
-      {/* Language Sync — online only */}
-      {!offline && userId && (
-        <div className="panel space-y-4" data-tour="settings-sync">
-          <div>
-            <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Language Sync</h2>
-            <p className="text-xs text-ink-faint mt-1">
-              Sync rules generate linked vocabulary in another language pair when you study.
-              E.g. a French card you study can auto-generate the Korean equivalent.
-            </p>
-          </div>
-          <LanguageSyncPanel userId={userId} />
-        </div>
-      )}
-      {/* Vocabulary labels (practice-mode groundwork) — online only */}
-      {!offline && userId && <VocabularyLabelsPanel userId={userId} />}
-        </div>
-      </div>
 
-      {/* Danger zone — online only */}
-      {!offline && (
-      <div className="panel border-danger/20 space-y-2">
-        <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Danger zone</h2>
-        {langPairs.length > 0 && (
-          <div className="border-t border-danger/20 pt-4 mt-4 space-y-3">
-            <p className="text-xs text-ink-muted">
-              Delete a language pairing and <strong className="text-ink">everything in it</strong> — all
-              cards, folders, and progress. This cannot be undone.
-            </p>
-            {deletePairError && <p className="text-danger text-xs">{deletePairError}</p>}
-            {(() => {
-              const seen = new Set<string>()
-              const uniquePairs = langPairs.filter(p => {
-                const key = `${p.sourceLanguage}|${p.targetLanguage}`
-                if (seen.has(key)) return false
-                seen.add(key); return true
-              })
-              return uniquePairs.map(p => {
-                const key = `${p.sourceLanguage}|${p.targetLanguage}`
-                const confirming = confirmDeletePair === key
+      {section === 'danger' && !offline && (
+        <SettingsSection title="Delete a language"
+          description={<>Deletes a language pairing and <strong className="text-ink">everything in it</strong> — all cards, folders, and study progress. This cannot be undone.</>}>
+          {deletePairError && <p className="text-danger text-sm">{deletePairError}</p>}
+          {langPairs.length === 0
+            ? <p className="text-sm text-ink-faint">No language pairings yet.</p>
+            : (() => {
+                const seen = new Set<string>()
+                const uniquePairs = langPairs.filter(p => {
+                  const key = `${p.sourceLanguage}|${p.targetLanguage}`
+                  if (seen.has(key)) return false
+                  seen.add(key); return true
+                })
                 return (
-                  <div key={key} className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${confirming ? 'border-danger/40 bg-danger/5' : 'border-line/10'}`}>
-                    <span className="text-sm text-ink">
-                      {langFlag(p.sourceLanguage)} {langName(p.sourceLanguage)} <span className="text-ink-faint">→ {langName(p.targetLanguage)}</span>
-                    </span>
-                    {confirming ? (
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-danger hidden sm:inline">Delete everything?</span>
-                        <button
-                          disabled={deletingPair}
-                          onClick={() => handleDeleteLanguage(p.sourceLanguage, p.targetLanguage)}
-                          className="text-xs bg-danger/90 hover:bg-danger text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
-                        >
-                          {deletingPair ? 'Deleting…' : 'Yes, delete'}
-                        </button>
-                        <button
-                          disabled={deletingPair}
-                          onClick={() => { setConfirmDeletePair(null); setDeletePairError(null) }}
-                          className="text-xs text-ink-faint hover:text-ink px-2 py-1.5"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => { setConfirmDeletePair(key); setDeletePairError(null) }}
-                        className="text-xs border border-danger/30 text-danger/80 hover:text-danger hover:border-danger/60 px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                        Delete
-                      </button>
-                    )}
+                  <div className="space-y-2 max-w-2xl">
+                    {uniquePairs.map(p => {
+                      const key = `${p.sourceLanguage}|${p.targetLanguage}`
+                      const confirming = confirmDeletePair === key
+                      return (
+                        <div key={key} className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${confirming ? 'border-danger/40 bg-danger/5' : 'border-line/10'}`}>
+                          <span className="text-sm text-ink">
+                            {langFlag(p.sourceLanguage)} {langName(p.sourceLanguage)} <span className="text-ink-faint">→ {langName(p.targetLanguage)}</span>
+                          </span>
+                          {confirming ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-danger hidden sm:inline">Delete everything?</span>
+                              <button disabled={deletingPair}
+                                onClick={() => handleDeleteLanguage(p.sourceLanguage, p.targetLanguage)}
+                                className="text-xs bg-danger/90 hover:bg-danger text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50">
+                                {deletingPair ? 'Deleting…' : 'Yes, delete'}
+                              </button>
+                              <button disabled={deletingPair}
+                                onClick={() => { setConfirmDeletePair(null); setDeletePairError(null) }}
+                                className="text-xs text-ink-faint hover:text-ink px-2 py-1.5">
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button onClick={() => { setConfirmDeletePair(key); setDeletePairError(null) }}
+                              className="text-xs border border-danger/30 text-danger/80 hover:text-danger hover:border-danger/60 px-3 py-1.5 rounded-lg transition-colors">
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )
-              })
-            })()}
-          </div>
-        )}
-      </div>
+              })()}
+        </SettingsSection>
       )}
 
-      <div className="flex gap-3">
-        <button className="btn-primary" onClick={handleSave}>{saved ? 'Saved ✓' : 'Save settings'}</button>
-      </div>
-      </>)}
-    </div>
+      {needsSave && (
+        <div className="pt-6">
+          <button className="btn-primary" onClick={handleSave}>{saved ? 'Saved ✓' : 'Save settings'}</button>
+        </div>
+      )}
+    </SettingsPane>
+  )
+}
+
+function SettingsPageInner() {
+  const section = parseSection(useSearchParams().get('section'))
+  return (
+    <SettingsShell active={section}>
+      {section === 'goals'   ? <GoalsSettings />
+        : section === 'ladders' ? <LaddersSettings />
+        : <SettingsScreen section={section} />}
+    </SettingsShell>
   )
 }
 
 export default function SettingsPage() {
-  return <SettingsScreen variant="general" />
+  // Suspense is required for useSearchParams in the App Router; without it the page opts out of
+  // static rendering, which the Capacitor export needs.
+  return <Suspense fallback={<p className="p-6 text-sm text-ink-faint">Loading…</p>}><SettingsPageInner /></Suspense>
 }
 
 /**

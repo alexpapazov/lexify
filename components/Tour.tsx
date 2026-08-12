@@ -18,6 +18,17 @@ export function startTour() {
   window.dispatchEvent(new Event('lexify:start-tour'))
 }
 
+/**
+ * The anchor that is actually ON SCREEN. An anchor can legitimately exist twice — the settings rail
+ * renders a desktop list and a mobile chip strip, one of which is always `display:none` — and a
+ * hidden element measures 0x0, which would put the spotlight in the top-left corner at zero size.
+ * Picking the first element with a real box makes the tour resolution-agnostic.
+ */
+function visibleAnchor(anchor: string): Element | null {
+  const els = [...document.querySelectorAll(`[data-tour="${anchor}"]`)]
+  return els.find(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }) ?? null
+}
+
 /** Guided product tour: navigates page-to-page, spotlights anchored elements, and
  *  shows a fixed explanation card with Back / Next / Skip. Mounted once in the layout. */
 export function Tour() {
@@ -56,7 +67,7 @@ export function Tour() {
 
     let stop = false
     const measure = () => {
-      const el = document.querySelector(`[data-tour="${step.anchor}"]`)
+      const el = visibleAnchor(step.anchor!)
       if (el) {
         el.scrollIntoView({ block: 'center', behavior: 'smooth' })
         setRect(el.getBoundingClientRect())
@@ -94,14 +105,14 @@ export function Tour() {
   useEffect(() => {
     if (!step?.anchor) return
     const update = () => {
-      const el = document.querySelector(`[data-tour="${step.anchor}"]`)
+      const el = visibleAnchor(step.anchor!)
       if (el) setRect(el.getBoundingClientRect())
     }
     update()
     window.addEventListener('scroll', update, true)
     window.addEventListener('resize', update)
     let ro: ResizeObserver | undefined
-    const el = document.querySelector(`[data-tour="${step.anchor}"]`)
+    const el = visibleAnchor(step.anchor!)
     if (el && typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(update); ro.observe(el) }
     const iv = setInterval(update, 400) // catch late-loading content the observer can't see yet
     return () => {
