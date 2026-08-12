@@ -38,6 +38,7 @@ import { prefetchChoices, type PrefetchItem } from '@/lib/distractors'
 import { langName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { CardBulkPanel, type BulkChange } from '@/components/CardBulkPanel'
+import { LibraryGearMenu } from '@/components/library/LibraryGearMenu'
 import { CardEditModal } from '@/components/CardEditModal'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
@@ -1713,14 +1714,17 @@ export default function DeckDetailPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          <button onClick={() => setShowGear(true)}
-            className="p-2.5 rounded-lg border border-line/10 hover:border-line/20 text-ink-muted hover:text-ink transition-colors"
-            title="Study settings">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-            </svg>
-          </button>
+          {/* One gear per library level, same contents everywhere: level-specific items, then the
+              shared Label + Export. The deck's study-settings modal is one of its items. */}
+          <LibraryGearMenu
+            title="Deck settings"
+            exportScope={{ kind: 'deck', deckId }}
+            folders={[]}
+            decks={[deck]}
+            userId={userId}
+            labelScopeDeckIds={[deckId]}
+            items={[{ label: 'Study settings…', onSelect: () => setShowGear(true) }]}
+          />
           <Link href={routes.deckAdd(deckId)}     className="btn-ghost text-sm">Add cards</Link>
           <Link href={routes.deckEdit(deckId)}    className="btn-ghost text-sm">Edit</Link>
           <Link href={routes.ladderDeck(deckId)}  className="btn-primary text-sm">Study</Link>

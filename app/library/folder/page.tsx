@@ -14,6 +14,7 @@ import { SupabaseCardOnboardingRepository } from '@/lib/data/cardOnboarding'
 import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { climbInProgress } from '@/lib/climbProgress'
+import { LibraryGearMenu } from '@/components/library/LibraryGearMenu'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { isCardStateDueNow } from '@/lib/dueStatus'
@@ -146,7 +147,6 @@ function FolderPageInner() {
   const [renaming,     setRenaming]     = useState(false)
   const [renameValue,  setRenameValue]  = useState('')
   // Folder settings gear (header) + folder-level vocabulary onboarding
-  const [settingsOpen,    setSettingsOpen]    = useState(false)
   const [queueingOnboard, setQueueingOnboard] = useState(false)
   const [onboardError,    setOnboardError]    = useState<string | null>(null)
   const [pendingOnboard,  setPendingOnboard]  = useState(0)
@@ -712,53 +712,38 @@ function FolderPageInner() {
             {folder.name}
           </h1>
         )}
-        {/* Folder settings gear — new subfolder / vocabulary onboarding / delete live in here. */}
-        <div className="relative shrink-0">
-          <button
-            onClick={() => setSettingsOpen(v => !v)}
-            title="Folder settings"
-            className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-surface-raised transition-colors"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-          {settingsOpen && (
-            <div className="absolute right-0 top-full mt-1 z-20 bg-surface-raised border border-line/10 rounded-lg py-1 w-64 shadow-xl">
-              {!folder.isSynced && (
-                <button
-                  onClick={() => { setSettingsOpen(false); setAddingFolder(true); setNewName('') }}
-                  className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-line/5 transition-colors"
-                >
-                  + New subfolder
-                </button>
-              )}
-              <button
-                disabled={queueingOnboard || (pendingOnboard === 0 && onboardableCount === 0)}
-                onClick={() => void startFolderOnboarding()}
-                title="Rate how well you already know each never-studied card in this folder — no need to open each deck"
-                className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-line/5 transition-colors disabled:opacity-50"
-              >
-                {queueingOnboard
-                  ? 'Opening…'
-                  : pendingOnboard > 0
-                    ? `Continue onboarding (${pendingOnboard} left)`
-                    : onboardableCount > 0
-                      ? `Onboard ${onboardableCount} unlearned card${onboardableCount !== 1 ? 's' : ''}`
-                      : counts === null ? 'Onboard vocabulary…' : 'Nothing to onboard'}
-              </button>
-              {!folder.isSynced && (
-                <button
-                  onClick={() => { setSettingsOpen(false); void handleDeleteCurrentFolder() }}
-                  className="w-full text-left px-4 py-2 text-sm text-danger/80 hover:bg-line/5 transition-colors"
-                >
-                  Delete folder
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+        {/* Folder settings gear. Level-specific items here; Label + Export are shared. */}
+        <LibraryGearMenu
+          title="Folder settings"
+          exportScope={{ kind: 'folder', folderId }}
+          folders={allFolders}
+          decks={allDecks}
+          userId={userId}
+          labelScopeDeckIds={descendantDeckIds(folderId, allFolders, allDecks)}
+          items={[
+            ...(folder.isSynced ? [] : [{
+              label: '+ New subfolder',
+              onSelect: () => { setAddingFolder(true); setNewName('') },
+            }]),
+            {
+              label: queueingOnboard
+                ? 'Opening…'
+                : pendingOnboard > 0
+                  ? `Continue onboarding (${pendingOnboard} left)`
+                  : onboardableCount > 0
+                    ? `Onboard ${onboardableCount} unlearned card${onboardableCount !== 1 ? 's' : ''}`
+                    : counts === null ? 'Onboard vocabulary…' : 'Nothing to onboard',
+              disabled: queueingOnboard || (pendingOnboard === 0 && onboardableCount === 0),
+              title: 'Rate how well you already know each never-studied card in this folder — no need to open each deck',
+              onSelect: () => void startFolderOnboarding(),
+            },
+            ...(folder.isSynced ? [] : [{
+              label: 'Delete folder',
+              danger: true,
+              onSelect: () => void handleDeleteCurrentFolder(),
+            }]),
+          ]}
+        />
       </div>
       {onboardError && <p className="text-danger text-xs text-right">{onboardError}</p>}
 

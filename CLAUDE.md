@@ -48,6 +48,8 @@ Current feature files:
 - `features/Card Connection Agent (proposal).md` — PINNED, not built. Contains the
   synonym/confusion infrastructure audit — including a real `addMember` merge bug
   worth fixing independently of the agent.
+- `features/Library Export.md` — the ⚙ gear at every library level: scoped Label cards + Export as
+  text/.txt/.docx/PDF. Dependency-free `.docx` writer; the export re-imports through batch import.
 - `features/Card Organizer Agent.md` — the second agent: sorts existing cards into folders/decks
   from a Word document's structure or a natural-language description. Moves are deck relinks.
 - `features/Goal Scheduler.md` — deadline-driven goals ("200 words by Dec 1"): the
@@ -3051,6 +3053,25 @@ labels to fill the extra height. Measured at 1512px: 329x216, a 1.52:1 card.
 tiles 162x216 — taller than wide. The `sm:` split keeps them square (162x162) on a phone and
 card-shaped on a laptop. If you change the column counts, re-check both breakpoints rather than only
 the desktop one.
+
+## Library gear menu + export (2026-08-11, no migration)
+
+"+ New folder" at the language-pair level became a ⚙ gear, and the same gear now sits at all three
+library levels with the same shape. **Read `features/Library Export.md` before changing it.** The
+points that bite:
+
+- **`components/library/LibraryGearMenu.tsx` is shared** by the pair / folder / deck headers; each
+  passes its own `items` and gets Label + Export appended. The deck's old gear opened the study-
+  settings modal directly — that modal is now just one of its items.
+- **Both shared actions are SCOPED.** Export from a deck exports that deck; labeling from a folder
+  only touches that folder's decks and skips cards that already have `pos`.
+- **`lib/docxWrite.ts` writes a real .docx with NO dependency** (ZIP via `CompressionStream`
+  ('deflate-raw') + a hand-rolled CRC32), mirroring `lib/docx.ts` which reads one.
+- **PDF is a print window, not a generated file** — a hand-built PDF can only use base-14 Latin-1
+  fonts, so Korean/Greek/Cyrillic/Chinese (i.e. most of this library) would render as garbage.
+- **The export is written to re-import**: bold names with descending sizes are `parseDeckPlan`'s
+  heading signal, cards are `front = back`. Card counts go on their OWN line — appending them to the
+  deck name produced a re-imported deck called "School  [12 cards]" (caught by the round-trip test).
 
 ## Verifying changes
 

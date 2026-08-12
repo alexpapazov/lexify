@@ -21,6 +21,7 @@ const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, du
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { langName, langNativeName, langFlag } from '@/lib/languages'
 import { FLAG_OPTIONS } from '@/lib/flagOptions'
+import { LibraryGearMenu } from '@/components/library/LibraryGearMenu'
 import type { Folder, Deck, LanguagePair, Card, CardState, TypedStrictnessLevel } from '@/domain'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow, type SchedulerParamsHistoryRow } from '@/lib/data/userSchedulerParams'
@@ -1373,14 +1374,15 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
             {langName(pairSource!)} <span className="text-ink-faint text-base font-normal">/ {langName(pairTarget!)}</span>
           </h1>
         </div>
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => { setAddingFolder(true); setNewName('') }}
-            className="text-sm text-accent hover:text-accent-soft transition-colors"
-          >
-            + New folder
-          </button>
-        </div>
+        <LibraryGearMenu
+          title="Library settings"
+          exportScope={{ kind: 'pair', sourceLanguage: pairSource!, targetLanguage: pairTarget! }}
+          folders={allFolders}
+          decks={allDecks}
+          userId={userId}
+          labelScopeDeckIds={allDecks.filter(d => d.sourceLanguage === pairSource && d.targetLanguage === pairTarget).map(d => d.id)}
+          items={[{ label: '+ New folder', onSelect: () => { setAddingFolder(true); setNewName('') } }]}
+        />
       </div>
 
       {/* Search bar + the starred filter (a card flag, not a study state — so not a counter box) */}
