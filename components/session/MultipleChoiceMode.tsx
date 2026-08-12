@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { Card, CardChoices, CardSide, Rating } from '@/domain'
+import type { Card, CardChoices, CardSide, DistractorSource, Rating } from '@/domain'
 import { buildOptions, ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
 import { speakCard } from '@/lib/speak'
 import { displayText, isQuoted } from '@/lib/cardText'
@@ -11,8 +11,9 @@ import { StarButton } from './StarButton'
 
 /**
  * Multiple-choice recall, used for pre-graduation "recognition" steps.
- * Shows the prompt plus 4 options (1 correct + up to 3 distractors,
- * AI-generated and cached per card, or deck-based fallback). Selecting an
+ * Shows the prompt plus 4 options (1 correct + up to 3 distractors). Which pool leads is the rung's
+ * `distractorSource`: 'smart' takes the cached AI distractors first, 'deck' takes other cards in the
+ * deck first and only borrows AI ones when the deck is too small to fill the options. Selecting an
  * option gives immediate color-coded feedback, then waits for the learner
  * to press Continue (or hit Enter, since the Continue button is
  * auto-focused) before advancing — no auto-advance.
@@ -21,7 +22,7 @@ import { StarButton } from './StarButton'
  * counts as a heavy penalty (3 agains) handled by the parent. A synonym
  * of the correct answer is accepted as correct and shown in amber.
  */
-export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, onInfo, onToggleStar, overrideAnswers, onOverrideAnswer, autoPlayAudio = true, ipaText, onToggleIPA }: {
+export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, sourceLanguage, targetLanguage, deckName, excludeAnswerTexts, splitGlossFromBack, onChoicesCached, onRate, onIDontKnow, onAdvance, onRepeat, onPromptEdit, onChoiceEdit, onInfo, onToggleStar, overrideAnswers, onOverrideAnswer, autoPlayAudio = true, ipaText, onToggleIPA, distractorSource }: {
   card:           Card
   promptSide:     CardSide
   answerSide:     CardSide
@@ -71,6 +72,8 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   ipaText?: string
   /** Toggles IPA on/off; when provided a faint "IPA" button appears in the prompt card corner. */
   onToggleIPA?: () => void
+  /** Which pool the distractors come from — the rung's / pathway state's setting. Default 'smart'. */
+  distractorSource?: DistractorSource
 }) {
   const correct  = displayText(answerSide === 'front' ? card.front : card.back)
 
@@ -84,7 +87,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   const displayCorrect = glossWord ?? correct
 
   const [choices,   setChoices]   = useState<string[]>(() => {
-    const opts = buildOptions(card, answerSide, deckCards, excludeAnswerTexts)
+    const opts = buildOptions(card, answerSide, deckCards, excludeAnswerTexts, distractorSource)
     if (glossWord && norm(glossWord) !== norm(correct)) {
       return opts.map(o => norm(o) === norm(correct) ? glossWord : o)
     }
@@ -104,7 +107,7 @@ export function MultipleChoiceMode({ card, promptSide, answerSide, deckCards, so
   const clickTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    const opts = buildOptions(card, answerSide, deckCards, excludeAnswerTexts)
+    const opts = buildOptions(card, answerSide, deckCards, excludeAnswerTexts, distractorSource)
     if (glossWord && norm(glossWord) !== norm(correct)) {
       setChoices(opts.map(o => norm(o) === norm(correct) ? glossWord : o))
     } else {

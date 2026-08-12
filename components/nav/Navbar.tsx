@@ -75,12 +75,12 @@ export function Navbar() {
     <>
       {/* pt-[safe-area] keeps the Lexify row below the device status bar (Capacitor edge-to-edge). */}
       <nav className="sticky top-0 z-50 border-b border-line/5 bg-surface-deep/90 backdrop-blur pt-[env(safe-area-inset-top)]">
-        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center">
+        <div className="w-full px-5 md:px-8 h-16 flex items-center">
 
           {/* ── Desktop: brand · nav links · account, spread edge to edge ── */}
           <div className="hidden md:flex items-center justify-between w-full gap-2">
             <Link href="/study" className="whitespace-nowrap">
-              <LexifyLogo />
+              <LexifyLogo markSize={30} />
             </Link>
 
             {navLinks.map(({ href, label }) => {
@@ -92,7 +92,7 @@ export function Navbar() {
                 : undefined
               return (
                 <Link key={href} href={href} onClick={onClick} className={[
-                  'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150 whitespace-nowrap',
+                  'px-4 py-2 rounded-lg text-[15px] font-medium transition-colors duration-150 whitespace-nowrap',
                   isActive ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
                 ].join(' ')}>
                   {label}
@@ -110,13 +110,13 @@ export function Navbar() {
                 onSignOut={handleSignOut}
               />
             ) : (
-              <Link href="/auth" className="btn-ghost text-sm py-1.5 px-3">Sign in</Link>
+              <Link href="/auth" className="btn-ghost text-[15px] py-2 px-4">Sign in</Link>
             )}
           </div>
 
           {/* ── Mobile: brand + hamburger ── */}
           <div className="flex md:hidden items-center justify-between w-full">
-            <Link href="/study"><LexifyLogo markSize={24} /></Link>
+            <Link href="/study"><LexifyLogo markSize={28} /></Link>
             <button
               onClick={() => setMenuOpen(o => !o)}
               className="text-ink-muted hover:text-ink transition-colors p-1"
@@ -124,13 +124,13 @@ export function Navbar() {
             >
               {menuOpen ? (
                 // X icon
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <line x1="18" y1="6" x2="6" y2="18" />
                   <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
               ) : (
                 // Hamburger icon
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <line x1="3" y1="6"  x2="21" y2="6"  />
                   <line x1="3" y1="12" x2="21" y2="12" />
                   <line x1="3" y1="18" x2="21" y2="18" />
@@ -158,7 +158,7 @@ export function Navbar() {
 
           {/* Drawer panel */}
           <div
-            className="relative mt-[calc(env(safe-area-inset-top)+3.5rem)] bg-surface-deep border-b border-line/5 px-4 py-3 space-y-1"
+            className="relative mt-[calc(env(safe-area-inset-top)+4rem)] bg-surface-deep border-b border-line/5 px-5 py-3 space-y-1"
             onClick={e => e.stopPropagation()}
           >
             {navLinks.map(({ href, label }) => {
@@ -246,7 +246,7 @@ function StudyMenu({ pathname, subs }: { pathname: string; subs: { href: string;
   return (
     <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <Link href="/study" className={[
-        'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150 whitespace-nowrap inline-flex items-center gap-1',
+        'px-4 py-2 rounded-lg text-[15px] font-medium transition-colors duration-150 whitespace-nowrap inline-flex items-center gap-1',
         active ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
       ].join(' ')}>Study</Link>
       {open && subs.length > 0 && (
@@ -275,7 +275,7 @@ function AnalyticsMenu({ pathname }: { pathname: string }) {
   return (
     <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <Link href="/progress" className={[
-        'px-3 py-1.5 rounded-md text-sm font-medium transition-colors duration-150 whitespace-nowrap inline-flex items-center gap-1',
+        'px-4 py-2 rounded-lg text-[15px] font-medium transition-colors duration-150 whitespace-nowrap inline-flex items-center gap-1',
         active ? 'text-ink bg-surface' : 'text-ink-muted hover:text-ink hover:bg-surface/50',
       ].join(' ')}>Analytics</Link>
       {open && (

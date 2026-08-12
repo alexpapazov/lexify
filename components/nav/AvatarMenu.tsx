@@ -53,7 +53,7 @@ export function AvatarMenu({
         aria-expanded={open}
         className="rounded-full transition hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-offset-2 focus:ring-offset-surface-deep"
       >
-        <Avatar name={displayName} email={user.email ?? ''} src={avatarUrl} size={32} />
+        <Avatar name={displayName} email={user.email ?? ''} src={avatarUrl} size={36} />
       </button>
 
       {open && (

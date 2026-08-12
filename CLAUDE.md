@@ -2926,6 +2926,42 @@ owns the frame and exports its building blocks (`SettingsPane` / `SettingsSectio
   second, partial copy of it that could drift. Do not re-add one. `StudyMenu` (Practice) and
   `AnalyticsMenu` remain — those genuinely point at separate pages.
 
+## Pathway/rung `distractorSource: 'deck'` was ignored once AI distractors existed (2026-08-11)
+
+**Bug (user report)**: a state configured "Other cards in the deck" still showed AI distractors. Two
+gaps, both silent: `LadderStudyCard` never passed `rung.distractorSource` to `MultipleChoiceMode`,
+and `buildOptions` had no such parameter — it ALWAYS led with `card.choices[side]` (the cached AI
+pool) and only used deck siblings to top up a short pool. Distractor GENERATION is independent of
+this setting (the background prefetch caches AI options for every upcoming recognition card), so the
+setting appeared to work until the AI pass finished and then silently reverted.
+
+`buildOptions(card, side, deckCards, excludeTexts, source)` now takes the source: `'deck'` leads with
+deck siblings and borrows cached AI options ONLY when the deck can't fill the option set (fewer than
+three other cards) — an unanswerable two-option question is worse than a distractor from the wrong
+pool. `'smart'` (the default) is unchanged, so Due Now and every existing caller behave exactly as
+before. Generation is deliberately left running: the user said "they can still generate, but should
+not be used", and other rungs / Due Now may want them. 4 tests in
+`lib/__tests__/buildOptionsSource.test.ts`.
+
+## Top bar: full-bleed and larger (2026-08-11)
+
+The navbar was `max-w-5xl mx-auto px-4 h-14`; it is now `w-full px-5 md:px-8 h-16` — edge to edge and
+64px tall, with proportionally larger elements (logo mark 26→30, nav links `text-sm`/`px-3 py-1.5` →
+`text-[15px]`/`px-4 py-2`, avatar 32→36, hamburger 22→26). **No element was added or removed** — the
+ask was purely size and width.
+
+- **`LexifyLogo`'s wordmark now scales WITH `markSize`** (`markSize × 17/26`) instead of being pinned
+  at 17px, so the lockup keeps its proportions at every size. It was a latent bug: growing the mark
+  used to leave the wordmark behind.
+- **Two things must stay in sync with the bar height**: the mobile drawer's top offset
+  (`mt-[calc(env(safe-area-inset-top)+4rem)]` — was 3.5rem for `h-14`) and the settings rail's
+  `md:top-20` sticky offset.
+- **Known consequence**: the Due Now session width was deliberately matched to the OLD navbar
+  container so card edges lined up with the logo (2026-07-27 note). The navbar is full-bleed now and
+  `<main>` is still `max-w-5xl`, so that alignment no longer holds. Left as-is — the user asked for
+  the bar specifically — but if the sessions should follow, they need the same treatment via
+  `MainContainer`'s `FULL_BLEED` list.
+
 ## Verifying changes
 
 ```

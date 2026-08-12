@@ -44,8 +44,13 @@ export function LexifyLogo({ markSize = 26, className = '' }: { markSize?: numbe
     <span className={`inline-flex items-center gap-2 ${className}`}>
       <LexifyMark size={markSize} align />
       <span
-        className="font-semibold tracking-tight text-ink text-[17px] leading-none"
-        style={{ transform: `translateY(${(markSize * TEXT_OFFSET).toFixed(2)}px)` }}
+        className="font-semibold tracking-tight text-ink leading-none"
+        style={{
+          // Scales with the mark (17px at the historical markSize of 26) so the lockup keeps its
+          // proportions at every size instead of the wordmark staying fixed as the mark grows.
+          fontSize: `${(markSize * (17 / 26)).toFixed(2)}px`,
+          transform: `translateY(${(markSize * TEXT_OFFSET).toFixed(2)}px)`,
+        }}
       >
         Lexi<span style={{ color: FY }}>fy</span>
       </span>

@@ -95,6 +95,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
         card={card} promptSide={promptSide} answerSide={answerSide}
         deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
         autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
+        distractorSource={rung.distractorSource}
         onChoicesCached={onChoicesCached} onInfo={onInfo} onToggleStar={onToggleStar}
         overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
         onOverrideAnswer={trackOverride(answerSide)}

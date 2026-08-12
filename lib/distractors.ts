@@ -19,7 +19,7 @@
  * `OPTIONS_NEEDED - 1` distractors (fewer if the deck is too small).
  */
 
-import type { Card, CardSide, CardChoices, CardConfusion } from '@/domain'
+import type { Card, CardSide, CardChoices, CardConfusion, DistractorSource } from '@/domain'
 import { apiUrl } from '@/lib/apiBase'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
@@ -187,11 +187,28 @@ export function scriptMatches(correct: string, distractor: string): boolean {
   return !a || !b || a === b
 }
 
+/**
+ * The multiple-choice options for one card side.
+ *
+ * `source` is the rung's / pathway state's `distractorSource` and decides which pool LEADS:
+ *
+ *   'smart' (default) — cached AI distractors first, topped up from deck siblings.
+ *   'deck'            — OTHER CARDS IN THE DECK first. AI distractors are used ONLY to top up a
+ *                       pool the deck itself cannot fill (a deck with fewer than three other
+ *                       cards), because an unanswerable two-option question is worse than a
+ *                       distractor from the wrong source.
+ *
+ * The 'deck' branch matters because generation is INDEPENDENT of this setting: the background
+ * prefetch caches AI distractors for every upcoming recognition card regardless. Before this, the
+ * cached pool was always preferred, so choosing "other cards in the deck" worked only until the
+ * AI pass finished and then silently reverted to AI options (user-reported).
+ */
 export function buildOptions(
   card: Card,
   side: CardSide,
   deckCards: Card[],
   excludeTexts?: string[],
+  source: DistractorSource = 'smart',
 ): string[] {
   const correct = displayText(side === 'front' ? card.front : card.back)
   const synonyms = (side === 'front' ? card.choices?.frontSynonyms : card.choices?.backSynonyms) ?? []
@@ -204,10 +221,15 @@ export function buildOptions(
     !synonyms.some(s => norm(s) === norm(d)) && !excludeNorms.has(norm(d)) && !looksMalformed(d) && scriptMatches(correct, d)
   )
 
-  let pool = dedupeAgainst(correct, cachedFiltered)
+  const lead = source === 'deck'
+    ? deckFallback(card, side, deckCards, correct, distractorsNeeded, excludeNorms)
+    : cachedFiltered
+  let pool = dedupeAgainst(correct, lead)
   if (pool.length < distractorsNeeded) {
-    const fallback = deckFallback(card, side, deckCards, correct, distractorsNeeded - pool.length, excludeNorms)
-    pool = dedupeAgainst(correct, [...pool, ...fallback])
+    const topUp = source === 'deck'
+      ? cachedFiltered
+      : deckFallback(card, side, deckCards, correct, distractorsNeeded - pool.length, excludeNorms)
+    pool = dedupeAgainst(correct, [...pool, ...topUp])
   }
 
   const distractors = shuffle(pool).slice(0, distractorsNeeded)
