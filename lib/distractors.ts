@@ -229,7 +229,12 @@ export function buildOptions(
     const topUp = source === 'deck'
       ? cachedFiltered
       : deckFallback(card, side, deckCards, correct, distractorsNeeded - pool.length, excludeNorms)
-    pool = dedupeAgainst(correct, [...pool, ...topUp])
+    // Take only what's still MISSING from the top-up, and keep every lead item. Merging both pools
+    // and shuffling the result could drop a real deck sibling in favour of a generated distractor on
+    // a 'deck' rung — the exact thing the setting exists to prevent.
+    const merged = dedupeAgainst(correct, [...pool, ...topUp])
+    const extra = merged.filter(x => !pool.includes(x)).slice(0, distractorsNeeded - pool.length)
+    pool = [...pool, ...extra]
   }
 
   const distractors = shuffle(pool).slice(0, distractorsNeeded)

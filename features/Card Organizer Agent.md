@@ -1,116 +1,91 @@
 # Card Organizer Agent
 
-**Status: built 2026-08-10. No migration.** Second agent on the Agents page
-(`/agents/organizer`, picker chips at the top of both agent pages).
-
-Sorts cards you already have into folders and decks. It never edits card text — only where a card
-lives — so review history, audio, distractors and every other deck a card is shared into survive
-untouched.
+**Status: rebuilt as a migration planner 2026-08-11. No migration, no dependency.**
+`/agents/organizer`. Sorts cards you already have into folders and decks. It never edits card text —
+only where a card lives — so review history, audio, distractors and every other deck a card is shared
+into survive untouched.
 
 ---
 
-## The one thing that makes it safe
+## How it works
 
-**A move is a `deck_cards` RELINK, not a card rewrite.** A card row is linked to decks; organizing
-means link the destination, unlink the source. Consequences worth stating:
+Four stages, in this order, because each one exists to make the next one trustworthy:
 
-- Review state (`card_states`), climb rows, audio and cached distractors are all keyed to the CARD,
-  so none of them are touched by a move.
-- A card shared into several decks keeps its other links — only the link in the scoped deck moves.
-  Organizing Spanish can't strip a card out of a Korean deck.
-- **Order is fixed: link the destination FIRST, unlink the source SECOND** (`lib/agents/organizerApply.ts`).
-  A crash between the two leaves the card in BOTH places — visible and trivially fixed. The reverse
-  order would leave it in neither, which is indistinguishable from data loss. Never swap them.
-  `undoMove` follows the same rule in reverse.
+1. **Export the scope.** A hierarchical text export of the selected decks (the same renderer the
+   library's Export uses). Feeding the model the TREE rather than a flat card list is what lets it
+   reason about folders and whole decks instead of only individual cards.
+2. **Diagnose deterministically.** Duplicated words, document words that aren't in scope, and cards
+   that live elsewhere in the library and could be pulled in — all computed in `migrationPlan.ts`,
+   never asked of the model. Computation is exact and free; a model auditing its own input is
+   neither. The results are handed to the planner as FACTS it's told to trust.
+3. **Plan.** One call to `/api/agents/organizer-plan` with the export, the instruction and the
+   documents. Returns an ordered list of steps plus a summary.
+4. **Validate, preview, run.** Every id is re-checked against the real library, the plan is shown
+   grouped for review, and one approval runs the whole thing — reversibly.
 
----
+## The instruction is ground truth; documents are evidence
 
-## Two ways to say where a card belongs
+Stated in the system prompt and load-bearing: the **instruction** says how to read the **documents**
+(follow them literally, use them as a grouping hint, ignore parts). If they disagree, the instruction
+wins. That's why the two are separate fields in the request rather than one concatenated blob.
 
-### 1. Word documents — deterministic, NO AI
+Either alone is enough to run: documents with no instruction are followed as literally as possible;
+an instruction with no documents reorganizes from the library alone.
 
-Drop one or more `.docx` files. They're parsed by the SAME `lib/docx.ts` pipeline batch import uses
-(`readDeckPlanFromFile` → headings become folders, the deepest heading over a word list becomes its
-deck). Here the plan is read as a **destination map**: "wherever this word appears in the document,
-that's where its card belongs".
+## Steps
 
-- Matching is by FRONT, through `normalizeFrontKey` — so articles, grammatical tags, case and
-  whitespace differences between the card and the document don't miss a match.
-- **Cards the document never mentions are LEFT ALONE** and reported. A document says where the words
-  it lists belong; it says nothing about the rest, and sweeping unlisted cards into some "other"
-  bucket would act on an instruction the user never gave.
-- A word listed under two headings is ambiguous: the FIRST occurrence wins and the rest are counted
-  in the notes. Silently taking the last would quietly undo an earlier deliberate placement.
-- Multiple files merge into one plan, earlier files winning conflicts — the same first-occurrence
-  rule, one level up.
-
-### 2. Natural language — batched model calls
-
-"Group these by topic", "split the verbs into Verbs/Regular and Verbs/Irregular". `POST
-/api/agents/card-organizer` returns `{cardId, path, reason}` per card, in batches of 40.
-
-- The model may ONLY choose a destination path. It cannot edit, split or delete, and there is no
-  tool-use loop — one structured JSON answer per batch.
-- The library's existing folder/deck paths are passed in and the prompt insists on reusing them. That
-  is what stops "Foods" appearing beside "Food".
-- **Every id is re-validated locally** by `planMovesFromAssignments` against the batch that was sent.
-  An invented id, an out-of-scope card, an empty path, or a no-op (card already there) is dropped
-  rather than trusted.
-
-### They combine
-
-Instructions are available in BOTH modes. With documents **and** an instruction:
-
-- the documents are **authoritative for every word they list** — a placement you wrote down is never
-  re-litigated by a model;
-- the instruction governs only the **leftovers** (cards no document mentioned), so "put anything not
-  in these documents into Unsorted" or "sort the rest into whichever of these folders fits" works;
-- the document's own folder/deck paths join the destination vocabulary (`pathsFromPlan`) alongside
-  the library's, so leftovers land INSIDE the structure the document just described rather than in a
-  parallel tree the model invented. The route is also told these are leftovers (`leftovers: true`),
-  without which it assumes it's organizing the whole library.
-
-With documents and NO instruction, unlisted cards are left alone and the note says so, pointing at
-the instruction box.
-
-Both paths converge on `MoveProposal[]` and the same review queue.
-
----
-
-## Review
-
-Proposals are grouped BY DESTINATION (`groupByDestination`), because approving a destination is the
-natural unit — "yes, all 14 of these are food words". Per group you can move all, skip the group, or
-leave individual cards behind. **Undo last** reverses the whole group just applied.
-"Accept all N remaining" is behind a confirmation and deliberately NOT undoable as a unit (the
-`lastApplied` snapshot holds one group; pretending otherwise would be a lie).
-
-A partial failure mid-group keeps whatever landed (still undoable) and leaves the rest queued, rather
-than advancing past a half-applied group.
-
-## Folders and decks are created on demand
-
-`ensureFolderPath` / `ensureDeck` reuse a same-named folder or deck at their level — the same rule as
-`BatchDeckImport.ensureFolderPath`, deliberately, so the two features can't fork each other's trees.
-A folder with no language pair of its own matches too (those are shared folders).
-
-`OrganizerContext` carries the live `folders`/`decks` arrays and is MUTATED as things are created, so
-a run of twenty moves into one new folder creates it once.
-
-**Undo does not delete folders or decks the move created.** An empty deck is visible and trivially
-removed by hand; auto-deleting risks removing a folder the user has meanwhile put something else in.
-
----
-
-## Files
-
-| Piece | Where |
+| Kind | Effect |
 |---|---|
-| Planning (pure, 19 tests) | `lib/agents/cardOrganizer.ts` — `planMovesFromDocument`, `planMovesFromAssignments`, `destinationsFromPlan`, `alreadyThere`, `groupByDestination` |
-| Applying | `lib/agents/organizerApply.ts` — `applyMove`, `undoMove`, `ensureFolderPath`, `ensureDeck` |
-| AI route | `app/api/agents/card-organizer/route.ts` |
-| Page | `app/agents/organizer/page.tsx` |
-| Shared scope picker | `components/agents/ScopeTreePicker.tsx` (extracted from the card-editor page; both use it) |
+| `createFolder` | Creates a folder path (reused by name if it exists) |
+| `moveFolder` | Reparents a folder |
+| `moveDeck` | Moves a whole deck into a folder |
+| `moveCard` | Relinks one card into a (possibly new) deck; `pullIn` marks one from outside the scope |
+
+**No renames, no deletions** — a deliberate limit. `orderSteps` runs createFolder → moveFolder →
+moveDeck → moveCard, with parent folders created before children, so a destination always exists
+before something moves into it. The prompt also tells the planner to prefer one `moveDeck` over fifty
+`moveCard`s that add up to the same thing: fewer steps to review, fewer writes to run.
+
+## The model plans; it is never trusted
+
+`validatePlan` drops any step whose id isn't in the client's own copy of the library — an invented
+card, a deck outside the scope, a pull-in the user didn't authorize, a folder move that would nest a
+folder inside itself, an empty path, or a no-op. Dropped steps are SHOWN ("3 proposed steps
+discarded") rather than hidden, so a bad plan is visible rather than silently thinned.
+
+**Sonnet 5, not Haiku.** This reads a whole library export and plans globally over it; the per-batch
+"where does this card go" call it replaced was a far smaller job. A weaker model produces
+plausible-looking plans that are wrong in the middle — the worst possible failure for something
+approved in one click.
+
+## Diagnostics, and what you can do about them
+
+- **Duplicate** — the same word on more than one card in scope. A card *shared* into several decks is
+  one card in several places and is NOT flagged. Checked with `normalizeFrontKey`, so "il gatto",
+  "Il Gatto" and "gatto (m)" are one word here exactly as they are everywhere else.
+- **Out of scope** — a document word that exists in the library but outside the selection. Offered as
+  a pull-in when "May pull in cards from outside the scope" is on; otherwise reported and untouched.
+- **Missing** — a document word that exists nowhere. Nothing can be moved; it's surfaced so you can
+  see what the document expected.
+
+Duplicates and missing words each have an "ignore" toggle. **Out-of-scope is never suppressed** — it
+is an offer, not noise.
+
+## Applying and undoing
+
+`runMigration` executes in order and records a journal entry per step BEFORE it runs; **Undo
+migration** replays it backwards. A failing step does not abort the run — the rest of a plan is
+usually independent, and stopping halfway leaves a library in a state nobody chose. Failures are
+collected and reported, and everything that did land stays undoable.
+
+**Order rule, inherited and non-negotiable:** a card move links the destination FIRST and unlinks the
+source SECOND. A crash between them leaves the card in both places (visible, trivially fixed) rather
+than in neither, which is indistinguishable from data loss. Undo mirrors it.
+
+**Undo deletes folders the migration created**, unlike the old per-move undo which left them behind.
+That is only safe because the journal records the exact folder created and undo runs in reverse, so
+anything the migration put inside has already been moved back out. Pre-existing folders are never
+touched.
 
 ---
 
@@ -120,11 +95,9 @@ removed by hand; auto-deleting risks removing a folder the user has meanwhile pu
 
 ## Known gaps
 
-- **Single language pair per run.** `OrganizerContext` takes its pair from the first scoped deck, so
-  a scope spanning two pairs would create destination decks in the first pair's languages. Select one
-  pair at a time until this is fixed.
-- **Online only** — no offline path, like every other agent.
-- The AI path sends up to 200 existing paths; a very large library could exceed that and start
-  inventing names for the unlisted parts of the tree.
-- No dry-run preview of the whole plan before the first group is approved (you see one group at a
-  time plus a short "then:" list).
+- **One language pair per run.** The context takes its pair from the first scoped deck.
+- **No rename or delete.** A reorganization that needs them has to be finished by hand; decks the
+  migration empties are left in place.
+- **Online only**, like every agent.
+- A very large scope can hit the planner's token ceiling; `truncated` is surfaced as a warning rather
+  than a silent partial plan.

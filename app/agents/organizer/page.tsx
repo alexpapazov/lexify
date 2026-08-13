@@ -3,19 +3,19 @@
 /**
  * app/agents/organizer/page.tsx — the card-organizer agent.
  *
- * Two ways in — usable together — one review queue out:
- *   • **Word documents** — drop one or more `.docx` files whose headings describe a folder tree.
- *     Every scoped card whose word appears in a document is proposed for the folder/deck it sits
- *     under there, subfolders and all. Deterministic, NO AI.
- *   • **Instructions** — "put the food words in Food/Ingredients". Batched model calls that return a
- *     destination per card; every id is re-validated locally.
+ * It works the way a person reorganizing a library would:
+ *   1. **Read the whole library** — a hierarchical export of the selected scope.
+ *   2. **Read the brief** — the instruction (GROUND TRUTH) plus any Word documents (supporting
+ *      evidence; the instruction says how literally to take them).
+ *   3. **Write a migration plan** — an ordered list of moves that ends with the library exactly as
+ *      described. Whole decks and folders move as units where possible, not card by card.
+ *   4. **Show the plan**, then run it end to end on one approval — reversibly.
  *
- * With BOTH, the documents win for every word they list (a deliberate placement is never
- * second-guessed by a model) and the instruction handles the leftovers, with the document's own
- * folder names offered as destinations.
+ * Duplicates, words the documents mention that aren't in scope, and cards sitting outside the scope
+ * are computed BEFORE the model is called and handed to it as facts (see `planMigration`). The model
+ * plans; it doesn't audit. Every id it returns is re-validated against the real library.
  *
- * Nothing moves until you approve it, one destination group at a time. A move is a deck relink, so
- * review history and audio ride along untouched.
+ * A move is a deck relink, so review history, audio and other decks a card is shared into survive.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -24,26 +24,18 @@ import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { buildScopeTree } from '@/lib/scopeTree'
 import { ScopeTreePicker } from '@/components/agents/ScopeTreePicker'
-import { gatherScopedCards, chunk } from '@/lib/agents/cardEditor'
-import type { ScopedCard } from '@/lib/agents/cardEditor'
-import {
-  planMovesFromDocument, assignBatch, groupByDestination, destinationKey, pathsFromPlan,
-  type MoveProposal,
-} from '@/lib/agents/cardOrganizer'
-import { applyMove, undoMove, type AppliedMove, type OrganizerContext } from '@/lib/agents/organizerApply'
+import { planMigration, type PlanResult } from '@/lib/agents/planMigration'
+import { groupPlan, countCardMoves, type Diagnostic, type DiagnosticPolicy, type MigrationStep } from '@/lib/agents/migrationPlan'
+import { runMigration, undoMigration, type AppliedStep, type MigrationContext } from '@/lib/agents/migrationApply'
 import { readDeckPlanFromFile, type DeckPlan } from '@/lib/docx'
-import type { Deck, Folder, Grant } from '@/domain'
+import type { Deck, Folder } from '@/domain'
 
 const DEFAULT_PIPELINE_ID = '00000000-0000-0000-0000-000000000001'
-const BATCH_SIZE = 40
 
-type Phase = 'setup' | 'working' | 'review' | 'done'
-type Source = 'document' | 'prompt'
+type Phase = 'setup' | 'planning' | 'review' | 'running' | 'done'
 
 const PLACEHOLDER =
-  'e.g. "Group these by topic — food, travel, work — with a deck per topic", "Split the verbs out into Verbs/Regular and Verbs/Irregular", "Put anything about family into Family"…'
-const DOC_PLACEHOLDER =
-  'e.g. "Put anything not in the documents into an Unsorted deck", "Sort the leftovers into whichever of these folders fits best", "Leave the rest alone"…'
+  'e.g. "Follow the documents exactly — every heading is a folder and every deck under it should hold exactly those words", "Use the documents as a guide but keep my existing Verbs folder", "Group everything by topic; the documents show which topics I mean"…'
 
 export default function OrganizerPage() {
   const [userId, setUserId] = useState<string | null>(null)
@@ -52,24 +44,27 @@ export default function OrganizerPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
-  const [source, setSource] = useState<Source>('document')
   const [task, setTask] = useState('')
   const [files, setFiles] = useState<{ name: string; plan: DeckPlan }[]>([])
   const [fileError, setFileError] = useState<string | null>(null)
 
+  // What to do about the things the deterministic pass finds.
+  const [policy, setPolicy] = useState<DiagnosticPolicy>({
+    ignoreDuplicates: false, ignoreMissing: false, allowPullIn: true,
+  })
+
   const [phase, setPhase] = useState<Phase>('setup')
-  const [queue, setQueue] = useState<MoveProposal[]>([])
+  const [result, setResult] = useState<PlanResult | null>(null)
+  const [showLibrary, setShowLibrary] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
-  const [movedCount, setMovedCount] = useState(0)
-  const [skippedCount, setSkippedCount] = useState(0)
-  const [notes, setNotes] = useState<string[]>([])
-  const [lastApplied, setLastApplied] = useState<AppliedMove[] | null>(null)
-  const [confirmAll, setConfirmAll] = useState(false)
+  const [applied, setApplied] = useState<AppliedStep[] | null>(null)
+  const [failed, setFailed] = useState<{ step: MigrationStep; error: string }[]>([])
+  const [undone, setUndone] = useState(false)
 
-  // Mutated in place by applyMove as folders/decks are created, so a run reuses what it just made.
-  const ctxRef = useRef<OrganizerContext | null>(null)
+  // Mutated in place by the executor as folders/decks are created, so a run reuses what it just made.
+  const ctxRef = useRef<MigrationContext | null>(null)
 
   useEffect(() => {
     ;(async () => {
@@ -86,30 +81,6 @@ export default function OrganizerPage() {
   }, [])
 
   const tree = useMemo(() => buildScopeTree(folders, decks), [folders, decks])
-
-  /** Folder names root → deepest, then the deck name — the path shown and compared everywhere. */
-  const deckPathOf = useMemo(() => {
-    const folderById = new Map(folders.map(f => [f.id, f]))
-    const deckById = new Map(decks.map(d => [d.id, d]))
-    return (deckId: string): string[] => {
-      const deck = deckById.get(deckId)
-      if (!deck) return []
-      const path: string[] = []
-      let fid = deck.folderId
-      const guard = new Set<string>()
-      while (fid && !guard.has(fid)) {
-        guard.add(fid)
-        const f = folderById.get(fid)
-        if (!f) break
-        path.unshift(f.name)
-        fid = f.parentId
-      }
-      return [...path, deck.name]
-    }
-  }, [folders, decks])
-
-  /** Every existing folder/deck path — handed to the model so it reuses names instead of inventing. */
-  const existingPaths = useMemo(() => decks.map(d => deckPathOf(d.id).join(' / ')).sort(), [decks, deckPathOf])
 
   function toggleDecks(ids: string[]) {
     if (ids.length === 0) return
@@ -148,386 +119,335 @@ export default function OrganizerPage() {
     if (added.length > 0) setFiles(prev => [...prev, ...added])
   }
 
-  /** Builds the shared apply-context from the scope's own language pair. */
-  function makeContext(cards: ScopedCard[]): OrganizerContext | null {
-    if (!userId) return null
-    const first = decks.find(d => d.id === cards[0]?.deckId)
-    if (!first) return null
-    return {
-      userId,
-      sourceLanguage: first.sourceLanguage,
-      targetLanguage: first.targetLanguage,
-      pipelineId: first.pipelineId || DEFAULT_PIPELINE_ID,
-      folders: [...folders],
-      decks: [...decks],
-    }
+  /** A document as text for the planner, plus the flat word list the diagnostics need. */
+  function documentsForPlanner() {
+    return files.map(f => {
+      const lines: string[] = []
+      const words: string[] = []
+      for (const deck of f.plan.decks) {
+        lines.push([...deck.path, deck.name].join(' / '))
+        for (const c of deck.cards) {
+          lines.push(`    ${c.front} = ${c.back}`)
+          words.push(c.front)
+        }
+      }
+      return { name: f.name, text: lines.join('\n'), words }
+    })
   }
 
-  async function run() {
+  async function makePlan() {
     if (!userId || busy || selected.size === 0) return
-    setBusy(true); setError(null); setNotes([]); setQueue([]); setPhase('working')
-    setMovedCount(0); setSkippedCount(0); setLastApplied(null); setProgress(null)
+    const first = decks.find(d => selected.has(d.id))
+    if (!first) { setError('No cards in the selected decks.'); return }
+    if (!task.trim() && files.length === 0) { setError('Give an instruction, a document, or both.'); return }
+
+    setBusy(true); setError(null); setPhase('planning')
+    setResult(null); setApplied(null); setFailed([]); setUndone(false)
     try {
-      const grant: Grant = {
-        operations: ['edit', 'create'], languages: [], folderIds: [],
-        deckIds: [...selected], dryRunOnly: false,
+      const res = await planMigration({
+        userId,
+        scopeDeckIds: [...selected],
+        instruction: task,
+        documents: documentsForPlanner(),
+        folders, decks,
+        sourceLanguage: first.sourceLanguage,
+        targetLanguage: first.targetLanguage,
+        policy,
+      })
+      setResult(res)
+      ctxRef.current = {
+        userId,
+        sourceLanguage: first.sourceLanguage,
+        targetLanguage: first.targetLanguage,
+        pipelineId: first.pipelineId || DEFAULT_PIPELINE_ID,
+        folders: [...folders],
+        decks: [...decks],
       }
-      const cards = await gatherScopedCards(userId, grant)
-      if (cards.length === 0) { setError('No cards in the selected decks.'); setPhase('setup'); return }
-      ctxRef.current = makeContext(cards)
-
-      const instruction = task.trim()
-      const msgs: string[] = []
-      const all: MoveProposal[] = []
-
-      if (source === 'document') {
-        if (files.length === 0) { setError('Add at least one Word document first.'); setPhase('setup'); return }
-        // Documents are merged into one plan; earlier files win a conflict, matching the
-        // first-occurrence rule inside a single document.
-        const merged: DeckPlan = { decks: files.flatMap(f => f.plan.decks), unparsed: files.flatMap(f => f.plan.unparsed) }
-        const { moves, unmatched, duplicates } = planMovesFromDocument(cards, merged, deckPathOf)
-        all.push(...moves)
-        if (duplicates.length > 0) msgs.push(`${duplicates.length} word${duplicates.length === 1 ? '' : 's'} appear under more than one heading; the first placement was used.`)
-        if (merged.unparsed.length > 0) msgs.push(`${merged.unparsed.length} document line${merged.unparsed.length === 1 ? '' : 's'} had no separator and were ignored.`)
-
-        if (instruction && unmatched.length > 0) {
-          // The instruction governs ONLY what the document didn't place — the document is the
-          // explicit statement and must not be re-litigated by a model. The document's own paths
-          // join the destination vocabulary so leftovers land inside the structure it defined.
-          const vocabulary = [...new Set([...existingPaths, ...pathsFromPlan(merged)])]
-          const batches = chunk(unmatched, BATCH_SIZE)
-          for (let i = 0; i < batches.length; i++) {
-            setProgress({ done: i, total: batches.length })
-            all.push(...await assignBatch(batches[i]!, instruction, vocabulary, deckPathOf, true))
-          }
-          setProgress({ done: batches.length, total: batches.length })
-          msgs.push(`${moves.length} placed by the document; the instruction was applied to the ${unmatched.length} card${unmatched.length === 1 ? '' : 's'} it didn’t list.`)
-        } else if (unmatched.length > 0) {
-          msgs.push(`${unmatched.length} card${unmatched.length === 1 ? '' : 's'} in scope aren’t in the document — left where they are. Add an instruction to say what should happen to them.`)
-        }
-        setNotes(msgs)
-        setQueue(all)
-        setPhase(all.length > 0 ? 'review' : 'done')
-        return
-      }
-
-      if (!instruction) { setError('Say how you want them organized.'); setPhase('setup'); return }
-      const batches = chunk(cards, BATCH_SIZE)
-      for (let i = 0; i < batches.length; i++) {
-        setProgress({ done: i, total: batches.length })
-        all.push(...await assignBatch(batches[i]!, instruction, existingPaths, deckPathOf))
-      }
-      setProgress({ done: batches.length, total: batches.length })
-      setQueue(all)
-      setPhase(all.length > 0 ? 'review' : 'done')
+      setPhase('review')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setPhase('setup')
     } finally { setBusy(false) }
   }
 
-  const groups = useMemo(() => groupByDestination(queue), [queue])
-  const current = groups[0]
-
-  /** Applies every move in the leading destination group. */
-  async function approveGroup() {
+  async function applyPlan() {
     const ctx = ctxRef.current
-    if (!current || !ctx || busy) return
-    setBusy(true); setError(null)
-    const applied: AppliedMove[] = []
+    if (!ctx || !result || busy) return
+    setBusy(true); setError(null); setPhase('running'); setProgress({ done: 0, total: result.steps.length })
     try {
-      for (const m of current.moves) applied.push(await applyMove(ctx, m))
-      setMovedCount(n => n + current.moves.length)
-      setLastApplied(applied)
-      setFolders([...ctx.folders]); setDecks([...ctx.decks])
-      const ids = new Set(current.moves.map(m => m.id))
-      setQueue(q => q.filter(m => !ids.has(m.id)))
+      const run = await runMigration(ctx, result.steps, (done, total) => setProgress({ done, total }))
+      setApplied(run.applied)
+      setFailed(run.failed)
+      setFolders([...ctx.folders])
+      setDecks([...ctx.decks])
+      setPhase('done')
     } catch (e) {
-      // Whatever landed stays landed and is still undoable; the rest of the group stays queued.
       setError(e instanceof Error ? e.message : String(e))
-      if (applied.length > 0) {
-        setMovedCount(n => n + applied.length)
-        setLastApplied(applied)
-        const done = new Set(applied.map(a => a.proposal.id))
-        setQueue(q => q.filter(m => !done.has(m.id)))
-      }
-    } finally { setBusy(false) }
-  }
-
-  function denyGroup() {
-    if (!current) return
-    setSkippedCount(n => n + current.moves.length)
-    setLastApplied(null)
-    const ids = new Set(current.moves.map(m => m.id))
-    setQueue(q => q.filter(m => !ids.has(m.id)))
-  }
-
-  /** Drops one card out of the leading group without touching the others. */
-  function skipOne(id: string) {
-    setSkippedCount(n => n + 1)
-    setQueue(q => q.filter(m => m.id !== id))
-  }
-
-  async function undoLast() {
-    const applied = lastApplied
-    if (!applied || busy) return
-    setBusy(true)
-    try {
-      for (const a of applied) await undoMove(a)
-      setMovedCount(n => Math.max(0, n - applied.length))
-      setQueue(q => [...applied.map(a => a.proposal), ...q])
-      setLastApplied(null)
       setPhase('review')
+    } finally { setBusy(false); setProgress(null) }
+  }
+
+  async function undoAll() {
+    if (!applied || busy) return
+    setBusy(true); setError(null); setProgress({ done: 0, total: applied.length })
+    try {
+      await undoMigration(applied, (done, total) => setProgress({ done, total }))
+      setUndone(true)
+      setApplied(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
-    } finally { setBusy(false) }
+    } finally { setBusy(false); setProgress(null) }
   }
-
-  /** Applies the whole queue behind a confirmation. Not undoable as a unit — that's what the confirm is for. */
-  async function approveAll() {
-    const ctx = ctxRef.current
-    if (!ctx || busy) return
-    setBusy(true); setConfirmAll(false); setError(null)
-    let ok = 0, failed = 0
-    try {
-      for (const m of [...queue]) {
-        try { await applyMove(ctx, m); ok++ } catch { failed++ }
-      }
-      setMovedCount(n => n + ok)
-      setFolders([...ctx.folders]); setDecks([...ctx.decks])
-      setQueue([])
-      setLastApplied(null)
-      if (failed > 0) setError(`${failed} move${failed === 1 ? '' : 's'} failed and were left in place.`)
-    } finally { setBusy(false) }
-  }
-
-  useEffect(() => {
-    if (phase === 'review' && queue.length === 0) setPhase('done')
-  }, [phase, queue.length])
 
   function reset() {
-    setPhase('setup'); setQueue([]); setNotes([]); setLastApplied(null)
-    setMovedCount(0); setSkippedCount(0); setError(null); setProgress(null)
+    setPhase('setup'); setResult(null); setApplied(null); setFailed([]); setUndone(false)
+    setError(null); setShowLibrary(false)
   }
+
+  const cardMoves = result ? countCardMoves(result.steps) : 0
+  const groups = result ? groupPlan(result.steps) : []
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
-      <div className="flex flex-wrap gap-2">
-        <a href="/agents"
-          className="text-xs px-3 py-1.5 rounded-full border border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40 transition-colors">
-          ✏️ Card editor
-        </a>
-        <span className="text-xs px-3 py-1.5 rounded-full border border-accent bg-accent/15 text-ink">🗂 Card organizer</span>
-      </div>
-
       <div>
         <h1 className="text-2xl font-semibold text-ink">Card organizer agent</h1>
         <p className="text-sm text-ink-muted mt-1">
-          Sorts the cards you select into folders and decks — either the exact structure of a Word
-          document you give it, or a grouping you describe. Cards keep all their review history; only
-          where they live changes.
+          Pick what it may touch, say how you want it organized, and add Word documents if you have
+          them. It reads your library, writes a migration plan, and runs the whole plan once you
+          approve it. Nothing moves before that, and everything is undoable afterwards.
         </p>
       </div>
 
-      {error && <p className="text-sm text-danger">{error}</p>}
+      {error && <div className="rounded-card border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{error}</div>}
 
       {phase === 'setup' && (
         <div className="panel space-y-5">
-          {/* How to say where things go */}
           <div className="space-y-1.5">
-            <label className="text-xs text-ink-faint">How should it decide?</label>
-            <div className="flex flex-wrap gap-2">
-              {([
-                ['document', '📄 From Word documents', 'Match the folders and decks the document’s headings describe — add instructions for anything it doesn’t list'],
-                ['prompt',   '💬 From instructions only',  'Tell it how to group them'],
-              ] as [Source, string, string][]).map(([val, label, hint]) => (
-                <button key={val} type="button" onClick={() => setSource(val)} title={hint}
-                  className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                    source === val ? 'border-accent bg-accent/15 text-ink' : 'border-line/10 text-ink-muted hover:text-ink hover:bg-surface/40'}`}>
-                  {label}
-                </button>
-              ))}
-            </div>
+            <label className="text-xs text-ink-faint">Scope — the decks it may reorganize</label>
+            <ScopeTreePicker
+              tree={tree} expanded={expanded}
+              onToggleSel={toggleDecks} onToggleExpand={toggleExpand} selState={selState}
+            />
           </div>
 
-          {source === 'document' ? (
-            <div className="space-y-2">
-              <label className="text-xs text-ink-faint">
-                Word documents <span className="text-ink-faint/70">(headings become folders; the deepest heading over a word list becomes its deck)</span>
-              </label>
-              <input type="file" accept=".docx" multiple onChange={e => void addFiles(e.target.files)}
-                className="block w-full text-sm text-ink-muted file:mr-3 file:py-1.5 file:px-3 file:rounded-full file:border file:border-line/10 file:bg-surface file:text-ink file:text-xs hover:file:bg-surface-raised" />
-              {fileError && <p className="text-xs text-danger">{fileError}</p>}
-              {files.length > 0 && (
-                <div className="space-y-1.5">
-                  {files.map((f, i) => {
-                    const words = f.plan.decks.reduce((n, d) => n + d.cards.length, 0)
-                    return (
-                      <div key={`${f.name}:${i}`} className="flex items-center justify-between gap-3 rounded-lg border border-line/10 px-3 py-2">
-                        <span className="text-sm text-ink truncate">📄 {f.name}</span>
-                        <span className="text-xs text-ink-faint shrink-0">
-                          {`${f.plan.decks.length} deck${f.plan.decks.length === 1 ? '' : 's'} · ${words} word${words === 1 ? '' : 's'}`}
-                        </span>
-                        <button type="button" onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))}
-                          className="text-xs text-ink-faint hover:text-danger shrink-0">Remove</button>
-                      </div>
-                    )
-                  })}
-                  <details className="text-xs text-ink-faint">
-                    <summary className="cursor-pointer hover:text-ink">Structure it found</summary>
-                    <ul className="mt-1.5 space-y-0.5 pl-3 max-h-40 overflow-y-auto">
-                      {files.flatMap(f => f.plan.decks).map((d, i) => (
-                        <li key={i} className="truncate">{[...d.path, d.name].join(' / ')} <span className="text-ink-faint/70">· {d.cards.length}</span></li>
-                      ))}
-                    </ul>
-                  </details>
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <label className="text-xs text-ink-faint">
-              {source === 'document'
-                ? <>Instructions <span className="text-ink-faint/70">(optional — applied to cards the documents don’t list)</span></>
-                : 'How should the cards be grouped?'}
+              How should it be organized? <span className="text-ink-faint/70">(this is the ground truth — it decides how the documents are read)</span>
             </label>
-            <textarea className="input min-h-[90px]" value={task} onChange={e => setTask(e.target.value)}
-              placeholder={source === 'document' ? DOC_PLACEHOLDER : PLACEHOLDER} />
-            {source === 'document' && (
-              <p className="text-[10px] text-ink-faint">
-                The documents decide every word they list — an instruction can’t override a placement you
-                wrote down. It handles the leftovers, and can put them into the same folders.
-              </p>
+            <textarea className="input min-h-[110px]" value={task} onChange={e => setTask(e.target.value)} placeholder={PLACEHOLDER} />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs text-ink-faint">Word documents <span className="text-ink-faint/70">(optional — structure to follow)</span></label>
+            <input type="file" accept=".docx" multiple onChange={e => void addFiles(e.target.files)}
+              className="block w-full text-sm text-ink-muted file:mr-3 file:rounded-lg file:border-0 file:bg-surface-raised file:px-3 file:py-1.5 file:text-sm file:text-ink hover:file:bg-surface" />
+            {fileError && <p className="text-xs text-danger">{fileError}</p>}
+            {files.length > 0 && (
+              <div className="space-y-1 pt-1">
+                {files.map((f, i) => (
+                  <div key={f.name + i} className="flex items-center justify-between gap-3 text-xs">
+                    <span className="text-ink truncate">
+                      {f.name} <span className="text-ink-faint">· {f.plan.decks.length} deck{f.plan.decks.length === 1 ? '' : 's'}</span>
+                    </span>
+                    <button onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))}
+                      className="text-ink-faint hover:text-danger shrink-0">Remove</button>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
 
-          <div className="space-y-1">
-            <div className="flex items-baseline justify-between">
-              <label className="text-xs text-ink-faint">Scope — the cards it may move</label>
-              <span className="text-xs text-ink-faint">{selected.size} deck{selected.size === 1 ? '' : 's'} in scope</span>
-            </div>
-            <ScopeTreePicker tree={tree} selState={selState} expanded={expanded}
-              onToggleSel={toggleDecks} onToggleExpand={toggleExpand} />
+          <div className="space-y-2 border-t border-line/10 pt-4">
+            <p className="text-xs uppercase tracking-wider text-ink-faint">When something doesn’t line up</p>
+            {([
+              ['ignoreDuplicates', 'Ignore duplicate words', 'Otherwise the plan is told to keep copies of the same word together.'],
+              ['ignoreMissing', 'Ignore words that aren’t in my library', 'Otherwise they’re listed so you can see what the documents expected.'],
+              ['allowPullIn', 'May pull in cards from outside the scope', 'When a document lists a word that lives in a deck you didn’t select, it can move it in.'],
+            ] as const).map(([key, label, hint]) => (
+              <label key={key} className="flex items-start gap-2 cursor-pointer select-none">
+                <input type="checkbox" checked={policy[key]}
+                  onChange={e => setPolicy(p => ({ ...p, [key]: e.target.checked }))}
+                  className="accent-accent w-4 h-4 mt-0.5" />
+                <span className="text-sm text-ink">
+                  {label}
+                  <span className="block text-xs text-ink-faint">{hint}</span>
+                </span>
+              </label>
+            ))}
           </div>
 
-          <button type="button" onClick={() => void run()}
-            disabled={!userId || busy || selected.size === 0 || (source === 'document' ? files.length === 0 : !task.trim())}
+          <button onClick={() => void makePlan()}
+            disabled={!userId || busy || selected.size === 0 || (!task.trim() && files.length === 0)}
             className="btn-primary text-sm py-2 px-4 disabled:opacity-40">
-            {busy
-              ? 'Working…'
-              : source === 'document'
-                ? (task.trim() ? 'Match the documents, then apply the instructions' : 'Match against the documents')
-                : 'Plan the reorganization'}
+            Plan the reorganization
           </button>
         </div>
       )}
 
-      {phase === 'working' && (
-        <div className="panel space-y-2">
-          <p className="text-sm text-ink">Reading your cards…</p>
-          {progress && (
-            <p className="text-xs text-ink-faint">{`Batch ${progress.done} of ${progress.total}`}</p>
-          )}
+      {phase === 'planning' && (
+        <div className="panel text-center py-10 space-y-2">
+          <p className="text-sm text-ink">Reading your library and writing a plan…</p>
+          <p className="text-xs text-ink-faint">This is one big think, so it takes a few moments.</p>
         </div>
       )}
 
-      {phase === 'review' && current && (
+      {phase === 'review' && result && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <p className="text-sm text-ink-muted">
-              {`${queue.length} card${queue.length === 1 ? '' : 's'} left · ${movedCount} moved · ${skippedCount} skipped`}
+          <div className="panel space-y-3">
+            <h2 className="text-sm font-medium text-ink">The plan</h2>
+            {result.plan.summary && <p className="text-sm text-ink-muted">{result.plan.summary}</p>}
+            <p className="text-xs text-ink-faint">
+              {`${result.steps.length} step${result.steps.length === 1 ? '' : 's'} · ${cardMoves} card${cardMoves === 1 ? '' : 's'} moved`}
             </p>
-            <div className="flex items-center gap-2">
-              {lastApplied && (
-                <button type="button" onClick={() => void undoLast()} disabled={busy}
-                  className="text-xs px-3 py-1.5 rounded-full border border-line/10 text-ink-muted hover:text-ink disabled:opacity-40">
-                  ↶ Undo last
-                </button>
-              )}
-              {confirmAll ? (
-                <span className="flex items-center gap-2 text-xs">
-                  <span className="text-ink-muted">{`Move all ${queue.length}?`}</span>
-                  <button type="button" onClick={() => void approveAll()} disabled={busy}
-                    className="btn-primary text-xs py-1 px-3">Yes, move them</button>
-                  <button type="button" onClick={() => setConfirmAll(false)} className="text-ink-faint hover:text-ink">Cancel</button>
-                </span>
-              ) : (
-                <button type="button" onClick={() => setConfirmAll(true)} disabled={busy}
-                  className="text-xs px-3 py-1.5 rounded-full border border-line/10 text-ink-muted hover:text-ink disabled:opacity-40">
-                  {`Accept all ${queue.length} remaining`}
-                </button>
-              )}
-            </div>
+            {result.truncated && (
+              <p className="text-xs text-warning">
+                The planner hit its length limit, so this plan may be incomplete. Consider narrowing the scope.
+              </p>
+            )}
           </div>
 
-          <div className="panel space-y-3">
-            <div>
-              <p className="text-xs text-ink-faint">Move into</p>
-              <p className="text-lg text-ink">📁 {destinationKey(current.to)}</p>
-              <p className="text-xs text-ink-faint mt-0.5">{current.moves[0]!.reason}</p>
-            </div>
+          {result.diagnostics.length > 0 && <DiagnosticList diagnostics={result.diagnostics} />}
 
-            <div className="rounded-lg border border-line/10 divide-y divide-line/5 max-h-72 overflow-y-auto">
-              {current.moves.map(m => (
-                <div key={m.id} className="flex items-center gap-3 px-3 py-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm text-ink truncate">{m.front}</div>
-                    <div className="text-xs text-ink-faint truncate">{m.back}</div>
+          {result.steps.length === 0 ? (
+            <div className="panel text-sm text-ink-muted">
+              Nothing to do — the library already matches what you described.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {groups.map(g => (
+                <div key={g.label} className="panel space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-medium text-ink">{g.label}</h3>
+                    <span className="text-xs text-ink-faint shrink-0">{g.steps.length}</span>
                   </div>
-                  <div className="text-xs text-ink-faint shrink-0 hidden sm:block truncate max-w-[12rem]">
-                    from {m.fromDeckName}
+                  <div className="divide-y divide-line/5">
+                    {g.steps.map((s, i) => <StepRow key={i} step={s} />)}
                   </div>
-                  <button type="button" onClick={() => skipOne(m.id)}
-                    className="text-xs text-ink-faint hover:text-ink shrink-0">Leave</button>
                 </div>
               ))}
             </div>
-
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={() => void approveGroup()} disabled={busy}
-                className="btn-primary text-sm py-1.5 px-4 disabled:opacity-40">
-                {busy ? 'Moving…' : `Move ${current.moves.length} card${current.moves.length === 1 ? '' : 's'}`}
-              </button>
-              <button type="button" onClick={denyGroup} disabled={busy}
-                className="text-sm px-3 py-1.5 rounded-lg border border-line/10 text-ink-muted hover:text-ink disabled:opacity-40">
-                Skip this group
-              </button>
-            </div>
-          </div>
-
-          {groups.length > 1 && (
-            <p className="text-xs text-ink-faint">
-              {`Then: ${groups.slice(1, 4).map(g => `${g.key} (${g.moves.length})`).join(', ')}${groups.length > 4 ? `, +${groups.length - 4} more` : ''}`}
-            </p>
           )}
+
+          {result.dropped.length > 0 && (
+            <details className="panel">
+              <summary className="text-sm text-ink-muted cursor-pointer">
+                {`${result.dropped.length} proposed step${result.dropped.length === 1 ? '' : 's'} discarded`}
+              </summary>
+              <div className="pt-2 space-y-1 text-xs text-ink-faint">
+                {result.dropped.map((d, i) => <div key={i}>{describeStep(d.step)} — {d.why}</div>)}
+              </div>
+            </details>
+          )}
+
+          <details className="panel">
+            <summary className="text-sm text-ink-muted cursor-pointer" onClick={() => setShowLibrary(v => !v)}>
+              What the planner read
+            </summary>
+            {showLibrary && (
+              <pre className="pt-2 text-[11px] text-ink-faint whitespace-pre-wrap max-h-80 overflow-y-auto">{result.libraryText}</pre>
+            )}
+          </details>
+
+          <div className="flex flex-wrap gap-3">
+            <button onClick={() => void applyPlan()} disabled={busy || result.steps.length === 0}
+              className="btn-primary text-sm py-2 px-4 disabled:opacity-40">
+              {`Apply plan (${result.steps.length} step${result.steps.length === 1 ? '' : 's'})`}
+            </button>
+            <button onClick={reset} className="btn-ghost text-sm py-2 px-4">Start over</button>
+          </div>
+        </div>
+      )}
+
+      {phase === 'running' && (
+        <div className="panel text-center py-10 space-y-2">
+          <p className="text-sm text-ink">Reorganizing…</p>
+          {progress && <p className="text-xs text-ink-faint">{progress.done} / {progress.total}</p>}
         </div>
       )}
 
       {phase === 'done' && (
         <div className="panel space-y-3">
-          <p className="text-sm text-ink">
-            {movedCount > 0
-              ? `Done — ${movedCount} card${movedCount === 1 ? '' : 's'} moved${skippedCount > 0 ? `, ${skippedCount} left alone` : ''}.`
-              : 'Nothing to move — every card in scope is already where it should be.'}
+          <h2 className="text-sm font-medium text-ink">{undone ? 'Migration undone' : 'Done'}</h2>
+          <p className="text-sm text-ink-muted">
+            {undone
+              ? 'Everything is back where it was.'
+              : `Applied ${applied?.length ?? 0} step${(applied?.length ?? 0) === 1 ? '' : 's'}.`}
           </p>
-          {notes.length > 0 && (
-            <ul className="text-xs text-ink-faint space-y-0.5">
-              {notes.map((n, i) => <li key={i}>{n}</li>)}
-            </ul>
+          {failed.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs text-danger">{failed.length} step{failed.length === 1 ? '' : 's'} failed:</p>
+              {failed.map((f, i) => (
+                <p key={i} className="text-xs text-ink-faint">{describeStep(f.step)} — {f.error}</p>
+              ))}
+            </div>
           )}
-          <div className="flex gap-2">
-            <button type="button" onClick={reset} className="btn-primary text-sm py-1.5 px-4">Organize more</button>
-            <a href="/library" className="text-sm px-3 py-1.5 rounded-lg border border-line/10 text-ink-muted hover:text-ink">See the library</a>
+          {progress && <p className="text-xs text-ink-faint">{progress.done} / {progress.total}</p>}
+          <div className="flex flex-wrap gap-3">
+            {!undone && applied && applied.length > 0 && (
+              <button onClick={() => void undoAll()} disabled={busy} className="btn-ghost text-sm py-2 px-4">
+                Undo migration
+              </button>
+            )}
+            <button onClick={reset} className="btn-primary text-sm py-2 px-4">Organize something else</button>
           </div>
         </div>
       )}
+    </div>
+  )
+}
 
-      {phase !== 'setup' && notes.length > 0 && phase !== 'done' && (
-        <ul className="text-xs text-ink-faint space-y-0.5">
-          {notes.map((n, i) => <li key={i}>{n}</li>)}
-        </ul>
-      )}
+// ─── Presentation ────────────────────────────────────────────────────────────
+
+function describeStep(s: MigrationStep): string {
+  if (s.kind === 'createFolder') return `Create folder ${s.path.join(' / ')}`
+  if (s.kind === 'moveFolder')   return `Move folder ${s.folderName} → ${s.toParent.join(' / ') || 'library root'}`
+  if (s.kind === 'moveDeck')     return `Move deck ${s.deckName} → ${s.toFolder.join(' / ') || 'library root'}`
+  return `${s.front} — from ${s.fromDeckName}`
+}
+
+function StepRow({ step }: { step: MigrationStep }) {
+  return (
+    <div className="py-2 flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-sm text-ink truncate">
+          {describeStep(step)}
+          {step.kind === 'moveCard' && step.pullIn && (
+            <span className="ml-2 text-[10px] uppercase tracking-wider text-warning">pulled in</span>
+          )}
+        </p>
+        {step.kind === 'moveCard' && <p className="text-xs text-ink-faint truncate">{step.back}</p>}
+        {step.reason && <p className="text-xs text-ink-faint">{step.reason}</p>}
+      </div>
+    </div>
+  )
+}
+
+const DIAG_LABEL: Record<Diagnostic['kind'], string> = {
+  duplicate:  'Duplicate words',
+  missing:    'Not in your library',
+  outOfScope: 'Outside the selected scope',
+}
+
+function DiagnosticList({ diagnostics }: { diagnostics: Diagnostic[] }) {
+  const kinds: Diagnostic['kind'][] = ['duplicate', 'outOfScope', 'missing']
+  return (
+    <div className="panel space-y-3">
+      <h2 className="text-sm font-medium text-ink">Worth knowing</h2>
+      {kinds.map(kind => {
+        const items = diagnostics.filter(d => d.kind === kind)
+        if (items.length === 0) return null
+        return (
+          <div key={kind} className="space-y-1">
+            <p className="text-xs uppercase tracking-wider text-ink-faint">{DIAG_LABEL[kind]} · {items.length}</p>
+            {items.slice(0, 12).map((d, i) => (
+              <p key={i} className="text-xs text-ink-muted">
+                <span className="text-ink">{d.word}</span> — {d.detail}
+              </p>
+            ))}
+            {items.length > 12 && <p className="text-xs text-ink-faint">…and {items.length - 12} more</p>}
+          </div>
+        )
+      })}
     </div>
   )
 }

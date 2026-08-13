@@ -2812,36 +2812,31 @@ rows — `SupabasePathwayRepository.listCustomPairKeys` (default ''/'' row and e
 excluded) for pathway pairs, ladder rows for ladder pairs — and reads "pathway · default" /
 "ladder · custom" so the mode is visible at a glance.
 
-## Card organizer agent (2026-08-10, no migration)
+## Card organizer agent — rebuilt as a MIGRATION PLANNER (2026-08-11, no migration)
 
-Second agent: `/agents/organizer`, picker chips at the top of both agent pages. Sorts EXISTING cards
-into folders/decks from either a Word document's structure (deterministic, no AI) or a natural-
-language description (batched model calls). **Read `features/Card Organizer Agent.md` before
-changing it.** The load-bearing points:
+The organizer no longer answers "where does this card go?" one batch at a time. It exports the scope,
+diagnoses deterministically, writes a whole migration PLAN, previews it, and runs it end to end on
+one approval — reversibly. **Read `features/Card Organizer Agent.md` before touching it.** The points
+that bite:
 
-- **A move is a `deck_cards` RELINK, never a card rewrite** — review state, climb rows, audio and
-  other decks the card is shared into are all untouched. **Link the destination FIRST, unlink the
-  source SECOND** (`lib/agents/organizerApply.ts`); a crash between them leaves the card in both
-  places (visible) rather than neither (looks like data loss). `undoMove` mirrors it.
-- **Document path**: reuses `lib/docx.ts`'s `readDeckPlanFromFile`, read as a destination map, matched
-  by `normalizeFrontKey` so articles/tags/case don't miss. **Cards the document doesn't mention are
-  LEFT ALONE** — a document describes where its own words go, nothing more. A word under two headings
-  keeps its FIRST placement.
-- **AI path**: `/api/agents/card-organizer` returns only `{cardId, path, reason}` — no edit/split/
-  delete verbs exist. Existing library paths are passed in so it reuses names instead of inventing
-  "Foods" beside "Food"; every id is re-validated locally against the sent batch.
-- **Both inputs combine.** An instruction can accompany documents: the documents stay authoritative
-  for every word they list, and the instruction handles only the LEFTOVERS — with the document's own
-  paths added to the destination vocabulary (`pathsFromPlan`) and `leftovers: true` telling the route
-  not to propose a competing tree. Instructions are optional in document mode, required otherwise.
-- Review is grouped BY DESTINATION; "Undo last" reverses the whole group just applied; "Accept all"
-  is confirmed and deliberately not undoable as a unit.
-- `ensureFolderPath`/`ensureDeck` reuse same-named folders/decks at their level — the same rule as
-  `BatchDeckImport`, so the two features can't fork each other's trees. Undo leaves created folders
-  in place on purpose.
-- **Known gap: one language pair per run** (the context takes its pair from the first scoped deck).
-- The card-editor page's scope tree + tri-state checkbox moved to
-  `components/agents/ScopeTreePicker.tsx` — shared, not duplicated.
+- **The instruction is GROUND TRUTH; documents are supporting evidence.** The instruction says how
+  literally to read the documents. They are separate fields in the planner request for that reason —
+  don't concatenate them.
+- **The model plans; it never audits and is never trusted with ids.** Duplicates / missing words /
+  out-of-scope cards are computed in `lib/agents/migrationPlan.ts` and handed in as facts;
+  `validatePlan` then drops every step whose id isn't in the client's own library copy. Dropped steps
+  are SHOWN, not hidden.
+- **Sonnet 5** (`app/api/agents/organizer-plan/route.ts`), not Haiku — this is global planning over a
+  full library export, and a weak plan approved in one click is the worst failure mode.
+- **`orderSteps`**: createFolder → moveFolder → moveDeck → moveCard, parents before children, so a
+  destination always exists. The prompt prefers ONE `moveDeck` over fifty `moveCard`s.
+- **Undo is a journal replayed backwards** (`migrationApply.ts`), and it DOES delete folders the
+  migration created — safe only because undo runs in reverse, so their contents have already moved
+  out. The link-destination-first / unlink-source-second rule is unchanged and non-negotiable.
+- Out-of-scope cards can be pulled IN when the user allows it; that permission is enforced in
+  `validatePlan`, not just in the prompt.
+- **Deleted as orphaned**: `lib/agents/cardOrganizer.ts`, `lib/agents/organizerApply.ts`,
+  `app/api/agents/card-organizer/` and their test — the per-batch flow they implemented is gone.
 
 ## Editing a ladder/pathway mid-climb bricked the deck (2026-08-10)
 
@@ -2941,7 +2936,9 @@ setting appeared to work until the AI pass finished and then silently reverted.
 deck siblings and borrows cached AI options ONLY when the deck can't fill the option set (fewer than
 three other cards) — an unanswerable two-option question is worse than a distractor from the wrong
 pool. `'smart'` (the default) is unchanged, so Due Now and every existing caller behave exactly as
-before. Generation is deliberately left running: the user said "they can still generate, but should
+before. **The top-up keeps every lead item and takes only what's missing** — merging both pools and
+shuffling the result could drop a real deck sibling in favour of a generated distractor on a 'deck'
+rung, which is the exact thing the setting exists to prevent (a flaky test caught this). Generation is deliberately left running: the user said "they can still generate, but should
 not be used", and other rungs / Due Now may want them. 4 tests in
 `lib/__tests__/buildOptionsSource.test.ts`.
 
