@@ -2676,6 +2676,33 @@ form can't round-trip a daily goal back into a long-term one. Migration `117_pat
 - `-debtBalance` for a zero balance is `-0` — `pace: -debtBalance || 0` normalizes it (a test
   caught `expect(0).toBe(-0)` failing).
 
+## "→ tomorrow" deferral works under schedules too (2026-08-12, no migration)
+
+The dashboard's "→ tomorrow" button (shown when a language's remaining goal is **≤ 5** — was < 5)
+now also appears for pairs driven by a goal SCHEDULE. It does NOT use `goal_deferrals` there —
+no schedule consumer reads that list. `deferScheduleToTomorrow` (app/study/page.tsx) speaks the
+schedule's own vocabulary: `dateExceptions[today] = 0`.
+
+- **Long-term target**: zeroing today is all it takes — the goal re-derives from what's left, so the
+  remainder spreads over every remaining day by construction. Don't force it onto tomorrow.
+- **Weekly pattern**: the week's target re-water-fills across the remaining days. (Deferring the
+  week's LAST day drops the remainder unless debt carry is on — known, accepted.)
+- **Daily pattern**: nothing conserves it, so tomorrow's exception is explicitly set to
+  `patternPlanForDate(tomorrow) + remaining`. Exceptions ARE the plan in daily framing.
+
+Guard: an existing `dateExceptions[today] === 0` makes it a no-op (no double-defer). The row drops
+off "Today's goals" immediately because `pairsWithGoalsToday` depends on `schedules` state.
+
+## Organizer planner: truncation salvage (2026-08-12)
+
+First real run failed with "did not return a usable plan" — a big plan hit the output-token ceiling
+and the JSON died mid-stream. `app/api/agents/organizer-plan/route.ts` now: MAX_TOKENS 16k→**32k**;
+`extractJson` salvages a TRUNCATED response by keeping every complete step (a `}` closing back to
+depth 2 ends a step — steps are the only depth-3 objects in the shape) and closing the JSON, so the
+client's existing `stopReason === 'max_tokens'` warning shows a usable partial plan instead of an
+error; when nothing is salvageable the error distinguishes "too large — narrow the scope" from
+"unusable — rephrase", and the raw head/tail is `console.error`ed server-side for diagnosis.
+
 ## Folder counts blind to climbing cards (2026-08-10)
 
 **Bug (user screenshot)**: decks showed cards in Learning while the parent folder showed 0 —
@@ -2942,7 +2969,7 @@ rung, which is the exact thing the setting exists to prevent (a flaky test caugh
 not be used", and other rungs / Due Now may want them. 4 tests in
 `lib/__tests__/buildOptionsSource.test.ts`.
 
-## Widths: the top bar is full-bleed, PAGES ARE NOT (2026-08-11, settled)
+## Widths: the top bar is full-bleed, PAGES ARE NOT (2026-08-12, RE-settled)
 
 **This went back and forth — read the whole note before changing any width.** The bar was widened,
 then pages were widened to match, then a shared 80px gutter was applied to both; the user tried all
@@ -2950,12 +2977,12 @@ of it and reverted everything except the bar: *"I hate the resizing in everythin
 after we enlarged it and made it end-to-end the first time, but I want everything else to be like it
 was."* The settled state:
 
-- **Navbar**: the BAR spans the window (background + bottom border on the `<nav>`), but its CONTENTS
-  sit in `w-full max-w-5xl mx-auto px-4 h-16` — **the same column as `MainContainer`'s non-full-bleed
-  branch**, so the logo lines up with a page's heading and the avatar with the right edge of its
-  content. Measured at 1512px: logo and content both start at x=260. The larger h-16 bar and the
-  bigger logo/links/avatar are kept. **If you change either container's width or padding, change the
-  other identically** — that shared value is the whole alignment.
+- **Navbar: CONTENTS end-to-end too — `w-full px-5 md:px-8 h-16 flex items-center`.** A 2026-08-11
+  screenshot comment ("line up a bit more cleanly") was over-read as "align the bar contents to the
+  page column" (`max-w-5xl mx-auto px-4`); the user rejected that the next day — *"I liked it when it
+  went end-to-end… it is the right size but does not go end-to-end, fix this."* The logo hugs the
+  left window edge and the avatar the right one, ON PURPOSE, and they will NOT line up with page
+  content below. Do not re-align the bar contents to the page column.
 - **Pages**: `max-w-5xl mx-auto px-4 py-8` — a centred 1024px column, as before. `MainContainer`
   applies it to every route EXCEPT `/settings`, which stays full-bleed because its section rail needs
   the width (the user asked for that separately and kept it).

@@ -23,7 +23,9 @@ export const runtime = 'nodejs'
 
 // Planning over a full library export is a reasoning job — see the header note.
 const MODEL = 'claude-sonnet-5'
-const MAX_TOKENS = 16000
+// A plan for a few hundred cards is long; a ceiling hit mid-JSON is recoverable (see extractJson)
+// but every complete step before the cut is one the user doesn't lose.
+const MAX_TOKENS = 32000
 
 const SYSTEM = `You plan a reorganization of a language learner's flashcard library.
 
@@ -67,12 +69,30 @@ interface Body {
 }
 
 function extractJson(text: string): unknown {
-  // The model is told to return bare JSON; a fenced block is the common deviation.
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text)
-  const raw = fenced ? fenced[1]! : text
-  const m = /\{[\s\S]*\}/.exec(raw)
-  if (!m) return null
-  try { return JSON.parse(m[0]) } catch { return null }
+  // The model is told to return bare JSON. The two deviations seen in practice: a ```json fence
+  // (possibly unterminated when the output was cut), and a response truncated at max_tokens.
+  const cleaned = text.replace(/```(?:json)?/g, '')
+  const start = cleaned.indexOf('{')
+  if (start < 0) return null
+  const raw = cleaned.slice(start, cleaned.lastIndexOf('}') + 1 || undefined)
+  try { return JSON.parse(raw) } catch { /* fall through to the truncation salvage */ }
+
+  // Truncated mid-plan: keep every COMPLETE step and drop the cut-off tail. The shape is
+  // {"summary": "...", "steps": [ {...}, {...} — so a `}` closing back to depth 2 marks the end of
+  // a whole step (steps are the only objects at that depth; summary is a string).
+  const body = cleaned.slice(start)
+  let depth = 0, inStr = false, esc = false, lastStepEnd = -1
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]
+    if (esc) { esc = false; continue }
+    if (ch === '\\') { esc = true; continue }
+    if (ch === '"') { inStr = !inStr; continue }
+    if (inStr) continue
+    if (ch === '{' || ch === '[') depth++
+    else if (ch === '}' || ch === ']') { depth--; if (ch === '}' && depth === 2) lastStepEnd = i }
+  }
+  if (lastStepEnd < 0) return null
+  try { return JSON.parse(body.slice(0, lastStepEnd + 1) + ']}') } catch { return null }
 }
 
 export async function POST(req: NextRequest) {
@@ -110,7 +130,12 @@ export async function POST(req: NextRequest) {
   const text = (data.content ?? []).filter((b: { type: string }) => b.type === 'text').map((b: { text: string }) => b.text).join('')
   const parsed = extractJson(text) as { summary?: string; steps?: unknown[] } | null
   if (!parsed || !Array.isArray(parsed.steps)) {
-    return NextResponse.json({ ok: false, error: 'The planner did not return a usable plan. Try rephrasing the instruction.' }, { status: 502 })
+    // Keep the model's raw output in the server log — "not usable" is undiagnosable without it.
+    console.error('organizer-plan: unusable response', { stopReason: data.stop_reason, head: text.slice(0, 400), tail: text.slice(-400) })
+    const error = data.stop_reason === 'max_tokens'
+      ? 'The plan was too large to finish. Narrow the scope (fewer decks) or split the reorganization into smaller instructions.'
+      : 'The planner did not return a usable plan. Try rephrasing the instruction.'
+    return NextResponse.json({ ok: false, error }, { status: 502 })
   }
 
   // Shape-check only — ids and destinations are re-validated on the client against the real library.

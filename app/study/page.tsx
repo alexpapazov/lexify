@@ -22,7 +22,7 @@ import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, effectiveDebtSince } from '@/lib/goalCarryover'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { scheduleStatus } from '@/lib/goalSchedule'
+import { scheduleStatus, patternPlanForDate } from '@/lib/goalSchedule'
 import { shareDayAcrossLanguages } from '@/lib/dailyCeiling'
 import type { GoalSchedule } from '@/domain'
 import { langName } from '@/lib/languages'
@@ -985,6 +985,33 @@ export default function StudyPage() {
     await supabase.from('profiles').update({ goal_deferrals: next }).eq('user_id', userId).then(() => {}, () => {})
   }
 
+  /**
+   * The schedule-mode counterpart of `deferGoalToTomorrow`, expressed in the schedule's own
+   * vocabulary: a zero-capacity `dateExceptions` entry for today. Deferrals never touch a scheduled
+   * pair (`goal_deferrals` feeds `owedGoalForDate`, which no schedule reads).
+   *
+   * What "moves" depends on the schedule kind, and only the daily pattern needs explicit help:
+   *   - A LONG-TERM target re-derives from what's left, so zeroing today re-spreads the remainder
+   *     over every remaining day by construction. Forcing it all onto tomorrow would fight that.
+   *   - A WEEKLY pattern re-water-fills the week's target across the days that still have capacity.
+   *     (Deferring the week's LAST day drops the remainder unless debt carry is on — accepted.)
+   *   - A DAILY pattern has no target to conserve it — each day IS its exception/weekday number —
+   *     so tomorrow's exception is explicitly raised by what's being pushed.
+   */
+  async function deferScheduleToTomorrow(key: string, remaining: number) {
+    if (!userId || !todayStr) return
+    const sched = schedules.get(key)
+    if (!sched || (sched.dateExceptions?.[todayStr] ?? -1) === 0) return
+    const exceptions = { ...(sched.dateExceptions ?? {}), [todayStr]: 0 }
+    if (sched.targetCount == null && sched.weeklyTarget == null) {
+      const tomorrow = addDays(todayStr, 1)
+      exceptions[tomorrow] = patternPlanForDate(sched, tomorrow) + remaining
+    }
+    const updated = { ...sched, dateExceptions: exceptions }
+    setSchedules(prev => new Map(prev).set(key, updated))
+    await new SupabaseGoalScheduleRepository().save(userId, updated).catch(() => {})
+  }
+
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: global.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'     },
@@ -1040,11 +1067,14 @@ export default function StudyPage() {
                       <div className="flex items-center justify-between text-sm">
                         <span className="text-ink">{langName(pair.sourceLanguage)} → {langName(pair.targetLanguage)}</span>
                         <div className="flex items-center gap-3">
-                          {/* Small remaining load → offer to push it to tomorrow instead of doing a card or two now. */}
-                          {/* Deferring is meaningless under a schedule: skipping today already
-                              redistributes across the days that are left. */}
-                          {!schedules.has(key) && (goal - count) > 0 && (goal - count) < 5 && (
-                            <button onClick={() => deferGoalToTomorrow(key)}
+                          {/* Small remaining load (5 or fewer) → offer to push it to tomorrow instead
+                              of doing a card or two now. Scheduled pairs defer through the schedule's
+                              own day-off mechanism; weekday-goal pairs through goal_deferrals. */}
+                          {(goal - count) > 0 && (goal - count) <= 5 && (
+                            <button
+                              onClick={() => schedules.has(key)
+                                ? deferScheduleToTomorrow(key, goal - count)
+                                : deferGoalToTomorrow(key)}
                               className="text-xs text-ink-faint hover:text-accent transition-colors"
                               title="Move today's remaining cards for this language to tomorrow">→ tomorrow</button>
                           )}
