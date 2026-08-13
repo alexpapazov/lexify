@@ -54,6 +54,7 @@ export default function OrganizerPage() {
   })
 
   const [phase, setPhase] = useState<Phase>('setup')
+  const [planningMsg, setPlanningMsg] = useState('Reading your library and writing a plan…')
   const [result, setResult] = useState<PlanResult | null>(null)
   const [showLibrary, setShowLibrary] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -119,20 +120,15 @@ export default function OrganizerPage() {
     if (added.length > 0) setFiles(prev => [...prev, ...added])
   }
 
-  /** A document as text for the planner, plus the flat word list the diagnostics need. */
+  /** A document as its sections — the planner builds its own text and outlines from these. */
   function documentsForPlanner() {
-    return files.map(f => {
-      const lines: string[] = []
-      const words: string[] = []
-      for (const deck of f.plan.decks) {
-        lines.push([...deck.path, deck.name].join(' / '))
-        for (const c of deck.cards) {
-          lines.push(`    ${c.front} = ${c.back}`)
-          words.push(c.front)
-        }
-      }
-      return { name: f.name, text: lines.join('\n'), words }
-    })
+    return files.map(f => ({
+      name: f.name,
+      sections: f.plan.decks.map(d => ({
+        path: d.path, name: d.name,
+        cards: d.cards.map(c => ({ front: c.front, back: c.back })),
+      })),
+    }))
   }
 
   async function makePlan() {
@@ -142,6 +138,7 @@ export default function OrganizerPage() {
     if (!task.trim() && files.length === 0) { setError('Give an instruction, a document, or both.'); return }
 
     setBusy(true); setError(null); setPhase('planning')
+    setPlanningMsg('Reading your library and writing a plan…')
     setResult(null); setApplied(null); setFailed([]); setUndone(false)
     try {
       const res = await planMigration({
@@ -153,6 +150,7 @@ export default function OrganizerPage() {
         sourceLanguage: first.sourceLanguage,
         targetLanguage: first.targetLanguage,
         policy,
+        onProgress: setPlanningMsg,
       })
       setResult(res)
       ctxRef.current = {
@@ -286,8 +284,8 @@ export default function OrganizerPage() {
 
       {phase === 'planning' && (
         <div className="panel text-center py-10 space-y-2">
-          <p className="text-sm text-ink">Reading your library and writing a plan…</p>
-          <p className="text-xs text-ink-faint">This is one big think, so it takes a few moments.</p>
+          <p className="text-sm text-ink">{planningMsg}</p>
+          <p className="text-xs text-ink-faint">Large libraries are planned in stages — this can take a few minutes.</p>
         </div>
       )}
 

@@ -11,6 +11,7 @@ import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
+import { interleaveLibrary, planMixedReorder } from '@/lib/libraryOrder'
 import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
 import { climbInProgress } from '@/lib/climbProgress'
 import { CardBulkPanel } from '@/components/CardBulkPanel'
@@ -405,34 +406,21 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     const { rootFolders, rootDecks } = getVisibleRoots()
 
     if (target.pos === 'into') {
-      // Move INTO a folder
+      // Move INTO a folder — only the middle drop zone of a folder row means this.
       if (dragging.type === 'folder' && dragging.id !== target.id) {
         await folderRepo.updateParent(dragging.id, target.id)
       } else if (dragging.type === 'deck') {
         await deckRepo.update(dragging.id, { folderId: target.id })
       }
     } else {
-      // Reorder within root
-      if (dragging.type === 'folder') {
-        const fromIdx = rootFolders.findIndex(f => f.id === dragging.id)
-        const toIdx   = rootFolders.findIndex(f => f.id === target.id)
-        if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-          const reordered = reorder(rootFolders, fromIdx, toIdx, target.pos)
-          await folderRepo.updatePositions(reordered.map((f, i) => ({ id: f.id, position: i })))
-        }
-      } else {
-        // Deck dropped on folder row → move into that folder
-        if (allFolders.some(f => f.id === target.id)) {
-          await deckRepo.update(dragging.id, { folderId: target.id })
-        } else {
-          // Deck dropped on deck row → reorder decks
-          const fromIdx = rootDecks.findIndex(d => d.id === dragging.id)
-          const toIdx   = rootDecks.findIndex(d => d.id === target.id)
-          if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-            const reordered = reorder(rootDecks, fromIdx, toIdx, target.pos)
-            await deckRepo.updatePositions(reordered.map((d, i) => ({ id: d.id, position: i })))
-          }
-        }
+      // Reorder within root — folders and decks live in ONE ordered list, so dropping a deck
+      // above a folder places it above the folder (it used to fall INTO it).
+      const plan = planMixedReorder(interleaveLibrary(rootFolders, rootDecks), dragging, target.id, target.pos)
+      if (plan) {
+        await Promise.all([
+          plan.folders.length > 0 ? folderRepo.updatePositions(plan.folders) : null,
+          plan.decks.length > 0 ? deckRepo.updatePositions(plan.decks) : null,
+        ])
       }
     }
 
@@ -1294,7 +1282,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   // ── Folder-tree view, filtered to the active pairing ───────────────────────
 
   const { rootFolders, rootDecks } = getVisibleRoots()
-  const hasContent = rootFolders.length > 0 || rootDecks.length > 0
+  const rootRows = interleaveLibrary(rootFolders, rootDecks)
+  const hasContent = rootRows.length > 0
 
   // Flat card search results across all decks in this pairing
   const pairSearchQuery = searchQuery.trim().toLowerCase()
@@ -1579,8 +1568,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         </div>
       ) : (
         <div className="space-y-0" data-tour="library-folders">
-          {/* Root folders */}
-          {rootFolders.map(folder => {
+          {/* One interleaved list — a deck can sit above a folder and vice versa. */}
+          {rootRows.map(row => {
+            if (row.kind === 'folder') {
+            const folder = row.folder
             const dt            = dropTarget?.id === folder.id ? dropTarget : null
             const isDragging    = dragging?.type === 'folder' && dragging.id === folder.id
 
@@ -1642,10 +1633,9 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                 )}
               </div>
             )
-          })}
+            }
 
-          {/* Root-level decks */}
-          {rootDecks.map(deck => {
+            const deck = row.deck
             const dt         = dropTarget?.id === deck.id ? dropTarget : null
             const isDragging = dragging?.type === 'deck' && dragging.id === deck.id
 

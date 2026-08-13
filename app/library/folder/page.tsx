@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
+import { interleaveLibrary, planMixedReorder } from '@/lib/libraryOrder'
 import { routes } from '@/lib/routes'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -88,15 +89,6 @@ function getDropPos(e: React.DragEvent, isFolder: boolean): DropPos {
   if (pct < 0.33) return 'before'
   if (isFolder && pct < 0.67) return 'into'
   return 'after'
-}
-
-function reorder<T>(arr: T[], fromIdx: number, toIdx: number, pos: 'before' | 'after'): T[] {
-  const next = [...arr]
-  const item = next.splice(fromIdx, 1)[0] as T
-  const insertAt = pos === 'before' ? toIdx : toIdx + 1
-  const adjusted = fromIdx < insertAt ? insertAt - 1 : insertAt
-  next.splice(adjusted, 0, item)
-  return next
 }
 
 function buildAncestors(allFolders: Folder[], currentId: string): Folder[] {
@@ -376,32 +368,22 @@ function FolderPageInner() {
     const deckRepo   = new SupabaseDeckRepository()
 
     if (target.pos === 'into') {
+      // Only the middle drop zone of a folder row means "put it inside".
       if (dragging.type === 'folder' && dragging.id !== target.id) {
         await folderRepo.updateParent(dragging.id, target.id)
       } else if (dragging.type === 'deck') {
         await deckRepo.update(dragging.id, { folderId: target.id })
       }
     } else {
-      const { subfolders: visibleSubfolders, decks: visibleDecks } = getVisibleItems()
-      if (dragging.type === 'folder') {
-        const fromIdx = visibleSubfolders.findIndex(f => f.id === dragging.id)
-        const toIdx   = visibleSubfolders.findIndex(f => f.id === target.id)
-        if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-          const reordered = reorder(visibleSubfolders, fromIdx, toIdx, target.pos)
-          await folderRepo.updatePositions(reordered.map((f, i) => ({ id: f.id, position: i })))
-        }
-      } else {
-        // Deck → dropped on folder = move into
-        if (allFolders.some(f => f.id === target.id)) {
-          await deckRepo.update(dragging.id, { folderId: target.id })
-        } else {
-          const fromIdx = visibleDecks.findIndex(d => d.id === dragging.id)
-          const toIdx   = visibleDecks.findIndex(d => d.id === target.id)
-          if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-            const reordered = reorder(visibleDecks, fromIdx, toIdx, target.pos)
-            await deckRepo.updatePositions(reordered.map((d, i) => ({ id: d.id, position: i })))
-          }
-        }
+      // Subfolders and decks live in ONE ordered list, so dropping a deck above a folder places
+      // it above the folder (it used to fall INTO it).
+      const { subfolders, decks: visibleDecks } = getVisibleItems()
+      const plan = planMixedReorder(interleaveLibrary(subfolders, visibleDecks), dragging, target.id, target.pos)
+      if (plan) {
+        await Promise.all([
+          plan.folders.length > 0 ? folderRepo.updatePositions(plan.folders) : null,
+          plan.decks.length > 0 ? deckRepo.updatePositions(plan.decks) : null,
+        ])
       }
     }
 
@@ -610,6 +592,7 @@ function FolderPageInner() {
   )
 
   const { subfolders: visibleSubfolders, decks: visibleDecks } = getVisibleItems()
+  const visibleRows = interleaveLibrary(visibleSubfolders, visibleDecks)
 
   // Never-studied, never-onboarded cards across the folder — what a fresh onboarding run would queue.
   // Derived from the stats we already load; 0 until they arrive (counts === null doubles as the
@@ -952,8 +935,10 @@ function FolderPageInner() {
         </div>
       ) : (
         <div className="space-y-0">
-          {/* Subfolders */}
-          {visibleSubfolders.map(sub => {
+          {/* One interleaved list — a deck can sit above a subfolder and vice versa. */}
+          {visibleRows.map(row => {
+            if (row.kind === 'folder') {
+            const sub = row.folder
             const dt         = dropTarget?.id === sub.id ? dropTarget : null
             const isDragging = dragging?.type === 'folder' && dragging.id === sub.id
 
@@ -1011,10 +996,9 @@ function FolderPageInner() {
                 )}
               </div>
             )
-          })}
+            }
 
-          {/* Decks */}
-          {visibleDecks.map(deck => {
+            const deck = row.deck
             const dt         = dropTarget?.id === deck.id ? dropTarget : null
             const isDragging = dragging?.type === 'deck' && dragging.id === deck.id
 

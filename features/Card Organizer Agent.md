@@ -89,9 +89,33 @@ touched.
 
 ---
 
+## Scaling: thousands of cards (2026-08-12)
+
+One giant model call dies at scale — output ceilings, function timeouts, "Failed to fetch" (both were
+hit on the first real runs). The planner is now sized to the load, all inside `planMigration`:
+
+- **Short ids** (`lib/agents/modelExport.ts`): the model reads `[f1]`/`[d2]`/`17: front = back` and
+  answers in the same vocabulary; the client translates back and fills every echo field from its own
+  data. A UUID is 36 characters — short ids are the difference between "fits" and "doesn't". They
+  also closed a real hole: the old export had NO ids, so every container/card step the model proposed
+  was validator-dropped.
+- **Small scope (≤60k chars of library+docs)**: the single-shot plan, as designed.
+- **Big scope**: (1) a STRUCTURE call over the tree (no card lines) + document outlines returns
+  container steps, a route for every doc section, and a leftover policy; (2) doc-listed cards are
+  moved DETERMINISTICALLY client-side (`resolveDocMoves`, normalizeFrontKey matching — free at any
+  size); (3) leftovers hit the model again only if the structure stage chose `judge` — batches of
+  250 with a numbered destination menu.
+- **Transport**: `maxDuration = 300`, streamed Anthropic call, per-mode token ceilings, truncation
+  salvage that keeps every complete step, NOTES lists capped at 60 entries.
+
 ## Error log
 
-*(none yet — never run against a real account)*
+- 2026-08-12 — "The planner did not return a usable plan": 16k output ceiling truncated the JSON
+  mid-plan. Fixed with the salvage parser + 32k ceiling.
+- 2026-08-12 — "Failed to fetch" on a big scope: no maxDuration + non-streamed call; the function
+  died mid-generation. Fixed by the staged pipeline + streaming + maxDuration.
+- 2026-08-12 — the export sent to the model contained no ids, so every proposed step referenced
+  invented ids and was dropped. Fixed by the short-id export.
 
 ## Known gaps
 

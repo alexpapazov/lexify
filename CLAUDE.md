@@ -2703,6 +2703,55 @@ client's existing `stopReason === 'max_tokens'` warning shows a usable partial p
 error; when nothing is salvageable the error distinguishes "too large — narrow the scope" from
 "unusable — rephrase", and the raw head/tail is `console.error`ed server-side for diagnosis.
 
+## Organizer scales to thousands of cards (2026-08-12) — short ids + staged planning
+
+The user then hit **"Failed to fetch"** on a big scope + long docs: the function died mid-generation
+(no `maxDuration`, non-streamed call) and one giant model call is structurally wrong at that size
+anyway. The rebuild, all behind `planMigration`:
+
+- **SHORT IDS everywhere** (`lib/agents/modelExport.ts`, pure, 19 tests). The model-facing export
+  labels folders `[f1]`, decks `[d2]`, cards `17: front = back`; the client maps them back to UUIDs.
+  This also fixed a REAL bug: the old export contained NO ids at all, so every moveDeck/moveFolder/
+  moveCard the model proposed referenced ids it invented and was silently dropped by `validatePlan`.
+  A card's short id names the (card, deck) LINK — a shared card gets one id per deck, so a move is
+  unambiguous — and `translateSteps` fills front/back/fromDeck from OUR data, never the model's echo.
+- **Two paths by size** (`SINGLE_SHOT_MAX_CHARS = 60_000` of library+doc text): small scopes keep the
+  one-call plan; big scopes run **structure → deterministic doc moves → optional leftover batches**:
+  1. `mode: 'structure'` — tree WITHOUT card lines + document OUTLINES (section paths, counts, 8
+     samples) → container steps + `sectionRoutes` (every doc section → destination deck path) + a
+     `leftovers` policy (`leave` / `route` / `judge`).
+  2. `resolveDocMoves` — CLIENT-SIDE, no model: every doc word matched by `normalizeFrontKey` to a
+     scope card (or pull-in candidate) and moved to its routed destination. This is what makes
+     "thousands of doc-listed cards" free. Section with no route → its own path (docs-literal default).
+  3. Leftovers (cards no doc names) only touch a model again if the structure stage said `judge`:
+     batches of 250 through `mode: 'assign'` (numbered destination menu, index answers), 2 in flight
+     via `mapLimit`; a failed batch loses its assignments, not the plan. `route` sends them all to one
+     deck; no instruction → always `leave`.
+- **Transport**: `export const maxDuration = 300` + the Anthropic call now STREAMS (SSE accumulated
+  server-side) — a long non-streamed generation is what produced the connection drops. Per-mode
+  output ceilings: plan 32k / structure 8k / assign 8k.
+- NOTES lists are capped at 60 entries (`capList`) — a thousand-line pull-in list was its own blowup.
+- The page shows staged progress via `onProgress` ("Assigning cards (3/12 batches)…").
+- `OutOfScopeCard` gained `back` + `deckId` (pull-in moves need a source deck without a lookup).
+
+## Library lists: folders and decks are ONE ordered list (2026-08-12)
+
+**Bug (user report)**: dragging a deck ABOVE a folder dropped it INSIDE the folder. Two causes:
+`commitDrop` on both library pages treated ANY deck-on-folder drop as "move into" (ignoring the
+before/into/after zones `getDropPos` already computed), and rendering was "all folders, then all
+decks", so a deck above a folder couldn't even display. Now `lib/libraryOrder.ts` (pure, 6 tests):
+
+- `interleaveLibrary(folders, decks)` — one list sorted by `position` across both types; equal
+  positions keep FOLDERS FIRST so never-reordered libraries look exactly as before.
+- `planMixedReorder(rows, dragging, targetId, pos)` — splice + reinsert, then write a SHARED 0..n
+  index back to BOTH tables (each table only needs its own relative order preserved; a shared index
+  does that and fixes the interleave). Null on no-op/unknown id — write nothing then.
+- Both `app/library/page.tsx` (root) and `app/library/folder/page.tsx` render ONE map over the
+  interleaved rows and route all before/after drops (any type on any type) through the plan.
+  **"Into" is now ONLY the middle third of a folder row** — that's the entire fix for the user's bug.
+- The folder page's private `reorder` helper was deleted as orphaned; the root page keeps its copy
+  for the language-pair GRID (a separate, unrelated drag system).
+
 ## Folder counts blind to climbing cards (2026-08-10)
 
 **Bug (user screenshot)**: decks showed cards in Learning while the parent folder showed 0 —

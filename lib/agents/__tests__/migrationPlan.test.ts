@@ -29,7 +29,7 @@ describe('diagnose', () => {
   })
 
   it('reports a document word that exists elsewhere in the library as out-of-scope, not missing', () => {
-    const outside: OutOfScopeCard[] = [{ cardId: 'c9', front: 'la mela', deckName: 'Fruit', sourceLanguage: 'it' }]
+    const outside: OutOfScopeCard[] = [{ cardId: 'c9', front: 'la mela', back: 'apple', deckId: 'd9', deckName: 'Fruit', sourceLanguage: 'it' }]
     const d = diagnose([card('c1', 'il gatto', 'A')], ['la mela'], outside, 'it')
     expect(d).toHaveLength(1)
     expect(d[0]).toMatchObject({ kind: 'outOfScope', word: 'la mela', cardId: 'c9', fromDeckName: 'Fruit' })
@@ -63,7 +63,7 @@ describe('applyPolicy', () => {
     expect(applyPolicy(diags, { ...ALLOW, ignoreMissing: true }).map(d => d.kind)).toEqual(['duplicate'])
   })
   it('never drops out-of-scope — it is an offer, not noise', () => {
-    const withOutside = diagnose([], ['la mela'], [{ cardId: 'c9', front: 'la mela', deckName: 'Fruit', sourceLanguage: 'it' }], 'it')
+    const withOutside = diagnose([], ['la mela'], [{ cardId: 'c9', front: 'la mela', back: 'apple', deckId: 'd9', deckName: 'Fruit', sourceLanguage: 'it' }], 'it')
     const kept = applyPolicy(withOutside, { ignoreDuplicates: true, ignoreMissing: true, allowPullIn: true })
     expect(kept.map(d => d.kind)).toEqual(['outOfScope'])
   })

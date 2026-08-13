@@ -82,6 +82,8 @@ export interface ScopeCard {
 export interface OutOfScopeCard {
   cardId: string
   front:  string
+  back:   string
+  deckId: string
   deckName: string
   sourceLanguage: string
 }
