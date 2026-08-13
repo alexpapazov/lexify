@@ -75,7 +75,7 @@ export function Navbar() {
     <>
       {/* pt-[safe-area] keeps the Lexify row below the device status bar (Capacitor edge-to-edge). */}
       <nav className="sticky top-0 z-50 border-b border-line/5 bg-surface-deep/90 backdrop-blur pt-[env(safe-area-inset-top)]">
-        <div className="w-full px-5 md:px-8 h-16 flex items-center">
+        <div className="w-full max-w-5xl mx-auto px-4 h-16 flex items-center">
 
           {/* ── Desktop: brand · nav links · account, spread edge to edge ── */}
           <div className="hidden md:flex items-center justify-between w-full gap-2">
@@ -158,7 +158,7 @@ export function Navbar() {
 
           {/* Drawer panel */}
           <div
-            className="relative mt-[calc(env(safe-area-inset-top)+4rem)] bg-surface-deep border-b border-line/5 px-5 py-3 space-y-1"
+            className="relative mt-[calc(env(safe-area-inset-top)+4rem)] bg-surface-deep border-b border-line/5 max-w-5xl mx-auto w-full px-4 py-3 space-y-1"
             onClick={e => e.stopPropagation()}
           >
             {navLinks.map(({ href, label }) => {

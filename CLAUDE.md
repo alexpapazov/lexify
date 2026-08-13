@@ -2953,7 +2953,12 @@ of it and reverted everything except the bar: *"I hate the resizing in everythin
 after we enlarged it and made it end-to-end the first time, but I want everything else to be like it
 was."* The settled state:
 
-- **Navbar**: `w-full px-5 md:px-8 h-16`, edge to edge, with the larger logo/links/avatar. KEEP.
+- **Navbar**: the BAR spans the window (background + bottom border on the `<nav>`), but its CONTENTS
+  sit in `w-full max-w-5xl mx-auto px-4 h-16` — **the same column as `MainContainer`'s non-full-bleed
+  branch**, so the logo lines up with a page's heading and the avatar with the right edge of its
+  content. Measured at 1512px: logo and content both start at x=260. The larger h-16 bar and the
+  bigger logo/links/avatar are kept. **If you change either container's width or padding, change the
+  other identically** — that shared value is the whole alignment.
 - **Pages**: `max-w-5xl mx-auto px-4 py-8` — a centred 1024px column, as before. `MainContainer`
   applies it to every route EXCEPT `/settings`, which stays full-bleed because its section rail needs
   the width (the user asked for that separately and kept it).
@@ -2961,7 +2966,9 @@ was."* The settled state:
   and the deck edit/add pages `3xl`, practice/onboarding `2xl`.
 - **Library pair tiles restored**: `grid-cols-2 sm:grid-cols-3`, `py-6`, `text-2xl` flag.
 
-The bar being wider than the content is INTENTIONAL — don't "fix" the alignment by widening pages.
+The BAR's background is wider than the content on purpose; its CONTENTS are not — the user marked
+the mismatch on a screenshot ("it needs to line up a bit more cleanly") and the fix was to pull the
+bar's contents onto the page column, NOT to widen pages again.
 
 ## Top bar: full-bleed and larger (2026-08-11)
 
