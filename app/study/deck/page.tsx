@@ -1231,8 +1231,23 @@ export default function DeckDetailPage() {
     typeof window !== 'undefined' && !!localStorage.getItem(`syn_scan_ignored_${deckId}`)
   )
   const searchParams = useSearchParams()
-  const activeFilter = searchParams.get('filter') as 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred' | null
+  type DeckFilter = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
+  // LOCAL STATE drives the filter, seeded from the URL. Reading it straight off useSearchParams()
+  // broke the star toggle: same-route query-param navigation doesn't reliably re-render in
+  // Next 16 + React 19 (the "← Library back button" landmine). Toggles set state directly and
+  // push the URL only so deep links and back/forward keep working.
+  const [activeFilter, setActiveFilterState] = useState<DeckFilter | null>(
+    () => searchParams.get('filter') as DeckFilter | null)
   const cardParam    = searchParams.get('card')
+
+  function setActiveFilter(filter: DeckFilter | null) {
+    setActiveFilterState(filter)
+    router.push(filter ? routes.deck(deckId, { filter }) : routes.deck(deckId))
+  }
+  // Back/forward (and programmatic navigation) still win when the re-render does fire.
+  useEffect(() => {
+    setActiveFilterState(searchParams.get('filter') as DeckFilter | null)
+  }, [searchParams])
 
   async function loadAll(uid: string) {
     const deckRepo  = new SupabaseDeckRepository()
@@ -1784,6 +1799,7 @@ export default function DeckDetailPage() {
             <Link
               key={label}
               href={isActive ? routes.deck(deckId) : routes.deck(deckId, { filter })}
+              onClick={() => setActiveFilterState(isActive ? null : filter as DeckFilter)}
               className={`panel border-t-2 ${border} text-center transition-colors w-full block space-y-1
                 ${isActive ? 'bg-surface-raised ring-1 ring-ink/10' : 'hover:bg-surface-raised/50'}`}
             >
@@ -1800,16 +1816,15 @@ export default function DeckDetailPage() {
           <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Cards</h2>
           <div className="flex items-center gap-2">
             {activeFilter && (
-              <Link href={routes.deck(deckId)} className="text-xs text-accent hover:text-accent-soft transition-colors">
+              <Link href={routes.deck(deckId)} onClick={() => setActiveFilterState(null)}
+                className="text-xs text-accent hover:text-accent-soft transition-colors">
                 Show all ✕
               </Link>
             )}
             {/* Starred is a card flag, not a graduation state, so it filters from here rather than
                 sitting in the stat-box row alongside the states that partition the deck. */}
             <StarFilterButton active={activeFilter === 'starred'}
-              onToggle={() => router.push(activeFilter === 'starred'
-                ? routes.deck(deckId)
-                : routes.deck(deckId, { filter: 'starred' }))} />
+              onToggle={() => setActiveFilter(activeFilter === 'starred' ? null : 'starred')} />
           </div>
         </div>
 

@@ -2734,6 +2734,18 @@ anyway. The rebuild, all behind `planMigration`:
 - The page shows staged progress via `onProgress` ("Assigning cards (3/12 batches)…").
 - `OutOfScopeCard` gained `back` + `deckId` (pull-in moves need a source deck without a lookup).
 
+## Deck page filter is LOCAL STATE, not useSearchParams (2026-08-12)
+
+**Bug (user report)**: the ★ filter worked at folder level but did nothing at deck level. The folder
+and library pages hold `activeFilter` in React state; the deck page read it from `useSearchParams()`
+and toggled via `router.push` to the same route with `?filter=` — the SAME same-route-param
+re-render landmine the "← Library back button" fix documented (Next 16 + React 19): the URL changed,
+searchParams didn't propagate, nothing rendered. Fix mirrors LibraryPageBody: `activeFilter` is
+state seeded from the URL; the star button/stat boxes/"Show all ✕" set state directly and push/Link
+the URL only for deep links + back/forward (a `useEffect` on searchParams re-syncs when the
+re-render DOES fire). Rule: on the query-param routes, never let rendering depend on
+`useSearchParams()` updating after a same-route navigation — drive it from state.
+
 ## Library lists: folders and decks are ONE ordered list (2026-08-12)
 
 **Bug (user report)**: dragging a deck ABOVE a folder dropped it INSIDE the folder. Two causes:
