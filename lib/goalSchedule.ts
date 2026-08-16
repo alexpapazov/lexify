@@ -363,17 +363,23 @@ export function scheduleStatus({ schedule, today, doneSoFar, doneToday }: Schedu
     let goal = base
     let debtBalance = 0
 
-    // ── Debt (opt-in, per flag) — the ONE pattern measure with a cumulative memory ──
+    // The running position vs the CONFIGURED plan — computed for EVERY pattern, debt or not, because
+    // "am I ahead or behind my 8-a-day" is a fact of history, not something debt-carry invents.
+    // Counts TODAY on both sides, matching `schedulePace` and `goalStanding`: the day starts down by
+    // today's goal and climbs to zero as you study.
+    const start = progressStart(schedule)
+    const yesterday = addScheduleDays(today, -1)
+    let planned = 0
+    if (yesterday >= start) for (const d of eachDate(start, yesterday)) planned += patternPlanForDate(schedule, d)
+    const pace = (doneSoFar - (planned + base)) || 0 // `|| 0` normalizes -0
+
+    // ── Debt (opt-in, per flag) — whether that position also ADJUSTS the goal ──
     // Derived, never stored: planned-since-start minus done-through-yesterday. carryMissed keeps
     // the deficit side, carryExtra the surplus side; either alone clips the other to zero. The
     // ceiling caps the adjusted goal and — because the balance is recomputed from history each
     // day — whatever the cap withholds simply reappears tomorrow, capped again. Exactly the
     // deferral contract `capGoal` documents; do not turn this into a stored counter.
     if (schedule.debtCarryMissed || schedule.debtCarryExtra) {
-      const start = progressStart(schedule)
-      const yesterday = addScheduleDays(today, -1)
-      let planned = 0
-      if (yesterday >= start) for (const d of eachDate(start, yesterday)) planned += patternPlanForDate(schedule, d)
       const doneThroughYesterday = Math.max(0, doneSoFar - (doneToday ?? 0))
       let balance = planned - doneThroughYesterday
       if (!schedule.debtCarryMissed) balance = Math.min(balance, 0)
@@ -397,9 +403,7 @@ export function scheduleStatus({ schedule, today, doneSoFar, doneToday }: Schedu
       shortfall: 0,
       done: false,
       expired: !!schedule.deadline && today > schedule.deadline,
-      // Ahead/behind IS meaningful once debt gives the pattern a memory: negative balance = banked.
-      // (`|| 0` normalizes the -0 that negating a zero balance produces.)
-      pace: -debtBalance || 0,
+      pace,
       remedies: null,
       isPattern: true,
       debtBalance,

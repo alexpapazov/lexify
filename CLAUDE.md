@@ -2666,6 +2666,13 @@ form can't round-trip a daily goal back into a long-term one. Migration `117_pat
   `floor(base × 2.5)`. The cap DEFERS by construction — nothing is stored, so the withheld words
   regrow from history tomorrow. Debt is pattern-only: a long-term goal re-spreads, debt on top
   double-charges.
+- **Pattern pace is ALWAYS computed (2026-08-12), debt or not**: `pace = doneSoFar − (planned since
+  `progressStart` through yesterday + today's base plan)` — today counts on BOTH sides, matching
+  `schedulePace`/`goalStanding`, and it is UNCLIPPED (the carry flags clip only what adjusts the
+  GOAL, via `debtBalance`). The Goal progress panel shows the Pace metric on recurring cards whenever
+  a schedule supplies a start date; schedule-less weekday goals have no start to measure from and
+  show none. Debt-mode pace changed with this (it used to be `-debtBalance`, through-yesterday and
+  clipped) — that was an inconsistency, not a feature.
 - **`scheduleStatus` takes optional `doneToday`** — without it, today's work both fills the goal and
   shrinks the balance. Dashboard passes `todayGradCounts`, PresentSnapshot `gradToday`, LadderStudy
   `gradTodayPair`; the editor preview omits it (accepted deflation).

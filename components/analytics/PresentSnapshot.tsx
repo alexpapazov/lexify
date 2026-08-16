@@ -689,7 +689,8 @@ export function PresentSnapshot() {
             // falls back to today's count and says so.
             startDate: sc?.startDate ?? null,
             deadline: null,
-            // Debt gives a pattern a real ahead/behind position; debt-off patterns report 0 as before.
+            // The engine reports every pattern's real position vs its configured plan (debt or not);
+            // only schedule-less weekday goals have no start date to measure from and stay at 0.
             pace: st?.pace ?? 0,
             feasible: true,
             shortfall: 0,
@@ -917,7 +918,10 @@ export function PresentSnapshot() {
                       hint={g.studyDaysLeft !== g.calendarDaysLeft ? `${g.studyDaysLeft} of them study days` : 'calendar days'}
                     />
                   )}
-                  {g.kind === 'target' && (
+                  {/* Recurring goals get a pace too, as long as a schedule gives them a start date
+                      to measure from — "am I ahead of my 8-a-day" is as real as any deadline pace.
+                      Plain weekday goals (no schedule) have no start, so nothing honest to show. */}
+                  {(g.kind === 'target' || g.startDate != null) && (
                     <Metric
                       label="Pace"
                       value={g.pace === 0 ? 'Level' : g.pace > 0 ? `+${g.pace}` : `${g.pace}`}

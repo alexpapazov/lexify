@@ -433,9 +433,19 @@ describe('pattern schedules (no finish line)', () => {
     const st = scheduleStatus({ schedule: pattern(), today: '2026-09-07', doneSoFar: 40 })
     expect(st.isPattern).toBe(true)
     expect(st.feasible).toBe(true)     // nothing to be infeasible against
-    expect(st.pace).toBe(0)            // nothing to be behind
+    // 40 done vs 32 planned through Sunday + today's 8 = exactly level.
+    expect(st.pace).toBe(0)
     expect(st.done).toBe(false)        // never "finished"
     expect(st.remedies).toBeNull()
+  })
+
+  it('reports ahead/behind vs the configured plan even with debt OFF — pace is a fact, not a debt feature', () => {
+    // Sep 1 (Tue) → Sep 7 (Mon), 8/day on weekdays: planned Tue–Fri = 32, plus today's 8 = 40 owed.
+    const behind = scheduleStatus({ schedule: pattern(), today: '2026-09-07', doneSoFar: 25 })
+    expect(behind.pace).toBe(-15)
+    expect(behind.goal).toBe(8)        // ...but the GOAL is untouched: debt is off
+    const ahead = scheduleStatus({ schedule: pattern(), today: '2026-09-07', doneSoFar: 50 })
+    expect(ahead.pace).toBe(10)
   })
 
   it('draws an open-ended plan over a rolling horizon', () => {
@@ -592,7 +602,7 @@ describe('scheduleStatus — pattern debt', () => {
     const st = scheduleStatus({ schedule: daily(), today: '2026-09-03', doneSoFar: 0 })
     expect(st.debtBalance).toBe(10)
     expect(st.goal).toBe(12)
-    expect(st.pace).toBe(-10)
+    expect(st.pace).toBe(-15)          // the 10 missed plus today's untouched 5 — today counts on both sides
   })
 
   it('NEVER discards what the cap withheld — it reappears the next day (statelessness)', () => {
@@ -608,7 +618,7 @@ describe('scheduleStatus — pattern debt', () => {
     const st = scheduleStatus({ schedule: daily(), today: '2026-09-03', doneSoFar: 20 })
     expect(st.debtBalance).toBe(-10)
     expect(st.goal).toBe(0)
-    expect(st.pace).toBe(10)
+    expect(st.pace).toBe(5)            // 20 done vs 10 planned + today's 5
   })
 
   it('carry-missed alone ignores surplus; carry-extra alone ignores deficit', () => {
