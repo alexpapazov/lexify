@@ -24,8 +24,13 @@ What practice is now:
 - Target selection (`engine/practiceSelect.ts`), the drillable gate, native cloze mode, per-word
   plans, and the session-local override all survive unchanged.
 - **Matching game (2026-08-12)** — the first additional exercise type: pair word ↔ meaning in
-  rounds of 5, up to 20 words, no generation, instant start (`MatchingGame.tsx`, the "Exercise"
-  toggle in Session settings). More types remain planned.
+  rounds of 8, NO word cap (rounds absorb any count), a "Word side" toggle for which column holds
+  the target words, no generation, instant start (`MatchingGame.tsx`, the "Exercise" toggle in
+  Session settings). More types remain planned.
+- **Audio + attempt log (2026-08-12)** — 🔊 toggle in both players (cloze speaks the answer after a
+  correct check; matching speaks a target tile on every tap); every answer is filed in
+  `practice_attempts` (migration 119 — PENDING) with the learner's response and, for matching, the
+  wrongly-paired card. Write-only for now.
 - **Wrong cloze answers go to the back of the line (2026-08-12)** — the player's `queue` state grows
   by the missed item on Continue; the session ends only when everything has been answered correctly.
   The requeue reads the outcome AFTER any override, so "actually, mark correct" also cancels the

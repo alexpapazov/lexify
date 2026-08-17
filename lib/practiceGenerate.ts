@@ -21,6 +21,8 @@ const GENERATE_CONCURRENCY = 3
 /** A generated exercise, ready to play. */
 export interface PreparedExercise {
   exercise: PracticeExercise
+  /** The drilled card, when the target lemma resolves to one — the attempt log links through this. */
+  targetCardId: string | null
   /**
    * Native meaning of the word that belongs in the blank — shown INSIDE the blank, so the exercise
    * is "produce this meaning, correctly inflected" rather than "guess which word is missing".
@@ -49,7 +51,11 @@ export interface GenerateOptions {
 export function prepareExercise(exercise: PracticeExercise, targets: PracticeTarget[]): PreparedExercise {
   const answerToken = exercise.tokens.find(t => t.text === exercise.answer)
   const targetCard  = targets.find(t => t.lemma.trim().toLowerCase() === exercise.targetLemma)
-  return { exercise, targetGloss: (answerToken?.gloss || targetCard?.back || '').trim() }
+  return {
+    exercise,
+    targetCardId: targetCard?.cardId ?? null,
+    targetGloss: (answerToken?.gloss || targetCard?.back || '').trim(),
+  }
 }
 
 /**

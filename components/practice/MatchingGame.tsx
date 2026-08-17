@@ -6,12 +6,13 @@
  * Like every practice exercise, deliberately NOT a study session: it writes nothing — no
  * card_states, no review events, no due dates. It also needs no generation, so it starts instantly.
  *
- * The session's words play in ROUNDS of up to five pairs. Twenty pairs at once would be forty tiles
- * — unscannable on a phone — and rounds also give the session a rhythm: clear the board, get a new
- * one. Both columns shuffle independently, so a pair is never straight across from itself.
+ * The session's words play in ROUNDS of up to eight pairs — rounds are why the word count is
+ * unlimited: any selection is just more boards. Both columns shuffle independently, so a pair is
+ * never straight across from itself.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { AudioToggle, usePracticeAudio } from './usePracticeAudio'
 
 export interface MatchPair {
   id:    string
@@ -21,7 +22,7 @@ export interface MatchPair {
   back:  string
 }
 
-const ROUND_SIZE = 5
+const ROUND_SIZE = 8
 
 const shuffle = <T,>(xs: T[]): T[] => {
   const a = [...xs]
@@ -53,10 +54,25 @@ const fmtTime = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
-export function MatchingGame({ pairs, onExit }: {
+export interface MatchAttempt {
+  /** The TARGET-side pair the learner picked. */
+  pair: MatchPair
+  correct: boolean
+  /** On a mismatch: the pair whose native tile they wrongly chose. */
+  confused?: MatchPair
+}
+
+export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt }: {
   pairs:  MatchPair[]
   onExit: () => void
+  /** Which column holds the target-language words. */
+  targetSide?: 'left' | 'right'
+  /** Plays a word's audio; called on every tap of a target-language tile while audio is on. */
+  onSpeakTarget?: (pair: MatchPair) => void
+  /** Fire-and-forget attempt log — right or wrong, and wrong WITH WHAT. */
+  onAttempt?: (a: MatchAttempt) => void
 }) {
+  const [audioOn, toggleAudio] = usePracticeAudio()
   const [rounds,   setRounds]   = useState<Round[]>(() => buildRounds(pairs))
   const [round,    setRound]    = useState(0)
   const [matched,  setMatched]  = useState<Set<string>>(new Set())   // pair ids, across all rounds
@@ -82,8 +98,16 @@ export function MatchingGame({ pairs, onExit }: {
 
   useEffect(() => () => { if (wrongTimer.current) clearTimeout(wrongTimer.current) }, [])
 
+  const pairById = (id: string) => rounds.flatMap(r => r.pairs).find(p => p.id === id)
+
   /** Both sides picked → judge. Matching is by pair id, so duplicate glosses can't cross-match. */
   function judge(leftId: string, rightId: string) {
+    const targetId = targetSide === 'left' ? leftId : rightId
+    const otherId  = targetSide === 'left' ? rightId : leftId
+    const tp = pairById(targetId)
+    if (tp) onAttempt?.(leftId === rightId
+      ? { pair: tp, correct: true }
+      : { pair: tp, correct: false, confused: pairById(otherId) })
     if (leftId === rightId) {
       const nextMatched = new Set(matched).add(leftId)
       setMatched(nextMatched)
@@ -106,6 +130,11 @@ export function MatchingGame({ pairs, onExit }: {
   }
 
   function pick(side: 'left' | 'right', id: string) {
+    // Hearing the word is part of matching it — every tap of a target-language tile speaks it.
+    if (side === targetSide && audioOn) {
+      const p = pairById(id)
+      if (p) onSpeakTarget?.(p)
+    }
     if (side === 'left') {
       const next = selLeft === id ? null : id
       setSelLeft(next)
@@ -160,7 +189,7 @@ export function MatchingGame({ pairs, onExit }: {
           'border-line/20 text-ink hover:border-line/40 hover:bg-surface-raised cursor-pointer'
         }`}
       >
-        {side === 'left' ? p.front : p.back}
+        {side === targetSide ? p.front : p.back}
       </button>
     )
   }
@@ -171,6 +200,7 @@ export function MatchingGame({ pairs, onExit }: {
       <div className="flex items-center justify-between gap-4">
         <button onClick={onExit} className="text-sm text-ink-faint hover:text-ink transition-colors">✕ End practice</button>
         <div className="flex items-center gap-4 text-sm text-ink-muted tabular-nums">
+          <AudioToggle on={audioOn} onToggle={toggleAudio} />
           <span>{fmtTime(elapsed)}</span>
           {mistakes > 0 && <span className="text-danger">{mistakes} ✗</span>}
           <span>{done} / {total}</span>

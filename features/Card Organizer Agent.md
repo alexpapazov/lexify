@@ -42,6 +42,14 @@ an instruction with no documents reorganizes from the library alone.
 | `moveCard` | Relinks one card into a (possibly new) deck; `pullIn` marks one from outside the scope |
 | `deleteDeck` / `deleteFolder` | Removes an EMPTY container — run last, refused at run time if anything is inside, undone via `restore()` |
 
+**"🧹 Delete empty folders & decks" chip (2026-08-12)** — a Common-tasks button on the setup screen.
+Fully DETERMINISTIC: "empty" is computable, so no model call. Scans the WHOLE library (an empty
+folder can't be selected through the deck-based scope picker), cascades folder emptiness to a
+fixpoint (a folder holding only empty folders is itself empty), and drops the delete steps into the
+normal review → apply → undo flow. Deck emptiness reads `listForDecks` — NOT `deckIdsByCard`, which
+keeps only each card's first deck and would misread a deck of shared cards as empty. The "What the
+planner read" panel hides for these plans (`libraryText: ''` — there was no planner).
+
 **No renames.** Deletions exist (2026-08-12) but only for EMPTY containers — the executor re-checks
 emptiness at run time and refuses rather than cascades, so a deletion can never take contents with
 it. Folder deletions run deepest-first via a client-computed depth. `orderSteps` runs createFolder → moveFolder →

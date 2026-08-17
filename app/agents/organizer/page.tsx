@@ -24,8 +24,9 @@ import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { buildScopeTree } from '@/lib/scopeTree'
 import { ScopeTreePicker } from '@/components/agents/ScopeTreePicker'
+import { SupabaseCardRepository } from '@/lib/data/cards'
 import { planMigration, type PlanResult } from '@/lib/agents/planMigration'
-import { groupPlan, countCardMoves, type Diagnostic, type DiagnosticPolicy, type MigrationStep } from '@/lib/agents/migrationPlan'
+import { groupPlan, countCardMoves, orderSteps, type Diagnostic, type DiagnosticPolicy, type MigrationStep } from '@/lib/agents/migrationPlan'
 import { runMigration, undoMigration, type AppliedStep, type MigrationContext } from '@/lib/agents/migrationApply'
 import { readDeckPlanFromFile, type DeckPlan } from '@/lib/docx'
 import type { Deck, Folder } from '@/domain'
@@ -168,6 +169,78 @@ export default function OrganizerPage() {
     } finally { setBusy(false) }
   }
 
+  /**
+   * The "delete empty" chip: fully DETERMINISTIC — "empty" is computable, so no model is involved.
+   * Scans the whole library (an empty folder can't even be selected through a deck-based scope),
+   * builds delete steps, and drops into the normal review → apply → undo flow, where the executor
+   * re-checks emptiness at run time like any other deletion.
+   */
+  async function planEmptyCleanup() {
+    if (!userId || busy) return
+    setBusy(true); setError(null); setPhase('planning')
+    setPlanningMsg('Scanning for empty folders and decks…')
+    setResult(null); setApplied(null); setFailed([]); setUndone(false)
+    try {
+      // A deck is empty when deck_cards holds nothing for it — listForDecks, NOT deckIdsByCard,
+      // which keeps only each card's first deck and would misread a deck of shared cards as empty.
+      const byDeck = await new SupabaseCardRepository().listForDecks(decks.map(d => d.id))
+      const deadDecks = decks.filter(d => (byDeck.get(d.id)?.length ?? 0) === 0)
+      const deadDeckIds = new Set(deadDecks.map(d => d.id))
+
+      // Folders are empty once their empty decks are gone — cascade to a fixpoint, so a folder
+      // holding only empty folders is itself deletable.
+      const deadFolders = new Set<string>()
+      for (;;) {
+        let grew = false
+        for (const f of folders) {
+          if (deadFolders.has(f.id)) continue
+          const hasDeck = decks.some(d => d.folderId === f.id && !deadDeckIds.has(d.id))
+          const hasSub  = folders.some(x => x.parentId === f.id && !deadFolders.has(x.id))
+          if (!hasDeck && !hasSub) { deadFolders.add(f.id); grew = true }
+        }
+        if (!grew) break
+      }
+
+      const folderById = new Map(folders.map(f => [f.id, f]))
+      const depthOf = (id: string) => {
+        let depth = 0
+        for (let f = folderById.get(id); f?.parentId; f = folderById.get(f.parentId)) depth += 1
+        return depth
+      }
+      const steps = orderSteps([
+        ...deadDecks.map(d => ({ kind: 'deleteDeck' as const, deckId: d.id, deckName: d.name, reason: 'contains no cards' })),
+        ...[...deadFolders].map(id => ({
+          kind: 'deleteFolder' as const, folderId: id,
+          folderName: folderById.get(id)?.name ?? '', depth: depthOf(id),
+          reason: 'contains no decks or folders',
+        })),
+      ])
+
+      const first = decks[0]
+      setResult({
+        plan: {
+          summary: steps.length === 0
+            ? 'Your library has no empty folders or decks.'
+            : `Deletes ${deadDecks.length} empty deck${deadDecks.length === 1 ? '' : 's'} and ${deadFolders.size} empty folder${deadFolders.size === 1 ? '' : 's'}. Everything is previewed below and undoable afterwards.`,
+          steps,
+        },
+        steps, diagnostics: [], dropped: [], libraryText: '', truncated: false,
+      })
+      ctxRef.current = {
+        userId,
+        sourceLanguage: first?.sourceLanguage ?? '',
+        targetLanguage: first?.targetLanguage ?? '',
+        pipelineId: first?.pipelineId || DEFAULT_PIPELINE_ID,
+        folders: [...folders],
+        decks: [...decks],
+      }
+      setPhase('review')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setPhase('setup')
+    } finally { setBusy(false) }
+  }
+
   async function applyPlan() {
     const ctx = ctxRef.current
     if (!ctx || !result || busy) return
@@ -220,6 +293,17 @@ export default function OrganizerPage() {
 
       {phase === 'setup' && (
         <div className="panel space-y-5">
+          <div className="space-y-1.5">
+            <label className="text-xs text-ink-faint">Common tasks — instant, no instruction needed</label>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => void planEmptyCleanup()} disabled={busy || !userId}
+                className="text-xs px-3 py-1.5 rounded-full border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 transition-colors disabled:opacity-40"
+                title="Scans your whole library, previews the deletions, and stays undoable">
+                🧹 Delete empty folders &amp; decks
+              </button>
+            </div>
+          </div>
+
           <div className="space-y-1.5">
             <label className="text-xs text-ink-faint">Scope — the decks it may reorganize</label>
             <ScopeTreePicker
@@ -337,6 +421,7 @@ export default function OrganizerPage() {
             </details>
           )}
 
+          {result.libraryText !== '' && (
           <details className="panel">
             <summary className="text-sm text-ink-muted cursor-pointer" onClick={() => setShowLibrary(v => !v)}>
               What the planner read
@@ -345,6 +430,7 @@ export default function OrganizerPage() {
               <pre className="pt-2 text-[11px] text-ink-faint whitespace-pre-wrap max-h-80 overflow-y-auto">{result.libraryText}</pre>
             )}
           </details>
+          )}
 
           <div className="flex flex-wrap gap-3">
             <button onClick={() => void applyPlan()} disabled={busy || result.steps.length === 0}

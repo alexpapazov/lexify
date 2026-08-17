@@ -35,7 +35,10 @@ import { normalizeFrontKey } from '@/lib/duplicates'
 import { getToday } from '@/lib/dates'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { ClozePlayer } from '@/components/practice/ClozePlayer'
-import { MatchingGame, type MatchPair } from '@/components/practice/MatchingGame'
+import { MatchingGame, type MatchPair, type MatchAttempt } from '@/components/practice/MatchingGame'
+import { type ClozeAttempt } from '@/components/practice/ClozePlayer'
+import { SupabasePracticeAttemptRepository } from '@/lib/data/practiceAttempts'
+import { speak, speakCard } from '@/lib/speak'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { langName, langFlag } from '@/lib/languages'
@@ -44,7 +47,6 @@ import type { Card, CardState, Deck, Folder, LanguagePair } from '@/domain'
 /** Used when a pair has never had its slider set. Reachable for a mid-sized library. */
 
 /** Defaults for the sentence plan. Small, because an uncached session generates every sentence. */
-const MATCH_CAP = 20
 const DEFAULT_TOTAL    = 5
 const DEFAULT_PER_WORD = 2
 
@@ -173,6 +175,8 @@ function PracticeInner() {
   const [rangeSeed,  setRangeSeed]  = useState(1)
 
   const [exercise,  setExercise]  = useState<'cloze' | 'matching'>('cloze')
+  /** Which matching column holds the target-language words. */
+  const [targetSide, setTargetSide] = useState<'left' | 'right'>('left')
   const [clozeMode, setClozeMode] = useState<ClozeMode>('target')
   const [planMode,  setPlanMode]  = useState<'total' | 'perWord'>('total')
   const [totalCount,setTotalCount]= useState(DEFAULT_TOTAL)
@@ -378,13 +382,34 @@ function PracticeInner() {
     }
   }
 
-  /** Matching needs no generation: sample up to the cap and go. */
+  /** Matching needs no generation: every chosen word plays, in rounds. */
   function startMatching() {
     if (!pair || chosen.length === 0) return
     setError(null)
-    const sampled = [...chosen].sort(() => Math.random() - 0.5).slice(0, MATCH_CAP)
-    setNotice(chosen.length > MATCH_CAP ? `Matching plays up to ${MATCH_CAP} words — using ${MATCH_CAP} of your ${chosen.length}.` : null)
-    setMatchPairs(sampled.map(t => ({ id: t.cardId, front: t.front, back: t.back })))
+    setNotice(null)
+    setMatchPairs(chosen.map(t => ({ id: t.cardId, front: t.front, back: t.back })))
+  }
+
+  // ── The attempt log: right or wrong, and wrong WITH WHAT. Fire-and-forget (migration 119). ──
+  const attemptRepo = useMemo(() => new SupabasePracticeAttemptRepository(), [])
+  function logCloze(a: ClozeAttempt) {
+    if (!userId || !pair) return
+    void attemptRepo.record(userId, {
+      exercise: 'cloze', cardId: a.item.targetCardId,
+      sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
+      prompt: a.item.exercise.sentence, expected: a.item.exercise.answer,
+      response: a.response || null, correct: a.correct, overridden: a.overridden,
+    }).catch(() => {})
+  }
+  function logMatch(a: MatchAttempt) {
+    if (!userId || !pair) return
+    void attemptRepo.record(userId, {
+      exercise: 'matching', cardId: a.pair.id,
+      sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
+      prompt: a.pair.front, expected: a.pair.back,
+      response: a.confused ? a.confused.back : a.pair.back,
+      correct: a.correct, confusedCardId: a.confused?.id ?? null,
+    }).catch(() => {})
   }
 
   async function start() {
@@ -432,7 +457,21 @@ function PracticeInner() {
   )
 
   if (matchPairs) {
-    return <MatchingGame pairs={matchPairs} onExit={() => { setMatchPairs(null); setNotice(null) }} />
+    return (
+      <MatchingGame
+        pairs={matchPairs}
+        targetSide={targetSide}
+        onExit={() => { setMatchPairs(null); setNotice(null) }}
+        // Stored clip when the card has one (cardByKey holds only display fields, so resolve the
+        // full card), else the device voice — same fallback chain as everywhere else.
+        onSpeakTarget={p => {
+          const card = cards.find(c => c.id === p.id)
+          if (card) speakCard(card, pair!.sourceLanguage)
+          else speak(p.front, pair!.sourceLanguage)
+        }}
+        onAttempt={logMatch}
+      />
+    )
   }
 
   if (session) {
@@ -442,6 +481,8 @@ function PracticeInner() {
         answerLanguage={pair!.sourceLanguage}
         onExit={() => { setSession(null); setNotice(null) }}
         findCard={findCard}
+        speakText={text => speak(text, pair!.sourceLanguage)}
+        onAttempt={logCloze}
       />
     )
   }
@@ -775,9 +816,25 @@ function PracticeInner() {
           <p className="text-xs text-ink-faint">
             {exercise === 'cloze'
               ? 'Type the missing word in a generated sentence.'
-              : `Pair each word with its meaning, in rounds. Starts instantly — no sentences to generate. Up to ${MATCH_CAP} words per game.`}
+              : 'Pair each word with its meaning, in rounds of 8. Starts instantly — no sentences to generate, and no limit on how many words.'}
           </p>
         </div>
+
+        {exercise === 'matching' && (
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Word side</label>
+            <div className="flex gap-1.5 flex-wrap">
+              {([['left', 'Words left, meanings right'], ['right', 'Meanings left, words right']] as const).map(([sideKey, label]) => (
+                <button key={sideKey} onClick={() => setTargetSide(sideKey)}
+                  className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                    targetSide === sideKey ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {exercise === 'cloze' && (<>
         <div className="space-y-2">
@@ -851,7 +908,7 @@ function PracticeInner() {
           : chosen.length === 0
             ? 'Pick at least one word'
             : exercise === 'matching'
-              ? `Match ${Math.min(chosen.length, MATCH_CAP)} word${Math.min(chosen.length, MATCH_CAP) !== 1 ? 's' : ''}`
+              ? `Match ${chosen.length} word${chosen.length !== 1 ? 's' : ''}`
               : `Practice ${chosen.length} word${chosen.length !== 1 ? 's' : ''}`}
       </button>
     </div>

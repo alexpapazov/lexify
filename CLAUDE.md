@@ -2756,16 +2756,31 @@ via the page's `findCard` (token lemma → card lemma, else `normalizeFrontKey`)
 stiffly — `DELETE FROM practice_sentences` lets the bank refill naturally. More exercise types on
 this page are the declared next step. `features/Practice Mode.md` carries the retirement banner.
 
-## Practice: matching game (2026-08-12)
+## Practice: matching game (2026-08-12; reworked same day per user)
 
 Second exercise type on `/practice`, chosen by the "Exercise" toggle in Session settings ("Fill the
 blank" | "Matching pairs"). `components/practice/MatchingGame.tsx`: pair target word ↔ native
-meaning, in ROUNDS of 5 (two independently-shuffled columns; 20 pairs at once would be 40 tiles).
-Needs NO generation — `startMatching()` samples up to `MATCH_CAP = 20` from the chosen targets and
-starts instantly (over-cap selections get a notice). Matching is by pair id, so duplicate glosses
-can't cross-match. Tracks time + mistakes; writes nothing, like all practice. The cloze-only
-sections (sentence language, sentence counts) hide in matching mode. Matching still draws from
-`chosen` (labeled, drillable targets) — an unlabeled card can't be picked; acceptable for now.
+meaning, in ROUNDS of 8 (two independently-shuffled columns). **No word cap** — rounds make any
+selection just more boards. A "Word side" toggle picks which column holds the target words
+(`targetSide` prop). Needs NO generation — starts instantly. Matching is by pair id, so duplicate
+glosses can't cross-match. Tracks time + mistakes; the cloze-only sections hide in matching mode.
+Matching draws from `chosen` (labeled, drillable targets) — an unlabeled card can't be picked.
+
+## Practice: audio toggle + attempt log (2026-08-12, migration 119 — PENDING)
+
+- **Audio**: 🔊 toggle in BOTH players' headers (`usePracticeAudio.tsx`, localStorage
+  `lexify-practice-audio`, device-level on purpose). Cloze speaks the ANSWER (the inflected surface
+  form, via plain `speak`) after a naturally-correct check; matching speaks the word on EVERY tap of
+  a target-language tile, through `speakCard` (stored clip → TTS → device voice) with a `speak`
+  fallback for unresolvable ids.
+- **Attempt log**: `practice_attempts` (migration **119 — MUST BE RUN**; owner-RLS, write-only for
+  now) records every answer: exercise kind, card id, prompt, expected, the learner's RESPONSE, and
+  for matching the `confused_card_id` they wrongly paired. Cloze logs at ADVANCE (not at check) so
+  the verdict reflects any override; each redo of a re-queued item logs as its own attempt.
+  `PreparedExercise.targetCardId` exists for this link. Repo:
+  `lib/data/practiceAttempts.ts` — callers fire-and-forget with `.catch(() => {})`; a failed log
+  line must never interrupt a session. Nothing reads the table yet — it exists so future features
+  (confusion mining, weak-word surfacing) start with history.
 
 ## Organizer: delete empty decks/folders (2026-08-12)
 
@@ -2783,6 +2798,11 @@ only". The invariants:
   runs newest-first, so restores happen before cards move back in.
 - `validatePlan` drops unknown ids and repeat deletions of the same container; `groupPlan` shows
   them as a "Cleanup" group at the end, mirroring execution order.
+- **"🧹 Delete empty folders & decks" chip** (same day): deterministic — whole-library scan, folder
+  emptiness cascaded to a fixpoint, straight into the review/apply/undo flow with NO model call.
+  Deck emptiness via `listForDecks`, never `deckIdsByCard` (first-deck-only → shared-card decks
+  would misread as empty). `libraryText: ''` marks a plannerless plan and hides "What the planner
+  read".
 
 ## Deck page filter is LOCAL STATE, not useSearchParams (2026-08-12)
 

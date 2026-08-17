@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AudioToggle, usePracticeAudio } from './usePracticeAudio'
 import { gradeTyping } from '@/engine/grading'
 import { splitForBlank, segmentWords } from '@/lib/practiceRender'
 import { DEFAULT_GRADING_SETTINGS, type GradingSettings } from '@/domain'
@@ -97,14 +98,27 @@ function SentenceLine({
   )
 }
 
-export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
+export interface ClozeAttempt {
+  item: PreparedExercise
+  correct: boolean
+  overridden: boolean
+  /** What the learner typed for this attempt. */
+  response: string
+}
+
+export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText, onAttempt }: {
   items:          PreparedExercise[]
   /** Language of the word being typed — the learned language. */
   answerLanguage: string
   onExit:         () => void
   /** Resolves a tapped word to the learner's own card, if the library has it. */
   findCard: (word: { text: string; lemma?: string }) => PracticeCardMatch | null
+  /** Speaks target-language text; used to say the answer after a correct check (audio toggle). */
+  speakText?: (text: string) => void
+  /** Fire-and-forget attempt log — right or wrong, and wrong WITH WHAT. */
+  onAttempt?: (a: ClozeAttempt) => void
 }) {
+  const [audioOn, toggleAudio] = usePracticeAudio()
   const [index,     setIndex]     = useState(0)
   /** The play order. Grows: an item answered wrong is re-queued at the END for a redo. */
   const [queue,     setQueue]     = useState<PreparedExercise[]>(() => items)
@@ -164,6 +178,8 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
     const graded = gradeTyping(input, exercise.answer, settings)
     setOutcomes(o => ({ ...o, [index]: { correct: graded.correct, overridden: false } }))
     setRevealed(true)
+    // Hearing the word you just produced is the reward; only a correct answer earns it.
+    if (graded.correct && audioOn) speakText?.(exercise.answer)
   }
 
   /**
@@ -186,7 +202,10 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
 
   /** Advance — a wrong answer sends the exercise to the BACK OF THE LINE for a redo. */
   function next() {
-    if (outcomes[index] && !outcomes[index]!.correct) setQueue(q => [...q, current!])
+    const o = outcomes[index]
+    // Logged at ADVANCE, not at check: the verdict is only final once any override has been made.
+    if (o) onAttempt?.({ item: current!, correct: o.correct, overridden: o.overridden, response: input.trim() })
+    if (o && !o.correct) setQueue(q => [...q, current!])
     setIndex(i => i + 1)
   }
 
@@ -194,7 +213,10 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
     <div className="space-y-6 max-w-2xl mx-auto pb-12">
       <div className="flex items-center justify-between gap-4">
         <button onClick={onExit} className="text-sm text-ink-faint hover:text-ink transition-colors">✕ End practice</button>
-        <span className="text-sm text-ink-muted tabular-nums">{index + 1} / {queue.length}</span>
+        <div className="flex items-center gap-4">
+          <AudioToggle on={audioOn} onToggle={toggleAudio} />
+          <span className="text-sm text-ink-muted tabular-nums">{index + 1} / {queue.length}</span>
+        </div>
       </div>
 
       <div className="h-1 rounded-full bg-surface overflow-hidden">
