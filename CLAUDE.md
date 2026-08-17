@@ -1522,7 +1522,11 @@ Lexify is now an installable PWA that boots offline from the home-screen icon.
   the offline flag persists across launches. **Still unverified on device: the sync-back leg** — study
   offline, reconnect, confirm the outbox drains and counts reconcile. That's the leg where data loss
   would actually show up, so treat it as untested until someone does it.
-- Bumping the SW cache: change `CACHE = 'lexify-shell-v1'` in `public/sw.js` to force old shells out.
+- Bumping the SW cache: change the `CACHE` name in `public/sw.js` to force old shells out. Bumped
+  v1→v2 2026-08-13 (user's device kept a stale shell; home-screen icon had degraded to a bookmark).
+  iOS decides bookmark-vs-standalone at ADD time, so a broken icon must be deleted and re-added —
+  and the installed web app has its OWN storage container, so offline downloads must be re-done
+  INSIDE the reinstalled app, not in Safari.
 
 ### Native app: query-param routes + static export + Capacitor (Stage 8 in progress, 2026-07-18)
 

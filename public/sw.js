@@ -12,7 +12,10 @@
  *   - cross-origin (Supabase, APIs) & /api  → never touched: straight to network (fail as designed
  *                                             when offline; the app handles that via offline mode).
  */
-const CACHE = 'lexify-shell-v1'
+// Bump the suffix to force every installed client to drop its cached shell on the next visit —
+// the activate handler deletes caches with any other name. Bumped v1→v2 2026-08-13 after a device
+// kept serving a stale shell (home-screen icon degraded to a bookmark, page stuck on "Loading…").
+const CACHE = 'lexify-shell-v2'
 const APP_SHELL_FALLBACK = '/study'
 
 self.addEventListener('install', event => {
