@@ -42,7 +42,10 @@ const SHARED_RULES = `
 - "path"/"toFolder"/"toParent" are folder names from the library root. "toDeck" is folders THEN the
   deck name as the last element.
 - You may name folders and decks that don't exist yet; naming them creates them.
-- You cannot rename or delete anything. Do not try.
+- You may DELETE a deck or folder ONLY when your plan leaves it empty (or it already is):
+  {"kind":"deleteDeck","deckId":"d2","reason":"..."} / {"kind":"deleteFolder","folderId":"f1","reason":"..."}.
+  Deletions run LAST, and are refused at run time if anything is still inside — they can only ever
+  remove an empty container, never contents. You cannot rename anything.
 - Return ONLY JSON, no prose.`
 
 const SYSTEM_PLAN = `You plan a reorganization of a language learner's flashcard library.
@@ -89,7 +92,7 @@ You are given:
 
 Return:
 {"summary":"one paragraph describing the reorganization",
- "steps":[ {"kind":"createFolder","path":[...],"reason":"..."} | {"kind":"moveFolder","folderId":"f1","toParent":[...],"reason":"..."} | {"kind":"moveDeck","deckId":"d2","toFolder":[...],"reason":"..."} ],
+ "steps":[ {"kind":"createFolder","path":[...],"reason":"..."} | {"kind":"moveFolder","folderId":"f1","toParent":[...],"reason":"..."} | {"kind":"moveDeck","deckId":"d2","toFolder":[...],"reason":"..."} | {"kind":"deleteDeck","deckId":"d2","reason":"..."} | {"kind":"deleteFolder","folderId":"f1","reason":"..."} ],
  "sectionRoutes":[{"section":"<the section path exactly as given>","toDeck":["Food","Fruit"]}],
  "leftovers":{"action":"leave"} | {"action":"route","toDeck":["Unsorted"]} | {"action":"judge"}}
 
@@ -100,7 +103,9 @@ Rules:
   default when the instruction doesn't say), "route" (all to one deck), or "judge" (you will be shown
   them in small batches next and asked to place each one — only choose this when the instruction
   requires per-card judgment).
-- steps may only be createFolder/moveFolder/moveDeck — card moves are derived from sectionRoutes.
+- steps may only be createFolder/moveFolder/moveDeck/deleteDeck/deleteFolder — card moves are
+  derived from sectionRoutes. Deletions only for containers your plan empties (or that already are);
+  they run last and are refused at run time if anything is still inside.
 ${SHARED_RULES}`
 
 const SYSTEM_ASSIGN = `You are sorting a language learner's flashcards into an already-decided set of

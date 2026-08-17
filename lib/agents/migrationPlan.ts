@@ -39,6 +39,18 @@ export type MigrationStep =
       pullIn?: boolean
       reason: string
     }
+  /**
+   * Cleanup, run LAST — after every move, so "empty" is judged on the migrated library. The
+   * executor re-checks emptiness at run time and refuses rather than cascades: a deletion may only
+   * ever remove a container, never contents.
+   */
+  | { kind: 'deleteDeck';   deckId: string;   deckName: string; reason: string }
+  | {
+      kind: 'deleteFolder'; folderId: string; folderName: string
+      /** Nesting depth (root = 0), so subfolders delete before their parents. Client-computed. */
+      depth: number
+      reason: string
+    }
 
 export interface MigrationPlan {
   /** One paragraph, in the model's words, of what this migration does overall. */
@@ -161,6 +173,9 @@ export function applyPolicy(diags: Diagnostic[], policy: DiagnosticPolicy): Diag
 
 const RANK: Record<MigrationStep['kind'], number> = {
   createFolder: 0, moveFolder: 1, moveDeck: 2, moveCard: 3,
+  // Deletions LAST: a container is only empty once everything has moved out. Decks before folders,
+  // since an emptied folder may hold a deck the plan is also deleting.
+  deleteDeck: 4, deleteFolder: 5,
 }
 
 /**
@@ -182,6 +197,11 @@ export function orderSteps(steps: MigrationStep[]): MigrationStep[] {
       if (r !== 0) return r
       if (a.s.kind === 'createFolder' && b.s.kind === 'createFolder') {
         const d = a.s.path.length - b.s.path.length
+        if (d !== 0) return d
+      }
+      // Deepest folders first: a parent is only empty once its subfolders are gone.
+      if (a.s.kind === 'deleteFolder' && b.s.kind === 'deleteFolder') {
+        const d = b.s.depth - a.s.depth
         if (d !== 0) return d
       }
       return a.i - b.i
@@ -211,6 +231,7 @@ export function validatePlan(
 ): { steps: MigrationStep[]; dropped: { step: MigrationStep; why: string }[] } {
   const kept: MigrationStep[] = []
   const dropped: { step: MigrationStep; why: string }[] = []
+  const deleted = new Set<string>()   // ids already scheduled for deletion — a second delete is noise
 
   for (const step of steps) {
     if (step.kind === 'createFolder') {
@@ -225,6 +246,18 @@ export function validatePlan(
     }
     if (step.kind === 'moveDeck') {
       if (!known.deckIds.has(step.deckId)) { dropped.push({ step, why: 'unknown deck' }); continue }
+      kept.push(step); continue
+    }
+    if (step.kind === 'deleteDeck') {
+      if (!known.deckIds.has(step.deckId)) { dropped.push({ step, why: 'unknown deck' }); continue }
+      if (deleted.has(step.deckId)) { dropped.push({ step, why: 'already being deleted' }); continue }
+      deleted.add(step.deckId)
+      kept.push(step); continue
+    }
+    if (step.kind === 'deleteFolder') {
+      if (!known.folderIds.has(step.folderId)) { dropped.push({ step, why: 'unknown folder' }); continue }
+      if (deleted.has(step.folderId)) { dropped.push({ step, why: 'already being deleted' }); continue }
+      deleted.add(step.folderId)
       kept.push(step); continue
     }
     // moveCard
@@ -257,7 +290,8 @@ export interface PlanGroup {
  * actually check, whereas 14 separate rows is a wall.
  */
 export function groupPlan(steps: MigrationStep[]): PlanGroup[] {
-  const structural = steps.filter(s => s.kind !== 'moveCard')
+  const isDelete = (s: MigrationStep) => s.kind === 'deleteDeck' || s.kind === 'deleteFolder'
+  const structural = steps.filter(s => s.kind !== 'moveCard' && !isDelete(s))
   const groups: PlanGroup[] = []
   if (structural.length > 0) groups.push({ label: 'Structure', steps: structural })
 
@@ -269,6 +303,10 @@ export function groupPlan(steps: MigrationStep[]): PlanGroup[] {
     if (arr) arr.push(s); else byDest.set(key, [s])
   }
   for (const [label, group] of byDest) groups.push({ label, steps: group })
+
+  // Deletions close the plan, mirroring execution order — they only happen once everything above is done.
+  const cleanup = steps.filter(isDelete)
+  if (cleanup.length > 0) groups.push({ label: 'Cleanup', steps: cleanup })
   return groups
 }
 

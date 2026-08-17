@@ -86,6 +86,17 @@ describe('translateSteps', () => {
     expect((steps[0] as { cardId: string }).cardId).toBe('99999')
   })
 
+  it('translates delete steps, computing folder depth from the REAL tree', () => {
+    const dShort = [...lib.deckIds.entries()].find(([, r]) => r === 'D1')![0]
+    const fShort = [...lib.folderIds.entries()].find(([, r]) => r === 'F2')![0]
+    const steps = translateSteps([
+      { kind: 'deleteDeck', deckId: dShort, reason: 'emptied' },
+      { kind: 'deleteFolder', folderId: fShort, depth: 99 /* model lies */, reason: 'emptied' },
+    ], lib, DECKS, FOLDERS)
+    expect(steps[0]).toMatchObject({ kind: 'deleteDeck', deckId: 'D1', deckName: 'Apples' })
+    expect(steps[1]).toMatchObject({ kind: 'deleteFolder', folderId: 'F2', folderName: 'Fruit', depth: 1 })
+  })
+
   it('translates deck and folder ids, filling names from the real records', () => {
     const dShort = [...lib.deckIds.entries()].find(([, r]) => r === 'D2')![0]
     const fShort = [...lib.folderIds.entries()].find(([, r]) => r === 'F2')![0]

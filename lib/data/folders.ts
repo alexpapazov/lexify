@@ -98,6 +98,16 @@ export class SupabaseFolderRepository {
     return rowToFolder(data)
   }
 
+  /** Un-deletes a soft-deleted folder — the organizer's undo for an empty-folder cleanup. */
+  async restore(folderId: FolderId): Promise<void> {
+    invalidateReads('folders:', 'decks:')
+    const { error } = await this.db
+      .from('folders')
+      .update({ deleted_at: null })
+      .eq('id', folderId)
+    if (error) throw new Error(error.message)
+  }
+
   /** Soft-delete. All child folders cascade due to ON DELETE CASCADE. */
   async softDelete(folderId: FolderId): Promise<void> {
     invalidateReads('folders:', 'decks:')

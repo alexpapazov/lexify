@@ -154,6 +154,48 @@ describe('validatePlan', () => {
   })
 })
 
+describe('deletions', () => {
+  const del = (kind: 'deleteDeck' | 'deleteFolder', id: string, depth = 0): MigrationStep =>
+    kind === 'deleteDeck'
+      ? { kind, deckId: id, deckName: id, reason: '' }
+      : { kind, folderId: id, folderName: id, depth, reason: '' }
+
+  it('orders deletions LAST — decks before folders, deepest folders first', () => {
+    const steps: MigrationStep[] = [
+      del('deleteFolder', 'f-shallow', 0),
+      del('deleteDeck', 'd1'),
+      { kind: 'moveCard', cardId: 'c1', front: 'a', back: '', fromDeckId: 'd1', fromDeckName: 'X', toDeck: ['A'], reason: '' },
+      del('deleteFolder', 'f-deep', 2),
+      { kind: 'createFolder', path: ['A'], reason: '' },
+    ]
+    expect(orderSteps(steps).map(s => s.kind === 'deleteFolder' ? `${s.kind}:${s.depth}` : s.kind))
+      .toEqual(['createFolder', 'moveCard', 'deleteDeck', 'deleteFolder:2', 'deleteFolder:0'])
+  })
+
+  it('validates delete ids against the scope, and drops repeats of the same container', () => {
+    const known = {
+      cardIds: new Set<string>(), deckIds: new Set(['d1']), folderIds: new Set(['f1']),
+      pullInCardIds: new Set<string>(),
+    }
+    const { steps, dropped } = validatePlan([
+      del('deleteDeck', 'd1'), del('deleteDeck', 'd1'),
+      del('deleteDeck', 'zz'), del('deleteFolder', 'f1'), del('deleteFolder', 'qq'),
+    ], known)
+    expect(steps.map(s => s.kind)).toEqual(['deleteDeck', 'deleteFolder'])
+    expect(dropped.map(d => d.why)).toEqual(['already being deleted', 'unknown deck', 'unknown folder'])
+  })
+
+  it('groups deletions into a Cleanup section at the end', () => {
+    const groups = groupPlan([
+      { kind: 'createFolder', path: ['A'], reason: '' },
+      { kind: 'moveCard', cardId: 'c1', front: 'a', back: '', fromDeckId: 'd1', fromDeckName: 'X', toDeck: ['A'], reason: '' },
+      del('deleteDeck', 'd9'),
+    ])
+    expect(groups.map(g => g.label)).toEqual(['Structure', 'A', 'Cleanup'])
+    expect(groups[2]!.steps).toHaveLength(1)
+  })
+})
+
 describe('groupPlan / countCardMoves', () => {
   const steps: MigrationStep[] = [
     { kind: 'createFolder', path: ['Food'], reason: '' },

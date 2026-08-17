@@ -35,6 +35,7 @@ import { normalizeFrontKey } from '@/lib/duplicates'
 import { getToday } from '@/lib/dates'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { ClozePlayer } from '@/components/practice/ClozePlayer'
+import { MatchingGame, type MatchPair } from '@/components/practice/MatchingGame'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { langName, langFlag } from '@/lib/languages'
@@ -43,6 +44,7 @@ import type { Card, CardState, Deck, Folder, LanguagePair } from '@/domain'
 /** Used when a pair has never had its slider set. Reachable for a mid-sized library. */
 
 /** Defaults for the sentence plan. Small, because an uncached session generates every sentence. */
+const MATCH_CAP = 20
 const DEFAULT_TOTAL    = 5
 const DEFAULT_PER_WORD = 2
 
@@ -170,6 +172,7 @@ function PracticeInner() {
   const [rangeLimit, setRangeLimit] = useState(DEFAULT_RANGE_LIMIT)
   const [rangeSeed,  setRangeSeed]  = useState(1)
 
+  const [exercise,  setExercise]  = useState<'cloze' | 'matching'>('cloze')
   const [clozeMode, setClozeMode] = useState<ClozeMode>('target')
   const [planMode,  setPlanMode]  = useState<'total' | 'perWord'>('total')
   const [totalCount,setTotalCount]= useState(DEFAULT_TOTAL)
@@ -179,6 +182,7 @@ function PracticeInner() {
   const [labeling,   setLabeling]   = useState(false)
   const [error,      setError]      = useState<string | null>(null)
   const [session,    setSession]    = useState<PreparedExercise[] | null>(null)
+  const [matchPairs, setMatchPairs] = useState<MatchPair[] | null>(null)
   const [notice,     setNotice]     = useState<string | null>(null)
 
   const pair = pairs.find(p => `${p.sourceLanguage}|${p.targetLanguage}` === pairKey) ?? null
@@ -374,6 +378,15 @@ function PracticeInner() {
     }
   }
 
+  /** Matching needs no generation: sample up to the cap and go. */
+  function startMatching() {
+    if (!pair || chosen.length === 0) return
+    setError(null)
+    const sampled = [...chosen].sort(() => Math.random() - 0.5).slice(0, MATCH_CAP)
+    setNotice(chosen.length > MATCH_CAP ? `Matching plays up to ${MATCH_CAP} words — using ${MATCH_CAP} of your ${chosen.length}.` : null)
+    setMatchPairs(sampled.map(t => ({ id: t.cardId, front: t.front, back: t.back })))
+  }
+
   async function start() {
     if (!pair || chosen.length === 0 || generating) return
     setGenerating(true)
@@ -417,6 +430,10 @@ function PracticeInner() {
       <Link href="/auth" className="btn-primary inline-block">Sign in</Link>
     </div>
   )
+
+  if (matchPairs) {
+    return <MatchingGame pairs={matchPairs} onExit={() => { setMatchPairs(null); setNotice(null) }} />
+  }
 
   if (session) {
     return (
@@ -744,6 +761,26 @@ function PracticeInner() {
       {/* Session settings */}
       <div className="panel space-y-5">
         <div className="space-y-2">
+          <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Exercise</label>
+          <div className="flex gap-1.5 flex-wrap">
+            {([['cloze', 'Fill the blank'], ['matching', 'Matching pairs']] as const).map(([m, label]) => (
+              <button key={m} onClick={() => setExercise(m)}
+                className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                  exercise === m ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
+                }`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-ink-faint">
+            {exercise === 'cloze'
+              ? 'Type the missing word in a generated sentence.'
+              : `Pair each word with its meaning, in rounds. Starts instantly — no sentences to generate. Up to ${MATCH_CAP} words per game.`}
+          </p>
+        </div>
+
+        {exercise === 'cloze' && (<>
+        <div className="space-y-2">
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">
             Sentence language
           </label>
@@ -798,13 +835,14 @@ function PracticeInner() {
             ones cost anything.
           </p>
         </div>
+        </>)}
       </div>
 
       {error  && <p className="text-danger text-sm">{error}</p>}
       {notice && <p className="text-ink-muted text-sm">{notice}</p>}
 
       <button
-        onClick={() => void start()}
+        onClick={() => exercise === 'matching' ? startMatching() : void start()}
         disabled={generating || chosen.length === 0}
         className="btn-primary w-full disabled:opacity-50"
       >
@@ -812,7 +850,9 @@ function PracticeInner() {
           ? 'Writing sentences…'
           : chosen.length === 0
             ? 'Pick at least one word'
-            : `Practice ${chosen.length} word${chosen.length !== 1 ? 's' : ''}`}
+            : exercise === 'matching'
+              ? `Match ${Math.min(chosen.length, MATCH_CAP)} word${Math.min(chosen.length, MATCH_CAP) !== 1 ? 's' : ''}`
+              : `Practice ${chosen.length} word${chosen.length !== 1 ? 's' : ''}`}
       </button>
     </div>
   )

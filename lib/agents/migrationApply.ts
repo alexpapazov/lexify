@@ -38,6 +38,8 @@ export type StepUndo =
   | { kind: 'movedFolder';   folderId: string; prevParentId: string | null }
   | { kind: 'movedDeck';     deckId: string;   prevFolderId: string | null }
   | { kind: 'movedCard';     cardId: string;   fromDeckId: string; toDeckId: string }
+  | { kind: 'deletedDeck';   deckId: string }
+  | { kind: 'deletedFolder'; folderId: string }
   | { kind: 'noop' }
 
 export interface AppliedStep { step: MigrationStep; undo: StepUndo }
@@ -117,6 +119,33 @@ export async function applyStep(ctx: MigrationContext, step: MigrationStep): Pro
     return { step, undo: { kind: 'movedDeck', deckId: deck.id, prevFolderId } }
   }
 
+  if (step.kind === 'deleteDeck') {
+    const deck = ctx.decks.find(d => d.id === step.deckId)
+    if (!deck) return { step, undo: { kind: 'noop' } }
+    // Emptiness is checked against the SERVER at run time, not the plan's belief — a deletion may
+    // only ever remove a container. Anything still inside means this step fails and is reported.
+    const remaining = await new SupabaseCardRepository().listByDeck(deck.id)
+    if (remaining.length > 0) throw new Error(`not deleted — ${remaining.length} card${remaining.length === 1 ? '' : 's'} still inside`)
+    await new SupabaseDeckRepository().softDelete(deck.id)
+    ctx.decks = ctx.decks.filter(d => d.id !== deck.id)
+    return { step, undo: { kind: 'deletedDeck', deckId: deck.id } }
+  }
+
+  if (step.kind === 'deleteFolder') {
+    const folder = ctx.folders.find(f => f.id === step.folderId)
+    if (!folder) return { step, undo: { kind: 'noop' } }
+    // The live ctx already reflects every earlier step (moves and deletions mutate it), so a child
+    // still present here is a child the migration really left behind.
+    const childFolders = ctx.folders.filter(f => f.parentId === folder.id).length
+    const childDecks   = ctx.decks.filter(d => d.folderId === folder.id).length
+    if (childFolders + childDecks > 0) {
+      throw new Error(`not deleted — still holds ${childDecks} deck${childDecks === 1 ? '' : 's'} and ${childFolders} folder${childFolders === 1 ? '' : 's'}`)
+    }
+    await new SupabaseFolderRepository().softDelete(folder.id)
+    ctx.folders = ctx.folders.filter(f => f.id !== folder.id)
+    return { step, undo: { kind: 'deletedFolder', folderId: folder.id } }
+  }
+
   // moveCard — the relink, destination first.
   const cardRepo = new SupabaseCardRepository()
   const toDeckId = await ensureDeck(ctx, step.toDeck)
@@ -150,6 +179,10 @@ export async function undoStep(applied: AppliedStep): Promise<void> {
     await new SupabaseDeckRepository().update(u.deckId, { folderId: u.prevFolderId })
     return
   }
+  // Deleted containers were EMPTY by invariant, so un-deleting restores them fully. Undo runs
+  // newest-first, so these restores happen before any cards move back in.
+  if (u.kind === 'deletedDeck')   { await new SupabaseDeckRepository().restore(u.deckId); return }
+  if (u.kind === 'deletedFolder') { await new SupabaseFolderRepository().restore(u.folderId); return }
   const cardRepo = new SupabaseCardRepository()
   const back = await cardRepo.listByDeck(u.fromDeckId)
   await cardRepo.addToDeck(u.fromDeckId, u.cardId, back.length)   // relink source FIRST

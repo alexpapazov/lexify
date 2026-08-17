@@ -23,7 +23,9 @@ What practice is now:
   stiffly; clearing the table (`DELETE FROM practice_sentences`) lets it refill with natural ones.
 - Target selection (`engine/practiceSelect.ts`), the drillable gate, native cloze mode, per-word
   plans, and the session-local override all survive unchanged.
-- **More exercise types beyond cloze are planned for this page** — that's the next step here.
+- **Matching game (2026-08-12)** — the first additional exercise type: pair word ↔ meaning in
+  rounds of 5, up to 20 words, no generation, instant start (`MatchingGame.tsx`, the "Exercise"
+  toggle in Session settings). More types remain planned.
 
 ---
 

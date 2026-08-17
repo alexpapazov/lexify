@@ -94,6 +94,20 @@ export class SupabaseDeckRepository implements DeckRepository {
     )
   }
 
+  /**
+   * Un-deletes a soft-deleted deck — the organizer's undo for an empty-deck cleanup. Plain
+   * `deleted_at = null` is a full reversal ONLY for a deck that was empty when deleted (the
+   * organizer's invariant); the soft_delete_deck RPC's card-side effects are not reversed here.
+   */
+  async restore(deckId: DeckId): Promise<void> {
+    invalidateReads('decks:', 'cards:', 'states:')
+    const { error } = await this.db
+      .from('decks')
+      .update({ deleted_at: null })
+      .eq('id', deckId)
+    if (error) throw new Error(error.message)
+  }
+
   async softDelete(deckId: DeckId): Promise<void> {
     invalidateReads('decks:', 'cards:', 'states:')
     const { error } = await this.db.rpc('soft_delete_deck', { p_deck_id: deckId })

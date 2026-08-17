@@ -40,8 +40,11 @@ an instruction with no documents reorganizes from the library alone.
 | `moveFolder` | Reparents a folder |
 | `moveDeck` | Moves a whole deck into a folder |
 | `moveCard` | Relinks one card into a (possibly new) deck; `pullIn` marks one from outside the scope |
+| `deleteDeck` / `deleteFolder` | Removes an EMPTY container — run last, refused at run time if anything is inside, undone via `restore()` |
 
-**No renames, no deletions** — a deliberate limit. `orderSteps` runs createFolder → moveFolder →
+**No renames.** Deletions exist (2026-08-12) but only for EMPTY containers — the executor re-checks
+emptiness at run time and refuses rather than cascades, so a deletion can never take contents with
+it. Folder deletions run deepest-first via a client-computed depth. `orderSteps` runs createFolder → moveFolder →
 moveDeck → moveCard, with parent folders created before children, so a destination always exists
 before something moves into it. The prompt also tells the planner to prefer one `moveDeck` over fifty
 `moveCard`s that add up to the same thing: fewer steps to review, fewer writes to run.

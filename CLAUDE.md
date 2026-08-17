@@ -2756,6 +2756,34 @@ via the page's `findCard` (token lemma → card lemma, else `normalizeFrontKey`)
 stiffly — `DELETE FROM practice_sentences` lets the bank refill naturally. More exercise types on
 this page are the declared next step. `features/Practice Mode.md` carries the retirement banner.
 
+## Practice: matching game (2026-08-12)
+
+Second exercise type on `/practice`, chosen by the "Exercise" toggle in Session settings ("Fill the
+blank" | "Matching pairs"). `components/practice/MatchingGame.tsx`: pair target word ↔ native
+meaning, in ROUNDS of 5 (two independently-shuffled columns; 20 pairs at once would be 40 tiles).
+Needs NO generation — `startMatching()` samples up to `MATCH_CAP = 20` from the chosen targets and
+starts instantly (over-cap selections get a notice). Matching is by pair id, so duplicate glosses
+can't cross-match. Tracks time + mistakes; writes nothing, like all practice. The cloze-only
+sections (sentence language, sentence counts) hide in matching mode. Matching still draws from
+`chosen` (labeled, drillable targets) — an unlabeled card can't be picked; acceptable for now.
+
+## Organizer: delete empty decks/folders (2026-08-12)
+
+Two new step kinds, `deleteDeck` / `deleteFolder` — the "no deletions" rule is now "EMPTY containers
+only". The invariants:
+- **A deletion may only ever remove a container, never contents.** The executor re-checks emptiness
+  at RUN TIME and throws instead of cascading: decks against the SERVER (`listByDeck` length), and
+  folders against the live ctx (which every earlier move/delete mutated). A refused deletion lands
+  in `failed` with "not deleted — N cards still inside".
+- **Ordering**: deletions run LAST (`RANK` deleteDeck:4, deleteFolder:5), deck-before-folder, and
+  deleteFolder DEEPEST-FIRST via a `depth` field that `translateSteps` computes from the REAL tree
+  (never trusted from the model — there's a test where the model lies about it).
+- **Undo**: new `restore()` on the deck/folder repos (`deleted_at = null`) — a full reversal ONLY
+  because the container was empty by invariant (the deck RPC's card-side effects never fired). Undo
+  runs newest-first, so restores happen before cards move back in.
+- `validatePlan` drops unknown ids and repeat deletions of the same container; `groupPlan` shows
+  them as a "Cleanup" group at the end, mirroring execution order.
+
 ## Deck page filter is LOCAL STATE, not useSearchParams (2026-08-12)
 
 **Bug (user report)**: the ★ filter worked at folder level but did nothing at deck level. The folder

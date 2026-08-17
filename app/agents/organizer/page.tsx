@@ -400,6 +400,8 @@ function describeStep(s: MigrationStep): string {
   if (s.kind === 'createFolder') return `Create folder ${s.path.join(' / ')}`
   if (s.kind === 'moveFolder')   return `Move folder ${s.folderName} → ${s.toParent.join(' / ') || 'library root'}`
   if (s.kind === 'moveDeck')     return `Move deck ${s.deckName} → ${s.toFolder.join(' / ') || 'library root'}`
+  if (s.kind === 'deleteDeck')   return `Delete empty deck ${s.deckName}`
+  if (s.kind === 'deleteFolder') return `Delete empty folder ${s.folderName}`
   return `${s.front} — from ${s.fromDeckName}`
 }
 

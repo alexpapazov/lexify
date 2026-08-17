@@ -146,6 +146,16 @@ export function translateSteps(raw: unknown[], lib: ModelLibrary, decks: Deck[],
     } else if (step.kind === 'moveDeck') {
       const real = lib.deckIds.get(String(step.deckId)) ?? String(step.deckId)
       out.push({ kind: 'moveDeck', deckId: real, deckName: deckById.get(real)?.name ?? String(step.deckName ?? ''), toFolder: path(step.toFolder), reason })
+    } else if (step.kind === 'deleteDeck') {
+      const real = lib.deckIds.get(String(step.deckId)) ?? String(step.deckId)
+      out.push({ kind: 'deleteDeck', deckId: real, deckName: deckById.get(real)?.name ?? String(step.deckName ?? ''), reason })
+    } else if (step.kind === 'deleteFolder') {
+      const real = lib.folderIds.get(String(step.folderId)) ?? String(step.folderId)
+      // Depth is OURS to compute — it orders deletions subfolder-before-parent, so it must come
+      // from the real tree, not from anything the model said.
+      let depth = 0
+      for (let f = folderById.get(real); f?.parentId; f = folderById.get(f.parentId)) depth += 1
+      out.push({ kind: 'deleteFolder', folderId: real, folderName: folderById.get(real)?.name ?? String(step.folderName ?? ''), depth, reason })
     } else if (step.kind === 'moveCard') {
       const link = lib.links.get(String(step.cardId))
       if (link) {
