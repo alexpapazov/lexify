@@ -1,18 +1,15 @@
 /**
  * POST /api/practice/generate
  *
- * Practice Mode, generation half: given target words the learner wants to drill and a SAMPLE of
- * words they already know, produce cloze sentences with per-word annotations.
+ * Practice Mode, generation half: given target words the learner wants to drill, produce NATURAL
+ * cloze sentences — one model call, no vocabulary constraint, no repair loop.
  *
- * The annotations are the whole point. This route does NOT try to satisfy "only use words from my
- * library" — asking a model to hard-satisfy a vocabulary whitelist fails, especially on inflected
- * forms. Instead it reports the lemma and word class of every word it used, and `engine/practice.ts`
- * then judges the sentence against the real library. The model proposes; code decides.
+ * The per-word annotations exist for INTERACTIVITY, not policing: every word carries a native gloss
+ * (click a word in the player → its meaning) and a lemma (so the player can find that word's card
+ * in the learner's library). The old known-words steering — score, repair, verify, the "% graduated"
+ * slider — is gone: it tripled the latency and produced stilted sentences.
  *
- * Helper words arrive as a POS-balanced sample (see `sampleHelperWords`), not the whole library —
- * long lists cost tokens and measurably WORSEN compliance.
- *
- * Model: Haiku — the validator provides the reliability, so the cheapest tier is the right trade.
+ * Model: Haiku — sentence-writing at this length is well inside its range, and it's the fast tier.
  * Fails soft like the other AI routes: `{ ok: false, reason }` with a 200 when the AI is
  * unavailable or unparseable, 400 only for a malformed request.
  */
@@ -40,21 +37,11 @@ export interface GenerateTarget {
 
 interface RequestBody {
   targets:        GenerateTarget[]
-  helperWords:    string[]
   sourceLanguage: string
   targetLanguage: string
   count:          number
-  /** True when the learner's library is too narrow to build from (see `vocabularyCoverage`). */
-  narrowVocabulary?: boolean
   /** 'target' (default) = a full target-language sentence. 'native' = only the blank is target. */
   mode?: ClozeMode
-  /**
-   * Whether to constrain the sentence to the learner's known words. **Off by default, because the
-   * constraint is what makes sentences unnatural** — forced to build from a word list, the model
-   * produces things like "La batida exitosa buscaba la llave desde la mañana". Unrestricted, it
-   * writes ordinary sentences and the learner just fills the blank.
-   */
-  restrictVocabulary?: boolean
 }
 
 function extractJson(text: string): unknown {
@@ -67,26 +54,6 @@ function generatePrompt(body: RequestBody, srcLang: string, tgtLang: string): st
   const targets = body.targets
     .map(t => `- ${t.lemma} (${t.pos}, means "${t.back}")`)
     .join('\n')
-  const helpers = body.helperWords.length > 0
-    ? body.helperWords.join(', ')
-    : '(none available yet)'
-
-  // Naturalness first. The vocabulary constraint is OPT-IN because it is exactly what degrades the
-  // output: a model told to build from a word list writes stilted, semantically odd sentences.
-  // Even when the constraint is on, it is framed as a preference that never outranks sounding real.
-  const vocabularySection = !body.restrictVocabulary
-    ? `Use whatever everyday vocabulary makes the most natural sentence. There is no restriction on
-which words you may use.`
-    : body.narrowVocabulary
-      ? `The learner's known-word list is too small to build from, so use whatever words you need —
-but prefer the most common, simplest ones.
-
-KNOWN WORDS (use where they fit naturally): ${helpers}`
-      : `PREFER these words the learner already knows, where they fit naturally:
-${helpers}
-
-This is a preference, NOT a requirement. A natural sentence always wins: if using a listed word
-would make the sentence awkward, forced, or semantically odd, use a better word instead.`
 
   return `You are writing short practice sentences for someone learning ${srcLang}. Their native
 language is ${tgtLang}.
@@ -94,7 +61,8 @@ language is ${tgtLang}.
 TARGET WORDS — each sentence must use exactly one of these, in a natural way:
 ${targets}
 
-${vocabularySection}
+Use whatever everyday vocabulary makes the most natural sentence. There is no restriction on
+which words you may use.
 
 Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Requirements:
 - Each sentence must sound like something a native speaker would ACTUALLY say or write. This
@@ -107,7 +75,8 @@ Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Requirements:
 - Grammatical, idiomatic ${srcLang} — correct agreement, tense and word order.
 - Vary sentence structure between items; do not reuse one template.
 
-For each sentence also report every VOCABULARY WORD in it (skip punctuation):
+For each sentence also report EVERY word in it — content words AND grammatical words, articles and
+prepositions included, since the reader can tap any word for its meaning (skip punctuation only):
 - "text": the word exactly as it appears in the sentence.
 - "lemma": its dictionary citation form (infinitive for verbs, singular for nouns, no article;
   keep a reflexive pronoun where the citation form has one).
@@ -115,7 +84,7 @@ For each sentence also report every VOCABULARY WORD in it (skip punctuation):
   interjection, numeral, other.
 - "isFunctionWord": true for grammatical words (articles, prepositions, pronouns, conjunctions,
   auxiliaries), false for content words.
-- "gloss": a one-or-two-word ${tgtLang} meaning of that word.
+- "gloss": a one-or-two-word ${tgtLang} meaning of that word AS USED HERE.
 
 Respond with ONLY a JSON object, no other text, in exactly this shape:
 {
@@ -205,7 +174,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, reason: 'bad-count' }, { status: 400 })
   }
 
-  const normalized = { ...body, count, helperWords: body.helperWords ?? [] }
+  const normalized = { ...body, count }
   const prompt = body.mode === 'native'
     ? nativePrompt(normalized, langName(sourceLanguage), langName(targetLanguage))
     : generatePrompt(normalized, langName(sourceLanguage), langName(targetLanguage))

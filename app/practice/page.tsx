@@ -21,7 +21,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
-import { buildLibraryIndex, vocabularyCoverage, toPracticeTargets, type PracticeTarget } from '@/engine/practice'
+import { buildLibraryIndex, toPracticeTargets, type PracticeTarget } from '@/engine/practice'
 import {
   resolveTargets, DEFAULT_CAP_PER_SOURCE, MIN_DIFFICULTY, MAX_DIFFICULTY, type TargetSource,
 } from '@/engine/practiceSelect'
@@ -41,7 +41,6 @@ import { langName, langFlag } from '@/lib/languages'
 import type { Card, CardState, Deck, Folder, LanguagePair } from '@/domain'
 
 /** Used when a pair has never had its slider set. Reachable for a mid-sized library. */
-const DEFAULT_GRADUATED_PCT = 70
 
 /** Defaults for the sentence plan. Small, because an uncached session generates every sentence. */
 const DEFAULT_TOTAL    = 5
@@ -171,10 +170,6 @@ function PracticeInner() {
   const [rangeLimit, setRangeLimit] = useState(DEFAULT_RANGE_LIMIT)
   const [rangeSeed,  setRangeSeed]  = useState(1)
 
-  const [pct,       setPct]       = useState(DEFAULT_GRADUATED_PCT)
-  /** Vocabulary restriction is OPT-IN: forcing the generator to build from a word list is what
-   *  produces stilted sentences, so the natural, unrestricted session is the default. */
-  const [restrict,  setRestrict]  = useState(false)
   const [clozeMode, setClozeMode] = useState<ClozeMode>('target')
   const [planMode,  setPlanMode]  = useState<'total' | 'perWord'>('total')
   const [totalCount,setTotalCount]= useState(DEFAULT_TOTAL)
@@ -226,14 +221,46 @@ function PracticeInner() {
       setDecks(pairDecks)
       setFolders(allFolders)
       setCardIdsByDeck(new Map([...byDeck].map(([deckId, list]) => [deckId, list.map(c => c.id)])))
-      setPct(pair.practiceGraduatedPct ?? DEFAULT_GRADUATED_PCT)
     })()
     return () => { cancelled = true }
   }, [userId, pairKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Derived: the library index and what it can support ─────────────────────
-  const index    = useMemo(() => buildLibraryIndex(cards, states), [cards, states])
-  const coverage = useMemo(() => vocabularyCoverage(index), [index])
+  // ── Derived: the library index (labeling status + word→card matching) ──────
+  const index = useMemo(() => buildLibraryIndex(cards, states), [cards, states])
+
+  /**
+   * Word → the learner's own card, for the player's tap panel. Keyed by the card's LEMMA and by its
+   * normalized front, so both "corre" (via lemma "correr") and an exact surface match resolve.
+   * First card wins on a collision — duplicates are the duplicate tooling's problem, not this panel's.
+   */
+  const cardByKey = useMemo(() => {
+    const src = pair?.sourceLanguage ?? ''
+    const forward = new Map(states.filter(st => st.reviewDirection !== 'reverse').map(st => [st.cardId, st]))
+    const statusOf = (id: string) => {
+      const st = forward.get(id)
+      if (!st) return 'Unlearned'
+      if (st.dormant) return 'Dormant'
+      return st.graduated ? 'Graduated' : 'Learning'
+    }
+    const map = new Map<string, { front: string; back: string; status: string }>()
+    const add = (key: string | null | undefined, c: Card) => {
+      const k = (key ?? '').trim().toLowerCase()
+      if (k && !map.has(k)) map.set(k, { front: c.front, back: c.back, status: statusOf(c.id) })
+    }
+    for (const c of cards) {
+      add(c.lemma, c)
+      add(normalizeFrontKey(c.front, src), c)
+    }
+    return map
+  }, [cards, states, pair?.sourceLanguage])
+
+  function findCard(word: { text: string; lemma?: string }) {
+    const src = pair?.sourceLanguage ?? ''
+    return (word.lemma ? cardByKey.get(word.lemma.trim().toLowerCase()) : undefined)
+      ?? cardByKey.get(normalizeFrontKey(word.text, src))
+      ?? cardByKey.get(word.text.trim().toLowerCase())
+      ?? null
+  }
 
   /** Everything the selection engine reads. Rebuilt whenever the underlying data changes. */
   const selectionCtx = useMemo(() => ({
@@ -353,25 +380,14 @@ function PracticeInner() {
     setError(null)
     setNotice(null)
     try {
-      // Remember the slider for this pair; a failure here must not block the session.
-      if (pct !== pair.practiceGraduatedPct) {
-        new SupabaseLanguagePairRepository()
-          .updatePracticeGraduatedPct(pair.sourceLanguage, pair.targetLanguage, pct)
-          .catch(() => {})
-      }
       const asked = plannedTotal(plan, chosen.length)
       const run = await preparePracticeSession({
         userId,
         targets: chosen,
-        index,
         sourceLanguage: pair.sourceLanguage,
         targetLanguage: pair.targetLanguage,
         plan,
-        minGraduatedPct: pct,
-        restrictVocabulary: restrict,
         mode: clozeMode,
-        // Varies which known words the generator sees, so a repeat run isn't the same sentences.
-        helperSeed: chosen.length + asked,
       })
       if (run.exercises.length === 0) {
         setError('The generator didn’t return any usable sentences. Try again, or pick different words.')
@@ -408,6 +424,7 @@ function PracticeInner() {
         items={session}
         answerLanguage={pair!.sourceLanguage}
         onExit={() => { setSession(null); setNotice(null) }}
+        findCard={findCard}
       />
     )
   }
@@ -446,11 +463,9 @@ function PracticeInner() {
         </div>
       )}
 
-      {/* Labeling and coverage, both computed locally before any API call.
-          ORDER MATTERS: unlabeled graduated words make a full library look empty, so when those
-          exist the labeling prompt is the real story and the coverage warning is suppressed —
-          otherwise we'd tell someone with 200 known words that they know none. */}
-      {index.unlabeledCount > 0 ? (
+      {/* Labeling, computed locally before any API call. Labels are what let a tapped word in a
+          sentence find its card, and what make a card drillable at all. */}
+      {index.unlabeledCount > 0 && (
         <div className={`rounded-card border px-4 py-3 text-sm text-ink-muted flex items-center justify-between gap-3 flex-wrap ${
           index.graduatedUnlabeledCount > 0 ? 'border-warning/40 bg-warning/5' : 'border-line/20'
         }`}>
@@ -460,8 +475,8 @@ function PracticeInner() {
                 <strong className="text-ink">{index.graduatedUnlabeledCount} word
                 {index.graduatedUnlabeledCount !== 1 ? 's you’ve' : ' you’ve'} already learned
                 {index.graduatedUnlabeledCount !== 1 ? ' aren’t' : ' isn’t'} labeled yet.</strong>{' '}
-                Practice builds sentences from labeled words, so label them to use your real
-                vocabulary.
+                Labels are how a tapped word in a sentence finds its card — label them so your own
+                words light up.
               </>
             ) : (
               <>
@@ -474,13 +489,6 @@ function PracticeInner() {
             className="btn-primary text-sm py-1.5 px-3 disabled:opacity-50 shrink-0">
             {labeling ? 'Labeling…' : `Label ${index.unlabeledCount}`}
           </button>
-        </div>
-      ) : coverage.verdict === 'narrow' && (
-        <div className="rounded-card border border-warning/40 bg-warning/5 px-4 py-3 text-sm text-ink-muted">
-          <strong className="text-ink">Narrow vocabulary.</strong>{' '}
-          {coverage.graduatedCount === 0
-            ? 'You have no graduated words in this language yet, so sentences will be built almost entirely from words outside your library.'
-            : `Not enough graduated ${coverage.missing.join('s, ')}s to build sentences from — simple words outside your library will fill the gaps.`}
         </div>
       )}
 
@@ -758,39 +766,6 @@ function PracticeInner() {
               : 'The sentence is in your own language and only the missing word is in the language you’re learning — usable from day one.'}
           </p>
         </div>
-
-        {/* The restriction is opt-in BY DESIGN: making the generator build from a word list is what
-            produces stilted sentences, so the default session is simply natural. */}
-        {clozeMode === 'target' && (
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={restrict} onChange={e => setRestrict(e.target.checked)}
-                className="accent-accent w-4 h-4" />
-              <span className="text-sm text-ink">Prefer words I already know</span>
-            </label>
-            {restrict ? (
-              <div className="space-y-2 pl-6">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs text-ink-muted">Target share from graduated vocabulary</span>
-                  <span className="text-sm text-ink tabular-nums">{pct}%</span>
-                </div>
-                <input type="range" min={0} max={100} step={5} value={pct}
-                  onChange={e => setPct(Number(e.target.value))}
-                  className="w-full accent-accent" />
-                <p className="text-xs text-ink-faint">
-                  Sentences are steered towards words you&apos;ve graduated, and a word you don&apos;t know is
-                  swapped out where possible. Naturalness still wins — a higher setting means more
-                  familiar sentences, but can make them read a little stiffly. Remembered per language.
-                </p>
-              </div>
-            ) : (
-              <p className="text-xs text-ink-faint pl-6">
-                Off: sentences are written to sound as natural as possible, using whatever words fit
-                best. You just fill in the missing word.
-              </p>
-            )}
-          </div>
-        )}
 
         <div className="space-y-2">
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Sentences</label>

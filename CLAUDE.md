@@ -2741,6 +2741,21 @@ anyway. The rebuild, all behind `planMigration`:
 - The page shows staged progress via `onProgress` ("Assigning cards (3/12 batches)…").
 - `OutOfScopeCard` gained `back` + `deckId` (pull-in moves need a source deck without a lookup).
 
+## Practice: known-words steering GUTTED, cloze is interactive (2026-08-12)
+
+At the user's direction ("takes a million years… incredibly awkward… gut it completely"). Deleted:
+the score → repair → verify loop (`scoreSentence`, `sampleHelperWords`, `repairCandidates`,
+`vocabularyCoverage`, `lib/practiceVerify.ts`, the repair + verify routes), the "Prefer words I
+already know" checkbox + slider, and the `practiceGraduatedPct` domain field/repo method (the DB
+column remains, unread). Generation is ONE Haiku call: natural sentences, full translation, a gloss
+for EVERY word incl. function words. The bank no longer re-scores — `pickBankExercises(stored,
+targets, plan)`. The player (`ClozePlayer`) shows the translation under the sentence AT ALL TIMES
+(replaced the Hint button) and every word is tappable → in-context gloss + the learner's own card
+via the page's `findCard` (token lemma → card lemma, else `normalizeFrontKey`). `segmentFlagged` →
+`segmentWords` in lib/practiceRender.ts. Old banked sentences predate the change and may read
+stiffly — `DELETE FROM practice_sentences` lets the bank refill naturally. More exercise types on
+this page are the declared next step. `features/Practice Mode.md` carries the retirement banner.
+
 ## Deck page filter is LOCAL STATE, not useSearchParams (2026-08-12)
 
 **Bug (user report)**: the ★ filter worked at folder level but did nothing at deck level. The folder

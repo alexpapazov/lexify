@@ -2,38 +2,17 @@ import {
   plannedTotal, planGenerationBatches, pickBankExercises,
   type SentencePlan, type BankCandidate,
 } from '../practiceBank'
-import { buildLibraryIndex, type PracticeTarget } from '../practice'
-import type { Card, CardState, PartOfSpeech } from '@/domain'
+import type { PracticeTarget } from '../practice'
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-let nextId = 0
-function card(front: string, pos: PartOfSpeech = 'noun', lemma = front): Card {
-  return {
-    id: `card-${nextId++}`, ownerId: 'u1', sourceLanguage: 'fr', targetLanguage: 'en',
-    front, back: `gloss of ${front}`, hints: [], choices: null, position: 0,
-    createdAt: '', updatedAt: '', deletedAt: null, pos, lemma,
-  }
-}
 
 function target(lemma: string): PracticeTarget {
   return { cardId: `c-${lemma}`, front: lemma, back: `gloss of ${lemma}`, lemma, pos: 'noun' }
 }
 
-/** A library where every listed word is graduated. */
-function library(words: string[]) {
-  const cards = words.map(w => card(w))
-  const states = cards.map(c => ({ cardId: c.id, graduated: true, reviewDirection: 'forward' } as unknown as CardState))
-  return buildLibraryIndex(cards, states)
-}
-
-function tok(text: string, lemma = text, pos: PartOfSpeech = 'noun', isFunctionWord = false) {
-  return { text, lemma, pos, isFunctionWord }
-}
-
-/** A stored sentence for `lemma` whose other content word is `other`. */
-function stored(id: string, lemma: string, other: string, useCount = 0): BankCandidate {
-  return { id, targetLemma: lemma, useCount, tokens: [tok(lemma), tok(other)] }
+/** A stored sentence for `lemma`. */
+function stored(id: string, lemma: string, useCount = 0): BankCandidate {
+  return { id, targetLemma: lemma, useCount }
 }
 
 // ─── plannedTotal ─────────────────────────────────────────────────────────────
@@ -102,77 +81,47 @@ describe('planGenerationBatches', () => {
 // ─── pickBankExercises ────────────────────────────────────────────────────────
 
 describe('pickBankExercises', () => {
-  const index   = library(['pluie', 'vent', 'orage'])
   const targets = [target('pluie'), target('vent')]
 
-  it('reuses a stored sentence whose words are all known', () => {
-    const bank = [stored('s1', 'pluie', 'orage')]
-    const { reuse } = pickBankExercises(bank, index, targets, 100, { mode: 'total', count: 5 })
+  it('reuses any stored sentence for a requested word — no re-scoring, sentences are unconstrained', () => {
+    const bank = [stored('s1', 'pluie')]
+    const { reuse } = pickBankExercises(bank, targets, { mode: 'total', count: 5 })
     expect(reuse.map(r => r.id)).toEqual(['s1'])
-  })
-
-  it('re-scores against the CURRENT library — a sentence with a now-unknown word is skipped', () => {
-    const bank = [stored('s1', 'pluie', 'tonnerre')]   // 'tonnerre' isn't in the library
-    const { reuse } = pickBankExercises(bank, index, targets, 100, { mode: 'total', count: 5 })
-    expect(reuse).toEqual([])
-  })
-
-  it('lets a previously-unusable sentence come back once the library grows', () => {
-    const bank = [stored('s1', 'pluie', 'tonnerre')]
-    const grown = library(['pluie', 'vent', 'orage', 'tonnerre'])
-    const { reuse } = pickBankExercises(bank, grown, targets, 100, { mode: 'total', count: 5 })
-    expect(reuse.map(r => r.id)).toEqual(['s1'])
-  })
-
-  it('respects the slider — the same sentence passes at a low bar and fails at a high one', () => {
-    // The target itself is exempt from scoring, so the judged content is 'orage' (graduated) and
-    // 'interposer' (met but not graduated) — exactly 50%.
-    const pluie = card('pluie'), orage = card('orage'), learning = card('interposer', 'verb', 'interposer')
-    const mixed = buildLibraryIndex([pluie, orage, learning], [
-      { cardId: pluie.id,    graduated: true,  reviewDirection: 'forward' } as unknown as CardState,
-      { cardId: orage.id,    graduated: true,  reviewDirection: 'forward' } as unknown as CardState,
-      { cardId: learning.id, graduated: false, reviewDirection: 'forward' } as unknown as CardState,
-    ])
-    const bank = [{ id: 's1', targetLemma: 'pluie', useCount: 0,
-      tokens: [tok('pluie'), tok('orage'), tok('interpose', 'interposer', 'verb')] }]
-    const only = [target('pluie')]
-    expect(pickBankExercises(bank, mixed, only, 50,  { mode: 'total', count: 5 }).reuse).toHaveLength(1)
-    expect(pickBankExercises(bank, mixed, only, 100, { mode: 'total', count: 5 }).reuse).toHaveLength(0)
   })
 
   it('ignores stored sentences for words this session did not ask for', () => {
-    const bank = [stored('s1', 'orage', 'pluie')]
-    const { reuse } = pickBankExercises(bank, index, targets, 100, { mode: 'total', count: 5 })
+    const bank = [stored('s1', 'orage')]
+    const { reuse } = pickBankExercises(bank, targets, { mode: 'total', count: 5 })
     expect(reuse).toEqual([])
   })
 
   it('serves least-used sentences first', () => {
-    const bank = [stored('used', 'pluie', 'orage', 4), stored('fresh', 'pluie', 'orage', 0)]
-    const { reuse } = pickBankExercises(bank, index, [target('pluie')], 100, { mode: 'total', count: 1 })
+    const bank = [stored('used', 'pluie', 4), stored('fresh', 'pluie', 0)]
+    const { reuse } = pickBankExercises(bank, [target('pluie')], { mode: 'total', count: 1 })
     expect(reuse.map(r => r.id)).toEqual(['fresh'])
   })
 
   it('round-robins across words instead of draining one word’s bank', () => {
     const bank = [
-      stored('p1', 'pluie', 'orage'), stored('p2', 'pluie', 'orage'), stored('p3', 'pluie', 'orage'),
-      stored('v1', 'vent', 'orage'),
+      stored('p1', 'pluie'), stored('p2', 'pluie'), stored('p3', 'pluie'),
+      stored('v1', 'vent'),
     ]
-    const { reuse } = pickBankExercises(bank, index, targets, 100, { mode: 'total', count: 2 })
+    const { reuse } = pickBankExercises(bank, targets, { mode: 'total', count: 2 })
     expect(reuse.map(r => r.targetLemma)).toEqual(['pluie', 'vent'])
   })
 
   it('stops at the requested total', () => {
-    const bank = Array.from({ length: 10 }, (_, i) => stored(`s${i}`, 'pluie', 'orage'))
-    const { reuse } = pickBankExercises(bank, index, [target('pluie')], 100, { mode: 'total', count: 3 })
+    const bank = Array.from({ length: 10 }, (_, i) => stored(`s${i}`, 'pluie'))
+    const { reuse } = pickBankExercises(bank, [target('pluie')], { mode: 'total', count: 3 })
     expect(reuse).toHaveLength(3)
   })
 
   it('per-word mode: caps each word at its quota', () => {
     const bank = [
-      stored('p1', 'pluie', 'orage'), stored('p2', 'pluie', 'orage'), stored('p3', 'pluie', 'orage'),
-      stored('v1', 'vent', 'orage'),
+      stored('p1', 'pluie'), stored('p2', 'pluie'), stored('p3', 'pluie'),
+      stored('v1', 'vent'),
     ]
-    const { reuse } = pickBankExercises(bank, index, targets, 100, { mode: 'perWord', perWord: 2 })
+    const { reuse } = pickBankExercises(bank, targets, { mode: 'perWord', perWord: 2 })
     const byLemma = reuse.reduce<Record<string, number>>((acc, r) => {
       acc[r.targetLemma] = (acc[r.targetLemma] ?? 0) + 1; return acc
     }, {})
@@ -180,28 +129,27 @@ describe('pickBankExercises', () => {
   })
 
   it('per-word mode: reports what each word still needs', () => {
-    const bank = [stored('p1', 'pluie', 'orage')]
-    const { shortfallByLemma } = pickBankExercises(bank, index, targets, 100, { mode: 'perWord', perWord: 2 })
+    const bank = [stored('p1', 'pluie')]
+    const { shortfallByLemma } = pickBankExercises(bank, targets, { mode: 'perWord', perWord: 2 })
     expect(shortfallByLemma.get('pluie')).toBe(1)
     expect(shortfallByLemma.get('vent')).toBe(2)
   })
 
   it('per-word mode: reports no shortfall when the bank covers everything', () => {
-    const bank = [stored('p1', 'pluie', 'orage'), stored('v1', 'vent', 'orage')]
-    const { shortfallByLemma } = pickBankExercises(bank, index, targets, 100, { mode: 'perWord', perWord: 1 })
+    const bank = [stored('p1', 'pluie'), stored('v1', 'vent')]
+    const { shortfallByLemma } = pickBankExercises(bank, targets, { mode: 'perWord', perWord: 1 })
     expect(shortfallByLemma.size).toBe(0)
   })
 
   it('handles an empty bank', () => {
-    const { reuse, shortfallByLemma } = pickBankExercises(
-      [], index, targets, 100, { mode: 'perWord', perWord: 2 })
+    const { reuse, shortfallByLemma } = pickBankExercises([], targets, { mode: 'perWord', perWord: 2 })
     expect(reuse).toEqual([])
     expect(shortfallByLemma.get('vent')).toBe(2)
   })
 
   it('matches lemmas case- and whitespace-insensitively', () => {
-    const bank = [{ id: 's1', targetLemma: '  Pluie ', useCount: 0, tokens: [tok('pluie'), tok('orage')] }]
-    const { reuse } = pickBankExercises(bank, index, [target('pluie')], 100, { mode: 'total', count: 1 })
+    const bank = [{ id: 's1', targetLemma: '  Pluie ', useCount: 0 }]
+    const { reuse } = pickBankExercises(bank, [target('pluie')], { mode: 'total', count: 1 })
     expect(reuse.map(r => r.id)).toEqual(['s1'])
   })
 })

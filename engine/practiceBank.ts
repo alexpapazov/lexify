@@ -16,8 +16,7 @@
  * Pure: no React, no Supabase, no clock, no randomness.
  */
 
-import { scoreSentence, type LibraryIndex, type PracticeTarget } from './practice'
-import type { AnnotatedToken } from './practice'
+import type { PracticeTarget } from './practice'
 
 // ─── How many sentences, and how they're spread ───────────────────────────────
 
@@ -78,11 +77,10 @@ export function planGenerationBatches(
 
 // ─── Reusing stored sentences ─────────────────────────────────────────────────
 
-/** The minimum a stored sentence must carry for the bank to judge it. */
+/** The minimum a stored sentence must carry for the bank to select it. */
 export interface BankCandidate {
   id:          string
   targetLemma: string
-  tokens:      AnnotatedToken[]
   useCount:    number
 }
 
@@ -96,26 +94,15 @@ export interface BankSelection<T extends BankCandidate> {
 /**
  * Picks what the session can serve from the bank, and reports what's still missing.
  *
- * A stored sentence is only reused if it **re-scores clean right now** — clears the slider and has
- * no unknown words. A sentence that no longer passes isn't repaired (that would spend an API call
- * to rescue a cached item when generating fresh costs the same); it's simply skipped, and may
- * become usable again later as the library grows.
- *
- * Selection is round-robin across the requested lemmas, least-used first within each, so a session
- * spreads over the chosen words instead of exhausting the first one's bank.
+ * Any stored sentence for a requested lemma is reusable — sentences are natural and unconstrained,
+ * so there is no score for a cached one to fail. Selection is round-robin across the requested
+ * lemmas, least-used first within each, so a session spreads over the chosen words instead of
+ * exhausting the first one's bank.
  */
 export function pickBankExercises<T extends BankCandidate>(
-  stored:          T[],
-  index:           LibraryIndex,
-  targets:         PracticeTarget[],
-  minGraduatedPct: number,
-  plan:            SentencePlan,
-  /**
-   * Whether the session restricts sentences to known words. When false (the default for a natural
-   * session) any stored sentence for the lemma is reusable — there is no bar to clear, so re-scoring
-   * would only reject perfectly good sentences for a constraint the learner switched off.
-   */
-  requireKnownWords = true,
+  stored:  T[],
+  targets: PracticeTarget[],
+  plan:    SentencePlan,
 ): BankSelection<T> {
   const wantPerLemma = plan.mode === 'perWord' ? Math.max(0, Math.floor(plan.perWord)) : Infinity
   const wantTotal    = plannedTotal(plan, targets.length)
@@ -127,11 +114,6 @@ export function pickBankExercises<T extends BankCandidate>(
     const lemma = candidate.targetLemma.trim().toLowerCase()
     const bucket = byLemma.get(lemma)
     if (!bucket) continue                       // not a word this session asked for
-    // The whole point: judged against the CURRENT library and slider, never a stored verdict.
-    if (requireKnownWords) {
-      const score = scoreSentence(candidate.tokens, index, [lemma], minGraduatedPct)
-      if (!score.passes) continue
-    }
     bucket.push(candidate)
   }
   for (const bucket of byLemma.values()) bucket.sort((a, b) => a.useCount - b.useCount)

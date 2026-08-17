@@ -1,17 +1,14 @@
 /**
- * lib/practiceRender.ts — turning a scored exercise into something renderable.
+ * lib/practiceRender.ts — turning a generated exercise into something renderable.
  *
  * Pure string work, kept out of the component so it can be tested: splitting a sentence around the
- * cloze blank, and marking the words that survived repair unknown so the UI can show them in red
- * with their translation.
+ * cloze blank, and splitting text into word/punctuation runs so every word can be a clickable span.
  */
 
-/** One run of sentence text; `flagged` runs are words the learner doesn't know. */
-export interface RenderSegment {
-  text:    string
-  flagged: boolean
-  /** Native gloss, present only on flagged runs. */
-  gloss?:  string
+/** One run of sentence text. `isWord` runs are tappable; the rest is punctuation and spacing. */
+export interface RenderRun {
+  text:   string
+  isWord: boolean
 }
 
 /**
@@ -25,24 +22,17 @@ export function splitForBlank(sentence: string, answer: string): { before: strin
 }
 
 /**
- * Splits `text` into runs, marking the ones that are flagged words.
+ * Splits `text` into word and non-word runs, preserving every character.
  *
- * Matching is per WORD (the split captures word runs, so punctuation and spacing survive untouched)
- * and case-insensitive, so a sentence-initial flagged word still matches its lowercase annotation.
- * A word that isn't flagged comes back as an ordinary run — adjacent runs are not merged, which
- * costs nothing since React renders a list of spans either way.
+ * The word pattern matches letter runs including combining marks, apostrophes and hyphens, so
+ * French elisions ("l'école") and hyphenated words come out as single tappable words while
+ * punctuation and spacing pass through untouched.
  */
-export function segmentFlagged(text: string, flagged: { text: string; gloss: string }[]): RenderSegment[] {
-  if (flagged.length === 0) return text ? [{ text, flagged: false }] : []
-
-  const glossByWord = new Map(flagged.map(f => [f.text.toLowerCase(), f.gloss]))
+export function segmentWords(text: string): RenderRun[] {
+  if (!text) return []
   // Capturing split: odd indices are word runs, even indices the punctuation/space between them.
-  const parts = text.split(/(\p{L}[\p{L}\p{M}'’-]*)/u).filter(p => p !== '')
-
-  return parts.map(part => {
-    const gloss = glossByWord.get(part.toLowerCase())
-    return gloss === undefined
-      ? { text: part, flagged: false }
-      : { text: part, flagged: true, gloss }
-  })
+  return text
+    .split(/(\p{L}[\p{L}\p{M}'’-]*)/u)
+    .filter(p => p !== '')
+    .map(part => ({ text: part, isWord: /^\p{L}/u.test(part) }))
 }

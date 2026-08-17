@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * components/practice/ClozePlayer.tsx — the Phase 3 practice session.
+ * components/practice/ClozePlayer.tsx — the practice session player.
  *
  * Fill the blank in a generated sentence. Deliberately NOT a study session:
  *
@@ -11,16 +11,33 @@
  *     The sentence is machine-generated, so failing someone on a missing accent in a word that
  *     isn't even the one being drilled would be noise.
  *
- * A word the repair pass couldn't replace is rendered in red with its translation, which is the
- * documented fallback in `features/Practice Mode.md` — a sentence with one glossed unknown word is
- * more useful than no sentence.
+ * The sentence is INTERACTIVE (Clozemaster-style): the native translation sits underneath the whole
+ * time, and tapping any word opens its meaning — the generator's in-context gloss — plus the
+ * learner's own card for that word when the library has one. Yes, the translation can hint at the
+ * blank; that trade was chosen deliberately, the exercise is recall + inflection, not riddling.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { gradeTyping } from '@/engine/grading'
-import { splitForBlank, segmentFlagged } from '@/lib/practiceRender'
+import { splitForBlank, segmentWords } from '@/lib/practiceRender'
 import { DEFAULT_GRADING_SETTINGS, type GradingSettings } from '@/domain'
 import type { PreparedExercise } from '@/lib/practiceGenerate'
+import type { PracticeToken } from '@/lib/practiceSchema'
+
+/** The learner's own card for a tapped word, as the page resolves it. */
+export interface PracticeCardMatch {
+  front:  string
+  back:   string
+  /** 'Graduated' / 'Learning' / … — whatever the page derives; shown as a chip. */
+  status: string
+}
+
+/** What the tap panel shows for one word. */
+interface PickedWord {
+  text:  string
+  gloss: string
+  card:  PracticeCardMatch | null
+}
 
 /** Practice grading: forgiving, because the sentence around the answer is generated. */
 function practiceGrading(answerLanguage: string): GradingSettings {
@@ -33,34 +50,39 @@ function practiceGrading(answerLanguage: string): GradingSettings {
   }
 }
 
-/** The sentence, blank and all, with unknown words marked. */
+/** The sentence with the blank, every word tappable. */
 function SentenceLine({
-  before, after, flagged, filled, gloss,
+  before, after, filled, gloss, onWord,
 }: {
   before: string
   after:  string
-  flagged: { text: string; gloss: string }[]
   /** The revealed answer, or null while the blank is still blank. */
   filled: string | null
   /** Native meaning of the missing word, shown inside the blank as the prompt. */
   gloss:  string
+  onWord: (text: string) => void
 }) {
-  const render = (text: string) => segmentFlagged(text, flagged).map((seg, i) =>
-    seg.flagged
+  const render = (text: string) => segmentWords(text).map((run, i) =>
+    run.isWord
       ? (
-        <span key={i} className="text-danger" title={seg.gloss}>
-          {seg.text}
-          <span className="text-danger/60 text-[0.85em]"> ({seg.gloss})</span>
-        </span>
+        <button key={i} type="button" onClick={() => onWord(run.text)}
+          className="rounded-sm hover:bg-accent/10 hover:text-accent-soft focus-visible:bg-accent/10 transition-colors cursor-pointer">
+          {run.text}
+        </button>
       )
-      : <span key={i}>{seg.text}</span>,
+      : <span key={i}>{run.text}</span>,
   )
 
   return (
     <p className="text-xl text-ink leading-relaxed text-center">
       {render(before)}
       {filled !== null
-        ? <span className="text-accent font-medium">{filled}</span>
+        ? (
+          <button type="button" onClick={() => onWord(filled)}
+            className="text-accent font-medium rounded-sm hover:bg-accent/10 transition-colors cursor-pointer">
+            {filled}
+          </button>
+        )
         // The blank carries the meaning to produce. Without it the learner is guessing which word
         // was removed; with it, the exercise is recall + inflection, which is the point.
         : gloss
@@ -75,16 +97,18 @@ function SentenceLine({
   )
 }
 
-export function ClozePlayer({ items, answerLanguage, onExit }: {
+export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
   items:          PreparedExercise[]
   /** Language of the word being typed — the learned language. */
   answerLanguage: string
   onExit:         () => void
+  /** Resolves a tapped word to the learner's own card, if the library has it. */
+  findCard: (word: { text: string; lemma?: string }) => PracticeCardMatch | null
 }) {
   const [index,     setIndex]     = useState(0)
   const [input,     setInput]     = useState('')
   const [revealed,  setRevealed]  = useState(false)
-  const [showHint,  setShowHint]  = useState(false)
+  const [picked,    setPicked]    = useState<PickedWord | null>(null)
   /**
    * Per-item outcome, so an override can flip one after it's been graded and the tally stays
    * consistent. `overridden` is kept only to label the result — the count reads `correct`.
@@ -98,7 +122,7 @@ export function ClozePlayer({ items, answerLanguage, onExit }: {
 
   // New card: clear the form and take focus back, so the whole session is keyboard-only.
   useEffect(() => {
-    setInput(''); setRevealed(false); setShowHint(false)
+    setInput(''); setRevealed(false); setPicked(null)
     inputRef.current?.focus()
   }, [index])
 
@@ -114,9 +138,24 @@ export function ClozePlayer({ items, answerLanguage, onExit }: {
     )
   }
 
-  const { exercise, flagged } = current
+  const { exercise } = current
   const split = splitForBlank(exercise.sentence, exercise.answer)
   const outcome = outcomes[index]
+
+  /** A tapped word: its in-context gloss from the token list, and the learner's card if any. */
+  function pickWord(text: string) {
+    const clean = text.trim()
+    if (!clean) return
+    // Toggle off when the same word is tapped again.
+    if (picked?.text.toLowerCase() === clean.toLowerCase()) { setPicked(null); return }
+    const token: PracticeToken | undefined =
+      exercise.tokens.find(t => t.text.toLowerCase() === clean.toLowerCase())
+    setPicked({
+      text:  clean,
+      gloss: token?.gloss ?? '',
+      card:  findCard({ text: clean, lemma: token?.lemma }),
+    })
+  }
 
   function check() {
     if (revealed || !input.trim()) return
@@ -158,14 +197,37 @@ export function ClozePlayer({ items, answerLanguage, onExit }: {
 
       <div className="panel py-10 space-y-5">
         {split
-          ? <SentenceLine before={split.before} after={split.after} flagged={flagged}
-              filled={revealed ? exercise.answer : null} gloss={current.targetGloss} />
+          ? <SentenceLine before={split.before} after={split.after}
+              filled={revealed ? exercise.answer : null} gloss={current.targetGloss} onWord={pickWord} />
           // Belt and braces: the parser rejects an answer that isn't in the sentence, so this
           // should be unreachable — but never render a broken exercise as a blank screen.
           : <p className="text-xl text-ink text-center">{exercise.sentence}</p>}
 
-        {(showHint || revealed) && exercise.translation && (
+        {/* The native translation lives under the sentence the whole time — the exercise is
+            producing the word, not decoding the sentence. */}
+        {exercise.translation && (
           <p className="text-sm text-ink-muted text-center italic">{exercise.translation}</p>
+        )}
+
+        {/* Tap-a-word panel: in-context meaning, plus the learner's own card when one matches. */}
+        {picked && (
+          <div className="mx-auto max-w-md rounded-card border border-line/15 bg-surface-raised px-4 py-3 space-y-1.5 text-center">
+            <p className="text-sm">
+              <span className="text-ink font-medium">{picked.text}</span>
+              {picked.gloss && <span className="text-ink-muted"> — {picked.gloss}</span>}
+              {!picked.gloss && !picked.card && <span className="text-ink-faint"> — no translation available</span>}
+            </p>
+            {picked.card ? (
+              <p className="text-xs text-ink-muted">
+                {`In your library: ${picked.card.front} = ${picked.card.back}`}
+                <span className="ml-2 inline-block rounded-full border border-line/20 px-2 py-0.5 text-[10px] uppercase tracking-wider text-ink-faint">
+                  {picked.card.status}
+                </span>
+              </p>
+            ) : (
+              <p className="text-xs text-ink-faint">Not in your library</p>
+            )}
+          </div>
         )}
       </div>
 
@@ -181,9 +243,6 @@ export function ClozePlayer({ items, answerLanguage, onExit }: {
             onKeyDown={e => { if (e.key === 'Enter') check() }}
           />
           <div className="flex items-center justify-center gap-3">
-            {!showHint && exercise.translation && (
-              <button onClick={() => setShowHint(true)} className="btn-ghost text-sm">Hint</button>
-            )}
             <button onClick={check} disabled={!input.trim()} className="btn-primary px-8 disabled:opacity-50">
               Check
             </button>

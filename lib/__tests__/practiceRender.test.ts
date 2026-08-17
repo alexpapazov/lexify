@@ -1,4 +1,4 @@
-import { splitForBlank, segmentFlagged } from '@/lib/practiceRender'
+import { splitForBlank, segmentWords } from '@/lib/practiceRender'
 
 describe('splitForBlank', () => {
   it('splits around the first occurrence of the answer', () => {
@@ -16,43 +16,28 @@ describe('splitForBlank', () => {
   })
 })
 
-describe('segmentFlagged', () => {
-  it('returns one plain run when nothing is flagged', () => {
-    expect(segmentFlagged('Il se précipite.', [])).toEqual([{ text: 'Il se précipite.', flagged: false }])
+describe('segmentWords', () => {
+  it('marks word runs and passes punctuation through', () => {
+    const runs = segmentWords('Vers le tonnerre, oui.')
+    expect(runs.filter(r => r.isWord).map(r => r.text)).toEqual(['Vers', 'le', 'tonnerre', 'oui'])
   })
 
-  it('marks a flagged word and carries its gloss', () => {
-    const segments = segmentFlagged('Vers le tonnerre.', [{ text: 'tonnerre', gloss: 'thunder' }])
-    expect(segments.filter(s => s.flagged)).toEqual([{ text: 'tonnerre', flagged: true, gloss: 'thunder' }])
+  it('preserves every character when rejoined', () => {
+    const text = 'Vers le tonnerre, oui.'
+    expect(segmentWords(text).map(r => r.text).join('')).toBe(text)
   })
 
-  it('preserves punctuation and spacing exactly', () => {
-    const segments = segmentFlagged('Vers le tonnerre, oui.', [{ text: 'tonnerre', gloss: 'thunder' }])
-    expect(segments.map(s => s.text).join('')).toBe('Vers le tonnerre, oui.')
+  it('keeps accented, apostrophised and hyphenated words whole', () => {
+    const runs = segmentWords("L'extase était porte-clés.")
+    expect(runs.filter(r => r.isWord).map(r => r.text)).toEqual(["L'extase", 'était', 'porte-clés'])
   })
 
-  it('matches a sentence-initial flagged word despite the capital', () => {
-    const segments = segmentFlagged('Tonnerre partout.', [{ text: 'tonnerre', gloss: 'thunder' }])
-    expect(segments.find(s => s.flagged)?.text).toBe('Tonnerre')
-  })
-
-  it('does not flag a word that merely contains the flagged one', () => {
-    const segments = segmentFlagged('Le pou est là.', [{ text: 'ou', gloss: 'or' }])
-    expect(segments.some(s => s.flagged)).toBe(false)
-  })
-
-  it('keeps accented and apostrophised words whole', () => {
-    const segments = segmentFlagged("L'extase était forte.", [{ text: 'était', gloss: 'was' }])
-    expect(segments.find(s => s.flagged)?.text).toBe('était')
-    expect(segments.map(s => s.text).join('')).toBe("L'extase était forte.")
-  })
-
-  it('flags every occurrence of the same word', () => {
-    const segments = segmentFlagged('Tonnerre et tonnerre.', [{ text: 'tonnerre', gloss: 'thunder' }])
-    expect(segments.filter(s => s.flagged)).toHaveLength(2)
+  it('handles non-Latin scripts', () => {
+    const runs = segmentWords('το σημείο είναι εδώ.')
+    expect(runs.filter(r => r.isWord).map(r => r.text)).toEqual(['το', 'σημείο', 'είναι', 'εδώ'])
   })
 
   it('returns nothing for empty text', () => {
-    expect(segmentFlagged('', [])).toEqual([])
+    expect(segmentWords('')).toEqual([])
   })
 })

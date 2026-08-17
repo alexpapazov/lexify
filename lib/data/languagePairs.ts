@@ -16,7 +16,6 @@ function rowToPair(row: Record<string, unknown>): LanguagePair {
     createdAt:      row.created_at as string,
     goals:          (row.goals as Record<string, number | null> | null) ?? null,
     learningMode:   (row.learning_mode as 'ladder' | 'pathway' | null) ?? 'ladder',
-    practiceGraduatedPct: (row.practice_graduated_pct as number | null) ?? null,
   }
 }
 
@@ -90,13 +89,6 @@ export class SupabaseLanguagePairRepository {
   }
 
   /** Remember this pairing's Practice Mode "% from graduated vocabulary" slider (migration 111). */
-  async updatePracticeGraduatedPct(sourceLanguage: string, targetLanguage: string, pct: number): Promise<void> {
-    invalidateReads('pairs:')
-    const { error } = await this.db.from('language_pairs')
-      .update({ practice_graduated_pct: Math.max(0, Math.min(100, Math.round(pct))) })
-      .match({ source_language: sourceLanguage, target_language: targetLanguage })
-    if (error) throw new Error(error.message)
-  }
 
   /** Update the AI instructions for an existing pairing (null clears them). */
   async updateInstructions(sourceLanguage: string, targetLanguage: string, instructions: string | null): Promise<void> {

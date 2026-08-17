@@ -1,19 +1,29 @@
 # Practice Mode
 
-**Status (2026-08-08): Phases 0–5 DONE. Phase 6 is next and needs a grading conversation first.**
+**Status (2026-08-12): the known-words steering is GONE — read this banner before the rest.**
 
-Shipped: vocabulary labels; `engine/practice.ts` (scoring), `engine/practiceSelect.ts` (composable
-target sources) and `engine/practiceBank.ts` (session plan + cache reuse); the generate / repair /
-verify routes and their orchestration; `/practice` with the cloze player, overrides, and the
-sentence bank. **Migrations 110–113 are all applied and archived** — next number is 114.
+The generate → score → repair → verify loop, the "Prefer words I already know" checkbox, the
+"% graduated" slider (and its `practice_graduated_pct` persistence), helper-word sampling,
+`vocabularyCoverage`, and the repair/verify routes were all DELETED on 2026-08-12, at the user's
+direction: the steering tripled latency (three model round-trips per batch) and still produced
+stilted sentences. Everything below describing scoring/repair/verify/slider is HISTORY — kept for
+context, not a description of the code.
 
-Run against the real API enough to surface and fix the naturalness problem (see §"Naturalness, the
-quality gate, and native cloze"). Still thinly exercised: bank reuse across sessions, per-word
-plans, and native cloze.
-
-A planned mode where the learner picks from exercise types (cloze, translate-the-sentence, use the
-word in a sentence, …) generated from their own vocabulary. This doc records the agreed design so a
-future session can build generation without re-deriving it, plus what is already built.
+What practice is now:
+- **One generation call** (`/api/practice/generate`, Haiku): natural, unconstrained sentences, a
+  full native translation, and a gloss for EVERY word — function words included.
+- **Interactive cloze** (`ClozePlayer`): the translation sits under the sentence the whole time
+  (Clozemaster-style — yes, it can hint at the blank; deliberate), and tapping any word opens its
+  in-context gloss plus the learner's own card when the library has one (`findCard` on the page:
+  token lemma → card lemma, else `normalizeFrontKey` on the front). Labels are now what make a
+  tapped word find its card — that's the labeling prompt's remaining purpose, besides drillability.
+- **The bank still runs** (`practice_sentences`, migration 113) but hands sentences back AS STORED —
+  no re-scoring; `pickBankExercises(stored, targets, plan)` only matches lemma + round-robins by
+  use count. Sentences banked BEFORE 2026-08-12 were generated under the old constraint and may read
+  stiffly; clearing the table (`DELETE FROM practice_sentences`) lets it refill with natural ones.
+- Target selection (`engine/practiceSelect.ts`), the drillable gate, native cloze mode, per-word
+  plans, and the session-local override all survive unchanged.
+- **More exercise types beyond cloze are planned for this page** — that's the next step here.
 
 ---
 
