@@ -106,6 +106,8 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
   findCard: (word: { text: string; lemma?: string }) => PracticeCardMatch | null
 }) {
   const [index,     setIndex]     = useState(0)
+  /** The play order. Grows: an item answered wrong is re-queued at the END for a redo. */
+  const [queue,     setQueue]     = useState<PreparedExercise[]>(() => items)
   const [input,     setInput]     = useState('')
   const [revealed,  setRevealed]  = useState(false)
   const [picked,    setPicked]    = useState<PickedWord | null>(null)
@@ -117,8 +119,8 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const settings = useMemo(() => practiceGrading(answerLanguage), [answerLanguage])
-  const current  = items[index]
-  const correct  = Object.values(outcomes).filter(o => o.correct).length
+  const current  = queue[index]
+  const retries  = queue.length - items.length
 
   // New card: clear the form and take focus back, so the whole session is keyboard-only.
   useEffect(() => {
@@ -131,7 +133,7 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
       <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
         <h1 className="text-2xl font-semibold text-ink">Practice complete</h1>
         <p className="text-ink-muted text-sm">
-          {`${correct} of ${items.length} correct. Nothing was scheduled — practice doesn’t change your review dates.`}
+          {`All ${items.length} answered${retries > 0 ? ` — ${retries} needed another try` : ', all on the first try'}. Nothing was scheduled — practice doesn’t change your review dates.`}
         </p>
         <button onClick={onExit} className="btn-primary">Back to practice setup</button>
       </div>
@@ -182,17 +184,21 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
     })
   }
 
-  function next() { setIndex(i => i + 1) }
+  /** Advance — a wrong answer sends the exercise to the BACK OF THE LINE for a redo. */
+  function next() {
+    if (outcomes[index] && !outcomes[index]!.correct) setQueue(q => [...q, current!])
+    setIndex(i => i + 1)
+  }
 
   return (
     <div className="space-y-6 max-w-2xl mx-auto pb-12">
       <div className="flex items-center justify-between gap-4">
         <button onClick={onExit} className="text-sm text-ink-faint hover:text-ink transition-colors">✕ End practice</button>
-        <span className="text-sm text-ink-muted tabular-nums">{index + 1} / {items.length}</span>
+        <span className="text-sm text-ink-muted tabular-nums">{index + 1} / {queue.length}</span>
       </div>
 
       <div className="h-1 rounded-full bg-surface overflow-hidden">
-        <div className="h-full bg-accent transition-all" style={{ width: `${(index / items.length) * 100}%` }} />
+        <div className="h-full bg-accent transition-all" style={{ width: `${(index / queue.length) * 100}%` }} />
       </div>
 
       <div className="panel py-10 space-y-5">
@@ -263,10 +269,13 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard }: {
               : (outcome?.overridden
                   ? <>Marked incorrect — the answer was <strong className="text-ink">{exercise.answer}</strong></>
                   : <>Answer: <strong className="text-ink">{exercise.answer}</strong>{input.trim() ? <> — you typed “{input.trim()}”</> : null}</>)}
+            {outcome && !outcome.correct && (
+              <span className="block text-xs text-ink-faint mt-1">It goes to the back of the line — you’ll redo it before the session ends.</span>
+            )}
           </div>
           <div className="flex flex-col items-center gap-3">
             <button autoFocus onClick={next} className="btn-primary px-10">
-              {index + 1 === items.length ? 'Finish' : 'Continue'}
+              {index + 1 === queue.length && outcome?.correct ? 'Finish' : 'Continue'}
             </button>
             <button onClick={toggleOverride}
               title="These sentences are generated — override the grader when your answer also works"

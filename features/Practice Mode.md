@@ -26,6 +26,10 @@ What practice is now:
 - **Matching game (2026-08-12)** — the first additional exercise type: pair word ↔ meaning in
   rounds of 5, up to 20 words, no generation, instant start (`MatchingGame.tsx`, the "Exercise"
   toggle in Session settings). More types remain planned.
+- **Wrong cloze answers go to the back of the line (2026-08-12)** — the player's `queue` state grows
+  by the missed item on Continue; the session ends only when everything has been answered correctly.
+  The requeue reads the outcome AFTER any override, so "actually, mark correct" also cancels the
+  redo. End screen reports retries instead of a correct-count (finishing means all correct).
 
 ---
 
