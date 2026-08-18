@@ -1,7 +1,7 @@
 /**
  * lib/offline/download.ts — Stage 2: build a DownloadBundle for a scope and write it into the local
  * store. Pure selection helpers (scope → decks, cards → included set, size estimate) are separated so
- * they're unit-testable; `downloadForOffline` orchestrates the Supabase reads + distractor pre-gen.
+ * they're unit-testable; `downloadForOffline` orchestrates the Supabase reads and store hydration.
  */
 import type { Card, CardState, Deck, Folder } from '@/domain'
 import { createClient } from '@/lib/supabase/client'
@@ -13,9 +13,7 @@ import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
-import { ensureChoicesGenerated, needsChoices } from '@/lib/distractors'
 import { fetchAllRows } from '@/lib/supabasePaged'
-import { mapLimit } from '@/lib/mapLimit'
 
 import { cardStateKey, ladderKey, paramKey, overrideKey } from './keys'
 import { getLocalStore } from './localStore'
@@ -25,8 +23,6 @@ import type { DownloadBundle, Manifest, OfflineScope, StoredCardState } from './
 // a time — the wall-clock is dominated by network latency, not local work, so this is close to a
 // linear speed-up. Kept modest so we don't trip provider rate limits; a 429 falls back to deck
 // siblings for that card, which is a silent quality loss, so speed isn't worth pushing much higher.
-const AI_CONCURRENCY = 5
-const DB_CONCURRENCY = 10   // plain row updates — cheap, no rate limit to respect
 
 /** Ids per `.in(...)` request. Keeps the generated query string well short of URL-length limits. */
 const IN_CHUNK = 400
@@ -152,39 +148,10 @@ export async function downloadForOffline(opts: DownloadOptions): Promise<{ manif
   const cards = allCards.filter(c => selected.has(c.id))
   const cardIds = [...selected]
 
-  // Pre-generate distractors for cards missing them (best-effort; MCQ falls back to deck siblings).
-  // Generated choices are also persisted back to the server card so a card that had no distractors
-  // gains them for everyone — a direct Supabase write (not the offline-guarded repo) so it lands on
-  // the server even if the offline flag is set (e.g. during "Update download").
-  const missing = cards.filter(c => needsChoices(c, 'front') || needsChoices(c, 'back'))
-  // Group siblings by pair ONCE. Re-filtering the whole card list per card made this O(n²) — with a
-  // couple thousand cards that's millions of comparisons, which is very noticeable on a phone.
-  const siblingsByPair = new Map<string, typeof cards>()
-  for (const c of cards) {
-    const k = `${c.sourceLanguage}|${c.targetLanguage}`
-    const a = siblingsByPair.get(k)
-    if (a) a.push(c); else siblingsByPair.set(k, [c])
-  }
-
-  const persistBack: { id: string; choices: unknown }[] = []
-  await mapLimit(missing, AI_CONCURRENCY, async c => {
-    const siblings = siblingsByPair.get(`${c.sourceLanguage}|${c.targetLanguage}`) ?? []
-    const side = needsChoices(c, 'front') ? 'front' : 'back'
-    try {
-      const choices = await ensureChoicesGenerated(c, side, siblings, c.sourceLanguage, c.targetLanguage)
-      if (choices) {
-        cardsById.set(c.id, { ...cardsById.get(c.id)!, choices })
-        // Persist EVERY generated card (not only ones that had zero choices) — a card with partial/legacy
-        // choices would otherwise keep failing needsChoices() and regenerate on every single download.
-        persistBack.push({ id: c.id, choices })
-      }
-    } catch { /* keep fallback */ }
-  }, n => progress('Generating distractors', n, missing.length))
-
-  // Upload the newly generated distractors to the library (guaranteed server write).
-  await mapLimit(persistBack, DB_CONCURRENCY, async ({ id, choices }) => {
-    try { await supabase.from('cards').update({ choices }).eq('id', id) } catch { /* best-effort */ }
-  }, n => progress('Saving distractors', n, persistBack.length))
+  // Distractors are deliberately NOT generated here (removed 2026-08-13, at the user's direction —
+  // one AI round-trip per missing card made big downloads take far too long). Cards ship with
+  // whatever choices they already have; offline MCQ falls back to deck-sibling distractors for the
+  // rest, exactly as it always did when generation failed.
   const finalCards = cardIds.map(id => cardsById.get(id)!).map(c => opts.includeAudio ? c : stripAudio(c))
 
   // Sync baselines (server updated_at) for the conflicting tables + the deck↔card join.

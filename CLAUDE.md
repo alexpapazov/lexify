@@ -1482,7 +1482,10 @@ Toggling offline OFF now **syncs the outbox back to Supabase**.
   `ladderSave`/`ladderReset`, synced on reconnect). `ladderKey('','')` = `'default'`. Every download
   ALWAYS bundles all pair ladders + the default (whole-user config, any scope) so downloaded cards run
   the pipeline accurately offline.
-- **Download distractors** persist to the server for cards that had none (direct `cards.update`).
+- **Download distractor pre-generation REMOVED (2026-08-13, user's direction)** — one AI call per
+  missing card made big downloads take minutes. Cards ship with whatever `choices` they already
+  have; offline MCQ falls back to deck-sibling distractors for the rest. The 2026-07-20 download
+  speed notes below describe machinery that no longer exists.
 - **Download speed (2026-07-20)**: distractor pre-generation was strictly sequential — one AI round-trip
   per card, awaited one at a time — which made a few-hundred-card download take 10+ minutes (network
   latency, not local work). Now runs `AI_CONCURRENCY = 5` in flight via a `mapLimit` helper in
