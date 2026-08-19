@@ -31,7 +31,7 @@ import {
   SupabaseGoalScheduleRepository, scheduleProgress, currentVocabularySize,
 } from '@/lib/data/goalSchedules'
 import {
-  scheduleStatus, schedulePlan, validateSchedule, daysBetween, addScheduleDays,
+  scheduleStatus, schedulePlan, validateSchedule, daysBetween, addScheduleDays, pickCurrentSchedule,
 } from '@/lib/goalSchedule'
 import { GoalScheduleCalendar } from '@/components/settings/GoalScheduleCalendar'
 import { getToday } from '@/lib/dates'
@@ -110,6 +110,10 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
 }) {
   const today = useMemo(() => getToday(timezone, turnoverHour), [timezone, turnoverHour])
 
+  /** The pair's whole queue of live schedules, earliest start first (sequential goals). */
+  const [all,       setAll]       = useState<GoalSchedule[]>([])
+  /** Which schedule the form edits; null = composing a brand-new one. */
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [saved,     setSaved]     = useState<GoalSchedule | null>(null)
   const [draft,     setDraft]     = useState<Draft>(() => draftFrom(null, today))
   /** null = the count could not be read. Distinct from 0, which is a real answer. */
@@ -127,14 +131,17 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     ;(async () => {
       setLoading(true)
       try {
-        const [existing, vocab] = await Promise.all([
-          new SupabaseGoalScheduleRepository().getForPair(userId, sourceLanguage, targetLanguage),
+        const [queue, vocab] = await Promise.all([
+          new SupabaseGoalScheduleRepository().listForPair(userId, sourceLanguage, targetLanguage),
           // A failure must not take the editor down with it — but it must NOT become a 0 either.
           // Reporting "you know 0 words" when the query simply failed is worse than saying nothing,
           // and it would have been stored as the schedule's baseline. null means "unknown".
           currentVocabularySize(userId, sourceLanguage, targetLanguage).catch(() => null),
         ])
         if (cancelled) return
+        const existing = pickCurrentSchedule(queue, today)
+        setAll(queue)
+        setEditingId(existing?.id ?? null)
         setSaved(existing)
         setDraft(draftFrom(existing, today))
         setVocabNow(vocab)
@@ -146,6 +153,22 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     })()
     return () => { cancelled = true }
   }, [userId, sourceLanguage, targetLanguage, today])
+
+  /** Loads one of the queue's schedules (or a blank follow-up draft) into the form. */
+  function editSchedule(target: GoalSchedule | null) {
+    setSaved(target)
+    setEditingId(target?.id ?? null)
+    if (target) {
+      setDraft(draftFrom(target, today))
+    } else {
+      // A follow-up starts the day after the queue's last deadline — the natural "and then".
+      const lastEnd = all.reduce<string | null>((acc, sc) =>
+        sc.deadline && (!acc || sc.deadline > acc) ? sc.deadline : acc, null)
+      const start = lastEnd && lastEnd >= today ? addScheduleDays(lastEnd, 1) : today
+      setDraft({ ...draftFrom(null, today), startDate: start })
+    }
+    setNote(null); setError(null); setConfirmArchive(false)
+  }
 
   /**
    * The baseline the schedule measures from. A 'total_words' target counts the vocabulary you already
@@ -274,7 +297,8 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     if (!ready || busy) return
     setBusy(true); setError(null); setNote(null)
     try {
-      const next = await new SupabaseGoalScheduleRepository().save(userId, {
+      const repo = new SupabaseGoalScheduleRepository()
+      const next = await repo.save(userId, {
         sourceLanguage, targetLanguage,
         name: candidate.name, targetKind: candidate.targetKind, targetCount: candidate.targetCount,
         startDate: candidate.startDate, deadline: candidate.deadline, baselineCount: candidate.baselineCount,
@@ -282,8 +306,10 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
         dateExceptions: candidate.dateExceptions, weeklyTarget: candidate.weeklyTarget,
         debtCarryMissed: candidate.debtCarryMissed, debtCarryExtra: candidate.debtCarryExtra,
         debtResetAt: candidate.debtResetAt, checkpoints: candidate.checkpoints,
-      })
+      }, editingId)
       setSaved(next)
+      setEditingId(next.id)
+      setAll(await repo.listForPair(userId, sourceLanguage, targetLanguage))
       setNote('Schedule saved.')
       onChanged?.(true)
     } catch (e) {
@@ -309,7 +335,7 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
         dateExceptions: s.dateExceptions, weeklyTarget: s.weeklyTarget,
         debtCarryMissed: s.debtCarryMissed, debtCarryExtra: s.debtCarryExtra,
         debtResetAt: today, checkpoints: s.checkpoints,
-      })
+      }, s.id)
       setSaved(next)
       setNote('Debt reset — the balance starts fresh from today.')
     } catch (e) {
@@ -322,10 +348,16 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
     setBusy(true); setError(null)
     try {
       await new SupabaseGoalScheduleRepository().archive(saved.id)
-      setSaved(null)
-      setDraft(draftFrom(null, today))
-      setNote('Schedule retired — this language is back on its weekday goals.')
-      onChanged?.(false)
+      const remaining = all.filter(sc => sc.id !== saved.id)
+      setAll(remaining)
+      const next = pickCurrentSchedule(remaining, today)
+      setSaved(next)
+      setEditingId(next?.id ?? null)
+      setDraft(draftFrom(next, today))
+      setNote(remaining.length > 0
+        ? 'Schedule retired — the next goal in the queue takes over.'
+        : 'Schedule retired — this language is back on its weekday goals.')
+      onChanged?.(remaining.length > 0)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not retire the schedule.')
     } finally { setBusy(false); setConfirmArchive(false) }
@@ -343,8 +375,41 @@ export function GoalScheduleEditor({ userId, sourceLanguage, targetLanguage, lab
   const isPattern = draft.planKind !== 'longterm'
   const debtOn = isPattern && (draft.debtCarryMissed || draft.debtCarryExtra)
 
+  const activeId = pickCurrentSchedule(all, today)?.id ?? null
   return (
     <div className="space-y-5">
+      {/* ── The queue: this pair's goals in order, plus "and then…". Sequential goals — finish one,
+             the next takes over by date, automatically. ── */}
+      {(all.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {all.map(sc => {
+            const isEditing = sc.id === editingId
+            const status = sc.id === activeId ? 'active'
+              : sc.deadline && sc.deadline < today ? 'ended'
+              : sc.startDate > today ? 'upcoming' : 'queued'
+            return (
+              <button key={sc.id} type="button" onClick={() => editSchedule(sc)}
+                className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  isEditing ? 'border-accent text-ink bg-accent/10' : 'border-line/10 text-ink-faint hover:text-ink'
+                }`}>
+                {sc.name || (sc.targetCount != null ? `${sc.targetCount} words` : sc.weeklyTarget != null ? `${sc.weeklyTarget}/week` : 'daily')}
+                {sc.deadline ? ` · by ${shortDate(sc.deadline)}` : ''}
+                <span className={`ml-1.5 ${status === 'active' ? 'text-success' : status === 'ended' ? 'text-warning' : 'text-ink-faint/70'}`}>
+                  {status === 'active' ? '● now' : status === 'upcoming' ? '↦ next' : status === 'ended' ? 'ended' : 'queued'}
+                </span>
+              </button>
+            )
+          })}
+          <button type="button" onClick={() => editSchedule(null)}
+            className={`text-xs px-3 py-1.5 rounded-full border border-dashed transition-colors ${
+              editingId === null ? 'border-accent text-ink bg-accent/10' : 'border-line/20 text-ink-faint hover:text-ink'
+            }`}
+            title="Queue a goal that starts when the last one ends">
+            + and then…
+          </button>
+        </div>
+      )}
+
       {/* ── What kind of plan? The first choice — it decides which fields below exist. ── */}
       <div className="flex flex-wrap gap-1.5">
         {([

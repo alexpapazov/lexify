@@ -2654,6 +2654,31 @@ which now saves itself with a TARGETED profile update — the settings page's om
 longer writes the `goal_*` columns, so don't put them back.
 
 
+## Sequential goals (2026-08-13, migration 120 — PENDING)
+
+A pair may now hold a QUEUE of live schedules: finish one, the next takes over by DATE, automatically.
+Migration `120_sequential_goal_schedules.sql` drops the one-live-schedule-per-pair unique index
+(replaced by a plain partial index). The rules:
+
+- **Activation is derived, never stored** (`pickCurrentSchedule` in lib/goalSchedule.ts, tested):
+  earliest-starting live schedule whose deadline hasn't passed owns the pair; the day after its
+  deadline the next in line takes over. When EVERYTHING has expired the most recent one is still
+  returned so the "deadline passed — retire it" warning can't vanish. Open-ended patterns never
+  expire, so they never hand over on their own.
+- **Every goal surface maps `listActive` rows through `currentSchedulesByPair(rows, today)`** —
+  dashboard, PresentSnapshot, ReviewCalendar, both Future charts, LadderStudy's cap. A bare
+  `new Map(rows.map(...))` silently keeps whichever row came last now that pairs can hold several.
+- **`repo.save(userId, input, id?)`** — id updates that row, no id INSERTS. The upsert-by-pair is
+  GONE; a caller that doesn't say which schedule it's editing creates a duplicate. `getForPair` now
+  takes `today` and returns the date-active one; `listForPair` returns the queue.
+- **Editor** (GoalScheduleEditor): a chip strip of the pair's queue ("● now" / "↦ next" / "ended")
+  + a "+ and then…" chip that drafts a follow-up starting the day after the queue's last deadline.
+  Retiring the active schedule promotes the next in line.
+- The Future charts project only each pair's CURRENT schedule — an upcoming successor becomes
+  visible when it takes over (documented, deliberate v1).
+- Checkpoints (click a calendar day) already existed and are unchanged — they're the
+  "one long goal with interim targets" answer; queues are the "goal after goal" answer.
+
 ## Plan kinds + pattern debt (2026-08-10, migration 117 — PENDING)
 
 The study-plan editor now leads with **Long-term goal / Daily goal / Weekly goal**. The kind is

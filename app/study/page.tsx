@@ -22,7 +22,7 @@ import { getToday, localDateWithTurnover } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, effectiveDebtSince } from '@/lib/goalCarryover'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { scheduleStatus, patternPlanForDate } from '@/lib/goalSchedule'
+import { scheduleStatus, patternPlanForDate, currentSchedulesByPair } from '@/lib/goalSchedule'
 import { shareDayAcrossLanguages } from '@/lib/dailyCeiling'
 import type { GoalSchedule } from '@/domain'
 import { langName } from '@/lib/languages'
@@ -404,8 +404,11 @@ export default function StudyPage() {
 
     // Deadline-driven goals. Resolved here rather than in the first wave because the progress
     // buckets are turnover-aware, so they need `tz` — but the row fetch itself already overlapped it.
-    const activeSchedules = await schedulesP
-    setSchedules(new Map(activeSchedules.map(sc => [`${sc.sourceLanguage}|${sc.targetLanguage}`, sc])))
+    const allSchedules = await schedulesP
+    // A pair can hold a QUEUE of schedules now — only the date-active one drives its goal.
+    const currentByPair = currentSchedulesByPair(allSchedules, todayStr)
+    const activeSchedules = [...currentByPair.values()]
+    setSchedules(currentByPair)
     setScheduleDone(activeSchedules.length === 0
       ? new Map()
       : await progressForSchedules({ userId: uid, schedules: activeSchedules, timezone: tz, turnoverHour })

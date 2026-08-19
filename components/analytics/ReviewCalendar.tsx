@@ -23,7 +23,7 @@ import { localDateWithTurnover, getToday } from '@/lib/dates'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { carriedGoal, fullDebtGoal, fullDebtExemptionAdjustment } from '@/lib/goalCarryover'
 import { SupabaseGoalScheduleRepository } from '@/lib/data/goalSchedules'
-import { plannedForDate } from '@/lib/goalSchedule'
+import { currentSchedulesByPair, plannedForDate } from '@/lib/goalSchedule'
 import type { GoalSchedule } from '@/domain'
 import { DayDetailModal } from '@/components/analytics/DayDetailModal'
 import type { LanguagePair } from '@/domain'
@@ -74,9 +74,9 @@ export function ReviewCalendar() {
       setTz(tzv); setTurnover(turnoverv)
       setColorOverrides((profile?.language_colors as Record<string, string> | null) ?? {})
       // Never fatal: without migration 114 every pair simply stays on the carryover path below.
-      setSchedules(new Map(
-        (await new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[]))
-          .map(sc => [`${sc.sourceLanguage}|${sc.targetLanguage}`, sc]),
+      setSchedules(currentSchedulesByPair(
+        await new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[]),
+        today,
       ))
       setCarry({
         shortfall: (profile?.goal_carry_shortfall as boolean | null) ?? false,

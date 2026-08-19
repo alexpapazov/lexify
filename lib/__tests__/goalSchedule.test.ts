@@ -3,6 +3,7 @@ import {
   dayCapacity, capacityWindow, waterFill, distributeIntegers, activeSegments,
   scheduleStatus, schedulePace, scheduleRemedies, schedulePlan, plannedForDate, assignedPlan, validateSchedule,
   isPatternSchedule, planEnd, PATTERN_HORIZON_DAYS, patternPlanForDate, progressStart,
+  pickCurrentSchedule, currentSchedulesByPair,
 } from '../goalSchedule'
 import type { GoalSchedule } from '@/domain'
 
@@ -681,5 +682,47 @@ describe('validateSchedule — weekly rules', () => {
 
   it('accepts a bare weekly number as a complete schedule', () => {
     expect(validateSchedule(makeSchedule({ targetCount: null, deadline: null, weeklyTarget: 35 }))).toEqual([])
+  })
+})
+
+describe('pickCurrentSchedule / currentSchedulesByPair — sequential goals', () => {
+  const first  = makeSchedule({ id: 'a', startDate: '2026-09-01', deadline: '2026-09-20' })
+  const second = makeSchedule({ id: 'b', startDate: '2026-09-21', deadline: '2026-10-20' })
+
+  it('the earliest-starting live schedule owns the pair while its deadline holds', () => {
+    expect(pickCurrentSchedule([second, first], '2026-09-10')!.id).toBe('a')
+  })
+
+  it('hands over to the next in line the day after the deadline — no retiring needed', () => {
+    expect(pickCurrentSchedule([first, second], '2026-09-20')!.id).toBe('a')
+    expect(pickCurrentSchedule([first, second], '2026-09-21')!.id).toBe('b')
+  })
+
+  it('a queued successor whose start is still ahead is ALREADY the current one after a hand-over', () => {
+    // Gap between deadlines: nothing demands work in the gap (capacity 0 before startDate), but the
+    // successor is what every surface should show.
+    const late = makeSchedule({ id: 'c', startDate: '2026-10-01', deadline: '2026-11-01' })
+    expect(pickCurrentSchedule([first, late], '2026-09-25')!.id).toBe('c')
+  })
+
+  it('an open-ended pattern never expires, so it never hands over on its own', () => {
+    const pattern = makeSchedule({ id: 'p', targetCount: null, deadline: null, dailyCeiling: 8, startDate: '2026-09-01' })
+    expect(pickCurrentSchedule([pattern, second], '2026-12-01')!.id).toBe('p')
+  })
+
+  it('keeps an expired schedule visible when nothing follows — the retire-it warning must not vanish', () => {
+    expect(pickCurrentSchedule([first], '2026-10-01')!.id).toBe('a')
+  })
+
+  it('skips archived schedules entirely', () => {
+    const dead = makeSchedule({ id: 'x', archivedAt: '2026-09-02T00:00:00Z' })
+    expect(pickCurrentSchedule([dead], '2026-09-10')).toBeNull()
+  })
+
+  it('groups by pair and picks each pair independently', () => {
+    const el = makeSchedule({ id: 'g', sourceLanguage: 'el', startDate: '2026-09-01', deadline: '2026-12-01' })
+    const map = currentSchedulesByPair([first, second, el], '2026-09-25')
+    expect(map.get('es|en')!.id).toBe('b')
+    expect(map.get('el|en')!.id).toBe('g')
   })
 })

@@ -258,7 +258,7 @@ export function GoalsSettings() {
           dateExceptions: next.dateExceptions, weeklyTarget: next.weeklyTarget,
           debtCarryMissed: next.debtCarryMissed, debtCarryExtra: next.debtCarryExtra,
           debtResetAt: next.debtResetAt, checkpoints: next.checkpoints,
-        }).catch(() => {})
+        }, s.id).catch(() => {})
       }
     } finally { setOverviewBusy(false) }
     await refreshOverview()

@@ -11,6 +11,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { cachedRead, invalidateReads } from '@/lib/readCache'
+import { pickCurrentSchedule } from '@/lib/goalSchedule'
 import { fetchAllRows } from '@/lib/supabasePaged'
 import { localDateWithTurnover } from '@/lib/dates'
 import { isAutoGraduated } from '@/lib/goalCarryover'
@@ -79,19 +80,26 @@ export class SupabaseGoalScheduleRepository {
     })
   }
 
-  async getForPair(userId: UserId, sourceLanguage: string, targetLanguage: string): Promise<GoalSchedule | null> {
+  /** ALL of a pair's live schedules, earliest start first — the queue sequential goals play through. */
+  async listForPair(userId: UserId, sourceLanguage: string, targetLanguage: string): Promise<GoalSchedule[]> {
     const active = await this.listActive(userId)
-    return active.find(s => s.sourceLanguage === sourceLanguage && s.targetLanguage === targetLanguage) ?? null
+    return active
+      .filter(s => s.sourceLanguage === sourceLanguage && s.targetLanguage === targetLanguage)
+      .sort((a, b) => a.startDate.localeCompare(b.startDate) || a.createdAt.localeCompare(b.createdAt))
+  }
+
+  /** The pair's ACTIVE schedule for `today` — see `pickCurrentSchedule` for the hand-over rule. */
+  async getForPair(userId: UserId, sourceLanguage: string, targetLanguage: string, today: string): Promise<GoalSchedule | null> {
+    return pickCurrentSchedule(await this.listForPair(userId, sourceLanguage, targetLanguage), today)
   }
 
   /**
-   * Creates or replaces the pair's active schedule. The partial unique index allows exactly one, so
-   * this upserts on the pair rather than quietly creating a second live schedule that the goal
-   * surfaces would then have to choose between.
+   * Saves one schedule. With `id`, updates that row; without, INSERTS a new one — a pair may hold a
+   * QUEUE of live schedules (migration 120), so there is no upsert-by-pair anymore: which schedule
+   * you are editing must be said explicitly, never guessed from the pair.
    */
-  async save(userId: UserId, input: GoalScheduleInput): Promise<GoalSchedule> {
+  async save(userId: UserId, input: GoalScheduleInput, id?: string | null): Promise<GoalSchedule> {
     invalidateReads('goalsched:')
-    const existing = await this.getForPair(userId, input.sourceLanguage, input.targetLanguage)
     const payload = {
       user_id:         userId,
       source_language: input.sourceLanguage,
@@ -112,8 +120,8 @@ export class SupabaseGoalScheduleRepository {
       checkpoints:     input.checkpoints,
       updated_at:      new Date().toISOString(),
     }
-    const query = existing
-      ? this.db.from('goal_schedules').update(payload).eq('id', existing.id)
+    const query = id
+      ? this.db.from('goal_schedules').update(payload).eq('id', id).eq('user_id', userId)
       : this.db.from('goal_schedules').insert(payload)
     const { data, error } = await query.select().single()
     invalidateReads('goalsched:')

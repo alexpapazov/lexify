@@ -18,7 +18,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { schedulePlan, patternPlanForDate, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
+import { currentSchedulesByPair, schedulePlan, patternPlanForDate, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
 import { applyDailyCeiling } from '@/lib/dailyCeiling'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { getToday } from '@/lib/dates'
@@ -76,11 +76,14 @@ export function VocabGrowthProjection() {
         const wordCeiling = (prof?.daily_word_ceiling as number | null) ?? null
         const today = getToday(tz, turnover)
 
-        const [decks, pairs, schedules] = await Promise.all([
+        const [decks, pairs, allSchedules] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
           new SupabaseLanguagePairRepository().list(uid),
           new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[]),
         ])
+        // A pair may hold queued schedules; only the date-active one shapes intake. An upcoming
+        // successor is deliberately not projected yet — it becomes visible when it takes over.
+        const schedules = [...currentSchedulesByPair(allSchedules, today).values()]
         const stateRepo = new SupabaseCardStateRepository()
         const [allStates, deckIdByCard] = await Promise.all([
           stateRepo.listAllForUser(uid),

@@ -328,6 +328,44 @@ export interface ScheduleStatus {
   debtBalance: number
 }
 
+/**
+ * Which of a pair's live schedules is ACTIVE today — the heart of sequential goals (migration 120).
+ *
+ * Rule: sort by start date; the earliest-starting schedule whose deadline hasn't passed owns the
+ * pair. When one's deadline passes, the next in line takes over AUTOMATICALLY — no retiring needed.
+ * A pattern schedule has no deadline and so never hands over on its own; retire it to move on.
+ *
+ * When EVERY schedule has expired, the most recent one is returned rather than null — the "deadline
+ * passed, retire or re-date it" warning must stay visible, not vanish the day the date slips by.
+ */
+export function pickCurrentSchedule(schedules: GoalSchedule[], today: string): GoalSchedule | null {
+  const live = schedules.filter(s => !s.archivedAt)
+  if (live.length === 0) return null
+  const sorted = [...live].sort((a, b) =>
+    a.startDate.localeCompare(b.startDate) || a.createdAt.localeCompare(b.createdAt))
+  return sorted.find(s => s.deadline == null || s.deadline >= today) ?? sorted[sorted.length - 1]!
+}
+
+/**
+ * Groups live schedules by pair and picks each pair's active one — the ONE way every goal surface
+ * turns `listActive` rows into its per-pair map. Building the map with `new Map(rows.map(...))`
+ * would silently keep whichever row came last once a pair can hold a queue.
+ */
+export function currentSchedulesByPair(schedules: GoalSchedule[], today: string): Map<string, GoalSchedule> {
+  const byPair = new Map<string, GoalSchedule[]>()
+  for (const s of schedules) {
+    const k = `${s.sourceLanguage}|${s.targetLanguage}`
+    const a = byPair.get(k)
+    if (a) a.push(s); else byPair.set(k, [s])
+  }
+  const out = new Map<string, GoalSchedule>()
+  for (const [k, list] of byPair) {
+    const cur = pickCurrentSchedule(list, today)
+    if (cur) out.set(k, cur)
+  }
+  return out
+}
+
 export interface ScheduleStatusArgs {
   schedule: GoalSchedule
   /** Local study-day (turnover-aware), from `getToday(tz, turnoverHour)`. */

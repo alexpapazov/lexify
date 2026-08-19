@@ -30,7 +30,7 @@ import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProd
 import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding, effectiveDebtSince } from '@/lib/goalCarryover'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { scheduleStatus, daysBetween, schedulePlan } from '@/lib/goalSchedule'
+import { scheduleStatus, daysBetween, schedulePlan, currentSchedulesByPair } from '@/lib/goalSchedule'
 import { shareDayAcrossLanguages } from '@/lib/dailyCeiling'
 import type { GoalSchedule } from '@/domain'
 import { AccuracyTrend } from './AccuracyTrend'
@@ -410,7 +410,8 @@ export function PresentSnapshot() {
         }
 
         const activeSchedules = await schedulesP
-        const scheduleByPair = new Map(activeSchedules.map(sc => [`${sc.sourceLanguage}|${sc.targetLanguage}`, sc]))
+        // Only each pair's date-active schedule drives its goal — queued successors wait their turn.
+        const scheduleByPair = currentSchedulesByPair(activeSchedules, today)
         const scheduleDone = activeSchedules.length === 0
           ? new Map<string, number>()
           : await progressForSchedules({ userId: uid, schedules: activeSchedules, timezone: tz, turnoverHour: turnover })

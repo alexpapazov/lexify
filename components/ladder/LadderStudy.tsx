@@ -454,7 +454,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         // weekday numbers + carryover. Online only, and never fatal: a missing goal_schedules table
         // (migration 114 unapplied) falls straight through to the carryover path below.
         const sched = await new SupabaseGoalScheduleRepository()
-          .getForPair(uid, src, tgt).catch(() => null)
+          .getForPair(uid, src, tgt, getToday(tzRef.current, turnoverRef.current)).catch(() => null)
 
         let goalToday: number
         if (sched) {

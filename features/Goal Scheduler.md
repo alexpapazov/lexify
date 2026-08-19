@@ -1,5 +1,10 @@
 # Goal Scheduler
 
+**Sequential goals shipped 2026-08-13 (migration 120 — PENDING): a pair can hold a QUEUE of
+schedules; the date-active one (`pickCurrentSchedule`) drives every surface, and finishing one
+hands over to the next automatically. See CLAUDE.md §Sequential goals for the rules.**
+
+
 **Status (2026-08-10): complete and wired.** Data model, engine, calendar editor, its own settings
 page, and all four goal consumers read it. Migrations **114–116 are applied; 117 is PENDING**
 (weekly patterns + per-pattern debt: `weekly_target`, `debt_carry_missed`, `debt_carry_extra`,

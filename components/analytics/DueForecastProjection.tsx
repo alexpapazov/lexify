@@ -10,7 +10,7 @@ import { createClient } from '@/lib/supabase/client'
 import { langName, langFlag, assignLanguageColors } from '@/lib/languages'
 import { monteCarloSteps, percentile, measureRatingModel, mixForReps, driftLabel, estimateInitialInterval, seedStability, seedDifficulty, DEFAULT_DIFFICULTY, stabilityForInterval, type RatingModel } from '@/lib/forecastFsrs'
 import { SupabaseGoalScheduleRepository, progressForSchedules } from '@/lib/data/goalSchedules'
-import { schedulePlan, patternPlanForDate, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
+import { currentSchedulesByPair, schedulePlan, patternPlanForDate, isPatternSchedule, eachDate, addScheduleDays } from '@/lib/goalSchedule'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { getToday } from '@/lib/dates'
 import { applyDailyCeiling } from '@/lib/dailyCeiling'
@@ -105,12 +105,16 @@ export function DueForecastProjection() {
         const wordCeiling = (prof?.daily_word_ceiling as number | null) ?? null
         const today = getToday(tz, turnover)
 
-        const [decks, paramRows, pairs, schedules] = await Promise.all([
+        const [decks, paramRows, pairs, allSchedules] = await Promise.all([
           new SupabaseDeckRepository().list(uid),
           new SupabaseUserSchedulerParamsRepository().listForUser(uid),
           new SupabaseLanguagePairRepository().list(uid),
           new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[]),
         ])
+
+        // A pair may hold queued schedules; only the date-active one shapes intake (an upcoming
+        // successor is deliberately not projected until it takes over).
+        const schedules = [...currentSchedulesByPair(allSchedules, today).values()]
 
         // Per-pair config keyed `${src}|${tgt}`.
         const cfg = new Map<string, PairCfg>()
