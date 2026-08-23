@@ -436,6 +436,24 @@ caught during the build, kept because they're easy to reintroduce.)*
 
 ---
 
+- **2026-08-22 — "goals for languages I zeroed" (three fixes).** The user, in a fixed-goal mode,
+  saw daily goals for pairs whose inputs were empty. Two independent mechanisms could cause it and
+  both are now closed, plus the display defect that hid the cause:
+  1. **`listActive` is now gated on `profiles.goal_mode`** (`lib/data/goalSchedules.ts`). Six
+     surfaces derive goals from that list and none knew about the mode toggle; the design leaned on
+     "leaving Schedule mode retires everything", but retirement was `.catch(() => {})` best-effort,
+     so one failed archive left zombie schedules silently assigning goals. Settings passes
+     `{ anyMode: true }` — you cannot retire what you cannot see — and shows an amber
+     "still live from Schedule mode" notice with a Retire button in fixed-goal modes.
+  2. **The stored mode is authoritative.** Settings used to force the toggle to Schedule whenever a
+     live schedule existed ("whatever the column says"), letting one zombie flip the whole system
+     back. Live schedules now infer the mode only when the column was never set (pre-115).
+  3. **Daily mode's input binds SUNDAY (`drafts['0']`), but the dashboard reads TODAY'S weekday** —
+     so leftover per-weekday values (e.g. a rest-day-blank Sunday with Sat = 4) showed an empty
+     input while charging 4 on Saturdays. The input now detects non-uniform weekday values, names
+     them ("Hidden per-weekday goals still apply: Sat 4 …"), and offers one click to collapse to a
+     single value. `retireAll` also reports failures instead of swallowing them.
+
 ## 7. Verification status
 
 - `lib/goalSchedule.ts`: **55 unit tests, all green.** The whole model in §3 is covered, including

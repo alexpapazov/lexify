@@ -2257,6 +2257,16 @@ per language × direction × typed); both import it now. The panel's own query i
 `limit(1000)` single request, NOT a 30-day window — 30 days of review_events is ~14k rows over several
 serial pages, the exact regression the 2026-07-27 perf pass removed.
 
+## Goal mode is enforced at the data layer (2026-08-22)
+
+`SupabaseGoalScheduleRepository.listActive` returns `[]` unless `profiles.goal_mode` is 'schedule'
+(or the column is unset — pre-115 accounts). Every goal surface derives schedule goals from that
+list, so zombie schedules left behind by a failed retirement can no longer assign goals in
+fixed-goal modes. Settings passes `{ anyMode: true }` to keep seeing them and offers a Retire
+notice. Also: Daily mode's single input binds Sunday while the dashboard reads today's weekday —
+the input now warns about, and can collapse, hidden non-uniform weekday values. Full detail in
+`features/Goal Scheduler.md` §6.
+
 ## Known backlog / open issues
 
 - **#55**: "Merge" action for duplicate cards creates a new duplicate instead
