@@ -29,9 +29,9 @@ import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, buildRetentionMap, retentionFor } from '@/lib/sessionLimits'
-import { buildCatchUpPools, emptyPool, rescheduleOverdueTracks, candidateKey, type ScopePool } from '@/lib/catchUpPools'
-import { assignBacklogDays, previewCatchUp, isLapsed, scopeKey, scopeDirection, addDays, daysBetween, type CatchUpType } from '@/lib/catchUp'
-import { buildPaceSamples, paceForMix, type PaceSamples, type PaceRow } from '@/lib/reviewPace'
+import { buildCatchUpPools, emptyPool, rescheduleOverdueTracks, candidateKey } from '@/lib/catchUpPools'
+import { assignBacklogDays, previewCatchUp, isLapsed, scopeKey, scopeDirection, addDays, daysBetween, type CatchUpType, type CatchUpCandidate } from '@/lib/catchUp'
+import { buildPaceSamples, pace, type PaceSamples, type PaceRow } from '@/lib/reviewPace'
 import { isDueByLocalDate } from '@/lib/dueStatus'
 import { chunk } from '@/lib/mapLimit'
 import { getToday } from '@/lib/dates'
@@ -40,23 +40,37 @@ import type { CardState, Deck } from '@/domain'
 
 const PRESET_DAYS = [3, 7, 14, 30]
 
-// Just the grading style — the DIRECTION is carried by the arrow in the row title, which is
-// computed per card type (`scopeDirection`). Repeating an abstract "native → target" here alongside
-// a concrete arrow was how the two ended up contradicting each other.
+// These label the card-type filter, which spans languages, so they use the app's abstract direction
+// vocabulary (matching the "Study all due" popover's hints) rather than naming languages. When a
+// single language IS selected the heading resolves this into a concrete arrow via `scopeDirection`,
+// which is the only place a language name and an arrow appear together.
 const TYPE_LABEL: Record<CatchUpType, string> = {
   typing:    'Typing',
-  sgForward: 'Self-graded',
-  sgReverse: 'Self-graded',
+  sgForward: 'Self-graded · native → target',
+  sgReverse: 'Self-graded · target → native',
 }
 
-interface Scope {
-  pairKey: string
-  source:  string
-  target:  string
-  type:    CatchUpType | null
-  pool:    ScopePool
+/**
+ * One overdue review, tagged with everything the filters slice on. A FLAT list rather than a tree of
+ * scopes: the two filters are independent, so "all my typing cards across every language" has to be
+ * as expressible as "everything Bulgarian" or one specific combination of the two. Grouping the data
+ * by language up front is what made card type silently language-scoped before.
+ */
+interface Entry {
+  pairKey:   string
+  source:    string
+  target:    string
+  type:      CatchUpType
+  candidate: CatchUpCandidate
+  /** Measured seconds-per-review for this exact bucket, for the minutes estimate. */
   msPerReview: number
 }
+
+const ALL = 'all' as const
+type LangFilter = typeof ALL | string
+type TypeFilter = typeof ALL | CatchUpType
+
+const TYPES: CatchUpType[] = ['typing', 'sgForward', 'sgReverse']
 
 function fmtMinutes(mins: number): string {
   if (mins < 60) return `~${Math.round(mins)} min`
@@ -65,18 +79,47 @@ function fmtMinutes(mins: number): string {
   return m === 0 ? `~${h} hr` : `~${h} hr ${m} min`
 }
 
+/**
+ * Defined at module scope, not inside the panel. A component declared inside a render is a NEW
+ * component type on every render, so React unmounts and remounts its whole subtree each keystroke.
+ */
+function Pill({ active, count, disabled, children, onClick }: {
+  active:    boolean
+  count:     number
+  disabled:  boolean
+  children:  React.ReactNode
+  onClick:   () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`text-xs px-3 py-1.5 rounded-full border transition-colors disabled:opacity-50 ${
+        active
+          ? 'border-accent/50 bg-accent/15 text-accent'
+          : 'border-line/15 text-ink-faint hover:text-ink hover:border-line/30'
+      }`}
+    >
+      {children}
+      <span className="ml-1.5 opacity-70">{count.toLocaleString()}</span>
+    </button>
+  )
+}
+
 export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
   userId:       string
   timezone:     string
   turnoverHour: number
 }) {
-  const [loading, setLoading]   = useState(true)
-  const [scopes,  setScopes]    = useState<Scope[]>([])
-  const [byType,  setByType]    = useState(false)
-  const [picking, setPicking]   = useState<string | null>(null)
-  const [custom,  setCustom]    = useState('')
-  const [busy,    setBusy]      = useState(false)
-  const [msg,     setMsg]       = useState<{ ok: boolean; text: string } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [entries, setEntries] = useState<Entry[]>([])
+  const [langs,   setLangs]   = useState<Array<{ pairKey: string; label: string }>>([])
+  const [lang,    setLang]    = useState<LangFilter>(ALL)
+  const [type,    setType]    = useState<TypeFilter>(ALL)
+  const [picking, setPicking] = useState(false)
+  const [custom,  setCustom]  = useState('')
+  const [busy,    setBusy]    = useState(false)
+  const [msg,     setMsg]     = useState<{ ok: boolean; text: string } | null>(null)
 
   /** Everything the panel needs, kept so the write can patch rows without re-fetching. */
   const [ctx, setCtx] = useState<{
@@ -156,30 +199,43 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
       }
 
       const pairKeys = [...new Set([...deckPairById.values()])]
-      const next: Scope[] = []
+      // Disambiguate only when two pairs share a learned language (es|en and es|fr), so the common
+      // case stays a plain "Spanish".
+      const sourceCounts = new Map<string, number>()
+      for (const pk of pairKeys) {
+        const src = pk.split('|')[0]!
+        sourceCounts.set(src, (sourceCounts.get(src) ?? 0) + 1)
+      }
+
+      const nextEntries: Entry[] = []
       for (const pairKey of pairKeys) {
         const [source, target] = pairKey.split('|') as [string, string]
-        for (const type of [null, 'typing', 'sgForward', 'sgReverse'] as (CatchUpType | null)[]) {
-          const pool = pools.get(scopeKey(pairKey, type)) ?? emptyPool()
+        for (const t of TYPES) {
+          const pool = pools.get(scopeKey(pairKey, t)) ?? emptyPool()
           if (pool.overdue.length === 0) continue
-          const mix = (['typing', 'sgForward', 'sgReverse'] as CatchUpType[])
-            .filter(t => !type || t === type)
-            .map(t => {
-              const p = pools.get(scopeKey(pairKey, t))
-              return {
-                dir: (t === 'sgReverse' ? 'reverse' : 'forward') as 'forward' | 'reverse',
-                typed: t === 'typing',
-                count: (p?.overdue.length ?? 0) + (p?.dueToday.length ?? 0),
-              }
-            })
-          next.push({
-            pairKey, source, target, type, pool,
-            msPerReview: paceForMix(paceSamples, source, target, mix),
-          })
+          const msPerReview = pace(
+            paceSamples, source, target,
+            t === 'sgReverse' ? 'reverse' : 'forward',
+            t === 'typing',
+          )
+          for (const candidate of pool.overdue) {
+            nextEntries.push({ pairKey, source, target, type: t, candidate, msPerReview })
+          }
         }
       }
-      next.sort((a, b) => b.pool.overdue.length - a.pool.overdue.length)
-      setScopes(next)
+      setEntries(nextEntries)
+      setLangs(pairKeys
+        .filter(pk => nextEntries.some(e => e.pairKey === pk))
+        .map(pk => {
+          const [src, tgt] = pk.split('|') as [string, string]
+          return {
+            pairKey: pk,
+            label: (sourceCounts.get(src) ?? 0) > 1
+              ? `${langName(src)} (${langName(tgt)})`
+              : langName(src),
+          }
+        })
+        .sort((a, b) => a.label.localeCompare(b.label)))
       setCtx({ statesByKey, forwardByCard, deckPair, tracks, inflow, today })
     } catch (err) {
       console.error('Catch-up load failed:', err)
@@ -191,19 +247,61 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
 
   useEffect(() => { void load() }, [load])
 
-  const visible = useMemo(
-    () => scopes.filter(s => (byType ? s.type !== null : s.type === null)),
-    [scopes, byType],
+  // ── The selection ───────────────────────────────────────────────────────────
+  // Both filters are independent and either may be "all", so a selection is just a predicate over
+  // the flat entry list. That is what makes language-only, type-only and both-at-once all reachable.
+  const selected = useMemo(
+    () => entries.filter(e => (lang === ALL || e.pairKey === lang) && (type === ALL || e.type === type)),
+    [entries, lang, type],
   )
 
-  async function spread(scope: Scope, targetDate: string) {
-    if (busy || !ctx) return
+  /** Facet counts: each filter is counted with the OTHER filter applied, so the pills stay truthful. */
+  const langCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const e of entries) {
+      if (type !== ALL && e.type !== type) continue
+      m.set(e.pairKey, (m.get(e.pairKey) ?? 0) + 1)
+    }
+    return m
+  }, [entries, type])
+
+  const typeCounts = useMemo(() => {
+    const m = new Map<CatchUpType, number>()
+    for (const e of entries) {
+      if (lang !== ALL && e.pairKey !== lang) continue
+      m.set(e.type, (m.get(e.type) ?? 0) + 1)
+    }
+    return m
+  }, [entries, lang])
+
+  const overdue = selected.length
+  const lapsed  = useMemo(() => selected.filter(e => isLapsed(e.candidate)).length, [selected])
+  const msPerReview = useMemo(
+    () => (selected.length === 0 ? 0 : selected.reduce((t, e) => t + e.msPerReview, 0) / selected.length),
+    [selected],
+  )
+
+  /** What the current selection is called. Only names a direction when one language and one type. */
+  const selectionLabel = useMemo(() => {
+    const langPart = lang === ALL ? null : langs.find(l => l.pairKey === lang)
+    if (langPart && type !== ALL) {
+      const [src, tgt] = lang.split('|') as [string, string]
+      const dir = scopeDirection(src, tgt, type)
+      return `${langName(dir.from)} → ${langName(dir.to)} · ${TYPE_LABEL[type]}`
+    }
+    if (langPart) return `${langPart.label} · all card types`
+    if (type !== ALL) return `${TYPE_LABEL[type]} · all languages`
+    return 'Everything overdue'
+  }, [lang, type, langs])
+
+  async function spread(targetDate: string) {
+    if (busy || !ctx || selected.length === 0) return
     setBusy(true)
     setMsg(null)
     try {
       const days = Math.max(1, daysBetween(ctx.today, targetDate))
       const result = assignBacklogDays({
-        overdue: scope.pool.overdue, today: ctx.today, days, existingLoad: ctx.inflow,
+        overdue: selected.map(e => e.candidate), today: ctx.today, days, existingLoad: ctx.inflow,
       })
 
       const updates: CardState[] = []
@@ -222,16 +320,17 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         setMsg({ ok: false, text: 'Nothing to move — those cards are already scheduled.' })
         return
       }
-      // Chunked: `upsertBatch` sends one request, and a language-wide backlog can be several hundred
-      // full rows. Chunking here rather than in the repo leaves Redistribute's path untouched.
+      // Chunked: `upsertBatch` sends one request, and a wide selection can be several hundred full
+      // rows. Chunking here rather than in the repo leaves Redistribute's path untouched.
       const repo = new SupabaseCardStateRepository()
       for (const part of chunk(updates, 200)) await repo.upsertBatch(part)
+
       const perDay = Math.round(updates.length / days)
       setMsg({
         ok: true,
         text: `Spread ${updates.length.toLocaleString()} card${updates.length === 1 ? '' : 's'} over ${days} day${days === 1 ? '' : 's'} — about ${perDay.toLocaleString()} a day on top of what was already scheduled.`,
       })
-      setPicking(null)
+      setPicking(false)
       await load()
     } catch (err) {
       console.error('Catch-up spread failed:', err)
@@ -247,105 +346,101 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
 
       {loading ? (
         <p className="text-sm text-ink-faint">Reading your backlog…</p>
-      ) : scopes.length === 0 ? (
+      ) : entries.length === 0 ? (
         <p className="text-sm text-ink-muted">Nothing is overdue — you are caught up.</p>
       ) : (
         <>
-          <div className="flex rounded-full border border-line/15 overflow-hidden text-xs w-fit">
-            {([false, true] as const).map(v => (
-              <button
-                key={String(v)}
-                onClick={() => { setByType(v); setPicking(null) }}
-                className={`px-3 py-1 transition-colors ${
-                  byType === v ? 'bg-accent/15 text-accent' : 'text-ink-faint hover:text-ink'
-                }`}
-              >
-                {v ? 'By card type' : 'By language'}
-              </button>
-            ))}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-ink-faint w-20 shrink-0">Language</span>
+              <Pill active={lang === ALL} disabled={busy}
+                count={entries.filter(e => type === ALL || e.type === type).length}
+                onClick={() => { setLang(ALL); setPicking(false) }}>All</Pill>
+              {langs.map(l => (
+                <Pill key={l.pairKey} active={lang === l.pairKey} disabled={busy}
+                  count={langCounts.get(l.pairKey) ?? 0}
+                  onClick={() => { setLang(l.pairKey); setPicking(false) }}>{l.label}</Pill>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-ink-faint w-20 shrink-0">Card type</span>
+              <Pill active={type === ALL} disabled={busy}
+                count={entries.filter(e => lang === ALL || e.pairKey === lang).length}
+                onClick={() => { setType(ALL); setPicking(false) }}>All</Pill>
+              {TYPES.map(t => (
+                <Pill key={t} active={type === t} disabled={busy} count={typeCounts.get(t) ?? 0}
+                  onClick={() => { setType(t); setPicking(false) }}>{TYPE_LABEL[t]}</Pill>
+              ))}
+            </div>
           </div>
 
           <div className="rounded-card border border-line/10 bg-surface-deep overflow-hidden">
-            {visible.map(s => {
-              const key     = scopeKey(s.pairKey, s.type)
-              const overdue = s.pool.overdue.length
-              const lapsed  = s.pool.overdue.filter(isLapsed).length
-              // Prompt language first. A typing review of Bulgarian is prompted in English, so this
-              // row must read "English → Bulgarian" even though the pair is bg|en.
-              const dir     = scopeDirection(s.source, s.target, s.type)
-              return (
-                <div key={key} className="border-b border-line/10 last:border-b-0">
-                  <div className="flex items-center justify-between gap-3 px-4 py-3">
-                    <div className="min-w-0">
-                      <div className="text-sm text-ink truncate">
-                        {`${langName(dir.from)} ${dir.bidirectional ? '↔' : '→'} ${langName(dir.to)}`}
-                      </div>
-                      <div className="text-xs text-ink-faint">
-                        {s.type ? `${TYPE_LABEL[s.type]} · ` : ''}
-                        {`${overdue.toLocaleString()} overdue`}
-                        {lapsed > 0 ? ` · ${lapsed.toLocaleString()} deeply lapsed` : ''}
-                      </div>
-                    </div>
-                    <button
-                      className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 shrink-0"
-                      disabled={busy}
-                      onClick={() => { setPicking(picking === key ? null : key); setCustom('') }}
-                    >
-                      {picking === key ? 'Cancel' : 'Catch up'}
-                    </button>
-                  </div>
-
-                  {picking === key && (
-                    <div className="px-4 pb-4 pt-1 bg-surface-deep/60 space-y-2">
-                      <p className="text-xs text-ink-faint">Be caught up in…</p>
-                      <div className="flex flex-wrap gap-2">
-                        {PRESET_DAYS.map(d => {
-                          const p = previewCatchUp({
-                            overdue, lapsed, inflowPerDay: 0, days: d, msPerAnswer: s.msPerReview,
-                          })
-                          return (
-                            <button
-                              key={d}
-                              disabled={busy}
-                              onClick={() => void spread(s, addDays(ctx!.today, d))}
-                              className="flex-1 min-w-[8.5rem] rounded-card border border-line/15 px-3 py-2 text-left hover:border-accent/50 hover:bg-surface-raised transition-colors disabled:opacity-50"
-                            >
-                              <div className="text-sm text-ink">{d} days</div>
-                              <div className="text-xs text-ink-faint">
-                                {`+${p.fromBacklog.toLocaleString()}/day`}
-                                {p.minutesPerDay != null && ` · ${fmtMinutes(p.minutesPerDay)}`}
-                              </div>
-                            </button>
-                          )
-                        })}
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        <input
-                          type="date"
-                          value={custom}
-                          min={addDays(ctx!.today, 1)}
-                          onChange={e => setCustom(e.target.value)}
-                          className="input text-xs py-1.5 px-2 w-auto"
-                        />
-                        <button
-                          className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                          disabled={busy || !custom || daysBetween(ctx!.today, custom) < 1}
-                          onClick={() => void spread(s, custom)}
-                        >
-                          Use this date
-                        </button>
-                        {busy && <span className="text-xs text-ink-faint">Rescheduling…</span>}
-                      </div>
-
-                      <p className="text-xs text-ink-faint pt-1">
-                        {`The cards you'd lose most by putting off go on the earliest days${lapsed > 0 ? `, and the ${lapsed.toLocaleString()} deeply lapsed ones are spread evenly so no day turns into a wall of relearning` : ''}. Days that already have reviews scheduled get a smaller share.`}
-                      </p>
-                    </div>
-                  )}
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-sm text-ink truncate">{selectionLabel}</div>
+                <div className="text-xs text-ink-faint">
+                  {overdue === 0
+                    ? 'nothing overdue in this selection'
+                    : `${overdue.toLocaleString()} overdue${lapsed > 0 ? ` · ${lapsed.toLocaleString()} deeply lapsed` : ''}`}
                 </div>
-              )
-            })}
+              </div>
+              <button
+                className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                disabled={busy || overdue === 0}
+                onClick={() => { setPicking(v => !v); setCustom('') }}
+              >
+                {picking ? 'Cancel' : 'Catch up'}
+              </button>
+            </div>
+
+            {picking && overdue > 0 && (
+              <div className="px-4 pb-4 pt-1 bg-surface-deep/60 space-y-2 border-t border-line/10">
+                <p className="text-xs text-ink-faint">Be caught up in…</p>
+                <div className="flex flex-wrap gap-2">
+                  {PRESET_DAYS.map(d => {
+                    const p = previewCatchUp({
+                      overdue, lapsed, inflowPerDay: 0, days: d, msPerAnswer: msPerReview,
+                    })
+                    return (
+                      <button
+                        key={d}
+                        disabled={busy}
+                        onClick={() => void spread(addDays(ctx!.today, d))}
+                        className="flex-1 min-w-[8.5rem] rounded-card border border-line/15 px-3 py-2 text-left hover:border-accent/50 hover:bg-surface-raised transition-colors disabled:opacity-50"
+                      >
+                        <div className="text-sm text-ink">{d} days</div>
+                        <div className="text-xs text-ink-faint">
+                          {`+${p.fromBacklog.toLocaleString()}/day`}
+                          {p.minutesPerDay != null && ` · ${fmtMinutes(p.minutesPerDay)}`}
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <input
+                    type="date"
+                    value={custom}
+                    min={addDays(ctx!.today, 1)}
+                    onChange={e => setCustom(e.target.value)}
+                    className="input text-xs py-1.5 px-2 w-auto"
+                  />
+                  <button
+                    className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled={busy || !custom || daysBetween(ctx!.today, custom) < 1}
+                    onClick={() => void spread(custom)}
+                  >
+                    Use this date
+                  </button>
+                  {busy && <span className="text-xs text-ink-faint">Rescheduling…</span>}
+                </div>
+
+                <p className="text-xs text-ink-faint pt-1">
+                  {`The cards you'd lose most by putting off go on the earliest days${lapsed > 0 ? `, and the ${lapsed.toLocaleString()} deeply lapsed ones are spread evenly so no day turns into a wall of relearning` : ''}. Days that already have reviews scheduled get a smaller share.`}
+                </p>
+              </div>
+            )}
           </div>
         </>
       )}

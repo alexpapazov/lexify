@@ -81,11 +81,23 @@ against real arrival numbers spreads to **under 400/day with no day above mean �
 | Panel + picker + the write | `components/settings/CatchUpPanel.tsx` |
 | Realistic end-to-end sanity check | `lib/__tests__/catchUpRealistic.test.ts` |
 
-### Scoping
+### Scoping — two INDEPENDENT filters
 
-Scope keys match the "Study all due" popover's buckets, so the count here matches the count there:
-`bg|en` for the whole language, or `bg|en:typing` / `:sgForward` / `:sgReverse`. The panel has a
-By language / By card type toggle.
+**Language** and **card type** are separate facets, each with an "All" option, so every combination
+is reachable: one language across all its types, one card type across every language, one specific
+pair of the two, or the entire backlog at once.
+
+The data behind this is a **flat list of overdue reviews** tagged `{ pairKey, type }`, and a selection
+is simply a predicate over it. That matters: the first version grouped the data into a tree of scopes
+keyed `bg|en` / `bg|en:typing`, which made "card type" silently language-scoped — there was no way to
+express "all my typing cards" at all. Do not reintroduce the tree.
+
+Pill counts are **faceted**: each language pill counts with the current type filter applied and vice
+versa, so the numbers always describe what you would actually get.
+
+The direction arrow only appears when a single language *and* a single type are selected — that is
+the only case with one true direction. Otherwise the card-type filter uses the app's abstract
+vocabulary (`native → target`), matching the "Study all due" popover's hints.
 
 ### `lib/reviewPace.ts` was extracted, not written
 
@@ -116,6 +128,8 @@ removed. The 7-day recency half-life means the newest reviews dominate anyway.
   typing scope must read "English → Bulgarian". Use `scopeDirection()`; a whole-language scope gets
   `↔` because it genuinely covers both. This mirrors the `n2t` flag in the dashboard's "Study all due"
   popover — keep the two in step.
+- **`Pill` is declared at module scope.** A component defined inside a render is a new component
+  type every render, so React remounts its entire subtree on each keystroke.
 - **A forward and a reverse review of the same card are separate items** (`candidateKey` is
   `cardId:direction`). Collapsing them undercounts the backlog.
 
