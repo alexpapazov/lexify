@@ -454,6 +454,16 @@ caught during the build, kept because they're easy to reintroduce.)*
      them ("Hidden per-weekday goals still apply: Sat 4 …"), and offers one click to collapse to a
      single value. `retireAll` also reports failures instead of swallowing them.
 
+- **2026-08-22 (follow-up) — the global mode itself was the bug.** The gate above fixed zombies but
+  kept the wrong model: with three live schedules, the user could not even OPEN the Daily/Per-weekday
+  tabs without being told to retire them — so the stale weekday goals on unscheduled pairs stayed
+  invisible and kept driving the dashboard. Reworked: goal mode is PER-LANGUAGE and derived (live
+  schedule → schedule-driven; otherwise weekday goals), the tabs are non-destructive views,
+  `listActive` is ungated again, the retire-to-switch dialog and the switch-to-Daily collapse are
+  deleted, and scheduled pairs show a "driven by its schedule" badge in the fixed-goal tabs. Mixing
+  a schedule on Bulgarian with a plain daily goal on French is now a supported state, not a
+  conflict.
+
 ## 7. Verification status
 
 - `lib/goalSchedule.ts`: **55 unit tests, all green.** The whole model in §3 is covered, including

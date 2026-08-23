@@ -2257,15 +2257,21 @@ per language × direction × typed); both import it now. The panel's own query i
 `limit(1000)` single request, NOT a 30-day window — 30 days of review_events is ~14k rows over several
 serial pages, the exact regression the 2026-07-27 perf pass removed.
 
-## Goal mode is enforced at the data layer (2026-08-22)
+## Goal "modes" are per-language and derived (2026-08-22)
 
-`SupabaseGoalScheduleRepository.listActive` returns `[]` unless `profiles.goal_mode` is 'schedule'
-(or the column is unset — pre-115 accounts). Every goal surface derives schedule goals from that
-list, so zombie schedules left behind by a failed retirement can no longer assign goals in
-fixed-goal modes. Settings passes `{ anyMode: true }` to keep seeing them and offers a Retire
-notice. Also: Daily mode's single input binds Sunday while the dashboard reads today's weekday —
-the input now warns about, and can collapse, hidden non-uniform weekday values. Full detail in
-`features/Goal Scheduler.md` §6.
+A language is **schedule-driven when it has a live schedule, weekday-goal-driven otherwise** — that
+per-pair precedence (already in `pairsWithGoalsToday`) is the whole model. The Daily / Per weekday /
+Schedule tabs in Settings are VIEWS: switching never retires a schedule and never rewrites goals
+(`profiles.goal_mode` stores only the last-open tab). The retire-to-switch dialog and the
+switch-to-Daily collapse are gone; in fixed-goal tabs a scheduled pair shows a "driven by its
+schedule" badge instead of inert inputs.
+
+Two dead ends, documented so they stay dead (`features/Goal Scheduler.md` §6):
+- A GLOBAL goal mode (briefly: `listActive` gated on `goal_mode`) forces retiring every schedule to
+  use daily goals anywhere — which is exactly how stale weekday values on unscheduled pairs became
+  invisible ghost goals. Do not reintroduce a global gate.
+- Daily view's single input binds Sunday while the dashboard reads today's weekday; it warns about
+  and can collapse hidden non-uniform values.
 
 ## Known backlog / open issues
 

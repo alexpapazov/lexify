@@ -33,7 +33,6 @@ import { applyDailyCeiling } from '@/lib/dailyCeiling'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { getToday } from '@/lib/dates'
 import { langName, assignLanguageColors } from '@/lib/languages'
-import { invalidateReads } from '@/lib/readCache'
 import type { GoalSchedule, LanguagePair } from '@/domain'
 
 /** How goals are set, for every language at once. */
@@ -73,7 +72,6 @@ export function GoalsSettings() {
   const [goalSavingKey, setGoalSavingKey] = useState<string | null>(null)
   /** Pair keys with a live schedule. */
   const [scheduledPairs, setScheduledPairs] = useState<Set<string>>(new Set())
-  const [confirmLeaveSchedule, setConfirmLeaveSchedule] = useState<GoalMode | null>(null)
 
   const [overview,      setOverview]      = useState<OverviewLanguage[]>([])
   const [liveSchedules, setLiveSchedules] = useState<GoalSchedule[]>([])
@@ -133,9 +131,7 @@ export function GoalsSettings() {
         new SupabaseLanguagePairRepository().list(uid),
         // A missing goal_schedules table (migration 114 not run) must not blank the page — the
         // weekday editors work perfectly well without it.
-        // anyMode: settings must SEE schedules even outside Schedule mode (listActive is
-        // mode-gated for every other surface) — you cannot retire what you cannot see.
-        new SupabaseGoalScheduleRepository().listActive(uid, { anyMode: true }).catch(() => [] as GoalSchedule[]),
+        new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[]),
       ])
 
       const tz = (profile?.timezone as string | null) ?? detectBrowserTimezone()
@@ -253,7 +249,7 @@ export function GoalsSettings() {
     setOverviewBusy(true)
     try {
       const repo = new SupabaseGoalScheduleRepository()
-      const live = await repo.listActive(userId, { anyMode: true }).catch(() => [] as GoalSchedule[])
+      const live = await repo.listActive(userId).catch(() => [] as GoalSchedule[])
       for (const s of live) {
         const next = mutate(s)
         await repo.save(userId, {
@@ -324,64 +320,17 @@ export function GoalsSettings() {
   const persistMode = useCallback(async (mode: GoalMode) => {
     if (!userId || !modeSupported) return
     await supabase.from('profiles').update({ goal_mode: mode }).eq('user_id', userId).then(() => {}, () => {})
-    // listActive's mode gate caches the mode — bust it so the dashboard reflects the switch now,
-    // not after the 60s TTL.
-    invalidateReads('goalsched:')
   }, [userId, modeSupported]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
-   * Switching to Daily collapses every language's seven weekday numbers to one value, so the two
-   * fixed modes stay consistent rather than the collapse being a per-language surprise.
+   * The tabs are VIEWS, not modes. Each language is schedule-driven when it has a live schedule and
+   * weekday-goal-driven otherwise, so bg can run a schedule while fr keeps a plain daily number —
+   * and switching tabs must therefore never retire a schedule or rewrite a goal. The old global
+   * mode forced a choice ("retire your schedules to even LOOK at weekday goals"), which is exactly
+   * how stale weekday values on unscheduled pairs became invisible ghost goals.
    */
-  async function applyMode(next: GoalMode) {
+  function applyMode(next: GoalMode) {
     if (next === goalMode) return
-    // Leaving Schedule while schedules are live would leave them driving the goals invisibly.
-    if (goalMode === 'schedule' && next !== 'schedule' && scheduledPairs.size > 0) {
-      setConfirmLeaveSchedule(next)
-      return
-    }
-    setGoalMode(next)
-    void persistMode(next)
-    if (next === 'daily') {
-      for (const pair of langPairs) {
-        const key = `${pair.sourceLanguage}|${pair.targetLanguage}`
-        const common = goalDrafts[key]?.['0'] ?? ''
-        const collapsed: Record<string, string> = {}
-        for (let d = 0; d <= 6; d++) collapsed[String(d)] = common
-        setGoalDrafts(prev => ({ ...prev, [key]: collapsed }))
-        await handleGoalBlur(pair.sourceLanguage, pair.targetLanguage, collapsed)
-      }
-    }
-  }
-
-  /**
-   * Retires every live schedule. Returns how many could NOT be archived — the old version swallowed
-   * failures silently, which is how zombie schedules survived a mode switch and kept assigning
-   * goals to pairs the user had zeroed.
-   */
-  async function retireAll(): Promise<number> {
-    if (!userId) return 0
-    const repo = new SupabaseGoalScheduleRepository()
-    const live = await repo.listActive(userId, { anyMode: true }).catch(() => [] as GoalSchedule[])
-    let failed = 0
-    for (const s of live) {
-      try { await repo.archive(s.id) } catch { failed++ }
-    }
-    const remaining = new Set(
-      failed === 0 ? [] :
-      (await repo.listActive(userId, { anyMode: true }).catch(() => [] as GoalSchedule[]))
-        .map(s => `${s.sourceLanguage}|${s.targetLanguage}`))
-    setScheduledPairs(remaining)
-    if (remaining.size === 0) { setOverview([]); setLiveSchedules([]) }
-    return failed
-  }
-
-  /** Retires every live schedule, then completes the mode switch that triggered the prompt. */
-  async function retireAllAndSwitch() {
-    const next = confirmLeaveSchedule
-    if (!next || !userId) return
-    await retireAll()
-    setConfirmLeaveSchedule(null)
     setGoalMode(next)
     void persistMode(next)
   }
@@ -436,27 +385,13 @@ export function GoalsSettings() {
           ))}
         </div>
 
-        {goalMode !== 'schedule' && scheduledPairs.size > 0 && (
-          <div className="flex items-center justify-between gap-3 rounded-card border border-warning/30 bg-warning/5 px-3 py-2 mb-3">
-            <p className="text-xs text-warning">
-              {`${scheduledPairs.size} goal schedule${scheduledPairs.size === 1 ? ' is' : 's are'} still live from Schedule mode. ${scheduledPairs.size === 1 ? 'It is' : 'They are'} ignored while you're in this mode, but switching back would revive ${scheduledPairs.size === 1 ? 'it' : 'them'}.`}
-            </p>
-            <button
-              className="text-xs border border-warning/40 text-warning hover:bg-warning/10 px-2.5 py-1 rounded-lg transition-colors shrink-0"
-              onClick={() => void retireAll()}
-            >
-              Retire {scheduledPairs.size === 1 ? 'it' : 'them'}
-            </button>
-          </div>
-        )}
-
         <h2 className="text-lg font-medium text-ink">Daily goals</h2>
         <p className="text-sm text-ink-muted mt-1">
           {goalMode === 'schedule'
-            ? 'Every language works backwards from its own deadline. The daily number is recalculated each morning from the words still to go, so missing a day nudges the rest of the schedule up instead of piling onto tomorrow.'
+            ? 'A scheduled language works backwards from its own deadline: the daily number is recalculated each morning from the words still to go. Languages without a schedule keep their daily or weekday goals — the three tabs are views, and mixing them across languages is fine.'
             : goalMode === 'daily'
-              ? 'One target every day, per language.'
-              : 'A different target for each day of the week, per language.'}
+              ? 'One target every day. A language with a live schedule ignores these numbers until the schedule ends.'
+              : 'A different target for each day of the week. A language with a live schedule ignores these numbers until the schedule ends.'}
         </p>
         {!modeSupported && (
           <p className="text-xs text-warning mt-1">
@@ -464,28 +399,6 @@ export function GoalsSettings() {
           </p>
         )}
       </div>
-
-      {/* Leaving schedule mode — never silently, since a live schedule would keep setting goals. */}
-      {confirmLeaveSchedule && (
-        <div className="panel space-y-2 border-danger/40">
-          <p className="text-sm text-ink">
-            {`${scheduledPairs.size} language${scheduledPairs.size === 1 ? ' has a' : 's have'} live schedule${scheduledPairs.size === 1 ? '' : 's'}.`}
-          </p>
-          <p className="text-xs text-ink-faint">
-            A schedule overrides weekday goals wherever it exists, so switching modes without retiring
-            them would leave them setting your daily number from behind this page. Retiring keeps the
-            schedule on record — you just have to set it up again to resume.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button className="btn-primary text-sm py-1.5 px-4" onClick={() => void retireAllAndSwitch()}>
-              Retire them and switch
-            </button>
-            <button className="btn-ghost text-sm py-1.5 px-3" onClick={() => setConfirmLeaveSchedule(null)}>
-              Stay on schedules
-            </button>
-          </div>
-        </div>
-      )}
 
       {langPairs.length === 0 && (
         <p className="panel text-sm text-ink-faint">
@@ -570,6 +483,12 @@ export function GoalsSettings() {
                 turnoverHour={turnoverHour}
                 onChanged={() => void refreshOverview()}
               />
+            ) : scheduledPairs.has(pairKey) ? (
+              // Per-language precedence: this pair's live schedule OWNS its goal, so its weekday
+              // numbers are inert — say so instead of rendering inputs that silently do nothing.
+              <p className="text-xs text-ink-faint">
+                {`Driven by its schedule — daily and weekday numbers are ignored while it runs. Manage it in the Schedule tab.`}
+              </p>
             ) : goalMode === 'daily' ? (
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">

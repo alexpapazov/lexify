@@ -58,22 +58,14 @@ export class SupabaseGoalScheduleRepository {
   private get db() { return createClient() }
 
   /**
-   * Every live (non-archived) schedule — GATED ON THE GLOBAL GOAL MODE.
-   *
-   * When `profiles.goal_mode` is anything other than 'schedule', this returns [] even if live rows
-   * exist. Six surfaces (dashboard goals, Present snapshot, both projections, the review calendar,
-   * the ladder's stop-at-goal cap) derive goals from this list and none of them know about the mode
-   * toggle; the old design leaned on "leaving Schedule mode retires every schedule", but retirement
-   * is best-effort (`.catch(() => {})`), so one failed archive left ZOMBIE schedules silently
-   * assigning daily goals to pairs the user had zeroed. Gating here makes zombies inert everywhere
-   * at once. An absent/unmigrated goal_mode column reads as schedule-mode-allowed, preserving
-   * pre-115 behaviour.
-   *
-   * `opts.anyMode` bypasses the gate — for the settings screen, which must still SEE zombie
-   * schedules in order to retire them.
+   * Every live (non-archived) schedule. A live schedule is ALWAYS in force for its pair — goal
+   * "modes" are per-language and derived (schedule-driven when a live schedule exists, weekday-goal
+   * driven otherwise), and the settings tabs are just views. This was briefly gated on a global
+   * `profiles.goal_mode`; that model forced retiring every schedule to use daily goals anywhere,
+   * which is how ghost weekday goals stayed invisible. Do not reintroduce a global gate here.
    */
-  async listActive(userId: UserId, opts?: { anyMode?: boolean }): Promise<GoalSchedule[]> {
-    const rows = await cachedRead(`goalsched:${userId}:active`, async () => {
+  async listActive(userId: UserId): Promise<GoalSchedule[]> {
+    return cachedRead(`goalsched:${userId}:active`, async () => {
       const { data, error } = await this.db.from('goal_schedules')
         .select('*').eq('user_id', userId).is('archived_at', null)
         // Pattern schedules have no deadline; nulls sort last, which is the right place for them.
@@ -81,13 +73,6 @@ export class SupabaseGoalScheduleRepository {
       if (error) throw new Error(error.message)
       return (data ?? []).map(rowToSchedule)
     })
-    if (opts?.anyMode || rows.length === 0) return rows
-    const mode = await cachedRead(`goalsched:${userId}:mode`, async () => {
-      const { data } = await this.db.from('profiles')
-        .select('goal_mode').eq('user_id', userId).maybeSingle()
-      return (data?.goal_mode as string | null) ?? 'schedule-allowed'
-    }).catch(() => 'schedule-allowed')
-    return mode === 'schedule' || mode === 'schedule-allowed' ? rows : []
   }
 
   /** Retired schedules, most recently finished first — the record of what was attempted. */
