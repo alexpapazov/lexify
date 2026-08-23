@@ -7,11 +7,12 @@ implementation notes + error log); this file is the map you read first.
 - **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 975 passing tests (62 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations applied BY HAND; `001`–`118` are archived
-  and live. **Pending at the top level: `119_practice_attempts.sql` and
-  `120_sequential_goal_schedules.sql`** — check both before assuming a feature that names their
-  columns is deployable. Next number is **121**: the catch-up feature no longer needs a migration, so
-  if you already applied the now-deleted `121_catchup_plans.sql`, `profiles.catchup_plans` is an
-  unused column you can drop.
+  and live; `119`–`121` are applied too (confirmed 2026-08-22) and now archived alongside them.
+  **Nothing is pending.** Next number is **122**.
+  - `121_catchup_plans.sql` was applied and then the feature it served was rebuilt without it, so
+    **`profiles.catchup_plans` is an orphaned column** — nothing in the codebase reads or writes it.
+    Harmless; drop it whenever convenient (`ALTER TABLE profiles DROP COLUMN IF EXISTS
+    catchup_plans;`). The migration file itself is deleted, so don't go looking for it.
 
 ---
 
