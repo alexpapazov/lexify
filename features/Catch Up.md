@@ -1,7 +1,7 @@
 # Catch Up
 
-**Status: rebuilt 2026-08-22. No migration.** Lives in **Settings → Data, above Redistribute**
-(`components/settings/CatchUpPanel.tsx`).
+**Status: rebuilt 2026-08-22. Migration `122_catchup_plans.sql` — apply before deploying.** Lives in
+**Settings → Data, above Redistribute** (`components/settings/CatchUpPanel.tsx`).
 
 Overdue cards all pile onto today. Pick a language — or one card type within it — and a date to be
 level again by, and the backlog is dealt out across the days between.
@@ -30,13 +30,22 @@ due date encodes an interval the scheduler actually chose; draining a backlog ha
 touching it. A card whose production is three weeks late but whose recognition is due next month has
 only its production moved.
 
-### Nothing is stored
+### What is stored, and what is not
 
-There is no plan record, no column, no migration. **The new due dates are the plan.** Fall behind
-again and you run it again — exactly like Redistribute, which is why it sits next to it.
+The due dates themselves are the plan; the record in `profiles.catchup_plans` (migration `122`) is a
+thin overlay that makes one *followable*:
 
-> The abandoned first build added `profiles.catchup_plans` (migration `121`, since deleted). If that
-> migration was already applied, the column is now unused and harmless; drop it whenever convenient.
+```json
+{ "bg|en:sgReverse": { "targetDate": "2026-09-05", "startedOn": "2026-08-22", "total": 81 } }
+```
+
+**All three fields are historical facts about the moment the plan was made, and none of them ever
+changes.** How many are LEFT is never stored — it is recomputed from the live cards on every load.
+That split is the discipline: store what happened, derive what is true now. Do not add a `remaining`
+or `done` field.
+
+> Migration `121` (deleted) added the same column with only `targetDate`. `122` is idempotent, and a
+> record missing `startedOn`/`total` is discarded on read rather than shown with invented totals.
 
 ## 2. How the days are chosen
 
@@ -78,7 +87,8 @@ against real arrival numbers spreads to **under 400/day with no day above mean �
 | Due rows → per-scope pools; the write patch | `lib/catchUpPools.ts` (21 tests) |
 | `overdue` vs `today` split, `daysOverdue` | `lib/dueStatus.ts` (`cardStateDueBucket`) |
 | Measured review pace for the "~N min" | `lib/reviewPace.ts` (11 tests) |
-| Panel + picker + the write | `components/settings/CatchUpPanel.tsx` |
+| Plan record, debt detection, progress | `lib/catchUpPlan.ts` (22 tests) |
+| Panel, picker, progress bars, Reassign | `components/settings/CatchUpPanel.tsx` |
 | Realistic end-to-end sanity check | `lib/__tests__/catchUpRealistic.test.ts` |
 
 ### Scoping — two INDEPENDENT filters
@@ -133,7 +143,45 @@ Note what this does **not** prevent, deliberately: plans with different windows 
 Greek over 30 days and everything else over 7, and each card keeps the date its own plan gave it.
 That is one plan per card, not one plan overall.
 
-## 5. Traps
+## 5. Progress, and Reassign
+
+### Recognising a claimed card without a marker column
+
+`CardState.scheduledIntervalDays` is *defined* as the calendar gap between `lastReviewedAt` and
+`dueAt` after smoothing. So an untouched card has `due − lastReviewed ≈ scheduledIntervalDays`, while
+a card catch-up pushed out — without a review — has a strictly larger gap. That is
+`isCarryingDebt()`, and combined with "falls inside the plan's window" it identifies exactly the
+cards a plan is still owed. No new column, nothing to keep in sync.
+
+Both halves are needed. The window alone would sweep in every normally-arriving review that happens
+to land in the same fortnight (186/day in the reported case); the debt check alone would count cards
+pushed by an older, longer plan.
+
+Tolerance is `interval × 1.05 + 1 day`, because **Redistribute moves due dates within the ±5% FSRS
+fuzz window without touching `scheduledIntervalDays`** — a redistributed card must not read as
+planned.
+
+Reviewing a card rewrites `lastReviewedAt` and `scheduledIntervalDays` together, so it stops carrying
+debt the instant it is done. That is what moves the bar.
+
+### Reassign
+
+Re-deals the cards a plan still owes across its remaining days, levelled against current load. Its
+one distinguishing argument is `replanThrough`: tracks already sitting inside the window may move,
+**but only for rows carrying debt**. That check lives inside `rescheduleOverdueTracks`, not in the
+caller — "unplanned cards stay unchanged" is a guarantee, and a guarantee the caller has to remember
+is not a guarantee. Five tests in `catchUpPools.test.ts` pin it, including the case that matters:
+an unplanned card sitting in the window is refused.
+
+Reassign also subtracts the plan's own cards from the levelling load before re-dealing, or they would
+count as immovable congestion and the re-deal would pile everything into whatever days looked free.
+
+### Overlapping plans
+
+A language plan and a card-type plan inside it claim some of the same cards, so two bars would
+double-count. `conflictingScopes()` makes creating either one replace the other.
+
+## 6. Traps
 
 - **Write the lane column, not just `due_at`.** Queue building reads `smart_due_at ?? typed_due_at ??
   due_at`; several counts still read `due_at`. `rescheduleOverdueTracks` writes whichever lane holds
@@ -158,7 +206,7 @@ That is one plan per card, not one plan overall.
 - **A forward and a reverse review of the same card are separate items** (`candidateKey` is
   `cardId:direction`). Collapsing them undercounts the backlog.
 
-## 6. Error log
+## 7. Error log
 
 - **2026-08-22 — the plan was invisible.** Built first as a session-queue cap with a stored target
   date; every due count and the forecast chart were unchanged, so nothing appeared to happen. Cause

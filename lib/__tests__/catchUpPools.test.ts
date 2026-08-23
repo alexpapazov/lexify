@@ -218,3 +218,51 @@ describe('one plan per card', () => {
     expect(rescheduleOverdueTracks(moved, '2026-09-05', opts)).toBeNull()
   })
 })
+
+describe('reassign mode (replanThrough)', () => {
+  const opts = { tracks: SMART, tz: TZ, today: TODAY }
+  const WINDOW = '2026-09-05'
+
+  /** A card an earlier plan pushed: last reviewed long ago, dealt onto a future day. */
+  const planned = () => grad('a', {
+    lastReviewedAt: '2026-02-01T04:00:00.000Z',
+    scheduledIntervalDays: 30, intervalDays: 30,
+    smartDueAt: '2026-08-30T04:00:00.000Z', dueAt: '2026-08-30T04:00:00.000Z',
+  })
+
+  /** A card sitting exactly where its own FSRS schedule put it, which happens to be in the window. */
+  const normal = () => grad('b', {
+    lastReviewedAt: '2026-08-01T04:00:00.000Z',
+    scheduledIntervalDays: 30, intervalDays: 30,
+    smartDueAt: '2026-08-31T04:00:00.000Z', dueAt: '2026-08-31T04:00:00.000Z',
+  })
+
+  it('re-deals a card an earlier plan placed in the window', () => {
+    const patch = rescheduleOverdueTracks(planned(), '2026-08-25', { ...opts, replanThrough: WINDOW })
+    expect(patch?.smartDueAt).toBe('2026-08-25T04:00:00.000Z')
+  })
+
+  it('leaves an unplanned card alone even though it falls inside the window', () => {
+    // The guarantee the user asked for: reassign must not disturb normally-scheduled reviews.
+    expect(rescheduleOverdueTracks(normal(), '2026-08-25', { ...opts, replanThrough: WINDOW })).toBeNull()
+  })
+
+  it('leaves a planned card scheduled BEYOND the window alone', () => {
+    const far = { ...planned(), smartDueAt: '2026-10-10T04:00:00.000Z', dueAt: '2026-10-10T04:00:00.000Z' }
+    expect(rescheduleOverdueTracks(far, '2026-08-25', { ...opts, replanThrough: WINDOW })).toBeNull()
+  })
+
+  it('without replanThrough, a planned future card is untouchable', () => {
+    // Plain catch-up must never re-deal what another plan already claimed.
+    expect(rescheduleOverdueTracks(planned(), '2026-08-25', opts)).toBeNull()
+  })
+
+  it('still claims overdue cards in reassign mode', () => {
+    const late = grad('c', {
+      lastReviewedAt: '2026-02-01T04:00:00.000Z',
+      smartDueAt: '2026-08-01T04:00:00.000Z', dueAt: '2026-08-01T04:00:00.000Z',
+    })
+    expect(rescheduleOverdueTracks(late, '2026-08-25', { ...opts, replanThrough: WINDOW })?.smartDueAt)
+      .toBe('2026-08-25T04:00:00.000Z')
+  })
+})

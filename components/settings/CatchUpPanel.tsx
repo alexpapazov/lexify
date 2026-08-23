@@ -29,10 +29,14 @@ import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, buildRetentionMap, retentionFor } from '@/lib/sessionLimits'
-import { buildCatchUpPools, emptyPool, rescheduleOverdueTracks, candidateKey } from '@/lib/catchUpPools'
+import { buildCatchUpPools, emptyPool, rescheduleOverdueTracks, candidateKey, catchUpTypeOf, candidateFor } from '@/lib/catchUpPools'
 import { assignBacklogDays, previewCatchUp, isLapsed, scopeKey, scopeDirection, addDays, daysBetween, type CatchUpType, type CatchUpCandidate } from '@/lib/catchUp'
 import { buildPaceSamples, pace, type PaceSamples, type PaceRow } from '@/lib/reviewPace'
 import { isDueByLocalDate } from '@/lib/dueStatus'
+import {
+  isOwedByPlan, planProgress, conflictingScopes,
+  type CatchUpPlanRecord, type CatchUpPlanRecords,
+} from '@/lib/catchUpPlan'
 import { chunk } from '@/lib/mapLimit'
 import { getToday } from '@/lib/dates'
 import { langName } from '@/lib/languages'
@@ -120,6 +124,9 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
   const [custom,  setCustom]  = useState('')
   const [busy,    setBusy]    = useState(false)
   const [msg,     setMsg]     = useState<{ ok: boolean; text: string } | null>(null)
+  const [plans,   setPlans]   = useState<CatchUpPlanRecords>({})
+  /** Live count of what each plan is still owed — derived on load, never stored. */
+  const [owed,    setOwed]    = useState<Map<string, number>>(new Map())
 
   /** Everything the panel needs, kept so the write can patch rows without re-fetching. */
   const [ctx, setCtx] = useState<{
@@ -129,18 +136,24 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     tracks:       ReturnType<typeof buildEnabledTracksMap>
     inflow:       Map<string, number>
     today:        string
+    states:       CardState[]
+    retentionByPair: Map<string, number>
+    thresholdByPair: Map<string, number>
   } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const today = getToday(timezone, turnoverHour)
-      const [decks, states, paramRows] = await Promise.all([
+      const supabase = createClient()
+      const [decks, states, paramRows, profileRow] = await Promise.all([
         new SupabaseDeckRepository().list(userId),
         new SupabaseCardStateRepository().listAllForUser(userId),
         new SupabaseUserSchedulerParamsRepository().listForUser(userId),
+        // Absent until migration 122 runs — no plans is the right default either way.
+        supabase.from('profiles').select('catchup_plans').eq('user_id', userId).maybeSingle()
+          .then((r: { data: { catchup_plans?: unknown } | null }) => r.data, () => null),
       ])
-      const supabase = createClient()
       const paceRows = await supabase
         .from('review_events')
         .select('response_ms, reviewed_at, source_language, target_language, review_direction, was_typed')
@@ -236,7 +249,39 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
           }
         })
         .sort((a, b) => a.label.localeCompare(b.label)))
-      setCtx({ statesByKey, forwardByCard, deckPair, tracks, inflow, today })
+      setCtx({ statesByKey, forwardByCard, deckPair, tracks, inflow, today, states, retentionByPair, thresholdByPair })
+
+      // ── Plans, and what each is still owed ──────────────────────────────
+      // The record is a historical fact; the remaining count is recomputed here from the live cards
+      // every single load, so a bar can never claim progress that didn't happen.
+      const storedPlans = ((profileRow?.catchup_plans ?? {}) as CatchUpPlanRecords)
+      const valid: CatchUpPlanRecords = {}
+      for (const [k, v] of Object.entries(storedPlans)) {
+        // A record from the deleted migration 121 has only `targetDate`; it can't drive a progress
+        // bar, so it is dropped rather than shown with invented totals.
+        if (v && typeof v.targetDate === 'string' && typeof v.total === 'number') valid[k] = v
+      }
+      setPlans(valid)
+
+      const nextOwed = new Map<string, number>()
+      for (const [k, plan] of Object.entries(valid)) {
+        const [pk, t] = k.split(':') as [`${string}|${string}`, CatchUpType | undefined]
+        let n = 0
+        for (const st of states) {
+          if ((deckPair.get(st.cardId) ?? '') !== pk) continue
+          if (t) {
+            const type = st.reviewDirection === 'reverse' ? 'sgReverse'
+              : catchUpTypeOf(st, {
+                  tracks: tracks.get(pk), threshold: thresholdByPair.get(pk) ?? 20,
+                  tz: timezone, today,
+                })
+            if (type !== t) continue
+          }
+          if (isOwedByPlan(st, plan, today, timezone)) n++
+        }
+        nextOwed.set(k, n)
+      }
+      setOwed(nextOwed)
     } catch (err) {
       console.error('Catch-up load failed:', err)
       setMsg({ ok: false, text: 'Could not read your backlog. Please try again.' })
@@ -293,6 +338,113 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     if (type !== ALL) return `${TYPE_LABEL[type]} · all languages`
     return 'Everything overdue'
   }, [lang, type, langs])
+
+  /** The plan governing the current selection, if the selection is exactly one planned scope. */
+  const currentKey  = useMemo(
+    () => (lang === ALL ? null : type === ALL ? lang : scopeKey(lang, type)),
+    [lang, type],
+  )
+  const currentPlan = currentKey ? plans[currentKey] ?? null : null
+
+  /**
+   * Re-deal the cards a plan already claimed across its remaining days.
+   *
+   * `replanThrough` is what makes this different from a fresh catch-up: it lets tracks already
+   * sitting in the window move, but only for rows carrying catch-up debt — so normally-scheduled
+   * reviews in the same fortnight are left exactly where the scheduler put them.
+   */
+  async function reassign(key: string, plan: CatchUpPlanRecord) {
+    if (busy || !ctx) return
+    setBusy(true)
+    setMsg(null)
+    try {
+      const [pk, t] = key.split(':') as [`${string}|${string}`, CatchUpType | undefined]
+
+      const claimed = ctx.states.filter(st => {
+        if ((ctx.deckPair.get(st.cardId) ?? '') !== pk) return false
+        if (t) {
+          const rowType = st.reviewDirection === 'reverse' ? 'sgReverse'
+            : catchUpTypeOf(st, {
+                tracks: ctx.tracks.get(pk), threshold: ctx.thresholdByPair.get(pk) ?? 20,
+                tz: timezone, today: ctx.today,
+              })
+          if (rowType !== t) return false
+        }
+        return isOwedByPlan(st, plan, ctx.today, timezone)
+      })
+      if (claimed.length === 0) {
+        setMsg({ ok: false, text: 'Nothing left to reassign — this plan is already clear.' })
+        await load()
+        return
+      }
+
+      const retention = ctx.retentionByPair.get(pk) ?? 0.9
+      const candidates = claimed.map(st => candidateFor(st, {
+        tracks: ctx.tracks.get(pk), tz: timezone, today: ctx.today,
+        forwardState: ctx.forwardByCard.get(st.cardId), retention, now: Date.now(),
+      }))
+      const days = Math.max(1, daysBetween(ctx.today, plan.targetDate))
+      // Levelled against the load MINUS what this plan itself put there, or the cards being re-dealt
+      // would be treated as immovable congestion and pile into whatever days are left.
+      const load2 = new Map(ctx.inflow)
+      for (const st of claimed) {
+        for (const d of [st.smartDueAt ?? st.typedDueAt ?? st.dueAt, st.recallDueAt]) {
+          if (!d) continue
+          const day = new Date(d).toLocaleDateString('en-CA', { timeZone: timezone })
+          if (load2.has(day)) load2.set(day, Math.max(0, load2.get(day)! - 1))
+        }
+      }
+      const result = assignBacklogDays({ overdue: candidates, today: ctx.today, days, existingLoad: load2 })
+
+      const byKey = new Map(claimed.map(st => [candidateKey(st), st]))
+      const updates: CardState[] = []
+      for (const [k, day] of result.assignments) {
+        const st = byKey.get(k)
+        if (!st) continue
+        const patch = rescheduleOverdueTracks(st, day, {
+          tracks: ctx.tracks.get(pk), tz: timezone, today: ctx.today,
+          forwardState: ctx.forwardByCard.get(st.cardId),
+          replanThrough: plan.targetDate,
+        })
+        if (patch) updates.push({ ...st, ...patch })
+      }
+      if (updates.length === 0) {
+        setMsg({ ok: false, text: 'Nothing moved — those cards are already evenly placed.' })
+        return
+      }
+      const repo = new SupabaseCardStateRepository()
+      for (const part of chunk(updates, 200)) await repo.upsertBatch(part)
+      setMsg({
+        ok: true,
+        text: `Reassigned ${updates.length.toLocaleString()} remaining card${updates.length === 1 ? '' : 's'} across ${days} day${days === 1 ? '' : 's'} to ${plan.targetDate}. Cards not on this plan were left alone.`,
+      })
+      await load()
+    } catch (err) {
+      console.error('Catch-up reassign failed:', err)
+      setMsg({ ok: false, text: 'Something went wrong. Please try again.' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function savePlan(key: string, record: CatchUpPlanRecord) {
+    // A language plan and a card-type plan inside it claim overlapping cards, so both bars would
+    // double-count. Creating either replaces the other.
+    const next: CatchUpPlanRecords = { ...plans }
+    for (const clash of conflictingScopes(key, next)) delete next[clash]
+    next[key] = record
+    setPlans(next)
+    await createClient().from('profiles').update({ catchup_plans: next }).eq('user_id', userId)
+      .then(() => {}, () => {})
+  }
+
+  async function clearPlan(key: string) {
+    const next: CatchUpPlanRecords = { ...plans }
+    delete next[key]
+    setPlans(next)
+    await createClient().from('profiles').update({ catchup_plans: next }).eq('user_id', userId)
+      .then(() => {}, () => {})
+  }
 
   async function spread(targetDate: string) {
     if (busy || !ctx || selected.length === 0) return
@@ -353,6 +505,12 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         text: `Spread ${updates.length.toLocaleString()} card${updates.length === 1 ? '' : 's'} over ${days} day${days === 1 ? '' : 's'} — about ${perDay.toLocaleString()} a day on top of what was already scheduled.${skipped}`,
       })
       setPicking(false)
+      // The plan is recorded with what the spread ACTUALLY claimed, not what the selection showed —
+      // the liveness re-check may have skipped some, and a total that never happened would make the
+      // progress bar start out wrong.
+      if (currentKey) {
+        await savePlan(currentKey, { targetDate, startedOn: ctx.today, total: updates.length })
+      }
       await load()
     } catch (err) {
       console.error('Catch-up spread failed:', err)
@@ -372,6 +530,65 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         <p className="text-sm text-ink-muted">Nothing is overdue — you are caught up.</p>
       ) : (
         <>
+          {Object.keys(plans).length > 0 && (
+            <div className="space-y-2">
+              {Object.entries(plans).map(([key, plan]) => {
+                const prog = planProgress(plan, owed.get(key) ?? 0, ctx?.today ?? plan.startedOn)
+                const [pk, t] = key.split(':') as [string, CatchUpType | undefined]
+                const [src, tgt] = pk.split('|') as [string, string]
+                const dir = scopeDirection(src, tgt, t ?? null)
+                const name = t
+                  ? `${langName(dir.from)} → ${langName(dir.to)} · ${TYPE_LABEL[t]}`
+                  : `${langName(dir.from)} ↔ ${langName(dir.to)} · all card types`
+                return (
+                  <div key={key} className="rounded-card border border-line/10 bg-surface-deep px-4 py-3 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm text-ink truncate">{name}</div>
+                        <div className="text-xs text-ink-faint">
+                          {prog.complete
+                            ? `Caught up — all ${prog.total.toLocaleString()} done`
+                            : `${prog.done.toLocaleString()} of ${prog.total.toLocaleString()} done · ${prog.remaining.toLocaleString()} to go`}
+                          {!prog.complete && (prog.overdue
+                            ? ' · past your target date'
+                            : ` · ${prog.daysLeft} day${prog.daysLeft === 1 ? '' : 's'} left`)}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {!prog.complete && (
+                          <button
+                            className="text-xs border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-2.5 py-1 rounded-lg transition-colors disabled:opacity-50"
+                            disabled={busy}
+                            onClick={() => void reassign(key, plan)}
+                            title="Re-level the cards still owed on this plan across its remaining days. Cards not on the plan are untouched."
+                          >
+                            Reassign
+                          </button>
+                        )}
+                        <button
+                          className="text-xs text-ink-faint hover:text-danger transition-colors disabled:opacity-50"
+                          disabled={busy}
+                          onClick={() => void clearPlan(key)}
+                          title="Stop tracking this plan. Due dates stay where they are."
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-surface-raised overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-300 ${
+                          prog.complete ? 'bg-success' : prog.overdue ? 'bg-warning' : 'bg-accent'
+                        }`}
+                        style={{ width: `${Math.round(prog.fraction * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-ink-faint w-20 shrink-0">Language</span>
@@ -410,8 +627,9 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
                 className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
                 disabled={busy || overdue === 0}
                 onClick={() => { setPicking(v => !v); setCustom('') }}
+                title={currentPlan ? 'Adds newly overdue cards to a fresh plan for this scope' : undefined}
               >
-                {picking ? 'Cancel' : 'Catch up'}
+                {picking ? 'Cancel' : currentPlan ? 'New plan' : 'Catch up'}
               </button>
             </div>
 

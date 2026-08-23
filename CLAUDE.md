@@ -2203,7 +2203,7 @@ longer intervals through the FSRS math instead of a correction factor, and is ar
 principled lever if the pinning returns at 2.0 — a calibration factor sitting at its ceiling is a
 symptom that the target is mis-set.
 
-## Catch up on a backlog — Settings → Data, beside Redistribute (2026-08-22, NO migration)
+## Catch up on a backlog — Settings → Data, beside Redistribute (2026-08-22, migration 122)
 
 Pick a language (or one card type in it) and a date to be level by; the overdue cards are dealt out
 across the days between. **Read `features/Catch Up.md` before touching it.**
@@ -2216,7 +2216,16 @@ across the days between. **Read `features/Catch Up.md` before touching it.**
   from `dueAt` (`engine/dueNow.ts` + the three session call sites), so difficulty/stability are
   untouched and the review scores identically whenever it lands. `rescheduleOverdueTracks` refuses
   anything due today or later — a future due date encodes an interval the scheduler chose.
-- **Nothing is stored.** The new due dates ARE the plan; fall behind and run it again.
+- **The due dates ARE the plan.** `profiles.catchup_plans` (migration 122) stores only
+  `{targetDate, startedOn, total}` per scope — three HISTORICAL FACTS that never change, so they
+  can't drift. How many are LEFT is recomputed from the live cards every load. Never add a
+  `remaining`/`done` field.
+- **Progress and Reassign need no marker column.** `scheduledIntervalDays` is the recorded gap
+  between `lastReviewedAt` and `dueAt`, so a card pushed out without a review has a strictly larger
+  gap — `isCarryingDebt()`. Tolerance is `× 1.05 + 1 day` because Redistribute nudges due dates
+  within the FSRS fuzz window without updating that field. Reassign passes `replanThrough`, letting
+  in-window tracks move ONLY for debt-carrying rows; that check is inside `rescheduleOverdueTracks`
+  deliberately, so "unplanned cards stay unchanged" can't be forgotten by a caller.
 - **Layout rules** (`assignBacklogDays`, pure): level against the days' EXISTING arrivals so the
   backlog fills the gaps rather than piling on the already-heavy days; highest deferral damage
   earliest (`loss = R·(1 − 0.9^(d/S))` peaks mid-band, so neither rock-solid nor long-gone cards go

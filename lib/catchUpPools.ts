@@ -19,6 +19,7 @@ import { cardStateDueBucket, daysOverdue, isDueByLocalDate } from '@/lib/dueStat
 import { scopeKey, elapsedDaysFor, type CatchUpCandidate, type CatchUpType } from '@/lib/catchUp'
 import { activeProductionTrack, forwardProductionMode, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
 import { seedStability } from '@/lib/forecastFsrs'
+import { isCarryingDebt } from '@/lib/catchUpPlan'
 
 export interface ScopePool {
   overdue:  CatchUpCandidate[]
@@ -147,11 +148,33 @@ export function emptyPool(): ScopePool {
 export function rescheduleOverdueTracks(
   s: CardState,
   newDay: string,
-  opts: { tracks?: EnabledTracks; tz: string; today: string; forwardState?: CardState | null },
+  opts: {
+    tracks?: EnabledTracks
+    tz: string
+    today: string
+    forwardState?: CardState | null
+    /**
+     * Reassign mode. When set, a track already scheduled on or before this date may ALSO move —
+     * but only if the row is carrying catch-up debt, i.e. an earlier plan is what put it there.
+     *
+     * The debt check is deliberately inside this function rather than left to the caller: it is the
+     * guarantee that "unplanned cards stay unchanged", and a guarantee a caller has to remember is
+     * not a guarantee. Without it, re-levelling would drag every normally-scheduled review that
+     * happens to fall in the window along with it.
+     */
+    replanThrough?: string
+  },
 ): Partial<CardState> | null {
   const { tracks, tz, today } = opts
-  const overdue = (d: string | null | undefined) =>
-    !!d && new Date(d).toLocaleDateString('en-CA', { timeZone: tz }) < today
+  const dayOf = (d: string) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
+  const movable = (d: string | null | undefined) => {
+    if (!d) return false
+    const day = dayOf(d)
+    if (day < today) return true                                  // overdue: always claimable
+    if (!opts.replanThrough || day > opts.replanThrough) return false
+    return isCarryingDebt(s, d)                                   // in-window, but only if planned
+  }
+  const overdue = movable
   /** Keep the original time-of-day; only the calendar day moves. */
   const shift = (iso: string) => newDay + iso.slice(10)
 

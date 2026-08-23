@@ -4,15 +4,15 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 975 passing tests (62 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
+- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 1010 passing tests (63 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations applied BY HAND; `001`–`118` are archived
-  and live; `119`–`121` are applied too (confirmed 2026-08-22) and now archived alongside them.
-  **Nothing is pending.** Next number is **122**.
-  - `121_catchup_plans.sql` was applied and then the feature it served was rebuilt without it, so
-    **`profiles.catchup_plans` is an orphaned column** — nothing in the codebase reads or writes it.
-    Harmless; drop it whenever convenient (`ALTER TABLE profiles DROP COLUMN IF EXISTS
-    catchup_plans;`). The migration file itself is deleted, so don't go looking for it.
+  and live; `119`–`121` are applied too (confirmed 2026-08-22) and archived alongside them.
+  **Pending: `122_catchup_plans.sql`** (catch-up progress tracking — idempotent, and re-adds the same
+  column the deleted `121` used). Next number is **123**.
+  - If you already dropped `profiles.catchup_plans` after `121` was deleted, `122` puts it back with
+    a richer shape; if you never dropped it, `122` is a no-op and old single-field records are
+    discarded on read. Either way it is safe to run.
 
 ---
 
@@ -163,8 +163,9 @@ and a date to be level by; the overdue cards get dealt out across the days betwe
 due dates**, like Redistribute — safe because only PAST-due dates move and FSRS measures elapsed time
 from `lastReviewedAt`, not `dueAt`. Layout levels against each day's existing arrivals, puts the
 highest deferral damage earliest, and spreads deeply lapsed cards evenly. Nothing is stored — the
-dates are the plan. An earlier version that only capped the session queue was deleted for being
-invisible; see the error log in `features/Catch Up.md`.
+dates are the plan, with a thin `{targetDate, startedOn, total}` record behind a progress bar and a
+Reassign button that re-levels what is still owed. An earlier version that only capped the session
+queue was deleted for being invisible; see the error log in `features/Catch Up.md`.
 
 **And a fourth, separate mode: the Goal Scheduler (2026-08-08, migration 114).** Set
 "200 new words by Dec 1" and the daily number is DERIVED from what's left, re-spread every morning —
