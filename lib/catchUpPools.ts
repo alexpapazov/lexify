@@ -22,10 +22,17 @@ import { cardStateDueBucket, daysOverdue, isDueByLocalDate } from '@/lib/dueStat
 import { scopeKey, elapsedDaysFor, type CatchUpCandidate, type CatchUpType } from '@/lib/catchUp'
 import { activeProductionTrack, forwardProductionMode, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
 import { seedStability } from '@/lib/forecastFsrs'
-import { isCarryingDebt } from '@/lib/catchUpPlan'
+import { isCarryingDebt, trackDueDates } from '@/lib/catchUpPlan'
 
 export interface ScopePool {
   overdue: CatchUpCandidate[]
+  /**
+   * Rows scheduled today or later that are CARRYING CATCH-UP DEBT (`isCarryingDebt`) — cards an
+   * earlier spread placed, still unreviewed. A fresh spread may reclaim these (it supersedes the
+   * earlier plan for its scope), which is also the repair path when a bad spread piled cards onto
+   * one day. Normally-scheduled future cards never appear here.
+   */
+  plannedDebt: CatchUpCandidate[]
 }
 
 /** Identity for a queue item. A card's forward and reverse rows are separate reviews. */
@@ -99,17 +106,23 @@ export function buildCatchUpPools(args: {
   now:             number
 }): Map<string, ScopePool> {
   const pools = new Map<string, ScopePool>()
-  const add = (key: string, c: CatchUpCandidate) => {
+  const add = (key: string, bucket: 'overdue' | 'plannedDebt', c: CatchUpCandidate) => {
     let pool = pools.get(key)
-    if (!pool) { pool = { overdue: [] }; pools.set(key, pool) }
-    pool.overdue.push(c)
+    if (!pool) { pool = { overdue: [], plannedDebt: [] }; pools.set(key, pool) }
+    pool[bucket].push(c)
   }
 
   for (const { pairKey, state } of args.rows) {
     const tracks = args.tracksByPair.get(pairKey)
     const opts = { tracks, tz: args.tz, today: args.today, forwardState: args.forwardByCard.get(state.cardId) }
-    // Overdue rows ONLY. 'today' is real work the learner should do today, not backlog.
-    if (cardStateDueBucket(state, opts) !== 'overdue') continue
+    // Two ways in: strictly overdue (the backlog), or scheduled today-or-later while still carrying
+    // an earlier spread's debt (reclaimable). A normally-scheduled card — including one genuinely
+    // due today — is neither: that is real work, not backlog, and must never be spread.
+    let bucket: 'overdue' | 'plannedDebt'
+    if (cardStateDueBucket(state, opts) === 'overdue') bucket = 'overdue'
+    else if (state.graduated && !state.dormant &&
+             trackDueDates(state).some(d => isCarryingDebt(state, d))) bucket = 'plannedDebt'
+    else continue
 
     const candidate = candidateFor(state, {
       ...opts, retention: args.retentionByPair.get(pairKey) ?? 0.9, now: args.now,
@@ -118,8 +131,8 @@ export function buildCatchUpPools(args: {
     const type = catchUpTypeOf(state, {
       tracks, threshold: args.thresholdByPair.get(pairKey) ?? 20, tz: args.tz, today: args.today,
     })
-    add(pairKey, candidate)
-    add(scopeKey(pairKey, type), candidate)
+    add(pairKey, bucket, candidate)
+    add(scopeKey(pairKey, type), bucket, candidate)
   }
   return pools
 }
@@ -130,7 +143,7 @@ export function buildCatchUpPools(args: {
  * a single stray push would leak one scope's cards into all the others.
  */
 export function emptyPool(): ScopePool {
-  return { overdue: [] }
+  return { overdue: [], plannedDebt: [] }
 }
 
 /**

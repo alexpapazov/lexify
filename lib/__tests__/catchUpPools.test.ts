@@ -337,3 +337,62 @@ describe('no double assignment, end to end', () => {
     expect(allTypeKeys.sort()).toEqual(['a:forward', 'b:forward', 'c:reverse'])
   })
 })
+
+describe('plannedDebt bucket and supersession', () => {
+  const opts = { tracks: SMART, tz: TZ, today: TODAY }
+  const WINDOW = '2026-09-05'
+
+  /** Pushed by an earlier spread: reviewed long ago, dealt onto an in-window future day. */
+  const plannedRow = (id: string, day = '2026-08-30') => grad(id, {
+    lastReviewedAt: '2026-02-01T04:00:00.000Z',
+    scheduledIntervalDays: 30, intervalDays: 30, smartIntervalDays: 30,
+    smartDueAt: `${day}T04:00:00.000Z`, dueAt: `${day}T04:00:00.000Z`,
+  })
+
+  /** Sitting exactly where its own schedule put it (gap == interval). */
+  const normalRow = (id: string, day: string) => grad(id, {
+    lastReviewedAt: '2026-08-01T04:00:00.000Z',
+    scheduledIntervalDays: 29, intervalDays: 29, smartIntervalDays: 29,
+    smartDueAt: `${day}T04:00:00.000Z`, dueAt: `${day}T04:00:00.000Z`,
+  })
+
+  it('collects debt-carrying scheduled cards, today included, but never normally-scheduled ones', () => {
+    const pools = build([
+      plannedRow('p1', TODAY),            // the pile-on-today repair case
+      plannedRow('p2', '2026-08-30'),
+      normalRow('n1', '2026-08-30'),
+      normalRow('n2', TODAY),             // genuinely due today — real work, untouchable
+    ])
+    const pool = pools.get(PAIR)!
+    expect(pool.plannedDebt.map(c => c.key).sort()).toEqual(['p1:forward', 'p2:forward'])
+    expect(pool.overdue).toEqual([])
+  })
+
+  it('a fresh spread supersedes in-window planned cards but still refuses normal ones', () => {
+    // The repair path for the pile-on-today incident, and the supersession rule in one.
+    const moved = (st: CardState) =>
+      rescheduleOverdueTracks(st, '2026-08-27', { ...opts, replanThrough: WINDOW })
+    expect(moved(plannedRow('p1', TODAY))?.smartDueAt).toBe('2026-08-27T04:00:00.000Z')
+    expect(moved(plannedRow('p2'))?.smartDueAt).toBe('2026-08-27T04:00:00.000Z')
+    expect(moved(normalRow('n2', TODAY))).toBeNull()
+    expect(moved(normalRow('n1', '2026-08-30'))).toBeNull()
+  })
+
+  it('supersession still leaves each card exactly one due date', () => {
+    // Spread #1 deals overdue cards; spread #2 over the same scope re-deals them. The card follows
+    // the LATEST plan — one current date, never two assignments.
+    const before = grad('a', {
+      lastReviewedAt: '2026-02-01T04:00:00.000Z',
+      scheduledIntervalDays: 30, intervalDays: 30, smartIntervalDays: 30,
+      smartDueAt: '2026-08-01T04:00:00.000Z', dueAt: '2026-08-01T04:00:00.000Z',
+    })
+    const p1 = rescheduleOverdueTracks(before, '2026-08-30', opts)!
+    const afterFirst = { ...before, ...p1 }
+    const p2 = rescheduleOverdueTracks(afterFirst, '2026-08-25', { ...opts, replanThrough: WINDOW })!
+    const afterSecond = { ...afterFirst, ...p2 }
+    expect(afterSecond.smartDueAt).toBe('2026-08-25T04:00:00.000Z')
+    expect(afterSecond.dueAt).toBe('2026-08-25T04:00:00.000Z')
+    // And without replanThrough (no new plan), the first claim still cannot be re-dealt.
+    expect(rescheduleOverdueTracks(afterFirst, '2026-08-25', opts)).toBeNull()
+  })
+})

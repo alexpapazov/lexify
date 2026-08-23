@@ -32,7 +32,6 @@ import { buildEnabledTracksMap, buildRetentionMap, retentionFor } from '@/lib/se
 import { buildCatchUpPools, emptyPool, rescheduleOverdueTracks, candidateKey, catchUpTypeOf, candidateFor } from '@/lib/catchUpPools'
 import { assignBacklogDays, previewCatchUp, isLapsed, scopeKey, scopeDirection, addDays, daysBetween, type CatchUpType, type CatchUpCandidate } from '@/lib/catchUp'
 import { buildPaceSamples, pace, type PaceSamples, type PaceRow } from '@/lib/reviewPace'
-import { isDueByLocalDate } from '@/lib/dueStatus'
 import {
   isOwedByPlan, planProgress, conflictingScopes,
   type CatchUpPlanRecord, type CatchUpPlanRecords,
@@ -66,6 +65,8 @@ interface Entry {
   target:    string
   type:      CatchUpType
   candidate: CatchUpCandidate
+  /** From an earlier spread (scheduled but still carrying debt) rather than strictly overdue. */
+  planned:   boolean
   /** Measured seconds-per-review for this exact bucket, for the minutes estimate. */
   msPerReview: number
 }
@@ -200,13 +201,17 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         tz: timezone, today, now: Date.now(),
       })
 
-      // Already-scheduled arrivals per day, so the spread levels against them instead of piling on.
+      // Already-scheduled load per day, TODAY INCLUDED. Only strictly-overdue rows are excluded
+      // (they are the backlog being moved). Excluding today as well was the bug behind the
+      // pile-on-today incident: every spread saw today as an empty day and poured a full share onto
+      // it, and successive spreads compounded it — nothing counted what the previous one had placed.
       const inflow = new Map<string, number>()
       for (const st of states) {
         if (!st.graduated || st.dormant) continue
         for (const d of [st.smartDueAt ?? st.typedDueAt ?? st.dueAt, st.recallDueAt]) {
-          if (!d || isDueByLocalDate(d, timezone, today)) continue    // past-due is backlog, not load
+          if (!d) continue
           const day = new Date(d).toLocaleDateString('en-CA', { timeZone: timezone })
+          if (day < today) continue
           inflow.set(day, (inflow.get(day) ?? 0) + 1)
         }
       }
@@ -225,14 +230,17 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         const [source, target] = pairKey.split('|') as [string, string]
         for (const t of TYPES) {
           const pool = pools.get(scopeKey(pairKey, t)) ?? emptyPool()
-          if (pool.overdue.length === 0) continue
+          if (pool.overdue.length === 0 && pool.plannedDebt.length === 0) continue
           const msPerReview = pace(
             paceSamples, source, target,
             t === 'sgReverse' ? 'reverse' : 'forward',
             t === 'typing',
           )
           for (const candidate of pool.overdue) {
-            nextEntries.push({ pairKey, source, target, type: t, candidate, msPerReview })
+            nextEntries.push({ pairKey, source, target, type: t, candidate, planned: false, msPerReview })
+          }
+          for (const candidate of pool.plannedDebt) {
+            nextEntries.push({ pairKey, source, target, type: t, candidate, planned: true, msPerReview })
           }
         }
       }
@@ -319,7 +327,8 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     return m
   }, [entries, lang])
 
-  const overdue = selected.length
+  const overdue      = useMemo(() => selected.filter(e => !e.planned).length, [selected])
+  const plannedCount = selected.length - overdue
   const lapsed  = useMemo(() => selected.filter(e => isLapsed(e.candidate)).length, [selected])
   const msPerReview = useMemo(
     () => (selected.length === 0 ? 0 : selected.reduce((t, e) => t + e.msPerReview, 0) / selected.length),
@@ -460,8 +469,21 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     setMsg(null)
     try {
       const days = Math.max(1, daysBetween(ctx.today, targetDate))
+      // Planned (debt-carrying) cards in the selection are being SUPERSEDED by this spread, so their
+      // current placements must come out of the levelling load first — otherwise the very cards
+      // being re-dealt would count as immovable congestion on the days they currently occupy.
+      const levelLoad = new Map(ctx.inflow)
+      const plannedKeys = new Set(selected.filter(e => e.planned).map(e => e.candidate.key))
+      for (const st of ctx.states) {
+        if (!plannedKeys.has(candidateKey(st))) continue
+        for (const d of [st.smartDueAt ?? st.typedDueAt ?? st.dueAt, st.recallDueAt]) {
+          if (!d) continue
+          const day = new Date(d).toLocaleDateString('en-CA', { timeZone: timezone })
+          if (levelLoad.has(day)) levelLoad.set(day, Math.max(0, levelLoad.get(day)! - 1))
+        }
+      }
       const result = assignBacklogDays({
-        overdue: selected.map(e => e.candidate), today: ctx.today, days, existingLoad: ctx.inflow,
+        overdue: selected.map(e => e.candidate), today: ctx.today, days, existingLoad: levelLoad,
       })
 
       // ── Liveness re-check: ONE catch-up per card ──────────────────────────
@@ -485,18 +507,16 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
           tracks: ctx.tracks.get(ctx.deckPair.get(state.cardId) ?? ''),
           tz: timezone, today: ctx.today,
           forwardState: freshForwards.get(state.cardId),
+          // Supersede: a card an earlier spread placed inside this window follows the NEW plan. The
+          // debt gate inside rescheduleOverdueTracks keeps normally-scheduled cards untouchable.
+          replanThrough: targetDate,
         })
         if (patch) updates.push({ ...state, ...patch })
         else alreadyPlanned++
       }
 
       if (updates.length === 0) {
-        setMsg({
-          ok: false,
-          text: alreadyPlanned > 0
-            ? 'Nothing to move — every one of those cards is already on a catch-up schedule.'
-            : 'Nothing to move — those cards are already scheduled.',
-        })
+        setMsg({ ok: false, text: 'Nothing to move — those cards are already scheduled or were reviewed since this page loaded.' })
         await load()
         return
       }
@@ -506,7 +526,7 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
 
       const perDay = Math.round(updates.length / days)
       const skipped = alreadyPlanned > 0
-        ? ` ${alreadyPlanned.toLocaleString()} were left alone — already on a catch-up schedule.`
+        ? ` ${alreadyPlanned.toLocaleString()} were left where they are (reviewed since load, or scheduled beyond this date).`
         : ''
       setMsg({
         ok: true,
@@ -635,28 +655,32 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
               <div className="min-w-0">
                 <div className="text-sm text-ink truncate">{selectionLabel}</div>
                 <div className="text-xs text-ink-faint">
-                  {overdue === 0
+                  {selected.length === 0
                     ? 'nothing overdue in this selection'
-                    : `${overdue.toLocaleString()} overdue${lapsed > 0 ? ` · ${lapsed.toLocaleString()} deeply lapsed` : ''}`}
+                    : [
+                        overdue > 0 ? `${overdue.toLocaleString()} overdue` : null,
+                        plannedCount > 0 ? `${plannedCount.toLocaleString()} spread earlier (can be re-spread)` : null,
+                        lapsed > 0 ? `${lapsed.toLocaleString()} deeply lapsed` : null,
+                      ].filter(Boolean).join(' · ')}
                 </div>
               </div>
               <button
                 className="text-sm border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-                disabled={busy || overdue === 0}
+                disabled={busy || selected.length === 0}
                 onClick={() => { setPicking(v => !v); setCustom('') }}
-                title={currentPlan ? 'Adds newly overdue cards to a fresh plan for this scope' : undefined}
+                title={currentPlan ? 'Replaces this scope\'s plan: overdue cards plus its still-pending spread are re-dealt' : undefined}
               >
                 {picking ? 'Cancel' : currentPlan ? 'New plan' : 'Catch up'}
               </button>
             </div>
 
-            {picking && overdue > 0 && (
+            {picking && selected.length > 0 && (
               <div className="px-4 pb-4 pt-1 bg-surface-deep/60 space-y-2 border-t border-line/10">
                 <p className="text-xs text-ink-faint">Be caught up in…</p>
                 <div className="flex flex-wrap gap-2">
                   {PRESET_DAYS.map(d => {
                     const p = previewCatchUp({
-                      overdue, lapsed, inflowPerDay: 0, days: d, msPerAnswer: msPerReview,
+                      overdue: selected.length, lapsed, inflowPerDay: 0, days: d, msPerAnswer: msPerReview,
                     })
                     return (
                       <button

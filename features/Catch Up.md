@@ -51,11 +51,13 @@ or `done` field.
 
 `assignBacklogDays()` in `lib/catchUp.ts` (pure, tested). Three things decide the layout:
 
-**1. Existing load is levelled against, not ignored.** The days ahead already carry their own
-arrivals — 186, 199, 249, 208 … in the reported case. The backlog is poured into the *gaps*: each
-day's capacity is `level(existing + backlog) − existing[day]`, so a day already at 249 takes less
-than one at 114, and a day already busier than the levelled total takes none at all. Spreading flat
-on top would leave the chart as spiky as it started.
+**1. Existing load is levelled against, not ignored — TODAY INCLUDED.** The days ahead already carry
+their own arrivals; the backlog is poured into the *gaps*: each day's capacity is
+`level(existing + backlog) − existing[day]`, so a busy day takes less and a day already above the
+level takes none. Only strictly-overdue rows are excluded from the load (they ARE the backlog).
+Excluding today as well was the pile-on-today bug — see the error log. When a spread supersedes
+planned cards, their current placements are subtracted from the load first, or the cards being
+re-dealt would count as immovable congestion on the days they occupy.
 
 **2. Highest deferral damage lands earliest.** Deferral cost is **not monotonic** in how forgotten a
 card is. Since `loss = R · (1 − 0.9^(d/S))`:
@@ -139,9 +141,10 @@ skipped and reported ("N were left alone — already on a catch-up schedule"). S
 `planDedupeDeletions` re-checking liveness at apply time, and for the same reason: a stale snapshot
 must never authorise a write.
 
-Note what this does **not** prevent, deliberately: plans with different windows coexisting. Spread
-Greek over 30 days and everything else over 7, and each card keeps the date its own plan gave it.
-That is one plan per card, not one plan overall.
+"One per card" means the LATEST plan owns it. A fresh spread over an overlapping scope supersedes
+the earlier plan's in-window placements (`replanThrough` + the debt gate), and `conflictingScopes`
+replaces the record to match — so a card always has exactly one current date and one owning plan,
+never two. Plans on windows that don't overlap coexist untouched.
 
 ## 5. Progress, and Reassign
 
@@ -218,8 +221,11 @@ double-count. `conflictingScopes()` makes creating either one replace the other.
   `cardId:direction`). Collapsing them undercounts the backlog. Each due row lands in exactly ONE
   type pool (`catchUpTypeOf` picks one), so the panel's entry list can never spread a row twice —
   pinned by the "no double assignment, end to end" test.
-- **Pools hold OVERDUE rows only.** Cards due today are today's legitimate work; `buildCatchUpPools`
-  never collects them, so a spread structurally cannot push them into the future.
+- **Pools hold two buckets: `overdue` and `plannedDebt`.** Overdue is the backlog; plannedDebt is
+  rows scheduled today-or-later that still carry an earlier spread's debt (`isCarryingDebt`) — a
+  fresh spread supersedes them. A NORMALLY-scheduled card, including one genuinely due today, is in
+  neither bucket and can never be spread; the debt gate inside `rescheduleOverdueTracks` enforces
+  the same rule at write time, so it holds even if a caller builds candidates some other way.
 - **The preset buttons' "heavy relearning days" warning** fires when `previewCatchUp` predicts the
   ¼-relearning cap would be breached (same condition as `lapsedCapped`). Everything still fits the
   window; some days just carry more relearning than the cap intends.
@@ -242,3 +248,13 @@ double-count. `conflictingScopes()` makes creating either one replace the other.
   tab — it now re-reads like `spread` does. Also made an "All" spread record per-language plans
   (previously it recorded nothing, so the largest spreads were untracked), and restored the
   heavy-relearning warning the filters rewrite had dropped.
+- **2026-08-22 — the pile-on-today incident.** After several spreads the dashboard showed ~1,100 due
+  today while the panel said 113 overdue. Cause: the existing-load map excluded everything due
+  `<= today`, so every spread saw today as an EMPTY day and poured a full level-sized share onto it —
+  and successive spreads compounded it, because nothing counted what the previous one had placed on
+  today. Fix: only strictly-overdue rows are excluded from the load. Alongside it, pools gained the
+  `plannedDebt` bucket and spread gained `replanThrough`, so re-running Catch up on a scope re-levels
+  the mess an earlier spread made (that is the repair path for anyone hit by this). Also the reading
+  confusion that surfaced it: "N overdue" counts strictly-before-today only, while today's chart bar
+  includes the spread's own day-one share — the summary line now shows "spread earlier (can be
+  re-spread)" separately.
