@@ -1,4 +1,4 @@
-import { buildCatchUpPools, catchUpTypeOf, candidateKey } from '@/lib/catchUpPools'
+import { buildCatchUpPools, catchUpTypeOf, candidateKey, rescheduleOverdueTracks } from '@/lib/catchUpPools'
 import { initialCardState } from '@/engine/pipeline'
 import { scopeKey } from '@/lib/catchUp'
 import type { CardState } from '@/domain'
@@ -109,5 +109,77 @@ describe('catchUpTypeOf', () => {
   it('classifies by the ACTIVE lane, so a legacy due_at card lands where the session puts it', () => {
     const s = grad('a', { smartDueAt: null, typedDueAt: null, dueAt: '2026-08-01T00:00:00.000Z', intervalDays: 5 })
     expect(catchUpTypeOf(s, opts)).toBe('typing')
+  })
+})
+
+describe('rescheduleOverdueTracks', () => {
+  const NEW  = '2026-09-01'
+  const OLD  = '2026-08-01T04:00:00.000Z'
+  const opts = { tracks: SMART, tz: TZ, today: TODAY }
+
+  it('moves the smart production lane and keeps due_at in step', () => {
+    const patch = rescheduleOverdueTracks(grad('a', { smartDueAt: OLD, dueAt: OLD }), NEW, opts)!
+    expect(patch.smartDueAt).toBe('2026-09-01T04:00:00.000Z')
+    expect(patch.dueAt).toBe('2026-09-01T04:00:00.000Z')
+  })
+
+  it('keeps the time of day, so the turnover offset survives', () => {
+    const patch = rescheduleOverdueTracks(
+      grad('a', { smartDueAt: '2026-08-01T09:30:00.000Z' }), NEW, opts)!
+    expect(patch.smartDueAt).toBe('2026-09-01T09:30:00.000Z')
+  })
+
+  it('moves a legacy due_at card that has no lane column', () => {
+    const patch = rescheduleOverdueTracks(
+      grad('a', { smartDueAt: null, typedDueAt: null, dueAt: OLD }), NEW, opts)!
+    expect(patch.dueAt).toBe('2026-09-01T04:00:00.000Z')
+    expect(patch.smartDueAt).toBeUndefined()
+  })
+
+  it('leaves a FUTURE track alone while moving the overdue one', () => {
+    // Rewriting a future due date would change an interval the scheduler chose — out of scope for
+    // draining a backlog.
+    const future = '2026-09-30T04:00:00.000Z'
+    const patch = rescheduleOverdueTracks(grad('a', { smartDueAt: OLD, recallDueAt: future }), NEW, opts)!
+    expect(patch.smartDueAt).toBe('2026-09-01T04:00:00.000Z')
+    expect(patch.recallDueAt).toBeUndefined()
+  })
+
+  it('moves both tracks when both are overdue', () => {
+    const patch = rescheduleOverdueTracks(
+      grad('a', { smartDueAt: OLD, recallDueAt: '2026-07-20T04:00:00.000Z' }), NEW, opts)!
+    expect(patch.smartDueAt).toBe('2026-09-01T04:00:00.000Z')
+    expect(patch.recallDueAt).toBe('2026-09-01T04:00:00.000Z')
+  })
+
+  it('moves a reverse row on its own recall column', () => {
+    const fwd = grad('c')
+    const rev = grad('c', { reviewDirection: 'reverse', recallDueAt: OLD })
+    const patch = rescheduleOverdueTracks(rev, NEW, { ...opts, forwardState: fwd })!
+    expect(patch.recallDueAt).toBe('2026-09-01T04:00:00.000Z')
+  })
+
+  it('moves a legacy reverse row scheduled on due_at, filling in the recall column', () => {
+    const fwd = grad('c')
+    const rev = grad('c', { reviewDirection: 'reverse', recallDueAt: null, dueAt: OLD })
+    const patch = rescheduleOverdueTracks(rev, NEW, { ...opts, forwardState: fwd })!
+    expect(patch.recallDueAt).toBe('2026-09-01T04:00:00.000Z')
+    expect(patch.dueAt).toBe('2026-09-01T04:00:00.000Z')
+  })
+
+  it('returns null for a card due today rather than pushing it later', () => {
+    expect(rescheduleOverdueTracks(grad('a', { smartDueAt: `${TODAY}T04:00:00.000Z` }), NEW, opts)).toBeNull()
+  })
+
+  it('returns null for a dormant card and for a disabled track', () => {
+    expect(rescheduleOverdueTracks(grad('a', { dormant: true, smartDueAt: OLD }), NEW, opts)).toBeNull()
+    const noProd: EnabledTracks = { typed: false, smart: false, recall: false, reverse: true }
+    expect(rescheduleOverdueTracks(grad('a', { smartDueAt: OLD }), NEW, { ...opts, tracks: noProd })).toBeNull()
+  })
+
+  it('returns null for a reverse row whose forward side has not graduated', () => {
+    const fwd = grad('c', { graduated: false })
+    const rev = grad('c', { reviewDirection: 'reverse', recallDueAt: OLD })
+    expect(rescheduleOverdueTracks(rev, NEW, { ...opts, forwardState: fwd })).toBeNull()
   })
 })

@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import CatchUpPanel from '@/components/settings/CatchUpPanel'
 import { SupabaseDeckPreferencesRepository }  from '@/lib/data/deckPreferences'
 import { SupabaseCardStateRepository }        from '@/lib/data/cardStates'
 import { SupabaseLanguageSyncRuleRepository } from '@/lib/data/languageSyncRules'
@@ -862,6 +863,13 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
       )}
 
       {section === 'labels' && !offline && userId && <VocabularyLabelsPanel userId={userId} />}
+
+      {section === 'data' && !offline && userId && (
+        <SettingsSection title="Catch up on a backlog"
+          description="Overdue cards all pile onto today. Pick a date to be level again by and they are dealt out across the days between — the ones you'd lose most by putting off go first, and deeply lapsed cards are spread evenly so no day becomes a wall of relearning. Only past-due dates move, so nothing about the memory model changes.">
+          <CatchUpPanel userId={userId} timezone={timezone || deviceTimeZone()} turnoverHour={turnoverHour} />
+        </SettingsSection>
+      )}
 
       {section === 'data' && !offline && userId && (
         <SettingsSection title="Redistribute cards"

@@ -198,92 +198,120 @@ export function elapsedDaysFor(args: {
   return Math.max(0, (args.intervalDays ?? 0) + args.daysOverdue)
 }
 
-// ─── Building the day's queue ─────────────────────────────────────────────────
+// ─── Spreading a backlog across the window ────────────────────────────────────
 
-export interface CatchUpSession extends QuotaBreakdown {
-  /** The cards to serve, already ordered and interleaved. */
-  queue: RankedCandidate[]
-  /** How many of the queue are deeply lapsed (relearning work). */
-  lapsedServed: number
-  /** Deeply lapsed cards still in the backlog after this session. */
-  lapsedRemaining: number
+export interface SpreadResult {
+  /** Candidate key → the YYYY-MM-DD it should now be due on. */
+  assignments: Map<string, string>
+  /** The days used, earliest first. */
+  days: string[]
+  /** How many backlog cards landed on each day. */
+  perDay: Map<string, number>
+  /** How many of the assignments are deeply lapsed cards. */
+  lapsedCount: number
   /**
-   * The comfort cap bound: the lapsed pool cannot drain by the target date without sessions becoming
-   * more than `MAX_LAPSED_SHARE` relearning. The cap wins; surface the later finish date instead of
-   * silently breaking the promise.
+   * The comfort cap bound on at least one day: the lapsed pool is too large to spread at
+   * `MAX_LAPSED_SHARE` without overflowing, so some days carry more relearning than the cap intends.
    */
   lapsedCapped: boolean
 }
 
-/** Spreads `sprinkle` evenly through `main` rather than clumping it at either end. */
-export function interleaveEvenly<T>(main: T[], sprinkle: T[]): T[] {
-  if (sprinkle.length === 0) return [...main]
-  if (main.length === 0) return [...sprinkle]
-  const total = main.length + sprinkle.length
-  const slots = new Set<number>()
-  for (let i = 0; i < sprinkle.length; i++) {
-    slots.add(Math.min(total - 1, Math.floor(((i + 0.5) * total) / sprinkle.length)))
-  }
-  const out: T[] = []
-  let mi = 0
-  let si = 0
-  for (let p = 0; p < total; p++) {
-    if (slots.has(p) && si < sprinkle.length) out.push(sprinkle[si++]!)
-    else if (mi < main.length) out.push(main[mi++]!)
-    else if (si < sprinkle.length) out.push(sprinkle[si++]!)
-  }
-  return out
-}
-
 /**
- * One day of a catch-up plan: how many, which ones, in what order.
+ * Assigns every overdue card a new due date inside the window.
  *
- * `dueToday` is served in full. The backlog slice is filled from two strata — deeply lapsed cards at
- * their own steady drain rate (capped), the rest by deferral damage — and the lapsed ones are then
- * spread through the result so the relearning is paced rather than piled up.
+ * Three things decide the layout:
+ *
+ *  1. **Existing load is levelled against.** The days ahead already carry their own arrivals (the
+ *     "Coming up" bars), so the backlog is poured into the gaps rather than spread flat on top —
+ *     otherwise a day that already had 249 due gets the same share as one that had 114.
+ *  2. **Highest deferral damage lands earliest.** Cards that lose the most recall by waiting are
+ *     assigned to the nearest days; rock-solid and long-gone cards drift later, since neither loses
+ *     much by waiting (see the header note on why this is not "most overdue first").
+ *  3. **Deeply lapsed cards are spread evenly across ALL days**, not sorted into a block. Relearning
+ *     is the slow, punishing work; concentrating it would make some days far harder than their card
+ *     count suggests.
  */
-export function planCatchUpSession(args: {
-  dueToday:   CatchUpCandidate[]
-  overdue:    CatchUpCandidate[]
-  targetDate: string
-  today:      string
-}): CatchUpSession {
-  const breakdown = catchUpQuota({
-    overdue:  args.overdue.length,
-    dueToday: args.dueToday.length,
-    targetDate: args.targetDate,
-    today:      args.today,
-  })
-  const { fromBacklog, daysRemaining, quota } = breakdown
+export function assignBacklogDays(args: {
+  overdue:  CatchUpCandidate[]
+  today:    string
+  /** Number of days to spread across, starting today. */
+  days:     number
+  /** Cards already scheduled on each YYYY-MM-DD in the window, so the fill can level against them. */
+  existingLoad?: Map<string, number>
+}): SpreadResult {
+  const nDays = Math.max(1, Math.floor(args.days))
+  const days  = Array.from({ length: nDays }, (_, i) => addDays(args.today, i))
+  const perDay = new Map(days.map(d => [d, 0]))
+  const assignments = new Map<string, string>()
 
-  const ranked  = args.overdue.map(c => rank(c, daysRemaining))
+  if (args.overdue.length === 0) {
+    return { assignments, days, perDay, lapsedCount: 0, lapsedCapped: false }
+  }
+
+  const ranked  = args.overdue.map(c => rank(c, nDays))
   const lapsed  = ranked.filter(c => c.retrievability <  LAPSED_R)
   const salvage = ranked.filter(c => c.retrievability >= LAPSED_R)
-
-  // The lapsed pool drains on the same derived formula, one level down — which is what keeps the mix
-  // steady day to day instead of leaving a wall of relearning for the final days.
-  const lapsedIdeal = Math.ceil(lapsed.length / daysRemaining)
-  const lapsedCap   = Math.floor(quota * MAX_LAPSED_SHARE)
-  const lapsedTake  = Math.min(lapsedIdeal, lapsedCap, lapsed.length, fromBacklog)
-
-  // Among lost causes, the least-far-gone first; among the rest, whoever loses most by waiting.
-  const lapsedPicked = [...lapsed]
-    .sort((a, b) => b.retrievability - a.retrievability)
-    .slice(0, lapsedTake)
-  const salvagePicked = [...salvage]
-    .sort((a, b) => b.deferralLoss - a.deferralLoss)
-    .slice(0, Math.max(0, fromBacklog - lapsedPicked.length))
-
-  const main = [...args.dueToday.map(c => rank(c, daysRemaining)), ...salvagePicked]
     .sort((a, b) => b.deferralLoss - a.deferralLoss)
 
-  return {
-    ...breakdown,
-    queue: interleaveEvenly(main, lapsedPicked),
-    lapsedServed:    lapsedPicked.length,
-    lapsedRemaining: lapsed.length - lapsedPicked.length,
-    lapsedCapped:    lapsed.length > 0 && lapsedIdeal > lapsedCap,
+  // ── Capacity per day ───────────────────────────────────────────────────────
+  // Level the TOTAL (existing arrivals + backlog) across the window, then each day's capacity is
+  // whatever that leaves after its own arrivals. A day already busier than the level target takes no
+  // backlog at all.
+  const existing = args.existingLoad ?? new Map<string, number>()
+  const existingTotal = days.reduce((t, d) => t + (existing.get(d) ?? 0), 0)
+  const level = (existingTotal + ranked.length) / nDays
+  const capacity = new Map(days.map(d => [d, Math.max(0, level - (existing.get(d) ?? 0))]))
+
+  // Rounding and already-overloaded days can leave the capacities short of what must be placed;
+  // top every day up evenly so nothing is left unassigned.
+  let slack = [...capacity.values()].reduce((t, c) => t + c, 0)
+  if (slack < ranked.length) {
+    const topUp = (ranked.length - slack) / nDays
+    for (const d of days) capacity.set(d, (capacity.get(d) ?? 0) + topUp)
   }
+
+  // ── Lapsed first, spread evenly across every day ───────────────────────────
+  const lapsedPerDay = lapsed.length / nDays
+  let lapsedCapped = false
+  let li = 0
+  const lapsedOnDay = new Map<string, number>()
+  for (let i = 0; i < nDays && li < lapsed.length; i++) {
+    const day = days[i]!
+    // Fractional accumulation, so a pool smaller than the window still lands one per day rather than
+    // rounding to zero and dumping the remainder at the end.
+    const want = Math.round(lapsedPerDay * (i + 1)) - li
+    const cap  = Math.max(1, Math.floor((capacity.get(day) ?? 0) * MAX_LAPSED_SHARE))
+    const take = Math.min(want, lapsed.length - li)
+    if (take > cap) lapsedCapped = true
+    for (let k = 0; k < take; k++) assignments.set(lapsed[li++]!.key, day)
+    lapsedOnDay.set(day, take)
+    perDay.set(day, (perDay.get(day) ?? 0) + take)
+  }
+  // Anything left over (window shorter than the rounding assumed) goes on the last day.
+  while (li < lapsed.length) {
+    const day = days[nDays - 1]!
+    assignments.set(lapsed[li++]!.key, day)
+    perDay.set(day, (perDay.get(day) ?? 0) + 1)
+  }
+
+  // ── Salvage, highest damage into the earliest day with room ────────────────
+  let si = 0
+  for (const day of days) {
+    if (si >= salvage.length) break
+    const room = Math.max(0, Math.round((capacity.get(day) ?? 0) - (lapsedOnDay.get(day) ?? 0)))
+    for (let k = 0; k < room && si < salvage.length; k++) {
+      assignments.set(salvage[si++]!.key, day)
+      perDay.set(day, (perDay.get(day) ?? 0) + 1)
+    }
+  }
+  // Rounding can leave a tail; distribute it over the lightest days so nothing bunches up.
+  while (si < salvage.length) {
+    const lightest = days.reduce((a, b) => ((perDay.get(a) ?? 0) <= (perDay.get(b) ?? 0) ? a : b))
+    assignments.set(salvage[si++]!.key, lightest)
+    perDay.set(lightest, (perDay.get(lightest) ?? 0) + 1)
+  }
+
+  return { assignments, days, perDay, lapsedCount: lapsed.length, lapsedCapped }
 }
 
 // ─── Preview, for the date picker ─────────────────────────────────────────────

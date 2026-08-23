@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { climbInProgress } from '@/lib/climbProgress'
 import { CardBulkPanel } from '@/components/CardBulkPanel'
@@ -29,10 +29,6 @@ import { langName } from '@/lib/languages'
 import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { fsrsScheduleMix, seedStability, seedDifficulty, measureRatingMix, DEFAULT_RATING_MIX, type RatingMix, type WeightedStep } from '@/lib/forecastFsrs'
-import CatchUpPanel, { type CatchUpScope } from '@/components/study/CatchUpPanel'
-import { buildCatchUpPools, emptyPool, type ScopePool } from '@/lib/catchUpPools'
-import { scopeKey, type CatchUpPlans, type CatchUpType } from '@/lib/catchUp'
-import { buildPaceSamples, paceForMix, pace, type PaceSamples } from '@/lib/reviewPace'
 
 type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
 
@@ -332,8 +328,6 @@ export default function StudyPage() {
   const [dailyCeiling,      setDailyCeiling]      = useState<number | null>(null)
   const [schedules,         setSchedules]         = useState<Map<string, GoalSchedule>>(new Map())
   const [scheduleDone,      setScheduleDone]      = useState<Map<string, number>>(new Map())
-  const [catchUpPlans, setCatchUpPlans] = useState<CatchUpPlans>({})
-  const [paceSamples,  setPaceSamples]  = useState<PaceSamples>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
@@ -361,7 +355,7 @@ export default function StudyPage() {
     // single pixel rendered, on top of the paged reads. Only the deck→card grouping and the
     // full-debt scan genuinely need an earlier result; those are still awaited in order below.
     const decksP   = deckRepo.list(uid)
-    const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals, daily_word_ceiling, catchup_plans').eq('user_id', uid).single())
+    const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals, daily_word_ceiling').eq('user_id', uid).single())
     const paramsP  = new SupabaseUserSchedulerParamsRepository().listForUser(uid)
     // A missing goal_schedules table (migration 114 not yet applied) must never blank the dashboard.
     const schedulesP = new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[])
@@ -379,18 +373,6 @@ export default function StudyPage() {
       // 72h, not 48: with a 4am turnover, the *logical* yesterday can begin nearly 48h before
       // "now" late in the day, leaving no margin. The extra day is cheap and removes the edge.
       .gte('graduated_at', new Date(Date.now() - 72 * 3600 * 1000).toISOString())
-    // Measured review pace for the catch-up picker's "~N min/day". Deliberately a CAPPED single
-    // request, not a 30-day window: 30 days of review_events is ~14k rows over several serial pages,
-    // which is exactly the dashboard regression the perf pass removed. Recency weighting (7-day
-    // half-life) means the newest reviews dominate anyway, so the tail would buy nothing.
-    const paceRowsP = supabase
-      .from('review_events')
-      .select('response_ms, reviewed_at, source_language, target_language, review_direction, was_typed')
-      .eq('user_id', uid)
-      .not('response_ms', 'is', null)
-      .order('reviewed_at', { ascending: false })
-      .limit(1000)
-      .then(r => r.data ?? [], () => [])
 
     let profileRes = await profileP
     // Resilience: if a carryover column isn't migrated yet, the whole select errors → data null →
@@ -410,10 +392,6 @@ export default function StudyPage() {
     setFullDebtSince(fullDebtSinceVal)
     const fullDebtResetsVal = (profileRes.data?.goal_full_debt_resets as Record<string, string> | null) ?? {}
     setFullDebtResets(fullDebtResetsVal)
-    // Absent until migration 121 runs (or when the core-columns fallback above kicked in) — an empty
-    // map just means no catch-up plans, which is the correct default either way.
-    setCatchUpPlans((profileRes.data?.catchup_plans as CatchUpPlans | null) ?? {})
-    void paceRowsP.then(rows => setPaceSamples(buildPaceSamples(rows, Date.now())))
     const skipShort = (profileRes.data?.full_debt_skip_shortfall_days as string[] | null) ?? []
     const skipSurp  = (profileRes.data?.full_debt_skip_surplus_days   as string[] | null) ?? []
     setSkipShortfallDays(skipShort)
@@ -883,106 +861,6 @@ export default function StudyPage() {
     })
   }
 
-  // ── Catch-up scopes ─────────────────────────────────────────────────────────
-  // Built from the SAME due definition the counts use (lib/dueStatus.ts), never from the forecast
-  // simulation — a quota that disagrees with the "Study all due" button reads as a bug.
-  const catchUpScopes: CatchUpScope[] = useMemo(() => {
-    if (!todayStr || deckStats.length === 0) return []
-    const forwardByCard = new Map<string, CardState>()
-    for (const { states } of deckStats) {
-      for (const st of states) if (st.reviewDirection !== 'reverse') forwardByCard.set(st.cardId, st)
-    }
-    const rows = deckStats.flatMap(({ deck, states }) =>
-      states.map(state => ({ pairKey: `${deck.sourceLanguage}|${deck.targetLanguage}`, state })))
-
-    // One nominal retention per pair for seeding stability on rows that never stored one. Production
-    // is the bulk of any backlog, so its target is the right representative.
-    const retentionByPair = new Map(
-      [...forecastCfg].map(([k, cfg]) => [k, cfg.smartP || cfg.typedP || 0.9] as const))
-
-    const pools = buildCatchUpPools({
-      rows, forwardByCard,
-      tracksByPair: enabledTracks, thresholdByPair: smartThresholds, retentionByPair,
-      tz, today: todayStr, now: Date.now(),
-    })
-
-    // The mix of buckets in a scope's backlog decides its representative pace — a mostly-typed
-    // language is genuinely slower per card than a mostly-recognition one.
-    const mixOf = (pairKey: string, type: CatchUpType | null) => {
-      const counts: Record<CatchUpType, number> = { typing: 0, sgForward: 0, sgReverse: 0 }
-      for (const t of ['typing', 'sgForward', 'sgReverse'] as CatchUpType[]) {
-        if (type && t !== type) continue
-        const pool = pools.get(scopeKey(pairKey, t))
-        counts[t] = (pool?.overdue.length ?? 0) + (pool?.dueToday.length ?? 0)
-      }
-      return [
-        { dir: 'forward' as const, typed: true,  count: counts.typing },
-        { dir: 'forward' as const, typed: false, count: counts.sgForward },
-        { dir: 'reverse' as const, typed: false, count: counts.sgReverse },
-      ]
-    }
-
-    const out: CatchUpScope[] = []
-    for (const { key, src, tgt } of availableLangPairs) {
-      for (const type of [null, 'typing', 'sgForward', 'sgReverse'] as (CatchUpType | null)[]) {
-        const pool: ScopePool = pools.get(scopeKey(key, type)) ?? emptyPool()
-        if (pool.overdue.length === 0 && pool.dueToday.length === 0 && !catchUpPlans[scopeKey(key, type)]) continue
-        out.push({
-          pairKey: key, source: src, target: tgt, type, pool,
-          msPerReview: paceForMix(paceSamples, src, tgt, mixOf(key, type)),
-        })
-      }
-    }
-    return out
-  }, [deckStats, availableLangPairs, enabledTracks, smartThresholds, forecastCfg, paceSamples, catchUpPlans, tz, todayStr])
-
-  /**
-   * Estimated daily arrivals for a scope, read off the forecast's next fortnight — TODAY is excluded
-   * on purpose: today's bar IS the backlog, so including it would inflate every estimate enormously.
-   */
-  const inflowFor = useCallback((pairKey: string, type: CatchUpType | null): number => {
-    const upcoming = forecast.filter(d => d.date > todayStr).slice(0, 14)
-    if (upcoming.length === 0) return 0
-    const perDayAllScopes = upcoming.reduce((t, d) => t + d.count, 0) / upcoming.length
-    // The forecast isn't broken down by scope, so apportion it by this scope's share of what is due
-    // now — a reasonable stand-in, and it only feeds the picker's estimate, never the live quota.
-    const totalDueAll = catchUpScopes
-      .filter(sc => sc.type === null)
-      .reduce((t, sc) => t + sc.pool.overdue.length + sc.pool.dueToday.length, 0)
-    const scope = catchUpScopes.find(sc => sc.pairKey === pairKey && sc.type === type)
-    if (!scope || totalDueAll === 0) return Math.round(perDayAllScopes)
-    const share = (scope.pool.overdue.length + scope.pool.dueToday.length) / totalDueAll
-    return Math.round(perDayAllScopes * share)
-  }, [forecast, todayStr, catchUpScopes])
-
-  /**
-   * A plan retires itself once its scope's backlog is gone. It has done its job at that point, and
-   * leaving it would keep a permanent row on the panel for a language that is caught up. Guarded on
-   * a loaded dashboard so an empty first render can't wipe every plan.
-   */
-  useEffect(() => {
-    if (loading || !userId || !todayStr || catchUpScopes.length === 0) return
-    const finished = Object.keys(catchUpPlans).filter(key => {
-      const scope = catchUpScopes.find(sc => scopeKey(sc.pairKey, sc.type) === key)
-      return scope != null && scope.pool.overdue.length === 0
-    })
-    if (finished.length === 0) return
-    const next: CatchUpPlans = { ...catchUpPlans }
-    for (const key of finished) delete next[key]
-    setCatchUpPlans(next)
-    void supabase.from('profiles').update({ catchup_plans: next }).eq('user_id', userId).then(() => {}, () => {})
-  }, [loading, userId, todayStr, catchUpScopes, catchUpPlans])
-
-  /** Only the target date is ever written. Passing null clears the plan. */
-  const saveCatchUpPlan = useCallback(async (key: string, targetDate: string | null) => {
-    if (!userId) return
-    const next: CatchUpPlans = { ...catchUpPlans }
-    if (targetDate) next[key] = { targetDate }
-    else delete next[key]
-    setCatchUpPlans(next)
-    await supabase.from('profiles').update({ catchup_plans: next }).eq('user_id', userId).then(() => {}, () => {})
-  }, [userId, catchUpPlans])
-
   // Per-pair typing / self-graded due counts, for nesting languages under each card type.
   // Self-graded is split by direction: sgForward = native→target (forward production shown self-graded
   // + recall), sgReverse = target→native (reverse recall).
@@ -1347,15 +1225,6 @@ export default function StudyPage() {
               )}
             </div>
           )}
-
-          {/* ── Catch up ─────────────────────────────────────────────────── */}
-          <CatchUpPanel
-            scopes={catchUpScopes}
-            plans={catchUpPlans}
-            today={todayStr}
-            inflowFor={inflowFor}
-            onSave={saveCatchUpPlan}
-          />
 
           {/* ── Upcoming reviews ─────────────────────────────────────────── */}
           <div className="space-y-3" data-tour="coming-up">

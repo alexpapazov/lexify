@@ -2,7 +2,7 @@ import {
   LAPSED_R, MAX_LAPSED_SHARE,
   scopeKey, resolvePlan, daysBetween, addDays,
   catchUpQuota, candidateMetrics, elapsedDaysFor,
-  interleaveEvenly, planCatchUpSession, previewCatchUp, isLapsed,
+  assignBacklogDays, previewCatchUp, isLapsed,
   type CatchUpCandidate, type CatchUpPlans,
 } from '@/lib/catchUp'
 
@@ -159,118 +159,99 @@ describe('elapsedDaysFor', () => {
   })
 })
 
-// ─── Interleaving ─────────────────────────────────────────────────────────────
+// ─── Spreading the backlog ────────────────────────────────────────────────────
 
-describe('interleaveEvenly', () => {
-  it('spreads the sprinkle out instead of clumping it at either end', () => {
-    const main     = Array.from({ length: 12 }, (_, i) => `m${i}`)
-    const sprinkle = ['s0', 's1', 's2']
-    const out = interleaveEvenly(main, sprinkle)
+describe('assignBacklogDays', () => {
+  it('gives every overdue card a day inside the window', () => {
+    const overdue = band('o', 140, 40, 30)
+    const r = assignBacklogDays({ overdue, today: TODAY, days: 14 })
 
-    expect(out).toHaveLength(15)
-    expect(new Set(out).size).toBe(15)
-    const at = sprinkle.map(s => out.indexOf(s))
-    // Neither the first nor the last slot, and no two adjacent.
-    expect(Math.min(...at)).toBeGreaterThan(0)
-    expect(Math.max(...at)).toBeLessThan(out.length - 1)
-    for (let i = 1; i < at.length; i++) expect(at[i]! - at[i - 1]!).toBeGreaterThan(1)
+    expect(r.assignments.size).toBe(140)
+    expect(r.days).toHaveLength(14)
+    expect(r.days[0]).toBe(TODAY)                       // starts today — the backlog is due NOW
+    for (const day of r.assignments.values()) expect(r.days).toContain(day)
+    expect([...r.perDay.values()].reduce((a, b) => a + b, 0)).toBe(140)
   })
 
-  it('handles either side being empty', () => {
-    expect(interleaveEvenly(['a', 'b'], [])).toEqual(['a', 'b'])
-    expect(interleaveEvenly([], ['x'])).toEqual(['x'])
+  it('spreads evenly when nothing is already scheduled', () => {
+    const r = assignBacklogDays({ overdue: band('o', 140, 40, 30), today: TODAY, days: 14 })
+    const counts = [...r.perDay.values()]
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1)
   })
 
-  it('loses nothing even when the sprinkle outnumbers the main list', () => {
-    const out = interleaveEvenly(['m0'], ['s0', 's1', 's2', 's3'])
-    expect(out).toHaveLength(5)
-    expect(new Set(out).size).toBe(5)
-  })
-})
+  it('pours the backlog into the gaps rather than flat on top of existing load', () => {
+    // A day already carrying 200 arrivals must take less backlog than an empty one, or the "Coming
+    // up" chart stays as spiky as before.
+    const existingLoad = new Map([[TODAY, 0], [addDays(TODAY, 1), 200], [addDays(TODAY, 2), 0]])
+    const r = assignBacklogDays({ overdue: band('o', 90, 40, 30), today: TODAY, days: 3, existingLoad })
 
-// ─── Building a day ───────────────────────────────────────────────────────────
-
-describe('planCatchUpSession', () => {
-  const TARGET = '2026-09-05'   // 14 days out
-
-  it('serves every card due today plus one slice of the backlog', () => {
-    const dueToday = band('t', 20, 3, 30)
-    const overdue  = band('o', 140, 40, 30)
-    const s = planCatchUpSession({ dueToday, overdue, targetDate: TARGET, today: TODAY })
-
-    expect(s.fromToday).toBe(20)
-    expect(s.fromBacklog).toBe(10)          // ceil(140 / 14)
-    expect(s.queue).toHaveLength(30)
-    // Nothing due today may be dropped — skipping it grows the backlog.
-    for (const c of dueToday) expect(s.queue.map(q => q.key)).toContain(c.key)
+    expect(r.perDay.get(addDays(TODAY, 1))!).toBeLessThan(r.perDay.get(TODAY)!)
+    expect(r.assignments.size).toBe(90)
   })
 
-  it('caps relearning at a quarter of the session however deep the lapsed pool is', () => {
-    // 700 long-gone cards over 14 days wants 50/day, but the quota is 20 + 50 = 70, so the cap is 17.
-    const dueToday = band('t', 20, 3, 30)
-    const overdue  = band('gone', 700, 400, 15)
-    const s = planCatchUpSession({ dueToday, overdue, targetDate: TARGET, today: TODAY })
-
-    expect(s.lapsedServed).toBeLessThanOrEqual(Math.floor(s.quota * MAX_LAPSED_SHARE))
-    expect(s.lapsedCapped).toBe(true)
-    expect(s.lapsedRemaining).toBe(700 - s.lapsedServed)
+  it('assigns nothing to a day that is already busier than the levelled total', () => {
+    const existingLoad = new Map([[TODAY, 500], [addDays(TODAY, 1), 0]])
+    const r = assignBacklogDays({ overdue: band('o', 20, 40, 30), today: TODAY, days: 2, existingLoad })
+    expect(r.perDay.get(TODAY)).toBe(0)
+    expect(r.perDay.get(addDays(TODAY, 1))).toBe(20)
   })
 
-  it('does not flag the cap when the lapsed pool drains comfortably', () => {
-    const dueToday = band('t', 40, 3, 30)
-    const overdue  = [...band('slip', 130, 12, 15), ...band('gone', 14, 400, 15)]
-    const s = planCatchUpSession({ dueToday, overdue, targetDate: TARGET, today: TODAY })
+  it('puts the cards that lose most by waiting on the earliest days', () => {
+    const overdue = [
+      ...band('slip', 14, 12, 15),    // fragile, still mostly remembered → highest deferral damage
+      ...band('solid', 14, 5, 300),   // rock solid → loses almost nothing by waiting
+    ]
+    const r = assignBacklogDays({ overdue, today: TODAY, days: 14 })
+    const dayOf = (k: string) => r.days.indexOf(r.assignments.get(k)!)
+    const avg = (p: string) => [...r.assignments.keys()].filter(k => k.startsWith(p))
+      .reduce((t, k) => t + dayOf(k), 0) / 14
 
-    expect(s.lapsedCapped).toBe(false)
-    expect(s.lapsedServed).toBe(1)          // ceil(14 / 14)
+    expect(avg('slip')).toBeLessThan(avg('solid'))
   })
 
-  it('fills the backlog slice with about-to-slip cards, not the most forgotten ones', () => {
-    const dueToday = band('t', 10, 3, 30)
-    const overdue  = [...band('gone', 100, 400, 15), ...band('slip', 100, 12, 15)]
-    const s = planCatchUpSession({ dueToday, overdue, targetDate: TARGET, today: TODAY })
+  it('spreads deeply lapsed cards across every day instead of blocking them together', () => {
+    const overdue = [...band('slip', 140, 12, 15), ...band('gone', 28, 400, 15)]
+    const r = assignBacklogDays({ overdue, today: TODAY, days: 14 })
 
-    const served = new Set(s.queue.map(c => c.key))
-    const slipServed = [...served].filter(k => k.startsWith('slip')).length
-    const goneServed = [...served].filter(k => k.startsWith('gone')).length
-    expect(slipServed).toBeGreaterThan(goneServed)
-    expect(goneServed).toBe(s.lapsedServed)
+    const lapsedDays = new Set(
+      [...r.assignments.entries()].filter(([k]) => k.startsWith('gone')).map(([, d]) => d))
+    expect(r.lapsedCount).toBe(28)
+    // Present on most days rather than piled onto two or three.
+    expect(lapsedDays.size).toBeGreaterThanOrEqual(10)
   })
 
-  it('sprinkles the relearning through the session rather than front-loading it', () => {
-    const dueToday = band('t', 40, 3, 30)
-    const overdue  = [...band('slip', 100, 12, 15), ...band('gone', 60, 400, 15)]
-    const s = planCatchUpSession({ dueToday, overdue, targetDate: TARGET, today: TODAY })
-
-    expect(s.lapsedServed).toBeGreaterThan(1)
-    const at = s.queue
-      .map((c, i) => ({ c, i }))
-      .filter(({ c }) => c.retrievability < LAPSED_R)
-      .map(({ i }) => i)
-    // Not all bunched into the opening stretch.
-    expect(Math.max(...at)).toBeGreaterThan(s.queue.length / 2)
-    for (let i = 1; i < at.length; i++) expect(at[i]! - at[i - 1]!).toBeGreaterThan(1)
+  it('still places a lapsed pool smaller than the window, one day at a time', () => {
+    // Fractional accumulation matters here: rounding 3/14 to zero per day would dump all three on
+    // the final day.
+    const r = assignBacklogDays({
+      overdue: [...band('slip', 70, 12, 15), ...band('gone', 3, 400, 15)], today: TODAY, days: 14,
+    })
+    const lapsedDays = [...r.assignments.entries()].filter(([k]) => k.startsWith('gone')).map(([, d]) => d)
+    expect(lapsedDays).toHaveLength(3)
+    expect(new Set(lapsedDays).size).toBe(3)
   })
 
-  it('serves the whole remaining backlog on the final day', () => {
-    const dueToday = band('t', 5, 3, 30)
-    const overdue  = band('o', 22, 40, 30)
-    const s = planCatchUpSession({ dueToday, overdue, targetDate: TODAY, today: TODAY })
-    expect(s.queue).toHaveLength(27)
+  it('flags when the lapsed pool is too big to spread comfortably', () => {
+    const r = assignBacklogDays({ overdue: band('gone', 140, 400, 15), today: TODAY, days: 14 })
+    expect(r.lapsedCapped).toBe(true)
+    expect(r.assignments.size).toBe(140)   // flagged, never dropped
+  })
+
+  it('puts everything on today when the window is a single day', () => {
+    const r = assignBacklogDays({ overdue: band('o', 25, 40, 30), today: TODAY, days: 1 })
+    expect(r.perDay.get(TODAY)).toBe(25)
   })
 
   it('handles an empty backlog', () => {
-    const s = planCatchUpSession({ dueToday: band('t', 6, 3, 30), overdue: [], targetDate: TARGET, today: TODAY })
-    expect(s.queue).toHaveLength(6)
-    expect(s.lapsedServed).toBe(0)
-    expect(s.lapsedCapped).toBe(false)
+    const r = assignBacklogDays({ overdue: [], today: TODAY, days: 14 })
+    expect(r.assignments.size).toBe(0)
+    expect(r.lapsedCapped).toBe(false)
   })
 
-  it('never returns a card twice', () => {
-    const dueToday = band('t', 30, 3, 30)
-    const overdue  = [...band('slip', 200, 12, 15), ...band('gone', 90, 400, 15)]
-    const s = planCatchUpSession({ dueToday, overdue, targetDate: TARGET, today: TODAY })
-    expect(new Set(s.queue.map(c => c.key)).size).toBe(s.queue.length)
+  it('never assigns a card twice', () => {
+    const overdue = [...band('slip', 200, 12, 15), ...band('gone', 90, 400, 15)]
+    const r = assignBacklogDays({ overdue, today: TODAY, days: 21 })
+    expect(r.assignments.size).toBe(290)
   })
 })
 

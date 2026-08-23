@@ -1,153 +1,122 @@
 # Catch Up
 
-**Status: built 2026-08-22. Migration `121_catchup_plans.sql` — apply before deploying** (the study
-dashboard and the all-session page both name `catchup_plans` in their `profiles` SELECT; both go
-through `loadProfileRow` with a core-columns fallback, so an unapplied migration degrades to "no
-plans" rather than blanking the page — but don't rely on that).
+**Status: rebuilt 2026-08-22. No migration.** Lives in **Settings → Data, above Redistribute**
+(`components/settings/CatchUpPanel.tsx`).
 
-Pick a date you want to be level again by; the app works out how many reviews a day that costs, which
-cards to serve, and in what order. Scoped per language, or per card type within a language, so you can
-be aggressive about one and relaxed about another.
+Overdue cards all pile onto today. Pick a language — or one card type within it — and a date to be
+level again by, and the backlog is dealt out across the days between.
 
 ---
 
-## 1. The one rule: only the target date is stored
+## 1. It moves real due dates, and that is the whole point
 
-`profiles.catchup_plans` is a JSONB map holding nothing but dates:
+The first build of this (commit `ab19733`) stored a target date and used it to **cap the session
+queue**, leaving due dates untouched. That was wrong in practice: the plan was invisible. The
+"Coming up" chart still showed 1,699 on today, the deck counts still said 1,693, and the app still
+read as though you were drowning. The user's report was exactly right — *"I planned it but it did not
+change when everything is due."*
 
-```json
-{ "bg|en": { "targetDate": "2026-09-05" },
-  "es|en:typing": { "targetDate": "2026-08-29" } }
-```
+Rewriting the dates makes every surface honest for free, instead of teaching each one about plans.
 
-Everything the feature displays or enforces — today's quota, how far behind you are, progress, which
-cards — is **derived from the live backlog and recomputed each day**. This is the same rule as
-full-debt goal carryover (`lib/goalCarryover.ts`) and it exists for the same reason: a stored "cards
-remaining" counter goes stale the moment you overshoot, fall short, or a relearn lands, and the plan
-then quietly lies. Recomputing self-corrects — overshoot today and tomorrow's number drops on its own.
+### Why this is safe
 
-**Do not add a progress counter, a "cards done" field, or a cached quota.** Every one of those
-reintroduces the drift this design exists to avoid.
+**FSRS measures elapsed time from `lastReviewedAt`, never from `dueAt`** (`engine/dueNow.ts` →
+`reviewDueNow(state, grade, elapsedDays, …)`; the three session call sites all derive `elapsedDays`
+from `state.lastReviewedAt`). So moving a due date changes **nothing** about difficulty or stability,
+and the review — whenever it happens — is scored exactly as it would have been.
 
-## 2. The quota
+**Only past-due dates move.** `rescheduleOverdueTracks` refuses anything due today or later. A future
+due date encodes an interval the scheduler actually chose; draining a backlog has no business
+touching it. A card whose production is three weeks late but whose recognition is due next month has
+only its production moved.
 
-```
-quota = dueToday + ceil(overdue / daysRemaining)
-```
+### Nothing is stored
 
-`catchUpQuota()` in `lib/catchUp.ts`. The split is shown to the user because the two halves mean
-different things: `dueToday` is non-negotiable (skip it and the backlog grows), `overdue` is the debt
-being drained.
+There is no plan record, no column, no migration. **The new due dates are the plan.** Fall behind
+again and you run it again — exactly like Redistribute, which is why it sits next to it.
 
-The important property, unit-tested: this **trends downward** day to day and reaches exactly zero on
-the target date. A naive `backlog / totalDays` climbs as new cards arrive, so the goal appears to run
-away from you — that was the thing to avoid.
+> The abandoned first build added `profiles.catchup_plans` (migration `121`, since deleted). If that
+> migration was already applied, the column is now unused and harmless; drop it whenever convenient.
 
-`daysRemaining` floors at 1. On the target date the quota becomes everything still owed; **past** the
-target it holds there until the backlog actually clears. A plan never expires on a date — it ends when
-the backlog does, then retires itself (see §6).
+## 2. How the days are chosen
 
-## 3. Ordering: deferral damage, and why it is not "most overdue first"
+`assignBacklogDays()` in `lib/catchUp.ts` (pure, tested). Three things decide the layout:
 
-The cost of delaying a card is **not monotonic** in how forgotten it is. Since
-`loss = R · (1 − 0.9^(d/S))`:
+**1. Existing load is levelled against, not ignored.** The days ahead already carry their own
+arrivals — 186, 199, 249, 208 … in the reported case. The backlog is poured into the *gaps*: each
+day's capacity is `level(existing + backlog) − existing[day]`, so a day already at 249 takes less
+than one at 114, and a day already busier than the levelled total takes none at all. Spreading flat
+on top would leave the chart as spiky as it started.
 
-- **R ≈ 0.95, large S** — rock solid. Loses almost nothing by waiting.
-- **R ≈ 0.7, small S** — about to slip. Loses a lot. *This is where a review does the most work.*
-- **R ≈ 0.05** — already gone. Loses almost nothing more.
+**2. Highest deferral damage lands earliest.** Deferral cost is **not monotonic** in how forgotten a
+card is. Since `loss = R · (1 − 0.9^(d/S))`:
 
-So the primary sort is projected recall lost over the remaining window, which peaks mid-band on its
-own and leaves both extremes alone. "Most overdue first" is the intuitive choice and the wrong one: it
-front-loads exactly the cards that have already been lost, which is the slowest, highest-lapse work.
+| | | |
+|---|---|---|
+| R ≈ 0.95, large S | rock solid | loses almost nothing by waiting |
+| R ≈ 0.7, small S | **about to slip** | **loses a lot — review does the most work here** |
+| R ≈ 0.05 | already gone | loses almost nothing more |
 
-### The lapsed stratum
+So the ranking peaks mid-band on its own. "Most overdue first" is the intuitive choice and the wrong
+one — it front-loads precisely the cards already lost, which is the slowest, highest-lapse work.
 
-Cards under `LAPSED_R = 0.30` are relearning, not reviewing. They are drained as a **separate
-stratum** at their own steady rate — `ceil(lapsedPool / daysRemaining)`, the same derived formula one
-level down — and capped at `MAX_LAPSED_SHARE = 0.25` of any session. Then `interleaveEvenly` spreads
-them through the queue rather than concatenating them.
+**3. Deeply lapsed cards (`R < LAPSED_R = 0.30`) are spread evenly across *every* day**, not sorted
+into a block. Relearning is the punishing work; concentrating it makes some days far harder than
+their card count suggests. Fractional accumulation is used so a pool smaller than the window still
+lands one per day instead of rounding to zero and dumping the remainder at the end.
+`MAX_LAPSED_SHARE = 0.25` caps how much of a day may be relearning; when the pool is too big for
+that, `lapsedCapped` is set rather than cards being dropped.
 
-Both halves matter. Without the steady rate they pile up in the final days; without the cap a deep
-backlog turns every session into a relearning slog; without the interleave they clump at one end.
+Verified against the reported backlog in `lib/__tests__/catchUpRealistic.test.ts`: 1,500 overdue
+against real arrival numbers spreads to **under 400/day with no day above mean × 1.15**.
 
-**The cap can conflict with the deadline.** If the lapsed pool cannot drain at ≤25%/day within the
-window, the cap wins and those cards finish after the target. That is surfaced *in the picker*
-(`previewCatchUp().lapsedFinishesInDays`) at the moment the date is chosen — breaking the promise
-quietly would be worse than pricing it honestly up front.
-
-## 4. Scoping
-
-Scope keys match the "Study all due" popover's own buckets, so the number a plan quotes matches the
-row you clicked:
-
-| Key | Covers |
-|---|---|
-| `bg|en` | the whole language |
-| `bg|en:typing` | typed production only |
-| `bg|en:sgForward` | self-graded, native → target |
-| `bg|en:sgReverse` | self-graded, target → native |
-
-`resolvePlan()` is **most-specific-wins**: a type key beats the language key, which covers whichever
-types have no plan of their own.
-
-## 5. Pieces
+## 3. Pieces
 
 | Piece | Where |
 |---|---|
-| Quota, strata, interleave, preview | `lib/catchUp.ts` (pure, 32 tests) |
-| Due rows → per-scope candidate pools | `lib/catchUpPools.ts` (11 tests) |
-| Applying plans to a built session queue | `lib/catchUpSession.ts` (12 tests) |
+| Ranking, strata, day assignment, preview | `lib/catchUp.ts` (32 tests) |
+| Due rows → per-scope pools; the write patch | `lib/catchUpPools.ts` (21 tests) |
 | `overdue` vs `today` split, `daysOverdue` | `lib/dueStatus.ts` (`cardStateDueBucket`) |
 | Measured review pace for the "~N min" | `lib/reviewPace.ts` (11 tests) |
-| Panel + date picker | `components/study/CatchUpPanel.tsx` |
-| Dashboard wiring, auto-retire | `app/study/page.tsx` |
-| Session cap | `app/study/all/session/page.tsx` |
-| Migration | `supabase/migrations/121_catchup_plans.sql` |
+| Panel + picker + the write | `components/settings/CatchUpPanel.tsx` |
+| Realistic end-to-end sanity check | `lib/__tests__/catchUpRealistic.test.ts` |
+
+### Scoping
+
+Scope keys match the "Study all due" popover's buckets, so the count here matches the count there:
+`bg|en` for the whole language, or `bg|en:typing` / `:sgForward` / `:sgReverse`. The panel has a
+By language / By card type toggle.
 
 ### `lib/reviewPace.ts` was extracted, not written
 
-The recency-weighted, per-bucket review pace already existed inside
-`components/analytics/PresentSnapshot.tsx`. It was lifted into `lib/` unchanged and PresentSnapshot now
-imports it, so the "~N min/day" in the picker and the "~N min" on the Present tab cannot come from two
-implementations of the same measurement.
+The recency-weighted per-bucket review pace already existed inside
+`components/analytics/PresentSnapshot.tsx`. It was lifted into `lib/` unchanged and PresentSnapshot
+imports it, so the "~N min" in the picker and the "~N min" on the Present tab cannot diverge. The
+panel's own query is a capped `limit(1000)` single request, not a 30-day window — 30 days of
+`review_events` is ~14k rows over several serial pages, the regression the 2026-07-27 perf pass
+removed. The 7-day recency half-life means the newest reviews dominate anyway.
 
-The dashboard's own pace query is a **capped single request** (`limit(1000)`, newest first), not a
-30-day window. 30 days of `review_events` is ~14k rows across several serial pages — precisely the
-dashboard regression the 2026-07-27 perf pass removed. The 7-day recency half-life means the newest
-reviews dominate anyway, so the tail would buy nothing.
+## 4. Traps
 
-## 6. Behaviour decisions (all made explicitly)
-
-- **New cards are untouched.** Catch-up governs reviews only; daily goals stay independent. Same rule
-  as goal carryover never touching the serving cap.
-- **Past the target date, hold at the final quota.** Nothing stops serving on its own.
-- **A plan retires itself** when its scope's `overdue` hits zero — a `useEffect` on the dashboard,
-  guarded on a loaded page so an empty first render can't wipe every plan.
-- **Only the all-session page is capped.** Deck and folder sessions are a deliberate narrow choice by
-  the learner and are left alone; the work still counts, because tomorrow's quota is recomputed from
-  the real backlog either way.
-- **Due-ness comes from `lib/dueStatus.ts`, never the forecast.** Those two disagree by a handful of
-  rows (1693 vs 1699 in the reported screenshot) and a quota that doesn't match the button reads as a
-  bug. `cardStateDueBucket` is unit-tested to agree with `isCardStateDueNow` on every row.
-- **Applied after the queue is built and deduped**, so an ungoverned scope is byte-identical to
-  pre-catch-up behaviour. A governed scope skips the shuffle, because its order is the point.
-- **`interleaveConfusablePairs` still runs afterwards** and may pull linked cards together, slightly
-  perturbing the sprinkle. Accepted: confusion clustering is the stronger pedagogical signal and the
-  sprinkle is approximate by nature.
-
-## 7. Traps
-
+- **Write the lane column, not just `due_at`.** Queue building reads `smart_due_at ?? typed_due_at ??
+  due_at`; several counts still read `due_at`. `rescheduleOverdueTracks` writes whichever lane holds
+  the schedule *and* keeps `due_at` in step — same rule Redistribute follows.
+- **Reverse rows schedule on `recall_due_at`**, on their own row, gated on the FORWARD row being
+  graduated. A legacy reverse row on `due_at` gets both written, or the stale column keeps reading as
+  due through the fallback.
+- **The time-of-day is preserved**; only the calendar day moves. Due dates are snapped to the start of
+  the study day, so the time part carries the turnover offset.
+- **The write is chunked at 200** in the panel. `stateRepo.upsertBatch` sends one request, and a
+  language-wide backlog is several hundred full rows. Chunking locally leaves Redistribute alone.
 - **`dueStatus.ts` now has one shared gate.** `activeDueDates()` backs `isCardStateDueNow`,
-  `cardStateDueBucket` and `daysOverdue`. That file exists because five surfaces each had their own
-  copy of this logic and drifted; don't add a fourth reader with its own version.
+  `cardStateDueBucket` and `daysOverdue`. That file exists because surfaces drifted; don't add a
+  reader with its own copy.
 - **A forward and a reverse review of the same card are separate items** (`candidateKey` is
   `cardId:direction`). Collapsing them undercounts the backlog.
-- **`applyCatchUpPlans` must never drop a card it cannot classify.** A `describe()` returning null, or
-  a duplicate candidate key, passes the item through ungoverned — losing a due review silently would
-  be far worse than serving one extra.
-- **The inflow estimate in the picker excludes today.** Today's forecast bar *is* the backlog; counting
-  it would inflate every estimate enormously.
 
-## 8. Error log
+## 5. Error log
 
-*(nothing yet — first build)*
+- **2026-08-22 — the plan was invisible.** Built first as a session-queue cap with a stored target
+  date; every due count and the forecast chart were unchanged, so nothing appeared to happen. Cause
+  was a wrong premise on my part: I had assumed rewriting due dates would corrupt the FSRS memory
+  model. It does not — elapsed time comes from `lastReviewedAt`. Rebuilt as a date-rewriting action.

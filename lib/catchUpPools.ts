@@ -129,3 +129,60 @@ export function buildCatchUpPools(args: {
 export function emptyPool(): ScopePool {
   return { overdue: [], dueToday: [] }
 }
+
+/**
+ * The patch that moves a row's OVERDUE tracks onto `newDay`, keeping each column's time-of-day (due
+ * dates are snapped to the start of the study day, so the time part carries the turnover offset).
+ *
+ * Only overdue tracks move. A card whose production is three weeks late but whose recognition is due
+ * next month must keep that recognition date — rewriting a FUTURE due date would genuinely change an
+ * interval the scheduler chose, which spreading a backlog has no business doing.
+ *
+ * Moving a PAST due date changes nothing about the memory model: FSRS measures elapsed time from
+ * `lastReviewedAt`, never from `dueAt` (see `engine/dueNow.ts`), so difficulty and stability are
+ * untouched and the review, whenever it lands, is scored exactly as it would have been.
+ *
+ * Returns null when the row has nothing overdue to move.
+ */
+export function rescheduleOverdueTracks(
+  s: CardState,
+  newDay: string,
+  opts: { tracks?: EnabledTracks; tz: string; today: string; forwardState?: CardState | null },
+): Partial<CardState> | null {
+  const { tracks, tz, today } = opts
+  const overdue = (d: string | null | undefined) =>
+    !!d && new Date(d).toLocaleDateString('en-CA', { timeZone: tz }) < today
+  /** Keep the original time-of-day; only the calendar day moves. */
+  const shift = (iso: string) => newDay + iso.slice(10)
+
+  const patch: Partial<CardState> = {}
+
+  if (s.reviewDirection === 'reverse') {
+    if (!trackEnabled(tracks, 'recall', true) || s.dormant) return null
+    if (opts.forwardState?.graduated !== true) return null
+    const ref = s.recallDueAt ?? s.dueAt
+    if (!overdue(ref)) return null
+    patch.recallDueAt = shift(ref!)
+    // A legacy reverse row scheduled on due_at: move both, or the stale column keeps reading as due
+    // for anything that falls back to it.
+    if (!s.recallDueAt && s.dueAt) patch.dueAt = shift(s.dueAt)
+    return patch
+  }
+
+  if (s.dormant) return null
+
+  const prodEnabled = trackEnabled(tracks, 'typed', false) || trackEnabled(tracks, 'smart', false)
+  const prodRef = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
+  if (prodEnabled && overdue(prodRef)) {
+    const moved = shift(prodRef!)
+    // Write whichever lane actually holds the schedule, and keep due_at in step — queue building
+    // reads the lane column, several counts still read due_at.
+    if (s.smartDueAt) patch.smartDueAt = moved
+    else if (s.typedDueAt) patch.typedDueAt = moved
+    patch.dueAt = moved
+  }
+  if (trackEnabled(tracks, 'recall', false) && overdue(s.recallDueAt)) {
+    patch.recallDueAt = shift(s.recallDueAt!)
+  }
+  return Object.keys(patch).length > 0 ? patch : null
+}
