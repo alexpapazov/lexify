@@ -73,6 +73,32 @@ export function resolvePlan(
   return null
 }
 
+/**
+ * The languages a scope's reviews actually run between, PROMPT FIRST.
+ *
+ * A pair key is `${sourceLanguage}|${targetLanguage}` where `source` is the language being learned
+ * and `target` is the learner's native language (see the domain conventions in CLAUDE.md — this is
+ * easy to get backwards). Which way a review runs then depends on the card type, NOT on the pair:
+ *
+ *  - **typing** and **sgForward** are forward PRODUCTION: prompted in the native language, you
+ *    produce the language you're learning. English → Bulgarian.
+ *  - **sgReverse** is recognition: prompted in the language you're learning. Bulgarian → English.
+ *
+ * A whole-language scope covers both, so it has no single direction — `bidirectional` says to render
+ * it with a two-headed arrow rather than implying one.
+ *
+ * Mirrors the `n2t` flag in the study dashboard's "Study all due" popover; keep the two in step.
+ */
+export function scopeDirection(
+  source: string,
+  target: string,
+  type: CatchUpType | null,
+): { from: string; to: string; bidirectional: boolean } {
+  if (type === null)        return { from: source, to: target, bidirectional: true }
+  if (type === 'sgReverse') return { from: source, to: target, bidirectional: false }
+  return { from: target, to: source, bidirectional: false }
+}
+
 // ─── Dates ────────────────────────────────────────────────────────────────────
 
 const DAY_MS = 86_400_000

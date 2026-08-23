@@ -111,6 +111,11 @@ removed. The 7-day recency half-life means the newest reviews dominate anyway.
 - **`dueStatus.ts` now has one shared gate.** `activeDueDates()` backs `isCardStateDueNow`,
   `cardStateDueBucket` and `daysOverdue`. That file exists because surfaces drifted; don't add a
   reader with its own copy.
+- **The row label's arrow is per CARD TYPE, not per pair.** A pair key is `${learned}|${native}`, but
+  typing and self-graded-forward are *production* — prompted in your native language — so a Bulgarian
+  typing scope must read "English → Bulgarian". Use `scopeDirection()`; a whole-language scope gets
+  `↔` because it genuinely covers both. This mirrors the `n2t` flag in the dashboard's "Study all due"
+  popover — keep the two in step.
 - **A forward and a reverse review of the same card are separate items** (`candidateKey` is
   `cardId:direction`). Collapsing them undercounts the backlog.
 
@@ -120,3 +125,8 @@ removed. The 7-day recency half-life means the newest reviews dominate anyway.
   date; every due count and the forecast chart were unchanged, so nothing appeared to happen. Cause
   was a wrong premise on my part: I had assumed rewriting due dates would corrupt the FSRS memory
   model. It does not — elapsed time comes from `lastReviewedAt`. Rebuilt as a date-rewriting action.
+- **2026-08-22 — row labels pointed the wrong way.** Every row rendered `source → target` off the
+  pair key, so a typing scope read "Bulgarian → English" when the prompt is English and you type
+  Bulgarian. The subtitle's abstract "native → target" then contradicted the concrete arrow beside
+  it. Fixed with `scopeDirection()` (prompt language first, `↔` for a whole-language scope) and by
+  dropping the abstract direction from the subtitle, so direction is stated in exactly one place.

@@ -30,7 +30,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, buildRetentionMap, retentionFor } from '@/lib/sessionLimits'
 import { buildCatchUpPools, emptyPool, rescheduleOverdueTracks, candidateKey, type ScopePool } from '@/lib/catchUpPools'
-import { assignBacklogDays, previewCatchUp, isLapsed, scopeKey, addDays, daysBetween, type CatchUpType } from '@/lib/catchUp'
+import { assignBacklogDays, previewCatchUp, isLapsed, scopeKey, scopeDirection, addDays, daysBetween, type CatchUpType } from '@/lib/catchUp'
 import { buildPaceSamples, paceForMix, type PaceSamples, type PaceRow } from '@/lib/reviewPace'
 import { isDueByLocalDate } from '@/lib/dueStatus'
 import { chunk } from '@/lib/mapLimit'
@@ -40,10 +40,13 @@ import type { CardState, Deck } from '@/domain'
 
 const PRESET_DAYS = [3, 7, 14, 30]
 
+// Just the grading style — the DIRECTION is carried by the arrow in the row title, which is
+// computed per card type (`scopeDirection`). Repeating an abstract "native → target" here alongside
+// a concrete arrow was how the two ended up contradicting each other.
 const TYPE_LABEL: Record<CatchUpType, string> = {
   typing:    'Typing',
-  sgForward: 'Self-graded · native → target',
-  sgReverse: 'Self-graded · target → native',
+  sgForward: 'Self-graded',
+  sgReverse: 'Self-graded',
 }
 
 interface Scope {
@@ -267,11 +270,16 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
               const key     = scopeKey(s.pairKey, s.type)
               const overdue = s.pool.overdue.length
               const lapsed  = s.pool.overdue.filter(isLapsed).length
+              // Prompt language first. A typing review of Bulgarian is prompted in English, so this
+              // row must read "English → Bulgarian" even though the pair is bg|en.
+              const dir     = scopeDirection(s.source, s.target, s.type)
               return (
                 <div key={key} className="border-b border-line/10 last:border-b-0">
                   <div className="flex items-center justify-between gap-3 px-4 py-3">
                     <div className="min-w-0">
-                      <div className="text-sm text-ink truncate">{langName(s.source)} → {langName(s.target)}</div>
+                      <div className="text-sm text-ink truncate">
+                        {`${langName(dir.from)} ${dir.bidirectional ? '↔' : '→'} ${langName(dir.to)}`}
+                      </div>
                       <div className="text-xs text-ink-faint">
                         {s.type ? `${TYPE_LABEL[s.type]} · ` : ''}
                         {`${overdue.toLocaleString()} overdue`}

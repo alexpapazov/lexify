@@ -2,7 +2,7 @@ import {
   LAPSED_R, MAX_LAPSED_SHARE,
   scopeKey, resolvePlan, daysBetween, addDays,
   catchUpQuota, candidateMetrics, elapsedDaysFor,
-  assignBacklogDays, previewCatchUp, isLapsed,
+  assignBacklogDays, previewCatchUp, isLapsed, scopeDirection,
   type CatchUpCandidate, type CatchUpPlans,
 } from '@/lib/catchUp'
 
@@ -43,6 +43,34 @@ describe('scope keys', () => {
     // ...and the language plan still covers the types that have none of their own.
     expect(resolvePlan(plans, 'bg|en', 'sgForward')?.plan.targetDate).toBe('2026-09-05')
     expect(resolvePlan(plans, 'es|en', 'typing')).toBeNull()
+  })
+})
+
+describe('scopeDirection', () => {
+  // Pair key is `${learned}|${native}` — bg|en means "learning Bulgarian, native English".
+  const BG = 'bg', EN = 'en'
+
+  it('reads native → learned for typing, because production is prompted in your own language', () => {
+    // The bug this exists to prevent: labelling a Bulgarian typing review "Bulgarian → English" when
+    // the prompt is English and you type Bulgarian.
+    expect(scopeDirection(BG, EN, 'typing')).toEqual({ from: EN, to: BG, bidirectional: false })
+  })
+
+  it('reads native → learned for self-graded forward production too', () => {
+    expect(scopeDirection(BG, EN, 'sgForward')).toEqual({ from: EN, to: BG, bidirectional: false })
+  })
+
+  it('reads learned → native for reverse recognition', () => {
+    expect(scopeDirection(BG, EN, 'sgReverse')).toEqual({ from: BG, to: EN, bidirectional: false })
+  })
+
+  it('marks a whole-language scope bidirectional, since it covers both', () => {
+    expect(scopeDirection(BG, EN, null).bidirectional).toBe(true)
+  })
+
+  it('holds for a pair whose native language is not English', () => {
+    expect(scopeDirection('es', 'fr', 'typing')).toEqual({ from: 'fr', to: 'es', bidirectional: false })
+    expect(scopeDirection('es', 'fr', 'sgReverse')).toEqual({ from: 'es', to: 'fr', bidirectional: false })
   })
 })
 
