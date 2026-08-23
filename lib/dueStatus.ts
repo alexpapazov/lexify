@@ -30,29 +30,82 @@ export function isDueByLocalDate(dateStr: string | null | undefined, tz: string,
  * for reverse rows, whose graduation and whole-card dormancy live on the forward side. `tracks`
  * undefined = the pair's defaults (typed/recall/reverse on, smart off).
  */
+/**
+ * Every due date this row can actually be served on, after track-enablement and dormancy gating.
+ *
+ * Extracted so `isCardStateDueNow` and `cardStateDueBucket` can never disagree about what "due" means
+ * — this file exists because five surfaces each had their own copy of this and they drifted.
+ */
+function activeDueDates(
+  s: CardState,
+  opts: { tracks?: EnabledTracks; forwardState?: CardState | null },
+): string[] {
+  const { tracks } = opts
+  const dates: (string | null | undefined)[] = []
+
+  if (s.reviewDirection === 'reverse') {
+    // Dormancy is PER-DIRECTION: recognition is gated on the REVERSE row's own `dormant` only. The
+    // forward row's dormancy is deliberately NOT checked here — pausing production must not force
+    // recognition off, or "Resume recognition" on a dormant card would be a no-op. (The forward
+    // GRADUATED check stays: a card can't be recognised before it has graduated.)
+    if (trackEnabled(tracks, 'recall', true) && opts.forwardState?.graduated === true && !s.dormant) {
+      dates.push(s.recallDueAt ?? s.dueAt)
+    }
+    return dates.filter((d): d is string => !!d)
+  }
+
+  // Production is a single lane (typed/smart mutually exclusive); visible if EITHER is enabled.
+  const prodEnabled = trackEnabled(tracks, 'typed', false) || trackEnabled(tracks, 'smart', false)
+  if (!s.dormant && prodEnabled) dates.push(s.smartDueAt ?? s.typedDueAt ?? s.dueAt)
+  if (!s.dormant && trackEnabled(tracks, 'recall', false)) dates.push(s.recallDueAt)
+  return dates.filter((d): d is string => !!d)
+}
+
+/**
+ * Whether a `card_states` row is due now. `forwardState` is the row's FORWARD counterpart — required
+ * for reverse rows, whose graduation and whole-card dormancy live on the forward side. `tracks`
+ * undefined = the pair's defaults (typed/recall/reverse on, smart off).
+ */
 export function isCardStateDueNow(
   s: CardState,
   opts: { tracks?: EnabledTracks; tz: string; today: string; forwardState?: CardState | null },
 ): boolean {
   if (!s.graduated) return false
-  const { tracks, tz, today } = opts
-  const due = (d: string | null | undefined) => isDueByLocalDate(d, tz, today)
+  return activeDueDates(s, opts).some(d => isDueByLocalDate(d, opts.tz, opts.today))
+}
 
-  if (s.reviewDirection === 'reverse') {
-    const fwd = opts.forwardState
-    // Dormancy is PER-DIRECTION: recognition is gated on the REVERSE row's own `dormant` only. The
-    // forward row's dormancy is deliberately NOT checked here — pausing production must not force
-    // recognition off, or "Resume recognition" on a dormant card would be a no-op. (The forward
-    // GRADUATED check stays: a card can't be recognised before it has graduated.)
-    return trackEnabled(tracks, 'recall', true) &&
-      fwd?.graduated === true && !s.dormant &&
-      due(s.recallDueAt ?? s.dueAt)
-  }
+/** `'overdue'` = due before today, `'today'` = due today, `null` = not due. */
+export type DueBucket = 'overdue' | 'today' | null
 
-  // Production is a single lane (typed/smart mutually exclusive); visible if EITHER is enabled.
-  const prodEnabled = trackEnabled(tracks, 'typed', false) || trackEnabled(tracks, 'smart', false)
-  const prodDue = !s.dormant && prodEnabled &&
-    (s.smartDueAt ? due(s.smartDueAt) : s.typedDueAt ? due(s.typedDueAt) : due(s.dueAt))
-  const recallDue = !s.dormant && trackEnabled(tracks, 'recall', false) && due(s.recallDueAt)
-  return prodDue || recallDue
+/**
+ * Which side of today a due row falls on — the split a catch-up plan is built from
+ * (`lib/catchUp.ts`): cards due TODAY are non-negotiable, everything older is the backlog being
+ * drained. A row with one track overdue and another due today counts as overdue, since it is the
+ * older debt that decides how far behind you are.
+ */
+export function cardStateDueBucket(
+  s: CardState,
+  opts: { tracks?: EnabledTracks; tz: string; today: string; forwardState?: CardState | null },
+): DueBucket {
+  if (!s.graduated) return null
+  const days = activeDueDates(s, opts)
+    .map(d => new Date(d).toLocaleDateString('en-CA', { timeZone: opts.tz }))
+    .filter(d => d <= opts.today)
+  if (days.length === 0) return null
+  return days.some(d => d < opts.today) ? 'overdue' : 'today'
+}
+
+/** How many days late a due row is (0 when it came due today). Feeds the FSRS decay estimate. */
+export function daysOverdue(
+  s: CardState,
+  opts: { tracks?: EnabledTracks; tz: string; today: string; forwardState?: CardState | null },
+): number {
+  const days = activeDueDates(s, opts)
+    .map(d => new Date(d).toLocaleDateString('en-CA', { timeZone: opts.tz }))
+    .filter(d => d <= opts.today)
+  if (days.length === 0) return 0
+  const earliest = days.reduce((a, b) => (a < b ? a : b))
+  return Math.max(0, Math.round(
+    (Date.parse(`${opts.today}T00:00:00.000Z`) - Date.parse(`${earliest}T00:00:00.000Z`)) / 86_400_000,
+  ))
 }

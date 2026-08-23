@@ -26,6 +26,7 @@ import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabasePathwayRepository } from '@/lib/data/pathways'
 import { resolveEffectivePathway } from '@/lib/pathway'
 import { minAnswersForPipeline, struggleFactor, newCardMs, DEFAULT_MS_PER_ANSWER } from '@/lib/pipelineCost'
+import { recencyWeight, paceKey, pace, buildPaceSamples, HALF_LIFE_DAYS } from '@/lib/reviewPace'
 import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode } from '@/lib/sessionLimits'
 import { getToday, localDateWithTurnover, localDate } from '@/lib/dates'
 import { carriedGoal, plannedGoalSum, fullDebtGoal, isAutoGraduated, fullDebtExemptionAdjustment, owedGoalForDate, goalStanding, effectiveDebtSince } from '@/lib/goalCarryover'
@@ -44,68 +45,14 @@ type Category = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
 interface CardEntry { card: Card; deckId: string; deckName: string; source: string; target: string }
 
 const DAY_MS = 86_400_000
-const DEFAULT_DUE_MS = 8_000     // fallback per-review time if we have no timing history
 const DEFAULT_LEARN_MS = 90_000  // fallback per-new-card learning time
-
-/** Bucket key for review pace: a typed Spanish production review and a reverse Korean recognition
- *  take very different amounts of time, so pace is measured per language × direction × typed-or-not
- *  rather than as one global median. */
-function paceKey(src: string, tgt: string, dir: 'forward' | 'reverse', typed: boolean): string {
-  return `${src}|${tgt}|${dir}|${typed ? 't' : 's'}`
-}
 
 // The estimates re-tune themselves daily: every past review/graduation is weighted by how recent it
 // is, so as you get faster (or slower) the projection follows within about a week without anyone
 // touching a setting. A longer window than before is safe precisely because old data decays away.
+// The weighting, bucketing and median all live in `lib/reviewPace.ts` — shared with the catch-up
+// picker so the two surfaces can never quote different figures for the same measurement.
 const WINDOW_DAYS = 30        // history pulled in (older data still counts, just very little)
-const HALF_LIFE_DAYS = 7      // a review 7 days old counts half as much as one from today
-const MIN_EFF_SAMPLES = 3     // minimum *weighted* samples before a bucket is trusted on its own
-
-/** Exponential recency weight: 1.0 today → 0.5 at one half-life → 0.25 at two, etc. */
-function recencyWeight(ageDays: number): number {
-  return Math.pow(0.5, Math.max(0, ageDays) / HALF_LIFE_DAYS)
-}
-
-interface WSample { v: number; w: number }
-const totalWeight = (xs: WSample[]) => xs.reduce((t, p) => t + p.w, 0)
-
-/**
- * Weighted median — stays robust to the occasional "walked away mid-review" outlier the way a plain
- * median does, while letting recent reviews dominate. (A weighted *mean* would be wrecked by a single
- * 4-minute response.) Returns the value at the 50% mark of accumulated weight.
- */
-function weightedMedian(xs: WSample[]): number | null {
-  if (xs.length === 0) return null
-  const s = [...xs].sort((a, b) => a.v - b.v)
-  const total = totalWeight(s)
-  if (total <= 0) return null
-  let acc = 0
-  for (const p of s) { acc += p.w; if (acc >= total / 2) return p.v }
-  return s[s.length - 1]!.v
-}
-
-/**
- * Recency-weighted median response time for a bucket, widening when a bucket is too thin to trust:
- * exact (language × direction × typed) → same language+direction → same direction+typed across
- * languages → global → fixed fallback. Thinness is judged on *weighted* samples, so three reviews
- * from last week count for less than three from today.
- */
-function pace(
-  samples: Map<string, WSample[]>, src: string, tgt: string, dir: 'forward' | 'reverse', typed: boolean,
-): number {
-  const tryKeys = [
-    paceKey(src, tgt, dir, typed),
-    `${src}|${tgt}|${dir}`,        // same language + direction, either presentation
-    `${dir}|${typed ? 't' : 's'}`, // same direction + presentation, any language
-    'all',
-  ]
-  for (const k of tryKeys) {
-    const xs = samples.get(k)
-    if (xs && totalWeight(xs) >= MIN_EFF_SAMPLES) { const m = weightedMedian(xs); if (m != null && m > 0) return m }
-  }
-  const any = weightedMedian(samples.get('all') ?? [])
-  return any && any > 0 ? any : DEFAULT_DUE_MS
-}
 
 const shortDate = (d: string) =>
   new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
@@ -538,20 +485,10 @@ export function PresentSnapshot() {
         // Review pace bucketed by language × direction × typed-or-not (plus the widening fallbacks),
         // each sample carrying its recency weight.
         let dueTodayMs = 0
-        const paceSamples = new Map<string, WSample[]>()
-        const push = (k: string, s: WSample) => { const a = paceSamples.get(k); if (a) a.push(s); else paceSamples.set(k, [s]) }
+        const paceSamples = buildPaceSamples(dueRows, now)
         for (const e of dueRows) {
-          const ms = (e.response_ms as number | null) ?? 0
           const at = e.reviewed_at as string
-          if (localDateWithTurnover(at, tz, turnover) === today) dueTodayMs += ms
-          if (ms <= 0) continue
-          const s: WSample = { v: ms, w: recencyWeight((now - new Date(at).getTime()) / DAY_MS) }
-          const src = (e.source_language as string | null) ?? '', tgt = (e.target_language as string | null) ?? ''
-          const dir: 'forward' | 'reverse' = (e.review_direction as string | null) === 'reverse' ? 'reverse' : 'forward'
-          const typed = !!(e.was_typed as boolean | null)
-          push('all', s)
-          push(`${dir}|${typed ? 't' : 's'}`, s)
-          if (src && tgt) { push(`${src}|${tgt}|${dir}`, s); push(paceKey(src, tgt, dir, typed), s) }
+          if (localDateWithTurnover(at, tz, turnover) === today) dueTodayMs += (e.response_ms as number | null) ?? 0
         }
 
         // Project each due bucket at its own pace, then sum — instead of (all due) × (one global median).

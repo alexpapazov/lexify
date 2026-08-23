@@ -42,6 +42,8 @@ Current feature files:
 - `features/Vocabulary Onboarding.md` — bulk intake of words you already know:
   AI accuracy check, front-only duplicate drop, four confidence bands mapped to
   FSRS difficulty/stability + spread due dates, resumable queue (migration 107).
+- `features/Catch Up.md` — drain a review backlog by a date you pick: derived daily quota,
+  deferral-damage ordering, the capped lapsed stratum, per-language/per-card-type scoping.
 - `features/Batch Deck Import.md` — Word document → folders + decks, NO AI. Heading
   structure becomes the tree; decks saved one at a time through the normal
   duplicate check. Parser (zip + WordprocessingML + outline) in `lib/docx.ts`.
@@ -2199,6 +2201,37 @@ Note the alternative we did NOT take: lowering per-track TARGET retention. That 
 longer intervals through the FSRS math instead of a correction factor, and is arguably the more
 principled lever if the pinning returns at 2.0 — a calibration factor sitting at its ceiling is a
 symptom that the target is mis-set.
+
+## Catch-up plans — drain a review backlog by a date (2026-08-22, migration 121)
+
+Pick a date to be level again by; the app derives how many reviews a day that costs, which cards, and
+in what order. Per language, or per card type within a language. **Read `features/Catch Up.md` before
+touching any of it.** The three things easiest to get wrong:
+
+- **Only the target date is stored** (`profiles.catchup_plans` JSONB). Quota, progress and selection
+  are all DERIVED and recomputed daily — same rule as full-debt carryover, same reason. Adding a
+  stored counter or cached quota reintroduces exactly the drift this avoids.
+- **Ordering is by projected recall LOST over the remaining window, not by most-overdue.** Deferral
+  damage is non-monotonic in retrievability (`loss = R·(1 − 0.9^(d/S))`): a rock-solid card and a
+  long-gone card both lose almost nothing by waiting, while a fragile card still mostly remembered
+  loses a lot. Deeply lapsed cards (R < 0.30) drain as a separate stratum capped at 25% of any
+  session and are sprinkled through it — remove the cap or the interleave and a big backlog turns
+  every session into a relearning slog.
+- **`quota = dueToday + ceil(overdue / daysRemaining)`**, which trends DOWN day to day and hits zero
+  on the target date. `backlog / totalDays` climbs as new cards arrive; that was the bug to avoid.
+
+Applied late — after the queue is built and deduped in `app/study/all/session/page.tsx` — so an
+ungoverned scope behaves exactly as before. Only that page caps; deck and folder sessions are a
+deliberate narrow choice and are left alone.
+
+**`lib/dueStatus.ts` gained `cardStateDueBucket` / `daysOverdue`, and all three readers now share one
+`activeDueDates()` gate.** That file exists because surfaces drifted apart; keep new readers on the
+shared gate.
+
+**`lib/reviewPace.ts` is extracted from `PresentSnapshot.tsx`** (recency-weighted median response time
+per language × direction × typed). Both surfaces import it now. The dashboard's own pace query is a
+capped `limit(1000)` single request, NOT a 30-day window — 30 days of review_events is ~14k rows over
+several serial pages, the exact regression the 2026-07-27 perf pass removed.
 
 ## Known backlog / open issues
 

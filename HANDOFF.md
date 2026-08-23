@@ -4,10 +4,12 @@ The **broad** orientation document: what the app is, how each feature actually w
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 867 passing tests (54 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
+- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 974 passing tests (62 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
-- **Backend**: Supabase (Postgres + Auth + RLS). Migrations `001`–`118`, applied BY HAND. **Nothing
-  is pending** — the top level of `supabase/migrations/` is empty.
+- **Backend**: Supabase (Postgres + Auth + RLS). Migrations applied BY HAND; `001`–`118` are archived
+  and live. **Pending at the top level: `119_practice_attempts.sql`, `120_sequential_goal_schedules.sql`
+  and `121_catchup_plans.sql`** — check each before assuming a feature that names its columns is
+  deployable. Next number is **122**.
 
 ---
 
@@ -152,6 +154,14 @@ Per-language, per-weekday goals (`language_pairs.goals`). Three escalating carry
 1. **Plain** — today's configured goal.
 2. **Yesterday carryover** — two toggles: carry shortfall / carry surplus. Bounded to one day.
 3. **Full debt** — unbounded cumulative deficit since the enable date, with per-day waivers.
+
+**Catch-up plans (2026-08-22, migration 121).** Pick a date to be level again by; the daily quota,
+the card selection and the ordering are all DERIVED from the live backlog and recomputed each day —
+only the target date is stored. Scoped per language or per card type. Ordering is by projected recall
+LOST over the remaining window (deferral damage peaks mid-band, so neither the rock-solid nor the
+long-gone cards go first), with deeply lapsed cards drained as a capped, evenly-sprinkled stratum.
+Only `app/study/all/session` caps; deck and folder sessions are left alone. Full rationale and the
+list of things not to "tidy" is in `features/Catch Up.md`.
 
 **And a fourth, separate mode: the Goal Scheduler (2026-08-08, migration 114).** Set
 "200 new words by Dec 1" and the daily number is DERIVED from what's left, re-spread every morning —

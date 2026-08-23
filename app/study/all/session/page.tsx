@@ -45,6 +45,10 @@ import { prefetchChoices, prefetchAudio, promoteConfusionDistractors, deckSiblin
 import { getToday, snapDueAtToStartOfDay } from '@/lib/dates'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, buildCalibrationMap, calibrationFor, buildRetentionMap, retentionFor, type EnabledTracks } from '@/lib/sessionLimits'
+import { applyCatchUpPlans } from '@/lib/catchUpSession'
+import { candidateFor } from '@/lib/catchUpPools'
+import { cardStateDueBucket } from '@/lib/dueStatus'
+import type { CatchUpPlans, CatchUpType } from '@/lib/catchUp'
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { UndoFab } from '@/components/session/UndoFab'
@@ -255,7 +259,7 @@ function AllDueSessionInner() {
         new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id),
         deckRepo.list(session.user.id),
         pipelineRepo.getDefault(),
-        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
+        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, catchup_plans').eq('user_id', session.user.id).single()),
         new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
         new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => []),
       ])
@@ -275,6 +279,9 @@ function AllDueSessionInner() {
       setStudyModeAutoplay((profileData.data?.study_mode_autoplay as boolean | null) ?? true)
       setAudioSourceDefault(profileData.data?.audio_source_default as string | null)
       setAudioSourceByLanguage(profileData.data?.audio_source_by_language as Record<string, string> | null)
+      // Absent until migration 121 runs — an empty map means no plan governs anything, and every
+      // queue below comes out exactly as it did before catch-up existed.
+      const catchUpPlans = (profileData.data?.catchup_plans as CatchUpPlans | null) ?? {}
       const now   = new Date()
       const today = getToday(tz, turnoverHour)
 
@@ -414,7 +421,46 @@ function AllDueSessionInner() {
           }
         }
         const dedupedCards = filterByPresent(dedupeDueReviews(categoryCards))
-        const finalQueue = interleaveConfusablePairs(hasLangFilter ? shuffle(dedupedCards) : shuffle(dedupedCards).slice(0, ALL_ELECTIVE_LIMIT), intraLinks)
+
+        // ── Catch-up plans ────────────────────────────────────────────────
+        // Applied AFTER the queue is built and deduped, so a scope with no plan is byte-identical to
+        // before. A governed scope is capped at today's quota and ordered by deferral damage, which
+        // is why its branch skips the shuffle — the order is the whole point (see lib/catchUp.ts).
+        const forwardForCatchUp = new Map(
+          dedupedCards.filter(i => !i.isReverse).map(i => [i.card.id, i.state]))
+        const catchUp = applyCatchUpPlans({
+          items: dedupedCards,
+          plans: catchUpPlans,
+          today,
+          describe: (i) => {
+            const tracks = tracksFor(i.sourceLanguage, i.targetLanguage)
+            const opts = {
+              tracks, tz, today,
+              forwardState: i.isReverse ? forwardForCatchUp.get(i.card.id) ?? null : i.state,
+            }
+            const bucket = cardStateDueBucket(i.state, opts)
+            if (!bucket) return null
+            // Presentation is taken from the queue item rather than recomputed, so the bucket a card
+            // is planned under is always the bucket the learner will actually be shown.
+            const type: CatchUpType = i.isReverse ? 'sgReverse'
+              : i.productionMode === 'typed' ? 'typing' : 'sgForward'
+            return {
+              pairKey: `${i.sourceLanguage}|${i.targetLanguage}`,
+              type, bucket,
+              candidate: candidateFor(i.state, {
+                ...opts,
+                retention: retentionFor(retMapRef.current, i.sourceLanguage, i.targetLanguage,
+                  i.isReverse ? 'reverse_recall' : 'forward_typed'),
+                now: now.getTime(),
+              }),
+            }
+          },
+        })
+
+        const orderedDue = catchUp.governed
+          ? catchUp.queue
+          : (hasLangFilter ? shuffle(dedupedCards) : shuffle(dedupedCards).slice(0, ALL_ELECTIVE_LIMIT))
+        const finalQueue = interleaveConfusablePairs(orderedDue, intraLinks)
         if (finalQueue.length === 0) { setDone(true); setLoading(false); return }
         setElectiveSession(true)
         await hydrateQueueAudio(finalQueue)

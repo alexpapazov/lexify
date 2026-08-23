@@ -1,4 +1,4 @@
-import { isCardStateDueNow, isDueByLocalDate } from '../dueStatus'
+import { isCardStateDueNow, isDueByLocalDate, cardStateDueBucket, daysOverdue } from '../dueStatus'
 import { initialCardState } from '../../engine/pipeline'
 import type { CardState } from '@/domain'
 import type { EnabledTracks } from '../sessionLimits'
@@ -73,5 +73,64 @@ describe('isCardStateDueNow', () => {
 
   it('non-graduated cards are never due', () => {
     expect(isCardStateDueNow(grad({ graduated: false, dueAt: `${TODAY}T00:00:00.000Z` }), { tracks: ALL, tz: TZ, today: TODAY })).toBe(false)
+  })
+})
+
+describe('cardStateDueBucket', () => {
+  const YESTERDAY = '2026-07-19'
+  const OLD       = '2026-07-01'
+
+  it('splits the backlog from today\'s arrivals', () => {
+    expect(cardStateDueBucket(grad({ dueAt: `${TODAY}T00:00:00.000Z` }), { tracks: ALL, tz: TZ, today: TODAY })).toBe('today')
+    expect(cardStateDueBucket(grad({ dueAt: `${OLD}T00:00:00.000Z` }),   { tracks: ALL, tz: TZ, today: TODAY })).toBe('overdue')
+    expect(cardStateDueBucket(grad({ dueAt: '2026-08-01T00:00:00.000Z' }), { tracks: ALL, tz: TZ, today: TODAY })).toBeNull()
+  })
+
+  it('is null for a card that has not graduated', () => {
+    expect(cardStateDueBucket(grad({ graduated: false, dueAt: `${OLD}T00:00:00.000Z` }), { tracks: ALL, tz: TZ, today: TODAY })).toBeNull()
+  })
+
+  it('takes the OLDER track when one is overdue and another lands today', () => {
+    // The row is served once; how far behind you are is decided by the older debt.
+    const s = grad({ typedDueAt: `${OLD}T00:00:00.000Z`, recallDueAt: `${TODAY}T00:00:00.000Z` })
+    expect(cardStateDueBucket(s, { tracks: ALL, tz: TZ, today: TODAY })).toBe('overdue')
+  })
+
+  it('ignores a disabled track, exactly as the due count does', () => {
+    const s = grad({ typedDueAt: `${OLD}T00:00:00.000Z`, dueAt: `${OLD}T00:00:00.000Z` })
+    const noProd: EnabledTracks = { typed: false, smart: false, recall: false, reverse: true }
+    expect(cardStateDueBucket(s, { tracks: noProd, tz: TZ, today: TODAY })).toBeNull()
+  })
+
+  it('agrees with isCardStateDueNow on every row', () => {
+    // The two must never drift — that divergence is the reason this module exists.
+    const rows = [
+      grad({ dueAt: `${TODAY}T00:00:00.000Z` }),
+      grad({ dueAt: `${OLD}T00:00:00.000Z` }),
+      grad({ dueAt: '2026-08-01T00:00:00.000Z' }),
+      grad({ graduated: false, dueAt: `${OLD}T00:00:00.000Z` }),
+      grad({ dormant: true, dueAt: `${OLD}T00:00:00.000Z` }),
+      grad({ smartDueAt: `${YESTERDAY}T00:00:00.000Z`, dueAt: '2026-01-01T00:00:00.000Z' }),
+    ]
+    for (const r of rows) {
+      const opts = { tracks: { ...ALL, smart: true }, tz: TZ, today: TODAY }
+      expect(cardStateDueBucket(r, opts) !== null).toBe(isCardStateDueNow(r, opts))
+    }
+  })
+})
+
+describe('daysOverdue', () => {
+  it('is zero on the day a card comes due, and counts calendar days after', () => {
+    expect(daysOverdue(grad({ dueAt: `${TODAY}T23:00:00.000Z` }), { tracks: ALL, tz: TZ, today: TODAY })).toBe(0)
+    expect(daysOverdue(grad({ dueAt: '2026-07-10T00:00:00.000Z' }), { tracks: ALL, tz: TZ, today: TODAY })).toBe(10)
+  })
+
+  it('measures from the EARLIEST due track', () => {
+    const s = grad({ typedDueAt: '2026-07-05T00:00:00.000Z', recallDueAt: '2026-07-18T00:00:00.000Z' })
+    expect(daysOverdue(s, { tracks: ALL, tz: TZ, today: TODAY })).toBe(15)
+  })
+
+  it('is zero for a card that is not due at all', () => {
+    expect(daysOverdue(grad({ dueAt: '2026-08-01T00:00:00.000Z' }), { tracks: ALL, tz: TZ, today: TODAY })).toBe(0)
   })
 })
