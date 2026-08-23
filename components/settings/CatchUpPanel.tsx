@@ -304,31 +304,53 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         overdue: selected.map(e => e.candidate), today: ctx.today, days, existingLoad: ctx.inflow,
       })
 
+      // ── Liveness re-check: ONE catch-up per card ──────────────────────────
+      // The selection was computed at load time, which may be minutes old — another tab, an earlier
+      // spread in this session, or reviews done in between can all have moved a card already. Re-read
+      // the rows and let `rescheduleOverdueTracks` re-judge each one: it refuses anything no longer
+      // overdue, so a card an earlier plan already placed can never be dealt a second date.
+      // Same pattern as `planDedupeDeletions` re-checking liveness at apply time.
+      const repo  = new SupabaseCardStateRepository()
+      const fresh = await repo.listAllForUser(userId)
+      const freshByKey     = new Map(fresh.map(st => [candidateKey(st), st]))
+      const freshForwards  = new Map(
+        fresh.filter(st => st.reviewDirection !== 'reverse').map(st => [st.cardId, st]))
+
       const updates: CardState[] = []
+      let alreadyPlanned = 0
       for (const [key, day] of result.assignments) {
-        const state = ctx.statesByKey.get(key)
-        if (!state) continue
+        const state = freshByKey.get(key)
+        if (!state) { alreadyPlanned++; continue }
         const patch = rescheduleOverdueTracks(state, day, {
           tracks: ctx.tracks.get(ctx.deckPair.get(state.cardId) ?? ''),
           tz: timezone, today: ctx.today,
-          forwardState: ctx.forwardByCard.get(state.cardId),
+          forwardState: freshForwards.get(state.cardId),
         })
         if (patch) updates.push({ ...state, ...patch })
+        else alreadyPlanned++
       }
 
       if (updates.length === 0) {
-        setMsg({ ok: false, text: 'Nothing to move — those cards are already scheduled.' })
+        setMsg({
+          ok: false,
+          text: alreadyPlanned > 0
+            ? 'Nothing to move — every one of those cards is already on a catch-up schedule.'
+            : 'Nothing to move — those cards are already scheduled.',
+        })
+        await load()
         return
       }
       // Chunked: `upsertBatch` sends one request, and a wide selection can be several hundred full
       // rows. Chunking here rather than in the repo leaves Redistribute's path untouched.
-      const repo = new SupabaseCardStateRepository()
       for (const part of chunk(updates, 200)) await repo.upsertBatch(part)
 
       const perDay = Math.round(updates.length / days)
+      const skipped = alreadyPlanned > 0
+        ? ` ${alreadyPlanned.toLocaleString()} were left alone — already on a catch-up schedule.`
+        : ''
       setMsg({
         ok: true,
-        text: `Spread ${updates.length.toLocaleString()} card${updates.length === 1 ? '' : 's'} over ${days} day${days === 1 ? '' : 's'} — about ${perDay.toLocaleString()} a day on top of what was already scheduled.`,
+        text: `Spread ${updates.length.toLocaleString()} card${updates.length === 1 ? '' : 's'} over ${days} day${days === 1 ? '' : 's'} — about ${perDay.toLocaleString()} a day on top of what was already scheduled.${skipped}`,
       })
       setPicking(false)
       await load()

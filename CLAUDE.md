@@ -2223,6 +2223,11 @@ across the days between. **Read `features/Catch Up.md` before touching it.**
   first — "most overdue first" is the wrong instinct); deeply lapsed cards (R < 0.30) spread evenly
   across every day, capped at 25% of any one. Sanity-checked against the real reported backlog in
   `lib/__tests__/catchUpRealistic.test.ts` — 1,500 overdue flattens to under 400/day.
+- **One catch-up per card, enforced twice.** Structurally, spreading moves a card out of "overdue"
+  and `rescheduleOverdueTracks` refuses anything not strictly overdue, so an overlapping later plan
+  can't re-deal it — which is also why ALL of a row's overdue tracks move together (leave one behind
+  and the row reads as overdue forever, uncleanable). Plus a liveness re-check at write time: the
+  panel re-reads the rows before writing and skips any already claimed, same as `planDedupeDeletions`.
 - **Write the lane column AND `due_at`** (queue building reads the lane, counts read `due_at`);
   reverse rows use their own `recall_due_at`; time-of-day is preserved because it carries the
   turnover offset. The write is chunked at 200 in the panel — `upsertBatch` sends one request.

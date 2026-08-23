@@ -108,7 +108,32 @@ panel's own query is a capped `limit(1000)` single request, not a 30-day window 
 `review_events` is ~14k rows over several serial pages, the regression the 2026-07-27 perf pass
 removed. The 7-day recency half-life means the newest reviews dominate anyway.
 
-## 4. Traps
+## 4. One catch-up per card
+
+A card can never be dealt a date by two plans. Two things enforce it, and they are separate on
+purpose:
+
+**Structural.** Spreading moves a card's due date to today or later, and `rescheduleOverdueTracks`
+refuses anything not strictly overdue. So the moment a plan claims a card it drops out of every
+later plan's backlog — including one whose selection overlaps (spread "Greek", then spread "all
+languages", and the Greek cards stay exactly where the first plan put them).
+
+This is also why **all** of a row's overdue tracks move together. A forward row can have production
+and recall both overdue; leaving one behind would keep the row reading as overdue forever, so no plan
+could ever clear it. Covered by `describe('one plan per card')` in `catchUpPools.test.ts`.
+
+**Liveness re-check at write time.** The selection is computed at load, which may be minutes old —
+another tab, an earlier spread this session, or reviews done in between. Before writing, the panel
+re-reads the rows and re-judges each through `rescheduleOverdueTracks`; anything already claimed is
+skipped and reported ("N were left alone — already on a catch-up schedule"). Same pattern as
+`planDedupeDeletions` re-checking liveness at apply time, and for the same reason: a stale snapshot
+must never authorise a write.
+
+Note what this does **not** prevent, deliberately: plans with different windows coexisting. Spread
+Greek over 30 days and everything else over 7, and each card keeps the date its own plan gave it.
+That is one plan per card, not one plan overall.
+
+## 5. Traps
 
 - **Write the lane column, not just `due_at`.** Queue building reads `smart_due_at ?? typed_due_at ??
   due_at`; several counts still read `due_at`. `rescheduleOverdueTracks` writes whichever lane holds
@@ -133,7 +158,7 @@ removed. The 7-day recency half-life means the newest reviews dominate anyway.
 - **A forward and a reverse review of the same card are separate items** (`candidateKey` is
   `cardId:direction`). Collapsing them undercounts the backlog.
 
-## 5. Error log
+## 6. Error log
 
 - **2026-08-22 — the plan was invisible.** Built first as a session-queue cap with a stored target
   date; every due count and the forecast chart were unchanged, so nothing appeared to happen. Cause

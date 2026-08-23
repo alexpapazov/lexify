@@ -1,4 +1,5 @@
 import { buildCatchUpPools, catchUpTypeOf, candidateKey, rescheduleOverdueTracks } from '@/lib/catchUpPools'
+import { cardStateDueBucket } from '@/lib/dueStatus'
 import { initialCardState } from '@/engine/pipeline'
 import { scopeKey } from '@/lib/catchUp'
 import type { CardState } from '@/domain'
@@ -181,5 +182,39 @@ describe('rescheduleOverdueTracks', () => {
     const fwd = grad('c', { graduated: false })
     const rev = grad('c', { reviewDirection: 'reverse', recallDueAt: OLD })
     expect(rescheduleOverdueTracks(rev, NEW, { ...opts, forwardState: fwd })).toBeNull()
+  })
+})
+
+describe('one plan per card', () => {
+  const opts = { tracks: SMART, tz: TZ, today: TODAY }
+
+  it('is idempotent: a card already moved by an earlier plan is refused by the next', () => {
+    // The guard that makes "only one catch-up per card" hold. After the first spread the card is no
+    // longer overdue, so any later plan whose selection overlaps must leave it exactly where it is.
+    const before = grad('a', { smartDueAt: '2026-08-01T04:00:00.000Z', dueAt: '2026-08-01T04:00:00.000Z' })
+    const first  = rescheduleOverdueTracks(before, '2026-09-01', opts)!
+    const after  = { ...before, ...first }
+
+    expect(rescheduleOverdueTracks(after, '2026-09-20', opts)).toBeNull()
+    expect(rescheduleOverdueTracks(after, '2026-08-25', opts)).toBeNull()
+  })
+
+  it('refuses a card an earlier plan placed on TODAY', () => {
+    // Landing on today is a legitimate assignment; it must not be re-dealt by the next plan either.
+    const onToday = grad('a', { smartDueAt: `${TODAY}T04:00:00.000Z`, dueAt: `${TODAY}T04:00:00.000Z` })
+    expect(rescheduleOverdueTracks(onToday, '2026-09-10', opts)).toBeNull()
+  })
+
+  it('clears the whole row, so a part-moved card cannot linger in the backlog', () => {
+    // A forward row can have production AND recall overdue. Both move together — leaving one behind
+    // would keep the row reading as overdue forever, so it could never be cleared by any plan.
+    const s = grad('a', {
+      smartDueAt: '2026-08-01T04:00:00.000Z',
+      recallDueAt: '2026-07-15T04:00:00.000Z',
+      dueAt: '2026-08-01T04:00:00.000Z',
+    })
+    const moved = { ...s, ...rescheduleOverdueTracks(s, '2026-09-01', opts)! }
+    expect(cardStateDueBucket(moved, opts)).toBeNull()
+    expect(rescheduleOverdueTracks(moved, '2026-09-05', opts)).toBeNull()
   })
 })
