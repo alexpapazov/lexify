@@ -22,7 +22,7 @@ import { cardStateDueBucket, daysOverdue, isDueByLocalDate } from '@/lib/dueStat
 import { scopeKey, elapsedDaysFor, type CatchUpCandidate, type CatchUpType } from '@/lib/catchUp'
 import { activeProductionTrack, forwardProductionMode, trackEnabled, type EnabledTracks } from '@/lib/sessionLimits'
 import { seedStability } from '@/lib/forecastFsrs'
-import { isCarryingDebt, trackDueDates } from '@/lib/catchUpPlan'
+import { isCarryingDebt, trackDueDates, type TrackKind } from '@/lib/catchUpPlan'
 
 export interface ScopePool {
   overdue: CatchUpCandidate[]
@@ -121,7 +121,7 @@ export function buildCatchUpPools(args: {
     let bucket: 'overdue' | 'plannedDebt'
     if (cardStateDueBucket(state, opts) === 'overdue') bucket = 'overdue'
     else if (state.graduated && !state.dormant &&
-             trackDueDates(state).some(d => isCarryingDebt(state, d))) bucket = 'plannedDebt'
+             trackDueDates(state).some(({ due, kind }) => isCarryingDebt(state, due, kind))) bucket = 'plannedDebt'
     else continue
 
     const candidate = candidateFor(state, {
@@ -182,14 +182,13 @@ export function rescheduleOverdueTracks(
 ): Partial<CardState> | null {
   const { tracks, tz, today } = opts
   const dayOf = (d: string) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
-  const movable = (d: string | null | undefined) => {
+  const movable = (d: string | null | undefined, kind: TrackKind) => {
     if (!d) return false
     const day = dayOf(d)
     if (day < today) return true                                  // overdue: always claimable
     if (!opts.replanThrough || day > opts.replanThrough) return false
-    return isCarryingDebt(s, d)                                   // in-window, but only if planned
+    return isCarryingDebt(s, d, kind)                             // in-window, but only if planned
   }
-  const overdue = movable
   /** Keep the original time-of-day; only the calendar day moves. */
   const shift = (iso: string) => newDay + iso.slice(10)
 
@@ -199,7 +198,7 @@ export function rescheduleOverdueTracks(
     if (!trackEnabled(tracks, 'recall', true) || s.dormant) return null
     if (opts.forwardState?.graduated !== true) return null
     const ref = s.recallDueAt ?? s.dueAt
-    if (!overdue(ref)) return null
+    if (!movable(ref, 'reverse')) return null
     patch.recallDueAt = shift(ref!)
     // A legacy reverse row scheduled on due_at: move both, or the stale column keeps reading as due
     // for anything that falls back to it.
@@ -211,7 +210,7 @@ export function rescheduleOverdueTracks(
 
   const prodEnabled = trackEnabled(tracks, 'typed', false) || trackEnabled(tracks, 'smart', false)
   const prodRef = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
-  if (prodEnabled && overdue(prodRef)) {
+  if (prodEnabled && movable(prodRef, 'prod')) {
     const moved = shift(prodRef!)
     // Write whichever lane actually holds the schedule, and keep due_at in step — queue building
     // reads the lane column, several counts still read due_at.
@@ -219,7 +218,7 @@ export function rescheduleOverdueTracks(
     else if (s.typedDueAt) patch.typedDueAt = moved
     patch.dueAt = moved
   }
-  if (trackEnabled(tracks, 'recall', false) && overdue(s.recallDueAt)) {
+  if (trackEnabled(tracks, 'recall', false) && movable(s.recallDueAt, 'recall')) {
     patch.recallDueAt = shift(s.recallDueAt!)
   }
   return Object.keys(patch).length > 0 ? patch : null

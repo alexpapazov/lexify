@@ -48,13 +48,30 @@ export interface CatchUpPlanRecord {
 /** Keyed by `scopeKey()` from `lib/catchUp.ts`. */
 export type CatchUpPlanRecords = Record<string, CatchUpPlanRecord>
 
+/** Which schedule a due date belongs to — each track has its own interval. */
+export type TrackKind = 'prod' | 'recall' | 'reverse'
+
 /**
- * Whether this row's due date sits further out than its own schedule put it — i.e. it was pushed by
- * a catch-up and has not been reviewed since.
- *
- * `dueIso` is the track's own due date, since a row's tracks are scheduled separately.
+ * The interval that describes ONE track's schedule. Never the row-level `scheduledIntervalDays`
+ * without knowing the track: that field is overwritten by whichever track was reviewed LAST, so
+ * judging a recall date against a production interval (or vice versa) flags half the library as
+ * debt — the bug behind a "3,241 spread earlier" reading when only ~1,500 rows had ever been spread.
  */
-export function isCarryingDebt(s: CardState, dueIso: string | null | undefined): boolean {
+function trackOwnInterval(s: CardState, kind: TrackKind): number {
+  const fallback = s.scheduledIntervalDays > 0 ? s.scheduledIntervalDays
+    : s.intervalDays > 0 ? s.intervalDays : 0
+  if (kind === 'prod')   return s.smartIntervalDays ?? s.typedIntervalDays ?? fallback
+  /* recall + reverse */ return s.recallIntervalDays ?? fallback
+}
+
+/**
+ * Whether this track's due date sits further out than its own schedule put it — i.e. it was pushed
+ * by a catch-up and has not been reviewed since.
+ *
+ * A row whose interval cannot be established reads as NOT carrying debt. Claiming a card is the
+ * consequential outcome (it becomes re-spreadable), so unprovable must mean unclaimed.
+ */
+export function isCarryingDebt(s: CardState, dueIso: string | null | undefined, kind: TrackKind): boolean {
   if (!dueIso) return false
   const anchor = s.lastReviewedAt ?? s.graduatedAt
   if (!anchor) return false
@@ -62,24 +79,22 @@ export function isCarryingDebt(s: CardState, dueIso: string | null | undefined):
   const from = Date.parse(anchor)
   if (Number.isNaN(due) || Number.isNaN(from)) return false
 
+  const own = trackOwnInterval(s, kind)
+  if (own <= 0) return false
   const gapDays = (due - from) / DAY_MS
-  const own = s.scheduledIntervalDays > 0 ? s.scheduledIntervalDays
-    : s.intervalDays > 0 ? s.intervalDays
-    : 0
   return gapDays > own * DEBT_FUZZ + DEBT_GRACE_DAYS
 }
 
-/** The due dates this row is scheduled on, whichever tracks are populated. */
-export function trackDueDates(s: CardState): string[] {
-  const out: string[] = []
+/** The due dates this row is scheduled on, each tagged with the track it belongs to. */
+export function trackDueDates(s: CardState): Array<{ due: string; kind: TrackKind }> {
   if (s.reviewDirection === 'reverse') {
     const d = s.recallDueAt ?? s.dueAt
-    if (d) out.push(d)
-    return out
+    return d ? [{ due: d, kind: 'reverse' }] : []
   }
+  const out: Array<{ due: string; kind: TrackKind }> = []
   const prod = s.smartDueAt ?? s.typedDueAt ?? s.dueAt
-  if (prod) out.push(prod)
-  if (s.recallDueAt) out.push(s.recallDueAt)
+  if (prod) out.push({ due: prod, kind: 'prod' })
+  if (s.recallDueAt) out.push({ due: s.recallDueAt, kind: 'recall' })
   return out
 }
 
@@ -96,9 +111,9 @@ export function isOwedByPlan(
   tz: string,
 ): boolean {
   if (!s.graduated || s.dormant) return false
-  return trackDueDates(s).some(d => {
-    const day = new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
-    return day >= today && day <= plan.targetDate && isCarryingDebt(s, d)
+  return trackDueDates(s).some(({ due, kind }) => {
+    const day = new Date(due).toLocaleDateString('en-CA', { timeZone: tz })
+    return day >= today && day <= plan.targetDate && isCarryingDebt(s, due, kind)
   })
 }
 

@@ -164,6 +164,14 @@ Tolerance is `interval × 1.05 + 1 day`, because **Redistribute moves due dates 
 fuzz window without touching `scheduledIntervalDays`** — a redistributed card must not read as
 planned.
 
+**The comparison interval is PER TRACK** (`trackOwnInterval`): production against
+`smartIntervalDays ?? typedIntervalDays`, recall/reverse against `recallIntervalDays`, the legacy
+row-level fields only as a fallback. `scheduledIntervalDays` alone is overwritten by whichever track
+was reviewed LAST, so judging a recall date against a production interval flagged half the library
+("3,241 spread earlier" when only ~1,500 rows had ever been spread — see the error log). And a row
+whose interval cannot be established reads as NOT debt: claiming a card makes it re-spreadable, so
+unprovable must mean unclaimed.
+
 Reviewing a card rewrites `lastReviewedAt` and `scheduledIntervalDays` together, so it stops carrying
 debt the instant it is done. That is what moves the bar.
 
@@ -258,3 +266,11 @@ double-count. `conflictingScopes()` makes creating either one replace the other.
   confusion that surfaced it: "N overdue" counts strictly-before-today only, while today's chart bar
   includes the spread's own day-one share — the summary line now shows "spread earlier (can be
   re-spread)" separately.
+- **2026-08-22 — "3,241 spread earlier" (per-track debt).** The debt check compared every track's
+  gap against the row-level `scheduledIntervalDays`, which whichever track was reviewed last had
+  overwritten — so a forward row with production on a short interval and recognition legitimately
+  due weeks out read as debt, roughly doubling the claimed count. A second defect compounded it:
+  a row with no establishable interval defaulted to debt (`own = 0` → any future date qualified).
+  Fixed with `trackOwnInterval` per track and unprovable → not debt. Surfaced when the user asked
+  whether "spread earlier" meant pressing Redistribute — it does not; re-spreading is the Catch up
+  button on the same row.
