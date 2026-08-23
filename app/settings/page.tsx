@@ -866,7 +866,7 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
 
       {section === 'data' && !offline && userId && (
         <SettingsSection title="Catch up on a backlog"
-          description="Overdue cards all pile onto today. Pick a date to be level again by and they are dealt out across the days between — the ones you'd lose most by putting off go first, and deeply lapsed cards are spread evenly so no day becomes a wall of relearning. Only past-due dates move, so nothing about the memory model changes.">
+          description="When cards pile up, pick a date to be level again by and everything overdue or due today is dealt out across the days between — the ones you'd lose most by putting off go first, and deeply lapsed cards are spread evenly so no day becomes a wall of relearning. Future-scheduled cards never move, and nothing about the memory model changes.">
           <CatchUpPanel userId={userId} timezone={timezone || deviceTimeZone()} turnoverHour={turnoverHour} />
         </SettingsSection>
       )}

@@ -65,8 +65,8 @@ interface Entry {
   target:    string
   type:      CatchUpType
   candidate: CatchUpCandidate
-  /** From an earlier spread (scheduled but still carrying debt) rather than strictly overdue. */
-  planned:   boolean
+  /** Which pool this review came from — drives the summary line and the levelling subtraction. */
+  bucket:    'overdue' | 'dueToday' | 'plannedDebt'
   /** Measured seconds-per-review for this exact bucket, for the minutes estimate. */
   msPerReview: number
 }
@@ -230,17 +230,16 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         const [source, target] = pairKey.split('|') as [string, string]
         for (const t of TYPES) {
           const pool = pools.get(scopeKey(pairKey, t)) ?? emptyPool()
-          if (pool.overdue.length === 0 && pool.plannedDebt.length === 0) continue
+          if (pool.overdue.length === 0 && pool.dueToday.length === 0 && pool.plannedDebt.length === 0) continue
           const msPerReview = pace(
             paceSamples, source, target,
             t === 'sgReverse' ? 'reverse' : 'forward',
             t === 'typing',
           )
-          for (const candidate of pool.overdue) {
-            nextEntries.push({ pairKey, source, target, type: t, candidate, planned: false, msPerReview })
-          }
-          for (const candidate of pool.plannedDebt) {
-            nextEntries.push({ pairKey, source, target, type: t, candidate, planned: true, msPerReview })
+          for (const bucket of ['overdue', 'dueToday', 'plannedDebt'] as const) {
+            for (const candidate of pool[bucket]) {
+              nextEntries.push({ pairKey, source, target, type: t, candidate, bucket, msPerReview })
+            }
           }
         }
       }
@@ -327,8 +326,9 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     return m
   }, [entries, lang])
 
-  const overdue      = useMemo(() => selected.filter(e => !e.planned).length, [selected])
-  const plannedCount = selected.length - overdue
+  const overdue      = useMemo(() => selected.filter(e => e.bucket === 'overdue').length, [selected])
+  const todayCount   = useMemo(() => selected.filter(e => e.bucket === 'dueToday').length, [selected])
+  const plannedCount = selected.length - overdue - todayCount
   const lapsed  = useMemo(() => selected.filter(e => isLapsed(e.candidate)).length, [selected])
   const msPerReview = useMemo(
     () => (selected.length === 0 ? 0 : selected.reduce((t, e) => t + e.msPerReview, 0) / selected.length),
@@ -469,11 +469,11 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     setMsg(null)
     try {
       const days = Math.max(1, daysBetween(ctx.today, targetDate))
-      // Planned (debt-carrying) cards in the selection are being SUPERSEDED by this spread, so their
-      // current placements must come out of the levelling load first — otherwise the very cards
-      // being re-dealt would count as immovable congestion on the days they currently occupy.
+      // Cards in the selection that currently OCCUPY days in the load map (due today, or placed by
+      // an earlier spread) are being re-dealt, so their placements come out of the levelling load
+      // first — otherwise the very cards being moved would count as immovable congestion.
       const levelLoad = new Map(ctx.inflow)
-      const plannedKeys = new Set(selected.filter(e => e.planned).map(e => e.candidate.key))
+      const plannedKeys = new Set(selected.filter(e => e.bucket !== 'overdue').map(e => e.candidate.key))
       for (const st of ctx.states) {
         if (!plannedKeys.has(candidateKey(st))) continue
         for (const d of [st.smartDueAt ?? st.typedDueAt ?? st.dueAt, st.recallDueAt]) {
@@ -656,10 +656,11 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
                 <div className="text-sm text-ink truncate">{selectionLabel}</div>
                 <div className="text-xs text-ink-faint">
                   {selected.length === 0
-                    ? 'nothing overdue in this selection'
+                    ? 'nothing to catch up in this selection'
                     : [
                         overdue > 0 ? `${overdue.toLocaleString()} overdue` : null,
-                        plannedCount > 0 ? `${plannedCount.toLocaleString()} spread earlier (can be re-spread)` : null,
+                        todayCount > 0 ? `${todayCount.toLocaleString()} due today` : null,
+                        plannedCount > 0 ? `${plannedCount.toLocaleString()} spread earlier` : null,
                         lapsed > 0 ? `${lapsed.toLocaleString()} deeply lapsed` : null,
                       ].filter(Boolean).join(' · ')}
                 </div>

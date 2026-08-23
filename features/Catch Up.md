@@ -25,10 +25,14 @@ Rewriting the dates makes every surface honest for free, instead of teaching eac
 from `state.lastReviewedAt`). So moving a due date changes **nothing** about difficulty or stability,
 and the review — whenever it happens — is scored exactly as it would have been.
 
-**Only past-due dates move.** `rescheduleOverdueTracks` refuses anything due today or later. A future
-due date encodes an interval the scheduler actually chose; draining a backlog has no business
-touching it. A card whose production is three weeks late but whose recognition is due next month has
-only its production moved.
+**Overdue and due-TODAY dates move; future dates never do.** A future due date encodes an interval
+the scheduler actually chose — draining a backlog has no business touching it (unless an earlier
+spread put it there; see supersession). Cards due today are deliberately deferrable: an overloaded
+today is precisely what catching up relieves, and the leveller keeps a fair share on today anyway.
+Deferring today's load only happens inside an explicit spread (`replanThrough`); plain claims stop
+at strictly-overdue. Mid-relearn rows (`relearning` / `relearningStep > 0`) never move — their due
+date is a timer, not a schedule. A card whose production is three weeks late but whose recognition
+is due next month has only its production moved.
 
 ### What is stored, and what is not
 
@@ -229,11 +233,12 @@ double-count. `conflictingScopes()` makes creating either one replace the other.
   `cardId:direction`). Collapsing them undercounts the backlog. Each due row lands in exactly ONE
   type pool (`catchUpTypeOf` picks one), so the panel's entry list can never spread a row twice —
   pinned by the "no double assignment, end to end" test.
-- **Pools hold two buckets: `overdue` and `plannedDebt`.** Overdue is the backlog; plannedDebt is
-  rows scheduled today-or-later that still carry an earlier spread's debt (`isCarryingDebt`) — a
-  fresh spread supersedes them. A NORMALLY-scheduled card, including one genuinely due today, is in
-  neither bucket and can never be spread; the debt gate inside `rescheduleOverdueTracks` enforces
-  the same rule at write time, so it holds even if a caller builds candidates some other way.
+- **Pools hold three buckets: `overdue`, `dueToday`, `plannedDebt`.** Overdue is the backlog;
+  dueToday is deferrable load (summarised separately — "113 overdue · 1,028 due today"); plannedDebt
+  is rows scheduled AFTER today still carrying an earlier spread's debt (`isCarryingDebt`), which a
+  fresh spread supersedes. A normally-scheduled FUTURE card is in no bucket and can never be spread;
+  `rescheduleOverdueTracks` enforces the same rules at write time, so they hold even if a caller
+  builds candidates some other way. Relearn rows are excluded everywhere.
 - **The preset buttons' "heavy relearning days" warning** fires when `previewCatchUp` predicts the
   ¼-relearning cap would be breached (same condition as `lapsedCapped`). Everything still fits the
   window; some days just carry more relearning than the cap intends.
@@ -274,3 +279,9 @@ double-count. `conflictingScopes()` makes creating either one replace the other.
   Fixed with `trackOwnInterval` per track and unprovable → not debt. Surfaced when the user asked
   whether "spread earlier" meant pressing Redistribute — it does not; re-spreading is the Catch up
   button on the same row.
+- **2026-08-22 — today's pile was visible but unspreadable.** After the levelling fix, ~1,000 cards
+  legitimately sat on today with no way to move them: "due today" was sacred by design, so the very
+  overload the feature exists to relieve was out of its reach. Resolved by making due-TODAY a third,
+  deferrable bucket — claimable only inside an explicit spread, with the leveller keeping a fair
+  share on today — while future-scheduled cards stay absolutely untouchable and mid-relearn rows
+  (due dates that are timers, not schedules) are excluded from every path.

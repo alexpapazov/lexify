@@ -2228,9 +2228,10 @@ across the days between. **Read `features/Catch Up.md` before touching it.**
   deliberately, so "unplanned cards stay unchanged" can't be forgotten by a caller. BOTH write paths
   (spread and reassign) re-read the rows immediately before writing — `upsertBatch` writes whole
   rows, so a snapshot row would revert reviews made since load. An "All" spread records one plan per
-  language claimed. Pools hold `overdue` + `plannedDebt` (rows an earlier spread placed, still
-  carrying debt — a new spread supersedes them via `replanThrough`); a normally-scheduled card,
-  due-today included, is never spreadable. The levelling load includes TODAY and excludes only
+  language claimed. Pools hold `overdue` + `dueToday` + `plannedDebt` (dueToday is deferrable — an
+  overloaded today is what the feature relieves; plannedDebt is rows an earlier spread placed, still
+  carrying debt, superseded via `replanThrough`); a normally-scheduled FUTURE card is never
+  spreadable, and mid-relearn rows never move at all. The levelling load includes TODAY and excludes only
   strictly-overdue rows — excluding today was the pile-on-today bug (see the feature doc's error
   log).
 - **Layout rules** (`assignBacklogDays`, pure): level against the days' EXISTING arrivals so the

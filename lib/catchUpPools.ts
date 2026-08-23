@@ -27,10 +27,16 @@ import { isCarryingDebt, trackDueDates, type TrackKind } from '@/lib/catchUpPlan
 export interface ScopePool {
   overdue: CatchUpCandidate[]
   /**
-   * Rows scheduled today or later that are CARRYING CATCH-UP DEBT (`isCarryingDebt`) — cards an
+   * Rows DUE TODAY. Deferrable by an explicit spread — an overloaded today is exactly what catching
+   * up exists to relieve, and the leveller keeps a fair share on today anyway. Distinct from
+   * `overdue` because the two mean different things in the summary ("113 overdue · 1,028 due
+   * today"), and a spread that finds nothing but today's load should still be possible.
+   */
+  dueToday: CatchUpCandidate[]
+  /**
+   * Rows scheduled AFTER today that are CARRYING CATCH-UP DEBT (`isCarryingDebt`) — cards an
    * earlier spread placed, still unreviewed. A fresh spread may reclaim these (it supersedes the
-   * earlier plan for its scope), which is also the repair path when a bad spread piled cards onto
-   * one day. Normally-scheduled future cards never appear here.
+   * earlier plan for its scope). Normally-scheduled future cards never appear in any bucket.
    */
   plannedDebt: CatchUpCandidate[]
 }
@@ -106,20 +112,25 @@ export function buildCatchUpPools(args: {
   now:             number
 }): Map<string, ScopePool> {
   const pools = new Map<string, ScopePool>()
-  const add = (key: string, bucket: 'overdue' | 'plannedDebt', c: CatchUpCandidate) => {
+  const add = (key: string, bucket: 'overdue' | 'dueToday' | 'plannedDebt', c: CatchUpCandidate) => {
     let pool = pools.get(key)
-    if (!pool) { pool = { overdue: [], plannedDebt: [] }; pools.set(key, pool) }
+    if (!pool) { pool = { overdue: [], dueToday: [], plannedDebt: [] }; pools.set(key, pool) }
     pool[bucket].push(c)
   }
 
   for (const { pairKey, state } of args.rows) {
     const tracks = args.tracksByPair.get(pairKey)
     const opts = { tracks, tz: args.tz, today: args.today, forwardState: args.forwardByCard.get(state.cardId) }
-    // Two ways in: strictly overdue (the backlog), or scheduled today-or-later while still carrying
-    // an earlier spread's debt (reclaimable). A normally-scheduled card — including one genuinely
-    // due today — is neither: that is real work, not backlog, and must never be spread.
-    let bucket: 'overdue' | 'plannedDebt'
-    if (cardStateDueBucket(state, opts) === 'overdue') bucket = 'overdue'
+    // A row mid-relearn is due in minutes by design; sweeping it into a spread would break the
+    // relearn gate. Never claimable, whatever bucket it would otherwise land in.
+    if (state.relearning || state.relearningStep > 0) continue
+    // Three ways in: strictly overdue (the backlog), due today (deferrable — an overloaded today is
+    // what catching up relieves), or scheduled later while still carrying an earlier spread's debt
+    // (reclaimable). A normally-scheduled FUTURE card is none of these and can never be spread.
+    const dueBucket = cardStateDueBucket(state, opts)
+    let bucket: 'overdue' | 'dueToday' | 'plannedDebt'
+    if (dueBucket === 'overdue') bucket = 'overdue'
+    else if (dueBucket === 'today') bucket = 'dueToday'
     else if (state.graduated && !state.dormant &&
              trackDueDates(state).some(({ due, kind }) => isCarryingDebt(state, due, kind))) bucket = 'plannedDebt'
     else continue
@@ -143,7 +154,7 @@ export function buildCatchUpPools(args: {
  * a single stray push would leak one scope's cards into all the others.
  */
 export function emptyPool(): ScopePool {
-  return { overdue: [], plannedDebt: [] }
+  return { overdue: [], dueToday: [], plannedDebt: [] }
 }
 
 /**
@@ -181,13 +192,17 @@ export function rescheduleOverdueTracks(
   },
 ): Partial<CardState> | null {
   const { tracks, tz, today } = opts
+  // A mid-relearn row's due date is a timer, not a schedule — moving it breaks the relearn gate.
+  if (s.relearning || s.relearningStep > 0) return null
   const dayOf = (d: string) => new Date(d).toLocaleDateString('en-CA', { timeZone: tz })
   const movable = (d: string | null | undefined, kind: TrackKind) => {
     if (!d) return false
     const day = dayOf(d)
     if (day < today) return true                                  // overdue: always claimable
     if (!opts.replanThrough || day > opts.replanThrough) return false
-    return isCarryingDebt(s, d, kind)                             // in-window, but only if planned
+    // Inside a plan's window: today's load is deferrable outright — relieving an overloaded today
+    // is the feature's point — while a LATER date moves only if an earlier spread put it there.
+    return day === today || isCarryingDebt(s, d, kind)
   }
   /** Keep the original time-of-day; only the calendar day moves. */
   const shift = (iso: string) => newDay + iso.slice(10)

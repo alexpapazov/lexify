@@ -28,7 +28,7 @@ function build(rows: CardState[], tracks: EnabledTracks = SMART) {
 }
 
 describe('buildCatchUpPools', () => {
-  it('collects only OVERDUE rows, filed under both the language and the type key', () => {
+  it('files overdue rows under both the language and the type key', () => {
     const pools = build([
       grad('a', { smartDueAt: '2026-08-01T00:00:00.000Z', smartIntervalDays: 5 }),   // overdue → in
       grad('b', { smartDueAt: `${TODAY}T00:00:00.000Z`,   smartIntervalDays: 5 }),   // today → OUT:
@@ -356,26 +356,45 @@ describe('plannedDebt bucket and supersession', () => {
     smartDueAt: `${day}T04:00:00.000Z`, dueAt: `${day}T04:00:00.000Z`,
   })
 
-  it('collects debt-carrying scheduled cards, today included, but never normally-scheduled ones', () => {
+  it('buckets today separately, collects future debt, and never a normal future card', () => {
     const pools = build([
-      plannedRow('p1', TODAY),            // the pile-on-today repair case
-      plannedRow('p2', '2026-08-30'),
-      normalRow('n1', '2026-08-30'),
-      normalRow('n2', TODAY),             // genuinely due today — real work, untouchable
+      plannedRow('p1', TODAY),            // piled onto today by an earlier spread
+      plannedRow('p2', '2026-08-30'),     // placed later in the window by an earlier spread
+      normalRow('n1', '2026-08-30'),      // the scheduler's own future date — untouchable
+      normalRow('n2', TODAY),             // genuinely due today — deferrable, so claimable
     ])
     const pool = pools.get(PAIR)!
-    expect(pool.plannedDebt.map(c => c.key).sort()).toEqual(['p1:forward', 'p2:forward'])
+    // Everything due TODAY is deferrable — an overloaded today is what catching up relieves.
+    expect(pool.dueToday.map(c => c.key).sort()).toEqual(['n2:forward', 'p1:forward'])
+    expect(pool.plannedDebt.map(c => c.key)).toEqual(['p2:forward'])
     expect(pool.overdue).toEqual([])
   })
 
-  it('a fresh spread supersedes in-window planned cards but still refuses normal ones', () => {
-    // The repair path for the pile-on-today incident, and the supersession rule in one.
+  it('never collects a mid-relearn row into any bucket', () => {
+    // A relearn row's due date is a timer, not a schedule — spreading it would break the gate.
+    const pools = build([
+      grad('r1', { relearningStep: 1, smartDueAt: '2026-08-01T04:00:00.000Z', dueAt: '2026-08-01T04:00:00.000Z' }),
+      grad('r2', { relearning: true, smartDueAt: `${TODAY}T04:00:00.000Z`, dueAt: `${TODAY}T04:00:00.000Z` }),
+    ])
+    expect(pools.get(PAIR)).toBeUndefined()
+  })
+
+  it('a fresh spread defers today outright, supersedes future debt, refuses normal future cards', () => {
     const moved = (st: CardState) =>
       rescheduleOverdueTracks(st, '2026-08-27', { ...opts, replanThrough: WINDOW })
     expect(moved(plannedRow('p1', TODAY))?.smartDueAt).toBe('2026-08-27T04:00:00.000Z')
     expect(moved(plannedRow('p2'))?.smartDueAt).toBe('2026-08-27T04:00:00.000Z')
-    expect(moved(normalRow('n2', TODAY))).toBeNull()
+    // Due today: deferrable even with no provable debt — this IS the overloaded-today relief.
+    expect(moved(normalRow('n2', TODAY))?.smartDueAt).toBe('2026-08-27T04:00:00.000Z')
+    // The scheduler's own future date: still absolutely untouchable.
     expect(moved(normalRow('n1', '2026-08-30'))).toBeNull()
+    // And a relearn row is refused whatever its date says.
+    expect(moved(grad('r', { relearningStep: 2, smartDueAt: `${TODAY}T04:00:00.000Z` }))).toBeNull()
+  })
+
+  it('without a plan window, today-due cards remain untouchable', () => {
+    // The deferral only exists inside an explicit spread; plain claims still stop at overdue.
+    expect(rescheduleOverdueTracks(normalRow('n2', TODAY), '2026-08-27', opts)).toBeNull()
   })
 
   it('supersession still leaves each card exactly one due date', () => {
