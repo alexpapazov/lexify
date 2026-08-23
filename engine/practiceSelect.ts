@@ -56,6 +56,18 @@ export interface SelectionContext {
   /** Today as `YYYY-MM-DD`, turnover-aware — the caller passes `getToday(tz, turnover)`. */
   today: string
   /**
+   * ISO timestamp → that moment's LOCAL calendar day (`YYYY-MM-DD`). Injected because this module
+   * has no timezone; without it a due time of 23:00 UTC lands on the wrong day for most learners.
+   * Defaults to the UTC day when absent.
+   */
+  localDayOf?: (iso: string) => string
+  /**
+   * Card id → the REVERSE row's due date (`recallDueAt ?? dueAt`), for cards that have one. The
+   * `due` source treats a word as due when ANY of its reviews is — production, recall, or
+   * recognition — and reverse rows live outside `statesByCard` (which is forward rows only).
+   */
+  reverseDueByCard?: Map<string, string>
+  /**
    * Normalizes a written word to the library's match key. Injected rather than imported so this
    * module stays dependency-free; the caller passes `normalizeFrontKey(text, sourceLanguage)`, the
    * same key duplicate detection uses, so "el pan" finds the card whose front is "pan".
@@ -145,13 +157,30 @@ function matchedCardIds(source: TargetSource, ctx: SelectionContext, byId: Map<s
     }
 
     case 'due': {
-      // Overdue counts as due — no lower bound. Compared at date level, matching how the rest of
-      // the app decides what "today" contains.
+      // Overdue counts as due — no lower bound. Compared at LOCAL date level, matching how the rest
+      // of the app decides what "today" contains.
+      //
+      // A word is due when ANY of its reviews is: the production lane (`smartDueAt ?? typedDueAt ??
+      // dueAt`), forward recall (`recallDueAt`), or the reverse row's recognition (injected via
+      // `reverseDueByCard`). Reading `dueAt` alone was the same drift `lib/dueStatus.ts` exists to
+      // prevent — a card whose production review just pushed `dueAt` into the future was invisible
+      // here even though its recall was due today.
+      const localDay = ctx.localDayOf ?? ((iso: string) => iso.slice(0, 10))
       const horizon = addDays(ctx.today, Math.max(0, source.withinDays))
+      const earliestDue = (s: CardState): string | null => {
+        const dates = [s.smartDueAt ?? s.typedDueAt ?? s.dueAt, s.recallDueAt,
+          ctx.reverseDueByCard?.get(s.cardId)].filter((d): d is string => !!d)
+        if (dates.length === 0) return null
+        return dates.reduce((a, b) => (a < b ? a : b))
+      }
       const rows = [...ctx.statesByCard.values()]
-        .filter(s => s.graduated && s.dueAt && s.dueAt.slice(0, 10) <= horizon && byId.has(s.cardId))
-        .sort((a, b) => (a.dueAt ?? '').localeCompare(b.dueAt ?? ''))   // soonest first
-      return { ids: rows.map(s => s.cardId), unmatched: [] }
+        .flatMap(s => {
+          if (!s.graduated || s.dormant || !byId.has(s.cardId)) return []
+          const due = earliestDue(s)
+          return due && localDay(due) <= horizon ? [{ cardId: s.cardId, due }] : []
+        })
+        .sort((a, b) => a.due.localeCompare(b.due))   // soonest first
+      return { ids: rows.map(r => r.cardId), unmatched: [] }
     }
 
     case 'difficulty': {
@@ -208,7 +237,10 @@ function matchedCardIds(source: TargetSource, ctx: SelectionContext, byId: Map<s
  * choices), and the two difficulty sources (they carry their own `limit`).
  */
 function isCapped(type: TargetSource['type']): boolean {
-  return type === 'decks' || type === 'due'
+  // Only `decks` is capped: a whole-deck selection can be thousands of cards picked with one click.
+  // `due` is deliberately NOT capped — "everything due today" is a complete answer or it is wrong,
+  // and the session-size decision belongs to the sentence plan, not the picker.
+  return type === 'decks'
 }
 
 /**

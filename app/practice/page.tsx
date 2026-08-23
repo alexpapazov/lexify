@@ -279,6 +279,15 @@ function PracticeInner() {
     ),
     cardIdsByDeck,
     today: getToday(deviceTimeZone()),
+    // Due comparisons must happen on the LOCAL calendar day — a 23:00 UTC due time is "today" or
+    // "tomorrow" depending on where the learner is.
+    localDayOf: (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: deviceTimeZone() }),
+    // Reverse rows carry the recognition schedule; a word whose recognition is due today is due.
+    reverseDueByCard: new Map(
+      states
+        .filter(s => s.reviewDirection === 'reverse' && !s.dormant)
+        .flatMap(s => { const d = s.recallDueAt ?? s.dueAt; return d ? [[s.cardId, d] as const] : [] }),
+    ),
     normalizeKey: (text: string) => normalizeFrontKey(text, pair?.sourceLanguage ?? ''),
   }), [cards, states, cardIdsByDeck, pair?.sourceLanguage])
 
@@ -789,7 +798,7 @@ function PracticeInner() {
               <p>{selection.droppedUndrillable} skipped as phrases or grammar words — those don&apos;t make good blanks.</p>
             )}
             {selection.capped.length > 0 && (
-              <p>Capped at {DEFAULT_CAP_PER_SOURCE} words per deck, folder or due window.</p>
+              <p>Capped at {DEFAULT_CAP_PER_SOURCE} words per deck or folder.</p>
             )}
             {selection.unmatched.length > 0 && (
               <p>Not in your library: {selection.unmatched.slice(0, 8).join(', ')}

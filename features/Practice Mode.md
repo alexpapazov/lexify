@@ -361,6 +361,20 @@ deliberately, which is a different thing and is wanted.
 
 ---
 
+## Error log (additions)
+
+- **2026-08-22 — "Due soon → Today" missed words and was silently capped.** Three defects in the
+  `due` source (`engine/practiceSelect.ts`): it read `dueAt` alone, so a card whose production
+  review had synced `dueAt` ahead — or whose schedule lived on `smartDueAt`/`typedDueAt`/
+  `recallDueAt`, or whose REVERSE recognition was due — was invisible (the same drift
+  `lib/dueStatus.ts` exists to prevent); it compared the UTC day against the learner's local
+  `today`, an off-by-one for evening due times; and it was capped at `DEFAULT_CAP_PER_SOURCE` (50)
+  like a deck selection, though "everything due today" is a complete answer or it is wrong. Now: a
+  word is due when ANY of its reviews is (production lane, forward recall, or the reverse row via
+  the injected `reverseDueByCard` map), days are compared through the injected `localDayOf`,
+  dormant rows are excluded, ordering is by the earliest due track, and `due` is uncapped — only
+  `decks` keeps the per-source cap. Seven regression tests.
+
 ## Error log
 
 | Date | Error | Fix |

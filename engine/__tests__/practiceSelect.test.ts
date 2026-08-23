@@ -416,3 +416,88 @@ describe('composing sources', () => {
     })
   })
 })
+
+describe('due source reads every track (the 39-missing-words regression)', () => {
+  const TODAY = '2026-08-08'
+  const due   = (): TargetSource[] => [{ type: 'due', withinDays: 0 }]
+
+  it('finds a card whose production lane is due while dueAt is stale or synced ahead', () => {
+    const cards = [card('un'), card('deux')]
+    const c = ctx({
+      cards,
+      statesByCard: statesOf([
+        // Smart lane due today; dueAt already synced to the NEXT review — the old dueAt-only read
+        // skipped exactly this card.
+        [cards[0]!.id, { smartDueAt: `${TODAY}T04:00:00Z`, dueAt: '2026-09-20T04:00:00Z' }],
+        [cards[1]!.id, { typedDueAt: `${TODAY}T04:00:00Z`, dueAt: null }],
+      ]),
+    })
+    expect(resolveTargets(due(), c).targets.map(t => t.front).sort()).toEqual(['deux', 'un'])
+  })
+
+  it('finds a card whose forward RECALL is due even though production is far out', () => {
+    const cards = [card('trois')]
+    const c = ctx({
+      cards,
+      statesByCard: statesOf([
+        [cards[0]!.id, { smartDueAt: '2026-09-20T04:00:00Z', recallDueAt: `${TODAY}T04:00:00Z` }],
+      ]),
+    })
+    expect(resolveTargets(due(), c).targets).toHaveLength(1)
+  })
+
+  it('finds a card whose REVERSE recognition is due, via the injected map', () => {
+    const cards = [card('quatre')]
+    const c = ctx({
+      cards,
+      statesByCard: statesOf([[cards[0]!.id, { smartDueAt: '2026-09-20T04:00:00Z' }]]),
+      reverseDueByCard: new Map([[cards[0]!.id, `${TODAY}T04:00:00Z`]]),
+    })
+    expect(resolveTargets(due(), c).targets).toHaveLength(1)
+  })
+
+  it('compares on the LOCAL day when a converter is supplied', () => {
+    // 03:00 UTC on the 9th is still the evening of the 8th in New York — due "today".
+    const cards = [card('cinq')]
+    const c = ctx({
+      cards,
+      statesByCard: statesOf([[cards[0]!.id, { dueAt: '2026-08-09T03:00:00Z' }]]),
+      localDayOf: (iso) => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }),
+    })
+    expect(resolveTargets(due(), c).targets).toHaveLength(1)
+    // Without the converter the UTC day (the 9th) is used, and the card is tomorrow's.
+    expect(resolveTargets(due(), { ...c, localDayOf: undefined }).targets).toHaveLength(0)
+  })
+
+  it('never caps the due source — everything due today is the whole point', () => {
+    const cards = Array.from({ length: DEFAULT_CAP_PER_SOURCE + 30 }, (_, i) => card(`mot${i}`))
+    const c = ctx({
+      cards,
+      statesByCard: statesOf(cards.map(cd => [cd.id, { dueAt: `${TODAY}T04:00:00Z` }])),
+    })
+    const r = resolveTargets(due(), c)
+    expect(r.targets).toHaveLength(DEFAULT_CAP_PER_SOURCE + 30)
+    expect(r.capped).toEqual([])
+  })
+
+  it('still excludes dormant rows', () => {
+    const cards = [card('six')]
+    const c = ctx({
+      cards,
+      statesByCard: statesOf([[cards[0]!.id, { dueAt: `${TODAY}T04:00:00Z`, dormant: true }]]),
+    })
+    expect(resolveTargets(due(), c).targets).toHaveLength(0)
+  })
+
+  it('orders by the earliest due track, soonest first', () => {
+    const cards = [card('tard'), card('tot')]
+    const c = ctx({
+      cards,
+      statesByCard: statesOf([
+        [cards[0]!.id, { dueAt: '2026-08-07T04:00:00Z' }],
+        [cards[1]!.id, { smartDueAt: '2026-09-01T04:00:00Z', recallDueAt: '2026-08-01T04:00:00Z' }],
+      ]),
+    })
+    expect(resolveTargets(due(), c).targets.map(t => t.front)).toEqual(['tot', 'tard'])
+  })
+})
