@@ -83,8 +83,8 @@ against real arrival numbers spreads to **under 400/day with no day above mean �
 
 | Piece | Where |
 |---|---|
-| Ranking, strata, day assignment, preview | `lib/catchUp.ts` (32 tests) |
-| Due rows → per-scope pools; the write patch | `lib/catchUpPools.ts` (21 tests) |
+| Ranking, strata, day assignment, preview | `lib/catchUp.ts` (30 tests) |
+| Overdue rows → per-scope pools; the write patch | `lib/catchUpPools.ts` (31 tests) |
 | `overdue` vs `today` split, `daysOverdue` | `lib/dueStatus.ts` (`cardStateDueBucket`) |
 | Measured review pace for the "~N min" | `lib/reviewPace.ts` (11 tests) |
 | Plan record, debt detection, progress | `lib/catchUpPlan.ts` (22 tests) |
@@ -176,6 +176,17 @@ an unplanned card sitting in the window is refused.
 Reassign also subtracts the plan's own cards from the levelling load before re-dealing, or they would
 count as immovable congestion and the re-deal would pile everything into whatever days looked free.
 
+### Plans are recorded per scope actually claimed
+
+The record written after a spread is grouped from the UPDATED rows, not from the selection. So an
+"All languages" spread leaves one trackable bar per language (there is no "everything" bar to go
+stale), and totals reflect what the liveness re-check actually let through. A selection with a card
+type set records `pk:type` keys per language; a language with "All types" records the language key.
+
+**Reassign re-reads the rows before writing, exactly like spread.** `upsertBatch` writes whole rows,
+so patching a snapshot row would silently revert any review made since load. Neither path may ever
+filter `ctx.states` for a write.
+
 ### Overlapping plans
 
 A language plan and a card-type plan inside it claim some of the same cards, so two bars would
@@ -204,7 +215,14 @@ double-count. `conflictingScopes()` makes creating either one replace the other.
 - **`Pill` is declared at module scope.** A component defined inside a render is a new component
   type every render, so React remounts its entire subtree on each keystroke.
 - **A forward and a reverse review of the same card are separate items** (`candidateKey` is
-  `cardId:direction`). Collapsing them undercounts the backlog.
+  `cardId:direction`). Collapsing them undercounts the backlog. Each due row lands in exactly ONE
+  type pool (`catchUpTypeOf` picks one), so the panel's entry list can never spread a row twice —
+  pinned by the "no double assignment, end to end" test.
+- **Pools hold OVERDUE rows only.** Cards due today are today's legitimate work; `buildCatchUpPools`
+  never collects them, so a spread structurally cannot push them into the future.
+- **The preset buttons' "heavy relearning days" warning** fires when `previewCatchUp` predicts the
+  ¼-relearning cap would be breached (same condition as `lapsedCapped`). Everything still fits the
+  window; some days just carry more relearning than the cap intends.
 
 ## 7. Error log
 
@@ -217,3 +235,10 @@ double-count. `conflictingScopes()` makes creating either one replace the other.
   Bulgarian. The subtitle's abstract "native → target" then contradicted the concrete arrow beside
   it. Fixed with `scopeDirection()` (prompt language first, `↔` for a whole-language scope) and by
   dropping the abstract direction from the subtitle, so direction is stated in exactly one place.
+- **2026-08-22 — final audit.** Deleted the dead remains of both abandoned designs (`catchUpQuota`,
+  `resolvePlan`/`CatchUpPlans`, `paceForMix`, `ScopePool.dueToday`) and the stale module header that
+  still described the quota model. Fixed a real hazard: `reassign` wrote whole rows from the
+  load-time snapshot with no liveness re-read, so a stale row could clobber a review made in another
+  tab — it now re-reads like `spread` does. Also made an "All" spread record per-language plans
+  (previously it recorded nothing, so the largest spreads were untracked), and restored the
+  heavy-relearning warning the filters rewrite had dropped.

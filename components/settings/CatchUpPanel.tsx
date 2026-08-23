@@ -339,12 +339,11 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     return 'Everything overdue'
   }, [lang, type, langs])
 
-  /** The plan governing the current selection, if the selection is exactly one planned scope. */
-  const currentKey  = useMemo(
-    () => (lang === ALL ? null : type === ALL ? lang : scopeKey(lang, type)),
-    [lang, type],
-  )
-  const currentPlan = currentKey ? plans[currentKey] ?? null : null
+  /** Whether the exact current selection already has a tracked plan — drives the button label. */
+  const currentPlan = useMemo(() => {
+    if (lang === ALL) return null
+    return plans[type === ALL ? lang : scopeKey(lang, type)] ?? null
+  }, [plans, lang, type])
 
   /**
    * Re-deal the cards a plan already claimed across its remaining days.
@@ -360,7 +359,15 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     try {
       const [pk, t] = key.split(':') as [`${string}|${string}`, CatchUpType | undefined]
 
-      const claimed = ctx.states.filter(st => {
+      // Liveness re-read, same as spread(): the panel's snapshot may be minutes old, and `upsertBatch`
+      // writes WHOLE rows — patching a stale row would silently revert any review made since load
+      // (another tab, or a session in this one). Filter fresh rows, never ctx.states.
+      const repo  = new SupabaseCardStateRepository()
+      const fresh = await repo.listAllForUser(userId)
+      const freshForwards = new Map(
+        fresh.filter(st => st.reviewDirection !== 'reverse').map(st => [st.cardId, st]))
+
+      const claimed = fresh.filter(st => {
         if ((ctx.deckPair.get(st.cardId) ?? '') !== pk) return false
         if (t) {
           const rowType = st.reviewDirection === 'reverse' ? 'sgReverse'
@@ -381,7 +388,7 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
       const retention = ctx.retentionByPair.get(pk) ?? 0.9
       const candidates = claimed.map(st => candidateFor(st, {
         tracks: ctx.tracks.get(pk), tz: timezone, today: ctx.today,
-        forwardState: ctx.forwardByCard.get(st.cardId), retention, now: Date.now(),
+        forwardState: freshForwards.get(st.cardId), retention, now: Date.now(),
       }))
       const days = Math.max(1, daysBetween(ctx.today, plan.targetDate))
       // Levelled against the load MINUS what this plan itself put there, or the cards being re-dealt
@@ -403,7 +410,7 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         if (!st) continue
         const patch = rescheduleOverdueTracks(st, day, {
           tracks: ctx.tracks.get(pk), tz: timezone, today: ctx.today,
-          forwardState: ctx.forwardByCard.get(st.cardId),
+          forwardState: freshForwards.get(st.cardId),
           replanThrough: plan.targetDate,
         })
         if (patch) updates.push({ ...st, ...patch })
@@ -412,7 +419,6 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         setMsg({ ok: false, text: 'Nothing moved — those cards are already evenly placed.' })
         return
       }
-      const repo = new SupabaseCardStateRepository()
       for (const part of chunk(updates, 200)) await repo.upsertBatch(part)
       setMsg({
         ok: true,
@@ -427,12 +433,14 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
     }
   }
 
-  async function savePlan(key: string, record: CatchUpPlanRecord) {
+  async function savePlans(records: Array<[string, CatchUpPlanRecord]>) {
     // A language plan and a card-type plan inside it claim overlapping cards, so both bars would
-    // double-count. Creating either replaces the other.
+    // double-count. Creating either replaces the other (conflictingScopes).
     const next: CatchUpPlanRecords = { ...plans }
-    for (const clash of conflictingScopes(key, next)) delete next[clash]
-    next[key] = record
+    for (const [key, record] of records) {
+      for (const clash of conflictingScopes(key, next)) delete next[clash]
+      next[key] = record
+    }
     setPlans(next)
     await createClient().from('profiles').update({ catchup_plans: next }).eq('user_id', userId)
       .then(() => {}, () => {})
@@ -505,11 +513,20 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
         text: `Spread ${updates.length.toLocaleString()} card${updates.length === 1 ? '' : 's'} over ${days} day${days === 1 ? '' : 's'} — about ${perDay.toLocaleString()} a day on top of what was already scheduled.${skipped}`,
       })
       setPicking(false)
-      // The plan is recorded with what the spread ACTUALLY claimed, not what the selection showed —
-      // the liveness re-check may have skipped some, and a total that never happened would make the
-      // progress bar start out wrong.
-      if (currentKey) {
-        await savePlan(currentKey, { targetDate, startedOn: ctx.today, total: updates.length })
+      // Record a plan per scope ACTUALLY claimed — grouped from `updates`, not from the selection.
+      // Two reasons: the liveness re-check may have skipped cards (a total that never happened would
+      // start the bar wrong), and an "All languages" spread must still leave one trackable bar per
+      // language rather than vanishing untracked.
+      const totals = new Map<string, number>()
+      for (const st of updates) {
+        const pk = ctx.deckPair.get(st.cardId)
+        if (!pk) continue
+        const k = type === ALL ? pk : scopeKey(pk, type)
+        totals.set(k, (totals.get(k) ?? 0) + 1)
+      }
+      if (totals.size > 0) {
+        await savePlans([...totals].map(([k, total]) =>
+          [k, { targetDate, startedOn: ctx.today, total }] as [string, CatchUpPlanRecord]))
       }
       await load()
     } catch (err) {
@@ -653,6 +670,12 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
                           {`+${p.fromBacklog.toLocaleString()}/day`}
                           {p.minutesPerDay != null && ` · ${fmtMinutes(p.minutesPerDay)}`}
                         </div>
+                        {/* Fires exactly when the spread would breach the ¼-relearning comfort cap
+                            (`lapsedCapped` in assignBacklogDays) — everything still fits the window,
+                            some days just carry heavier relearning than the cap intends. */}
+                        {p.lapsedFinishesInDays > d && (
+                          <div className="text-xs text-warning mt-0.5">heavy relearning days</div>
+                        )}
                       </button>
                     )
                   })}

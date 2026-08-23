@@ -1,8 +1,11 @@
 /**
- * lib/catchUpPools.ts — turning due `card_states` rows into the pools a catch-up plan draws from.
+ * lib/catchUpPools.ts — turning due `card_states` rows into the per-scope backlogs a catch-up
+ * spreads, and the write patch that moves them.
  *
- * One pass over the rows produces, per scope, the two lists `planCatchUpSession` needs: what came due
- * TODAY (non-negotiable) and what is OVERDUE (the backlog being drained).
+ * One pass over the rows produces, per scope, the OVERDUE list — the backlog `assignBacklogDays`
+ * deals out. Cards merely due TODAY are deliberately not collected: they are today's legitimate
+ * work, and a spread must never push them into the future (`cardStateDueBucket` is what tells the
+ * two apart).
  *
  * Every row is filed under BOTH its language key (`"bg|en"`) and its type key (`"bg|en:typing"`), so a
  * language-level plan and a type-level plan each find a pool without a second pass. The type split is
@@ -22,8 +25,7 @@ import { seedStability } from '@/lib/forecastFsrs'
 import { isCarryingDebt } from '@/lib/catchUpPlan'
 
 export interface ScopePool {
-  overdue:  CatchUpCandidate[]
-  dueToday: CatchUpCandidate[]
+  overdue: CatchUpCandidate[]
 }
 
 /** Identity for a queue item. A card's forward and reverse rows are separate reviews. */
@@ -97,17 +99,17 @@ export function buildCatchUpPools(args: {
   now:             number
 }): Map<string, ScopePool> {
   const pools = new Map<string, ScopePool>()
-  const add = (key: string, bucket: 'overdue' | 'today', c: CatchUpCandidate) => {
+  const add = (key: string, c: CatchUpCandidate) => {
     let pool = pools.get(key)
-    if (!pool) { pool = { overdue: [], dueToday: [] }; pools.set(key, pool) }
-    ;(bucket === 'overdue' ? pool.overdue : pool.dueToday).push(c)
+    if (!pool) { pool = { overdue: [] }; pools.set(key, pool) }
+    pool.overdue.push(c)
   }
 
   for (const { pairKey, state } of args.rows) {
     const tracks = args.tracksByPair.get(pairKey)
     const opts = { tracks, tz: args.tz, today: args.today, forwardState: args.forwardByCard.get(state.cardId) }
-    const bucket = cardStateDueBucket(state, opts)
-    if (!bucket) continue
+    // Overdue rows ONLY. 'today' is real work the learner should do today, not backlog.
+    if (cardStateDueBucket(state, opts) !== 'overdue') continue
 
     const candidate = candidateFor(state, {
       ...opts, retention: args.retentionByPair.get(pairKey) ?? 0.9, now: args.now,
@@ -116,8 +118,8 @@ export function buildCatchUpPools(args: {
     const type = catchUpTypeOf(state, {
       tracks, threshold: args.thresholdByPair.get(pairKey) ?? 20, tz: args.tz, today: args.today,
     })
-    add(pairKey, bucket, candidate)
-    add(scopeKey(pairKey, type), bucket, candidate)
+    add(pairKey, candidate)
+    add(scopeKey(pairKey, type), candidate)
   }
   return pools
 }
@@ -128,7 +130,7 @@ export function buildCatchUpPools(args: {
  * a single stray push would leak one scope's cards into all the others.
  */
 export function emptyPool(): ScopePool {
-  return { overdue: [], dueToday: [] }
+  return { overdue: [] }
 }
 
 /**

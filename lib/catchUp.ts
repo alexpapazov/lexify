@@ -1,23 +1,12 @@
 /**
- * lib/catchUp.ts — draining a review backlog by a date you choose.
+ * lib/catchUp.ts — spreading an overdue backlog across the days up to a date you choose.
  *
- * When you fall behind, "Study all due (1693)" is not a plan, it's a wall. A catch-up plan turns it
- * into a daily number: pick the date you want to be level again, and every day this computes how many
- * reviews that costs and which ones to serve.
+ * When you fall behind, "Study all due (1693)" is not a plan, it's a wall. Catch-up deals the
+ * overdue cards out across real due dates (`assignBacklogDays`), so every surface — the forecast
+ * chart, the deck counts, the session queues — sees the same schedule with no extra logic.
  *
- * ── Only the target date is stored ────────────────────────────────────────────
- * Everything else is DERIVED and recomputed each day, exactly like full-debt goal carryover
- * (`lib/goalCarryover.ts`). A stored "cards remaining" counter goes stale the moment you overshoot,
- * fall short, or a relearn lands, and then the plan quietly lies. Recomputing from the live backlog
- * self-corrects: overshoot today and tomorrow's number drops on its own.
- *
- * ── The quota splits in two, and the split is meaningful ──────────────────────
- *   quota = dueToday + ceil(overdue / daysRemaining)
- *
- * `dueToday` is non-negotiable — skip it and the backlog grows. `overdue` is the actual debt, spread
- * evenly over the days you have left. Note this trends DOWNWARD day to day, which a naive
- * `backlog / days` does not: that one climbs as new cards arrive and feels like the target is running
- * away from you.
+ * This module is the pure math only. Turning rows into candidates and writing the moved dates lives
+ * in `lib/catchUpPools.ts`; tracking a spread as a followable plan lives in `lib/catchUpPlan.ts`.
  *
  * ── Ordering: deferral damage, not "most overdue" ─────────────────────────────
  * The cost of delaying a card is NOT monotonic in how forgotten it is. A card at R=0.95 is safe and
@@ -26,9 +15,9 @@
  * window, which peaks mid-band on its own and leaves both extremes alone.
  *
  * Deeply lapsed cards (below `LAPSED_R`) are drained as a separate stratum at their own steady rate,
- * capped so no session is more than `MAX_LAPSED_SHARE` relearning, then sprinkled evenly through the
- * queue. Without that cap and that sprinkle you either front-load a wall of relearning or push it all
- * to the final days.
+ * capped so no day is more than `MAX_LAPSED_SHARE` relearning, then spread evenly across the window.
+ * Without that cap and that spread you either front-load a wall of relearning or push it all to the
+ * final days.
  */
 
 import { retrievability } from '@/engine/fsrs'
@@ -42,35 +31,11 @@ export const MAX_LAPSED_SHARE = 0.25
 /** The three buckets the "Study all due" popover already splits each language into. */
 export type CatchUpType = 'typing' | 'sgForward' | 'sgReverse'
 
-/** All a plan stores. Everything else is derived from the live backlog. */
-export interface CatchUpPlan {
-  /** YYYY-MM-DD you want to be level again by. */
-  targetDate: string
-}
-
-/** Keyed by `scopeKey()`: `"bg|en"` for a whole language, `"bg|en:typing"` for one card type. */
-export type CatchUpPlans = Record<string, CatchUpPlan>
-
 // ─── Scope ────────────────────────────────────────────────────────────────────
 
 /** `"bg|en"` or `"bg|en:typing"`. `pairKey` is the existing `${source}|${target}`. */
 export function scopeKey(pairKey: string, type?: CatchUpType | null): string {
   return type ? `${pairKey}:${type}` : pairKey
-}
-
-/**
- * The plan governing one (language, card type), most-specific-wins: a type-level plan beats the
- * language-level one, which covers whichever types have no plan of their own.
- */
-export function resolvePlan(
-  plans: CatchUpPlans,
-  pairKey: string,
-  type: CatchUpType,
-): { key: string; plan: CatchUpPlan } | null {
-  const typed = scopeKey(pairKey, type)
-  if (plans[typed]) return { key: typed, plan: plans[typed]! }
-  if (plans[pairKey]) return { key: pairKey, plan: plans[pairKey]! }
-  return null
 }
 
 /**
@@ -118,45 +83,6 @@ export function addDays(today: string, days: number): string {
   return new Date(t + days * DAY_MS).toISOString().slice(0, 10)
 }
 
-// ─── The quota ────────────────────────────────────────────────────────────────
-
-export interface QuotaBreakdown {
-  /** Total reviews to serve today. */
-  quota: number
-  /** Of that, cards that came due today — non-negotiable. */
-  fromToday: number
-  /** Of that, this day's slice of the backlog. */
-  fromBacklog: number
-  /** Days left including today; floored at 1 so the last day clears everything. */
-  daysRemaining: number
-  /** The date has passed and there is still a backlog — hold at the final quota. */
-  pastTarget: boolean
-}
-
-/**
- * Today's number for one scope. On and after the target date `daysRemaining` floors at 1, so the
- * quota becomes "everything still owed" and simply holds there until the backlog actually clears —
- * nothing stops serving on its own.
- */
-export function catchUpQuota(args: {
-  overdue:    number
-  dueToday:   number
-  targetDate: string
-  today:      string
-}): QuotaBreakdown {
-  const overdue  = Math.max(0, Math.floor(args.overdue))
-  const dueToday = Math.max(0, Math.floor(args.dueToday))
-  const daysRemaining = Math.max(1, daysBetween(args.today, args.targetDate))
-  const fromBacklog = Math.ceil(overdue / daysRemaining)
-  return {
-    quota: dueToday + fromBacklog,
-    fromToday: dueToday,
-    fromBacklog,
-    daysRemaining,
-    pastTarget: daysBetween(args.today, args.targetDate) < 0,
-  }
-}
-
 // ─── Ranking ──────────────────────────────────────────────────────────────────
 
 /**
@@ -172,8 +98,8 @@ export interface CatchUpCandidate {
   stability: number
 }
 
-/** A candidate with its ranking numbers for one particular window. */
-export interface RankedCandidate extends CatchUpCandidate {
+/** A candidate with its ranking numbers for one particular window. Internal to the spreader. */
+interface RankedCandidate extends CatchUpCandidate {
   /** Recall probability right now, 0–1. */
   retrievability: number
   /** Recall that would be lost by putting this off to the end of the window, 0–1. */

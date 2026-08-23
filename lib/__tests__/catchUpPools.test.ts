@@ -28,17 +28,15 @@ function build(rows: CardState[], tracks: EnabledTracks = SMART) {
 }
 
 describe('buildCatchUpPools', () => {
-  it('splits overdue from due-today and files each row under BOTH its language and its type', () => {
+  it('collects only OVERDUE rows, filed under both the language and the type key', () => {
     const pools = build([
-      grad('a', { smartDueAt: '2026-08-01T00:00:00.000Z', smartIntervalDays: 5 }),   // overdue, typing
-      grad('b', { smartDueAt: `${TODAY}T00:00:00.000Z`,   smartIntervalDays: 5 }),   // today,   typing
+      grad('a', { smartDueAt: '2026-08-01T00:00:00.000Z', smartIntervalDays: 5 }),   // overdue → in
+      grad('b', { smartDueAt: `${TODAY}T00:00:00.000Z`,   smartIntervalDays: 5 }),   // today → OUT:
+      // a card due today is today's legitimate work, and a spread must never push it later.
     ])
     const lang = pools.get(PAIR)!
     expect(lang.overdue.map(c => c.key)).toEqual(['a:forward'])
-    expect(lang.dueToday.map(c => c.key)).toEqual(['b:forward'])
-    // Same rows, reachable by the type key a type-level plan would use.
-    expect(pools.get(scopeKey(PAIR, 'typing'))!.overdue).toHaveLength(1)
-    expect(pools.get(scopeKey(PAIR, 'typing'))!.dueToday).toHaveLength(1)
+    expect(pools.get(scopeKey(PAIR, 'typing'))!.overdue.map(c => c.key)).toEqual(['a:forward'])
   })
 
   it('leaves out cards that are not due', () => {
@@ -264,5 +262,78 @@ describe('reassign mode (replanThrough)', () => {
     })
     expect(rescheduleOverdueTracks(late, '2026-08-25', { ...opts, replanThrough: WINDOW })?.smartDueAt)
       .toBe('2026-08-25T04:00:00.000Z')
+  })
+})
+
+describe('no double assignment, end to end', () => {
+  // The full chain the panel runs — pools → spread → write → pools again — twice, with overlapping
+  // selections. This is the invariant the unit guards exist to serve, so it gets its own test.
+  const opts = { tracks: SMART, tz: TZ, today: TODAY }
+
+  function poolsFor(rows: CardState[]) {
+    return build(rows)
+  }
+
+  function runSpread(rows: CardState[], candidates: { key: string }[], targetDay: string) {
+    // Mirrors the panel: assign days, patch each row, return the new rows.
+    const byKey = new Map(rows.map(st => [candidateKey(st), st]))
+    const forwards = new Map(rows.filter(r => r.reviewDirection !== 'reverse').map(r => [r.cardId, r]))
+    const moved: string[] = []
+    const next = rows.map(st => ({ ...st }))
+    for (const c of candidates) {
+      const st = byKey.get(c.key)
+      if (!st) continue
+      const patch = rescheduleOverdueTracks(st, targetDay, { ...opts, forwardState: forwards.get(st.cardId) })
+      if (patch) {
+        moved.push(c.key)
+        const i = next.findIndex(n => candidateKey(n) === c.key)
+        next[i] = { ...next[i]!, ...patch }
+      }
+    }
+    return { next, moved }
+  }
+
+  it('a second overlapping spread moves nothing the first one claimed', () => {
+    const rows = [
+      grad('a', { smartDueAt: '2026-08-01T04:00:00.000Z', dueAt: '2026-08-01T04:00:00.000Z', smartIntervalDays: 5 }),
+      grad('b', { smartDueAt: '2026-08-05T04:00:00.000Z', dueAt: '2026-08-05T04:00:00.000Z', smartIntervalDays: 400 }),
+      grad('c', { reviewDirection: 'reverse', recallDueAt: '2026-08-03T04:00:00.000Z', recallIntervalDays: 30 }),
+      grad('c'),
+    ]
+    // First spread: the typing scope only.
+    const typingPool = poolsFor(rows).get(scopeKey(PAIR, 'typing'))!
+    const first = runSpread(rows, typingPool.overdue, '2026-08-30')
+    expect(first.moved).toEqual(['a:forward'])
+
+    // Second spread: the WHOLE language, which overlaps the typing scope.
+    const langPool = poolsFor(first.next).get(PAIR)!
+    const second = runSpread(first.next, langPool.overdue, '2026-09-10')
+    // 'a' is claimed and gone from the backlog; only b and the reverse row move.
+    expect(second.moved.sort()).toEqual(['b:forward', 'c:reverse'])
+    expect(langPool.overdue.map(c => c.key)).not.toContain('a:forward')
+
+    // Third pass: everything claimed, nothing overdue anywhere, nothing movable.
+    const finalPools = poolsFor(second.next)
+    expect(finalPools.get(PAIR)).toBeUndefined()
+    const third = runSpread(second.next, [
+      ...typingPool.overdue, ...langPool.overdue,     // even replaying stale candidate lists
+    ], '2026-09-20')
+    expect(third.moved).toEqual([])
+  })
+
+  it('each due row yields exactly one candidate across all type pools', () => {
+    // The panel builds its entry list from the three type pools; a row landing in two would be
+    // spread twice in one run.
+    const rows = [
+      grad('a', { smartDueAt: '2026-08-01T04:00:00.000Z', recallDueAt: '2026-07-20T04:00:00.000Z', smartIntervalDays: 5 }),
+      grad('b', { smartDueAt: '2026-08-05T04:00:00.000Z', smartIntervalDays: 400 }),
+      grad('c', { reviewDirection: 'reverse', recallDueAt: '2026-08-03T04:00:00.000Z' }),
+      grad('c'),
+    ]
+    const pools = poolsFor(rows)
+    const allTypeKeys = (['typing', 'sgForward', 'sgReverse'] as const)
+      .flatMap(t => (pools.get(scopeKey(PAIR, t))?.overdue ?? []).map(c => c.key))
+    expect(allTypeKeys.length).toBe(new Set(allTypeKeys).size)
+    expect(allTypeKeys.sort()).toEqual(['a:forward', 'b:forward', 'c:reverse'])
   })
 })

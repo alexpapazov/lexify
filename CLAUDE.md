@@ -2225,7 +2225,10 @@ across the days between. **Read `features/Catch Up.md` before touching it.**
   gap — `isCarryingDebt()`. Tolerance is `× 1.05 + 1 day` because Redistribute nudges due dates
   within the FSRS fuzz window without updating that field. Reassign passes `replanThrough`, letting
   in-window tracks move ONLY for debt-carrying rows; that check is inside `rescheduleOverdueTracks`
-  deliberately, so "unplanned cards stay unchanged" can't be forgotten by a caller.
+  deliberately, so "unplanned cards stay unchanged" can't be forgotten by a caller. BOTH write paths
+  (spread and reassign) re-read the rows immediately before writing — `upsertBatch` writes whole
+  rows, so a snapshot row would revert reviews made since load. An "All" spread records one plan per
+  language claimed; pools hold overdue rows only (due-today is never spreadable).
 - **Layout rules** (`assignBacklogDays`, pure): level against the days' EXISTING arrivals so the
   backlog fills the gaps rather than piling on the already-heavy days; highest deferral damage
   earliest (`loss = R·(1 − 0.9^(d/S))` peaks mid-band, so neither rock-solid nor long-gone cards go

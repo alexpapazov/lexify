@@ -111,21 +111,3 @@ export function pace(
   const any = weightedMedian(samples.get('all') ?? [])
   return any && any > 0 ? any : DEFAULT_DUE_MS
 }
-
-/**
- * One representative pace for a whole language, for the catch-up picker — which quotes a single
- * "~N min/day" and so cannot show four bucket figures. Averages the buckets that actually have due
- * work, weighted by how much of it each carries.
- */
-export function paceForMix(
-  samples: PaceSamples,
-  src: string,
-  tgt: string,
-  mix: Array<{ dir: 'forward' | 'reverse'; typed: boolean; count: number }>,
-): number {
-  const total = mix.reduce((t, m) => t + Math.max(0, m.count), 0)
-  if (total <= 0) return pace(samples, src, tgt, 'forward', false)
-  let acc = 0
-  for (const m of mix) acc += pace(samples, src, tgt, m.dir, m.typed) * Math.max(0, m.count)
-  return acc / total
-}

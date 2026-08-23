@@ -1,5 +1,5 @@
 import {
-  buildPaceSamples, pace, paceForMix, weightedMedian, recencyWeight,
+  buildPaceSamples, pace, weightedMedian, recencyWeight,
   DEFAULT_DUE_MS, HALF_LIFE_DAYS, type PaceRow,
 } from '@/lib/reviewPace'
 
@@ -74,25 +74,5 @@ describe('pace', () => {
     const s = buildPaceSamples(rows, NOW)
     expect(pace(s, 'bg', 'en', 'forward', true)).toBe(12_000)
     expect(pace(s, 'bg', 'en', 'forward', false)).toBe(3_000)
-  })
-})
-
-describe('paceForMix', () => {
-  it('weights each bucket by how much due work it actually carries', () => {
-    const rows = [
-      ...Array.from({ length: 4 }, () => row(10_000, 0, { was_typed: true })),
-      ...Array.from({ length: 4 }, () => row(2_000, 0, { was_typed: false })),
-    ]
-    const s = buildPaceSamples(rows, NOW)
-    // Three quarters of the backlog is the slow typed bucket.
-    const mixed = paceForMix(s, 'bg', 'en', [
-      { dir: 'forward', typed: true, count: 30 },
-      { dir: 'forward', typed: false, count: 10 },
-    ])
-    expect(mixed).toBeCloseTo((10_000 * 30 + 2_000 * 10) / 40, 5)
-  })
-
-  it('falls back cleanly when there is no due work to weight', () => {
-    expect(paceForMix(buildPaceSamples([], NOW), 'bg', 'en', [])).toBe(DEFAULT_DUE_MS)
   })
 })

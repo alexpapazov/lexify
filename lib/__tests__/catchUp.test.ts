@@ -1,9 +1,9 @@
 import {
-  LAPSED_R, MAX_LAPSED_SHARE,
-  scopeKey, resolvePlan, daysBetween, addDays,
-  catchUpQuota, candidateMetrics, elapsedDaysFor,
+  LAPSED_R,
+  scopeKey, daysBetween, addDays,
+  candidateMetrics, elapsedDaysFor,
   assignBacklogDays, previewCatchUp, isLapsed, scopeDirection,
-  type CatchUpCandidate, type CatchUpPlans,
+  type CatchUpCandidate,
 } from '@/lib/catchUp'
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -31,18 +31,6 @@ describe('scope keys', () => {
   it('separates a whole language from one card type', () => {
     expect(scopeKey('bg|en')).toBe('bg|en')
     expect(scopeKey('bg|en', 'typing')).toBe('bg|en:typing')
-  })
-
-  it('resolves most-specific-first, falling back to the language plan', () => {
-    const plans: CatchUpPlans = {
-      'bg|en':          { targetDate: '2026-09-05' },
-      'bg|en:typing':   { targetDate: '2026-08-29' },
-    }
-    // The type-level plan wins for typing...
-    expect(resolvePlan(plans, 'bg|en', 'typing')?.plan.targetDate).toBe('2026-08-29')
-    // ...and the language plan still covers the types that have none of their own.
-    expect(resolvePlan(plans, 'bg|en', 'sgForward')?.plan.targetDate).toBe('2026-09-05')
-    expect(resolvePlan(plans, 'es|en', 'typing')).toBeNull()
   })
 })
 
@@ -84,63 +72,6 @@ describe('date helpers', () => {
   it('addDays crosses a month boundary', () => {
     expect(addDays(TODAY, 14)).toBe('2026-09-05')
     expect(addDays('2026-12-31', 1)).toBe('2027-01-01')
-  })
-})
-
-// ─── The quota ────────────────────────────────────────────────────────────────
-
-describe('catchUpQuota', () => {
-  it('is today\'s arrivals plus an even slice of the backlog', () => {
-    const q = catchUpQuota({ overdue: 1500, dueToday: 190, targetDate: '2026-09-05', today: TODAY })
-    expect(q.daysRemaining).toBe(14)
-    expect(q.fromBacklog).toBe(Math.ceil(1500 / 14))   // 108
-    expect(q.fromToday).toBe(190)
-    expect(q.quota).toBe(298)
-    expect(q.pastTarget).toBe(false)
-  })
-
-  it('clears everything on the target date itself', () => {
-    const q = catchUpQuota({ overdue: 400, dueToday: 50, targetDate: TODAY, today: TODAY })
-    expect(q.daysRemaining).toBe(1)
-    expect(q.quota).toBe(450)
-    expect(q.pastTarget).toBe(false)   // the date has arrived, it has not passed
-  })
-
-  it('holds at the full remaining load once the target has passed', () => {
-    // Nothing stops serving on its own — the plan ends when the backlog does, not when the date does.
-    const q = catchUpQuota({ overdue: 220, dueToday: 60, targetDate: '2026-08-20', today: TODAY })
-    expect(q.pastTarget).toBe(true)
-    expect(q.daysRemaining).toBe(1)
-    expect(q.quota).toBe(280)
-  })
-
-  it('asks for nothing extra when the backlog is already clear', () => {
-    const q = catchUpQuota({ overdue: 0, dueToday: 190, targetDate: '2026-09-05', today: TODAY })
-    expect(q.fromBacklog).toBe(0)
-    expect(q.quota).toBe(190)
-  })
-
-  it('drains to exactly zero by the target date, and never asks for more than the day before', () => {
-    // The property that matters: recomputing daily from the live backlog trends DOWNWARD. A naive
-    // `backlog / totalDays` climbs as new cards arrive, so the target appears to run away from you.
-    let overdue = 1500
-    const inflow = 190
-    let prevSlice = Infinity
-    for (let day = 0; day < 14; day++) {
-      const q = catchUpQuota({
-        overdue, dueToday: inflow, targetDate: '2026-09-05', today: addDays(TODAY, day),
-      })
-      expect(q.fromBacklog).toBeLessThanOrEqual(prevSlice)
-      prevSlice = q.fromBacklog
-      overdue -= q.fromBacklog                 // today's slice cleared; the arrivals were cleared too
-    }
-    expect(overdue).toBe(0)
-  })
-
-  it('self-corrects after a day you overshoot', () => {
-    const onPlan = catchUpQuota({ overdue: 1392, dueToday: 190, targetDate: '2026-09-05', today: addDays(TODAY, 1) })
-    const ahead  = catchUpQuota({ overdue: 1000, dueToday: 190, targetDate: '2026-09-05', today: addDays(TODAY, 1) })
-    expect(ahead.quota).toBeLessThan(onPlan.quota)
   })
 })
 
