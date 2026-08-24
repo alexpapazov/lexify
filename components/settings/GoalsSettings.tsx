@@ -538,23 +538,41 @@ export function GoalsSettings() {
                 })()}
               </div>
             ) : (
-              <div className="grid grid-cols-7 gap-2 max-w-2xl">
-                {WEEKDAYS.map(({ day, label }) => (
-                  <div key={day} className="flex flex-col items-center gap-1">
-                    <span className="text-xs text-ink-faint select-none">{label}</span>
-                    <input
-                      type="number" min={1} max={999}
-                      className="input text-center text-sm px-1 py-1.5 w-full"
-                      placeholder="—"
-                      value={drafts[String(day)] ?? ''}
-                      onChange={e => setGoalDrafts(prev => ({
-                        ...prev,
-                        [pairKey]: { ...(prev[pairKey] ?? {}), [String(day)]: e.target.value },
-                      }))}
-                      onBlur={() => void handleGoalBlur(pair.sourceLanguage, pair.targetLanguage)}
-                    />
-                  </div>
-                ))}
+              <div className="flex items-end gap-3 max-w-3xl">
+                <div className="grid grid-cols-7 gap-2 flex-1">
+                  {WEEKDAYS.map(({ day, label }) => (
+                    <div key={day} className="flex flex-col items-center gap-1">
+                      <span className="text-xs text-ink-faint select-none">{label}</span>
+                      <input
+                        type="number" min={1} max={999}
+                        className="input text-center text-sm px-1 py-1.5 w-full"
+                        placeholder="—"
+                        value={drafts[String(day)] ?? ''}
+                        onChange={e => setGoalDrafts(prev => ({
+                          ...prev,
+                          [pairKey]: { ...(prev[pairKey] ?? {}), [String(day)]: e.target.value },
+                        }))}
+                        onBlur={() => void handleGoalBlur(pair.sourceLanguage, pair.targetLanguage)}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {/* Clears the whole week in one click and PERSISTS immediately — blanking seven
+                    boxes by hand relies on a blur per box, which is exactly how stale values on
+                    off-screen days survived to become ghost goals. */}
+                <button
+                  className="btn-ghost text-xs px-3 py-1.5 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                  disabled={Array.from({ length: 7 }, (_, d) => (drafts[String(d)] ?? '').trim()).every(v => v === '')}
+                  title="Remove this language's goal for every day of the week"
+                  onClick={() => {
+                    const cleared: Record<string, string> = {}
+                    for (let d = 0; d <= 6; d++) cleared[String(d)] = ''
+                    setGoalDrafts(prev => ({ ...prev, [pairKey]: cleared }))
+                    void handleGoalBlur(pair.sourceLanguage, pair.targetLanguage, cleared)
+                  }}
+                >
+                  Clear week
+                </button>
               </div>
             )}
           </div>
