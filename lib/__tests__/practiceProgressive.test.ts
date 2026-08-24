@@ -1,16 +1,5 @@
 import type { PracticeTarget } from '@/engine/practice'
 
-// The bank repo talks to Supabase; the progressive core's contract is about WAITING, so the repo is
-// faked wholesale and fetch is mocked per-call like practiceGenerate.test.ts.
-const bank: { stored: unknown[] } = { stored: [] }
-jest.mock('@/lib/data/practiceSentences', () => ({
-  SupabasePracticeSentenceRepository: class {
-    async listForLemmas() { return bank.stored }
-    async saveMany() {}
-    async markUsed() {}
-  },
-}))
-
 import { preparePracticeSessionProgressive, preparePracticeSession } from '@/lib/practiceBank'
 
 function target(front: string): PracticeTarget {
@@ -48,7 +37,7 @@ const OPTS = {
   plan: { mode: 'perWord', perWord: 1 } as const,
 }
 
-afterEach(() => { jest.restoreAllMocks(); bank.stored = [] })
+afterEach(() => { jest.restoreAllMocks() })
 
 describe('preparePracticeSessionProgressive', () => {
   it('with an empty bank, the learner waits for exactly ONE starter sentence', async () => {
@@ -67,20 +56,6 @@ describe('preparePracticeSessionProgressive', () => {
     expect(ready).toEqual([1])
     expect(appended).toEqual([2])
     expect(run.missingCount).toBe(0)
-  })
-
-  it('with bank hits, onReady fires with them and every generation happens behind the player', async () => {
-    bank.stored = [{ id: 's1', targetLemma: 'un', useCount: 0, exercise: apiExercise('un') }]
-    const bodies = mockGenerate([{ exercises: [apiExercise('deux'), apiExercise('trois')] }])
-    const ready: number[] = []
-    const appended: number[] = []
-    await preparePracticeSessionProgressive(
-      { ...OPTS, targets: [target('un'), target('deux'), target('trois')] },
-      { onReady: f => ready.push(f.length), onAppend: m => appended.push(m.length) },
-    )
-    expect(ready).toEqual([1])            // the bank hit opened the session — no starter carve-out
-    expect(appended).toEqual([2])
-    expect(bodies.every(b => b.count !== undefined)).toBe(true)
   })
 
   it('a dead starter does not kill the session — the next batch opens it instead', async () => {
@@ -107,15 +82,18 @@ describe('preparePracticeSessionProgressive', () => {
     )).rejects.toThrow('no-api-key')
   })
 
-  it('fires onReady exactly once across bank + batches', async () => {
-    bank.stored = [{ id: 's1', targetLemma: 'un', useCount: 0, exercise: apiExercise('un') }]
+})
+
+describe('preparePracticeSessionProgressive — onReady fires once', () => {
+  it('is the starter batch and only the starter batch', async () => {
     mockGenerate([
+      { exercises: [apiExercise('un')] },
       { exercises: [apiExercise('deux')] },
       { exercises: [apiExercise('trois')] },
     ])
     let readyCalls = 0
     await preparePracticeSessionProgressive(
-      { ...OPTS, targets: [target('un'), target('deux'), target('trois')], plan: { mode: 'perWord', perWord: 1 } },
+      { ...OPTS, targets: [target('un'), target('deux'), target('trois')] },
       { onReady: () => { readyCalls++ }, onAppend: () => {} },
     )
     expect(readyCalls).toBe(1)

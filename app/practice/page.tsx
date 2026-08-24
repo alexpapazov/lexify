@@ -454,11 +454,8 @@ function PracticeInner() {
         setError('The generator didn’t return any usable sentences. Try again, or pick different words.')
         return
       }
-      const reusedNote = run.fromBank > 0 ? ` ${run.fromBank} reused from earlier sessions.` : ''
       if (run.missingCount > 0) {
-        setNotice(`Prepared ${produced} of ${asked} — the rest didn’t come back usable.${reusedNote}`)
-      } else if (reusedNote) {
-        setNotice(reusedNote.trim())
+        setNotice(`Prepared ${produced} of ${asked} — the rest didn’t come back usable.`)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed. Please try again.')
@@ -913,8 +910,8 @@ function PracticeInner() {
               : planMode === 'total'
                 ? `${totalCount} sentence${totalCount !== 1 ? 's' : ''} spread across your ${chosen.length} word${chosen.length !== 1 ? 's' : ''}.`
                 : `${perWord} each for ${chosen.length} word${chosen.length !== 1 ? 's' : ''} — ${plannedTotal(plan, chosen.length)} sentences.`}
-            {' '}Sentences you&apos;ve seen before are reused from earlier sessions, so only the new
-            ones cost anything.
+            {' '}Every sentence is generated fresh for this session — nothing is reused, so a word
+            never comes with a sentence you&apos;ve already seen.
           </p>
         </div>
         </>)}

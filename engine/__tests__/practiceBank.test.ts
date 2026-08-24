@@ -1,6 +1,6 @@
 import {
-  plannedTotal, planGenerationBatches, pickBankExercises,
-  type SentencePlan, type BankCandidate,
+  plannedTotal, planGenerationBatches,
+  type SentencePlan,
 } from '../practiceBank'
 import type { PracticeTarget } from '../practice'
 
@@ -8,11 +8,6 @@ import type { PracticeTarget } from '../practice'
 
 function target(lemma: string): PracticeTarget {
   return { cardId: `c-${lemma}`, front: lemma, back: `gloss of ${lemma}`, lemma, pos: 'noun' }
-}
-
-/** A stored sentence for `lemma`. */
-function stored(id: string, lemma: string, useCount = 0): BankCandidate {
-  return { id, targetLemma: lemma, useCount }
 }
 
 // ─── plannedTotal ─────────────────────────────────────────────────────────────
@@ -80,76 +75,3 @@ describe('planGenerationBatches', () => {
 
 // ─── pickBankExercises ────────────────────────────────────────────────────────
 
-describe('pickBankExercises', () => {
-  const targets = [target('pluie'), target('vent')]
-
-  it('reuses any stored sentence for a requested word — no re-scoring, sentences are unconstrained', () => {
-    const bank = [stored('s1', 'pluie')]
-    const { reuse } = pickBankExercises(bank, targets, { mode: 'total', count: 5 })
-    expect(reuse.map(r => r.id)).toEqual(['s1'])
-  })
-
-  it('ignores stored sentences for words this session did not ask for', () => {
-    const bank = [stored('s1', 'orage')]
-    const { reuse } = pickBankExercises(bank, targets, { mode: 'total', count: 5 })
-    expect(reuse).toEqual([])
-  })
-
-  it('serves least-used sentences first', () => {
-    const bank = [stored('used', 'pluie', 4), stored('fresh', 'pluie', 0)]
-    const { reuse } = pickBankExercises(bank, [target('pluie')], { mode: 'total', count: 1 })
-    expect(reuse.map(r => r.id)).toEqual(['fresh'])
-  })
-
-  it('round-robins across words instead of draining one word’s bank', () => {
-    const bank = [
-      stored('p1', 'pluie'), stored('p2', 'pluie'), stored('p3', 'pluie'),
-      stored('v1', 'vent'),
-    ]
-    const { reuse } = pickBankExercises(bank, targets, { mode: 'total', count: 2 })
-    expect(reuse.map(r => r.targetLemma)).toEqual(['pluie', 'vent'])
-  })
-
-  it('stops at the requested total', () => {
-    const bank = Array.from({ length: 10 }, (_, i) => stored(`s${i}`, 'pluie'))
-    const { reuse } = pickBankExercises(bank, [target('pluie')], { mode: 'total', count: 3 })
-    expect(reuse).toHaveLength(3)
-  })
-
-  it('per-word mode: caps each word at its quota', () => {
-    const bank = [
-      stored('p1', 'pluie'), stored('p2', 'pluie'), stored('p3', 'pluie'),
-      stored('v1', 'vent'),
-    ]
-    const { reuse } = pickBankExercises(bank, targets, { mode: 'perWord', perWord: 2 })
-    const byLemma = reuse.reduce<Record<string, number>>((acc, r) => {
-      acc[r.targetLemma] = (acc[r.targetLemma] ?? 0) + 1; return acc
-    }, {})
-    expect(byLemma).toEqual({ pluie: 2, vent: 1 })
-  })
-
-  it('per-word mode: reports what each word still needs', () => {
-    const bank = [stored('p1', 'pluie')]
-    const { shortfallByLemma } = pickBankExercises(bank, targets, { mode: 'perWord', perWord: 2 })
-    expect(shortfallByLemma.get('pluie')).toBe(1)
-    expect(shortfallByLemma.get('vent')).toBe(2)
-  })
-
-  it('per-word mode: reports no shortfall when the bank covers everything', () => {
-    const bank = [stored('p1', 'pluie'), stored('v1', 'vent')]
-    const { shortfallByLemma } = pickBankExercises(bank, targets, { mode: 'perWord', perWord: 1 })
-    expect(shortfallByLemma.size).toBe(0)
-  })
-
-  it('handles an empty bank', () => {
-    const { reuse, shortfallByLemma } = pickBankExercises([], targets, { mode: 'perWord', perWord: 2 })
-    expect(reuse).toEqual([])
-    expect(shortfallByLemma.get('vent')).toBe(2)
-  })
-
-  it('matches lemmas case- and whitespace-insensitively', () => {
-    const bank = [{ id: 's1', targetLemma: '  Pluie ', useCount: 0 }]
-    const { reuse } = pickBankExercises(bank, [target('pluie')], { mode: 'total', count: 1 })
-    expect(reuse.map(r => r.id)).toEqual(['s1'])
-  })
-})

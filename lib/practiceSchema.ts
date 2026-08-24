@@ -112,3 +112,31 @@ export function parseExercises(raw: unknown): PracticeExercise[] {
   if (!Array.isArray(list)) return []
   return list.map(parseExercise).filter((e): e is PracticeExercise => e !== null)
 }
+
+// ─── Native-mode script check ─────────────────────────────────────────────────
+
+const SCRIPTS = ['Greek', 'Cyrillic', 'Hangul', 'Han', 'Hiragana', 'Katakana', 'Arabic', 'Hebrew', 'Thai', 'Devanagari'] as const
+
+/** The non-Latin script the text is (mostly) written in, or null for Latin/mixed-unknown. */
+function dominantScript(text: string): (typeof SCRIPTS)[number] | null {
+  for (const s of SCRIPTS) {
+    if (new RegExp(`\\p{Script=${s}}`, 'u').test(text)) return s
+  }
+  return null
+}
+
+/**
+ * Whether a NATIVE-mode sentence leaks target-language words beyond the answer — the "It ενδέχεται
+ * να βρέξει αύριο" failure, where the model dragged the answer's grammar words along with it.
+ *
+ * Deterministic and script-based, so it only works when the two languages use different scripts
+ * (Greek, Bulgarian, Korean … learned from English). Same-script pairs pass through untouched and
+ * rely on the prompt alone — a Latin-vs-Latin check would need a dictionary, not a regex.
+ */
+export function leaksTargetScript(sentence: string, answer: string): boolean {
+  const script = dominantScript(answer)
+  if (!script) return false
+  // Remove every occurrence of the answer, then any remaining character of its script is a leak.
+  const rest = sentence.split(answer).join(' ')
+  return new RegExp(`\\p{Script=${script}}`, 'u').test(rest)
+}

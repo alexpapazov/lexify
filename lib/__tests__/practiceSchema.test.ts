@@ -1,4 +1,4 @@
-import { parseExercise, parseExercises } from '@/lib/practiceSchema'
+import { parseExercise, parseExercises, leaksTargetScript } from '@/lib/practiceSchema'
 
 const goodToken = { text: 'pluie', lemma: 'pluie', pos: 'noun', isFunctionWord: false, gloss: 'rain' }
 
@@ -90,5 +90,29 @@ describe('parseExercises', () => {
     expect(parseExercises(null)).toEqual([])
     expect(parseExercises({})).toEqual([])
     expect(parseExercises({ exercises: 'nope' })).toEqual([])
+  })
+})
+
+describe('leaksTargetScript — native-mode single-word guarantee', () => {
+  it('flags the reported failure: Greek grammar words dragged along with the answer', () => {
+    expect(leaksTargetScript('It ενδέχεται να βρέξει αύριο, so bring an umbrella.', 'ενδέχεται')).toBe(true)
+  })
+
+  it('passes a clean native sentence with exactly one Greek word', () => {
+    expect(leaksTargetScript('Strange things συμβαίνουν in this house at night.', 'συμβαίνουν')).toBe(false)
+  })
+
+  it('works for Cyrillic and Hangul answers too', () => {
+    expect(leaksTargetScript('The крепост was built on a hill.', 'крепост')).toBe(false)
+    expect(leaksTargetScript('Той built the крепост on a hill.', 'крепост')).toBe(true)
+    expect(leaksTargetScript('I ate 김치 with dinner yesterday.', '김치')).toBe(false)
+  })
+
+  it('handles a multi-word answer as one unit', () => {
+    expect(leaksTargetScript('He tried to се приближи quietly.', 'се приближи')).toBe(false)
+  })
+
+  it('is inert for same-script pairs — a Latin check would need a dictionary, not a regex', () => {
+    expect(leaksTargetScript('The cremallera se desprendió while running.', 'cremallera')).toBe(false)
   })
 })

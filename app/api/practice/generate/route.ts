@@ -132,6 +132,10 @@ Requirements:
 - The whole sentence reads as ordinary ${tgtLang} apart from the one ${srcLang} word or phrase.
 - Keep it short and everyday: 5 to 12 words.
 - The surrounding ${tgtLang} must make the target word's meaning clear from context.
+- EXACTLY ONE ${srcLang} word per sentence: the target word. Every other word — every verb,
+  particle, preposition, everything — must be ${tgtLang}. "It may rain tomorrow" must NOT become
+  "It may να βρέξει tomorrow"; if the target word drags ${srcLang} grammar words along with it,
+  rewrite the sentence so it doesn't.
 - Inflect the ${srcLang} word correctly for how it is used (tense, number, gender, case).
 - Spread the sentences across the target words rather than reusing one.
 - Do NOT translate the target word into ${tgtLang} anywhere in the sentence.

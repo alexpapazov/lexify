@@ -1,4 +1,5 @@
-import { splitForBlank, segmentWords } from '@/lib/practiceRender'
+import { splitForBlank, segmentWords, gradeClozeInput } from '@/lib/practiceRender'
+import { DEFAULT_GRADING_SETTINGS } from '@/domain'
 
 describe('splitForBlank', () => {
   it('splits around the first occurrence of the answer', () => {
@@ -39,5 +40,40 @@ describe('segmentWords', () => {
 
   it('returns nothing for empty text', () => {
     expect(segmentWords('')).toEqual([])
+  })
+})
+
+describe('gradeClozeInput — every grammatical form of the word is accepted', () => {
+  const settings = {
+    ...DEFAULT_GRADING_SETTINGS,
+    gradingMode: 'flexible' as const,
+    ignoreCapitalization: true,
+    answerLanguage: 'el',
+  }
+  const grade = (input: string) => gradeClozeInput(input, 'συμβαίνουν', 'συμβαίνω', settings)
+
+  it('accepts the sentence\'s inflected form as plain correct', () => {
+    expect(grade('συμβαίνουν')).toBe('correct')
+  })
+
+  it('accepts the citation form as "form" — right word, wrong grammar', () => {
+    expect(grade('συμβαίνω')).toBe('form')
+  })
+
+  it('extends the same typo tolerance to the citation form', () => {
+    // The reported case verbatim: "σημβαίνω" is a one-letter slip on the lemma, not a different word.
+    expect(grade('σημβαίνω')).toBe('form')
+  })
+
+  it('still rejects a different word outright', () => {
+    expect(grade('πηγαίνουν')).toBe('wrong')
+  })
+
+  it('never reports "form" when answer and lemma coincide', () => {
+    expect(gradeClozeInput('σπίτι', 'σπίτι', 'σπίτι', settings)).toBe('correct')
+  })
+
+  it('survives a blank lemma (phrase cards carry none)', () => {
+    expect(gradeClozeInput('συμβαίνω', 'συμβαίνουν', '', settings)).toBe('wrong')
   })
 })

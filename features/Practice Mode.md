@@ -361,6 +361,32 @@ deliberately, which is a different thing and is wanted.
 
 ---
 
+## Grading, native mode, and the death of the bank (2026-08-22)
+
+Three changes from one live session, in cause-and-effect order:
+
+**Every grammatical form of the target word is accepted** (`gradeClozeInput` in
+`lib/practiceRender.ts`, 6 tests). Two tiers: the sentence's inflection → correct; the citation
+form (lemma) → also correct, shown as *"Right word — in this sentence it takes the form X"*.
+Both tiers accept gradeTyping's `'almost'` (typo/accent/article slips) — practice grading is
+deliberately forgiving, and `correct` alone is stricter than the player's stated philosophy.
+Practice drills the WORD; the reveal teaches the conjugation better than a red panel does.
+
+**Native mode enforces its one-target-word promise** (`leaksTargetScript` in
+`lib/practiceSchema.ts`, 5 tests). The model dragged the answer's grammar words along ("It
+ενδέχεται να βρέξει tomorrow"); now the prompt forbids it explicitly AND a deterministic script
+check drops any sentence with target-script characters beyond the answer. Script-based, so it
+protects different-script pairs (Greek/Bulgarian/Korean from English) and is inert for
+same-script pairs, which rely on the prompt alone.
+
+**The sentence bank is GONE, at the user's explicit request.** The trigger: a native session
+served an all-Greek sentence, because the bank was MODE-BLIND — it filed full-target sentences and
+native sessions reused them verbatim. And even mode-filtered, replaying the same sentence for the
+same word teaches sentence recognition, not word recall. Every session now generates fresh.
+`lib/data/practiceSentences.ts` and `pickBankExercises` are deleted; migration 113's
+`practice_sentences` table still exists but nothing touches it — drop it whenever convenient
+(`DROP TABLE IF EXISTS practice_sentences;`). **Do not reintroduce caching without the user asking.**
+
 ## Progressive session start (2026-08-22)
 
 Pressing Practice waits for the FIRST playable sentence only; the rest generate behind the player.

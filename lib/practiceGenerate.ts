@@ -13,7 +13,7 @@ import { mapLimit } from '@/lib/mapLimit'
 import { planGenerationBatches } from '@/engine/practiceBank'
 import type { PracticeTarget } from '@/engine/practice'
 import { GENERATE_CAP } from '@/app/api/practice/generate/route'
-import type { PracticeExercise, ClozeMode } from '@/lib/practiceSchema'
+import { leaksTargetScript, type PracticeExercise, type ClozeMode } from '@/lib/practiceSchema'
 
 /** Generation calls in flight when one request needs several batches. */
 const GENERATE_CONCURRENCY = 3
@@ -84,7 +84,15 @@ export async function generatePracticeExercises(opts: GenerateOptions): Promise<
       })
       const data = await res.json()
       if (!data?.ok || !Array.isArray(data.exercises)) throw new Error(data?.reason ?? 'generate-failed')
-      return (data.exercises as PracticeExercise[]).map(e => prepareExercise(e, batch.targets))
+      let parsed = data.exercises as PracticeExercise[]
+      // Native mode promises ONE target-language word per sentence; the model sometimes drags the
+      // answer's grammar words along ("It ενδέχεται να βρέξει tomorrow"). Detectable by script
+      // whenever the pair's scripts differ — those sentences are dropped (they count against
+      // missingCount), never shown, never banked.
+      if ((opts.mode ?? 'target') === 'native') {
+        parsed = parsed.filter(e => !leaksTargetScript(e.sentence, e.answer))
+      }
+      return parsed.map(e => prepareExercise(e, batch.targets))
     } catch (err) {
       errors.push(err)      // captured here because mapLimit only reports a failure as `null`
       return null

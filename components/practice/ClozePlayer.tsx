@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AudioToggle, usePracticeAudio } from './usePracticeAudio'
 import { gradeTyping } from '@/engine/grading'
-import { splitForBlank, segmentWords } from '@/lib/practiceRender'
+import { splitForBlank, segmentWords, gradeClozeInput } from '@/lib/practiceRender'
 import { DEFAULT_GRADING_SETTINGS, type GradingSettings } from '@/domain'
 import type { PreparedExercise } from '@/lib/practiceGenerate'
 import type { PracticeToken } from '@/lib/practiceSchema'
@@ -131,7 +131,7 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText
    * Per-item outcome, so an override can flip one after it's been graded and the tally stays
    * consistent. `overridden` is kept only to label the result — the count reads `correct`.
    */
-  const [outcomes, setOutcomes] = useState<Record<number, { correct: boolean; overridden: boolean }>>({})
+  const [outcomes, setOutcomes] = useState<Record<number, { correct: boolean; overridden: boolean; form: boolean }>>({})
   const inputRef = useRef<HTMLInputElement>(null)
 
   const settings = useMemo(() => practiceGrading(answerLanguage), [answerLanguage])
@@ -198,11 +198,14 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText
 
   function check() {
     if (revealed || !input.trim()) return
-    const graded = gradeTyping(input, exercise.answer, settings)
-    setOutcomes(o => ({ ...o, [index]: { correct: graded.correct, overridden: false } }))
+    // Two tiers: the sentence's inflection, or the word's citation form ('form' — right vocabulary,
+    // wrong grammar). Both count as correct; the form case shows the inflection as a note, because
+    // practice drills the WORD and the reveal teaches the conjugation better than a red panel does.
+    const verdict = gradeClozeInput(input, exercise.answer, exercise.targetLemma, settings)
+    setOutcomes(o => ({ ...o, [index]: { correct: verdict !== 'wrong', overridden: false, form: verdict === 'form' } }))
     setRevealed(true)
     // Hearing the word you just produced is the reward; only a correct answer earns it.
-    if (graded.correct && audioOn) speakText?.(exercise.answer)
+    if (verdict !== 'wrong' && audioOn) speakText?.(exercise.answer)
   }
 
   /**
@@ -219,7 +222,7 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText
     setOutcomes(o => {
       const at = o[index]
       if (!at) return o
-      return { ...o, [index]: { correct: !at.correct, overridden: !at.overridden } }
+      return { ...o, [index]: { correct: !at.correct, overridden: !at.overridden, form: false } }
     })
   }
 
@@ -310,7 +313,9 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText
             {outcome?.correct
               ? (outcome.overridden
                   ? <>Marked correct — the answer was <strong className="text-ink">{exercise.answer}</strong></>
-                  : 'Correct')
+                  : outcome.form
+                    ? <>Right word — in this sentence it takes the form <strong className="text-ink">{exercise.answer}</strong></>
+                    : 'Correct')
               : (outcome?.overridden
                   ? <>Marked incorrect — the answer was <strong className="text-ink">{exercise.answer}</strong></>
                   : <>Answer: <strong className="text-ink">{exercise.answer}</strong>{input.trim() ? <> — you typed “{input.trim()}”</> : null}</>)}
