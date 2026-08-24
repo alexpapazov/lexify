@@ -361,6 +361,25 @@ deliberately, which is a different thing and is wanted.
 
 ---
 
+## Progressive session start (2026-08-22)
+
+Pressing Practice waits for the FIRST playable sentence only; the rest generate behind the player.
+`preparePracticeSessionProgressive` (`lib/practiceBank.ts`, 6 tests) owns the wait profile:
+
+- **Any bank hit → `onReady` fires immediately**, all generation is background.
+- **Empty bank → a STARTER batch of exactly one sentence for the first word** is generated alone
+  (assert: the first API call has `count: 1`), the remaining plan is re-carved with that word's
+  quota reduced, and later batches stream in via `onAppend`.
+- Once `onReady` has fired, failures degrade to a shorter session (`missingCount`), never a dead
+  one; the promise rejects only when NOTHING became playable. A dead starter is recovered by the
+  first background batch firing `onReady` instead of `onAppend`.
+- `preparePracticeSession` remains as the all-at-once wrapper over the same core (tests and any
+  non-streaming caller), so there is exactly one implementation.
+
+`ClozePlayer` appends: items may GROW mid-session, and the append effect adds only the delta —
+re-copying would wipe the redo copies spliced onto the queue's end. Reaching the end while
+`moreComing` shows "Generating the next sentence…" with a Stop-here escape rather than the summary.
+
 ## Error log (additions)
 
 - **2026-08-22 — "Due soon → Today" missed words and was silently capped.** Three defects in the

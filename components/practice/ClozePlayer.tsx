@@ -106,8 +106,10 @@ export interface ClozeAttempt {
   response: string
 }
 
-export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText, onAttempt }: {
+export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText, onAttempt, moreComing = false }: {
   items:          PreparedExercise[]
+  /** Later batches are still generating — reaching the end waits instead of finishing. */
+  moreComing?:    boolean
   /** Language of the word being typed — the learned language. */
   answerLanguage: string
   onExit:         () => void
@@ -133,6 +135,17 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText
   const inputRef = useRef<HTMLInputElement>(null)
 
   const settings = useMemo(() => practiceGrading(answerLanguage), [answerLanguage])
+
+  // Items can GROW mid-session (batches stream in behind the player). Append only the delta —
+  // re-copying would wipe the redo copies spliced onto the end of the queue.
+  const consumedRef = useRef(items.length)
+  useEffect(() => {
+    if (items.length <= consumedRef.current) return
+    const fresh = items.slice(consumedRef.current)
+    consumedRef.current = items.length
+    setQueue(q => [...q, ...fresh])
+  }, [items])
+
   const current  = queue[index]
   const retries  = queue.length - items.length
 
@@ -143,6 +156,16 @@ export function ClozePlayer({ items, answerLanguage, onExit, findCard, speakText
   }, [index])
 
   if (!current) {
+    // Ahead of the generator: the learner answered everything that exists so far, but more is on
+    // the way. Hold here — the append effect advances us the moment the next batch lands.
+    if (moreComing) {
+      return (
+        <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
+          <p className="text-ink-muted text-sm animate-pulse">Generating the next sentence…</p>
+          <button onClick={onExit} className="btn-ghost text-sm px-4 py-2">Stop here</button>
+        </div>
+      )
+    }
     return (
       <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
         <h1 className="text-2xl font-semibold text-ink">Practice complete</h1>

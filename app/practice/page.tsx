@@ -27,7 +27,7 @@ import {
 } from '@/engine/practiceSelect'
 import { buildScopeTree, type TreeNode } from '@/lib/scopeTree'
 import { type PreparedExercise } from '@/lib/practiceGenerate'
-import { preparePracticeSession } from '@/lib/practiceBank'
+import { preparePracticeSessionProgressive } from '@/lib/practiceBank'
 import { plannedTotal, type SentencePlan } from '@/engine/practiceBank'
 import type { ClozeMode } from '@/lib/practiceSchema'
 import { labelCards } from '@/lib/labelCards'
@@ -183,6 +183,7 @@ function PracticeInner() {
   const [perWord,   setPerWord]   = useState(DEFAULT_PER_WORD)
 
   const [generating, setGenerating] = useState(false)
+  const [moreComing, setMoreComing] = useState(false)
   const [labeling,   setLabeling]   = useState(false)
   const [error,      setError]      = useState<string | null>(null)
   const [session,    setSession]    = useState<PreparedExercise[] | null>(null)
@@ -426,31 +427,45 @@ function PracticeInner() {
     setGenerating(true)
     setError(null)
     setNotice(null)
+    setMoreComing(true)
+    let produced = 0
     try {
       const asked = plannedTotal(plan, chosen.length)
-      const run = await preparePracticeSession({
+      // Progressive: the player opens on the FIRST playable sentence (a bank hit, or one starter
+      // generation) and the rest stream in behind it — the wait is one sentence, not the plan.
+      const run = await preparePracticeSessionProgressive({
         userId,
         targets: chosen,
         sourceLanguage: pair.sourceLanguage,
         targetLanguage: pair.targetLanguage,
         plan,
         mode: clozeMode,
+      }, {
+        onReady: (first) => {
+          produced += first.length
+          if (first.length > 0) { setSession(first); setGenerating(false) }
+        },
+        onAppend: (more) => {
+          produced += more.length
+          setSession(prev => (prev ? [...prev, ...more] : more))
+        },
       })
-      if (run.exercises.length === 0) {
+      if (produced === 0) {
         setError('The generator didn’t return any usable sentences. Try again, or pick different words.')
         return
       }
       const reusedNote = run.fromBank > 0 ? ` ${run.fromBank} reused from earlier sessions.` : ''
       if (run.missingCount > 0) {
-        setNotice(`Prepared ${run.exercises.length} of ${asked} — the rest didn’t come back usable.${reusedNote}`)
+        setNotice(`Prepared ${produced} of ${asked} — the rest didn’t come back usable.${reusedNote}`)
       } else if (reusedNote) {
         setNotice(reusedNote.trim())
       }
-      setSession(run.exercises)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed. Please try again.')
+      setSession(null)
     } finally {
       setGenerating(false)
+      setMoreComing(false)
     }
   }
 
@@ -487,6 +502,7 @@ function PracticeInner() {
     return (
       <ClozePlayer
         items={session}
+        moreComing={moreComing}
         answerLanguage={pair!.sourceLanguage}
         onExit={() => { setSession(null); setNotice(null) }}
         findCard={findCard}

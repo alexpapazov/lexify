@@ -42,16 +42,43 @@ export interface PreparedSession {
   missingCount: number
 }
 
+/** How a progressive session reports back while its later batches are still in flight. */
+export interface ProgressCallbacks {
+  /**
+   * Fires ONCE, with the first playable exercises — bank hits when there are any (instant),
+   * otherwise the first generated sentence. The learner starts here; everything else streams in
+   * behind them.
+   */
+  onReady:  (first: PreparedExercise[]) => void
+  /** Fires per background batch as it lands, already prepared for the player. */
+  onAppend: (more: PreparedExercise[]) => void
+}
+
 /**
- * Builds a session: bank first, then generation for whatever's still missing.
+ * Builds a session progressively: bank first, then generation for whatever's still missing — but
+ * the learner waits only for the FIRST playable sentence, never the whole run.
+ *
+ * The wait profile is deliberate:
+ *  - Any bank hit → `onReady` fires immediately, all generation happens behind the player.
+ *  - Empty bank → a STARTER batch of exactly one sentence for the first word is generated alone,
+ *    so the wait is one single-sentence API call rather than the full plan. The remaining work is
+ *    re-planned with that word's quota reduced by one and streamed in via `onAppend`.
+ *
+ * The returned promise resolves when everything has settled, with the final accounting. It rejects
+ * only when NOTHING could be prepared — once `onReady` has fired, later failures degrade to a
+ * shorter session (reported via `missingCount`), never a dead one.
  *
  * In per-word mode the shortfall is per WORD, so generation is asked only for the words that came
  * up short — a word whose bank already covers its quota costs nothing.
  */
-export async function preparePracticeSession(opts: PrepareOptions): Promise<PreparedSession> {
+export async function preparePracticeSessionProgressive(
+  opts: PrepareOptions,
+  cb: ProgressCallbacks,
+): Promise<PreparedSession> {
   const { userId, targets, sourceLanguage, targetLanguage, plan } = opts
   const wanted = plannedTotal(plan, targets.length)
   if (targets.length === 0 || wanted <= 0) {
+    cb.onReady([])
     return { exercises: [], fromBank: 0, missingCount: 0 }
   }
   const mode = opts.mode ?? 'target'
@@ -74,12 +101,13 @@ export async function preparePracticeSession(opts: PrepareOptions): Promise<Prep
     .map(r => reusedById.get(r.id))
     .filter((s): s is StoredSentence => s != null)
     .map(s => prepareExercise(s.exercise, targets))
+  void repo.markUsed(reuse.map(r => r.id)).catch(() => {})
 
-  // ── What still needs generating ────────────────────────────────────────────
-  const generated: PreparedExercise[] = []
+  // ── The generation work-list ───────────────────────────────────────────────
+  // Per-word: groups keyed by how many sentences each word still needs, so one call serves several
+  // words wanting the same amount. Total: one pool over all targets.
+  const groups: Array<{ targets: PracticeTarget[]; count: number }> = []
   if (plan.mode === 'perWord') {
-    // Group the short words by how many each still needs, so one call can serve several words that
-    // want the same amount.
     const byShortfall = new Map<number, PracticeTarget[]>()
     for (const t of targets) {
       const missing = shortfallByLemma.get(t.lemma.trim().toLowerCase()) ?? 0
@@ -88,39 +116,108 @@ export async function preparePracticeSession(opts: PrepareOptions): Promise<Prep
       group.push(t)
       byShortfall.set(missing, group)
     }
-    const runs = await mapLimit([...byShortfall.entries()], 2, ([missing, group]) =>
-      generatePracticeExercises({
-        targets: group, sourceLanguage, targetLanguage,
-        count: missing * group.length, mode,
-      }))
-    for (const run of runs) if (run) generated.push(...run.exercises)
+    for (const [missing, group] of byShortfall) groups.push({ targets: group, count: missing * group.length })
   } else {
     const missing = Math.max(0, wanted - fromBank.length)
-    if (missing > 0) {
-      const run = await generatePracticeExercises({
-        targets, sourceLanguage, targetLanguage, count: missing, mode,
-      })
-      generated.push(...run.exercises)
+    if (missing > 0) groups.push({ targets, count: missing })
+  }
+
+  let ready = false
+  const settle = (first: PreparedExercise[]) => { ready = true; cb.onReady(first) }
+
+  // With no bank hits, carve one single-sentence starter off the first group so the learner's wait
+  // is ONE sentence, not the plan. The group keeps the remainder.
+  let starter: { targets: PracticeTarget[] } | null = null
+  if (fromBank.length === 0 && groups.length > 0) {
+    const g = groups[0]!
+    const starterTarget = g.targets[0]!
+    starter = { targets: [starterTarget] }
+    if (g.count <= 1) groups.shift()
+    else {
+      // Per-word groups must stay per-word exact: the starter word moves to its own reduced group.
+      if (plan.mode === 'perWord') {
+        const per = g.count / g.targets.length
+        g.targets = g.targets.filter(t => t !== starterTarget)
+        g.count = per * g.targets.length
+        if (per > 1) groups.push({ targets: [starterTarget], count: per - 1 })
+        if (g.targets.length === 0) groups.shift()
+      } else {
+        g.count -= 1
+      }
     }
   }
 
-  // ── Persist and account, neither of which may break the session ────────────
-  void (async () => {
-    try {
-      const fileable = generated
-        .filter(g => g.exercise.targetLemma)
-        .map(g => ({ targetLemma: g.exercise.targetLemma, exercise: g.exercise }))
-      await repo.saveMany(userId, sourceLanguage, targetLanguage, fileable)
-    } catch { /* cache write only */ }
-  })()
-  void repo.markUsed(fromBank.map((_, i) => reuse[i]!.id)).catch(() => {})
-
-  const exercises = [...fromBank, ...generated]
-  return {
-    exercises,
-    fromBank: fromBank.length,
-    missingCount: Math.max(0, wanted - exercises.length),
+  const persist = (made: PreparedExercise[]) => {
+    void (async () => {
+      try {
+        const fileable = made
+          .filter(g => g.exercise.targetLemma)
+          .map(g => ({ targetLemma: g.exercise.targetLemma, exercise: g.exercise }))
+        await repo.saveMany(userId, sourceLanguage, targetLanguage, fileable)
+      } catch { /* cache write only */ }
+    })()
   }
+
+  let produced = fromBank.length
+  const errors: unknown[] = []
+
+  if (fromBank.length > 0) settle(fromBank)
+
+  if (starter) {
+    try {
+      const run = await generatePracticeExercises({
+        targets: starter.targets, sourceLanguage, targetLanguage, count: 1, mode,
+      })
+      produced += run.exercises.length
+      persist(run.exercises)
+      settle(run.exercises)
+    } catch (err) {
+      errors.push(err)
+      // The starter died; the remaining groups are now the only chance to open the session, so the
+      // first of them to land must fire onReady instead of onAppend.
+    }
+  }
+
+  // ── Everything else streams in behind the player ───────────────────────────
+  await mapLimit(groups, 2, async (g) => {
+    try {
+      const run = await generatePracticeExercises({
+        targets: g.targets, sourceLanguage, targetLanguage, count: g.count, mode,
+      })
+      if (run.exercises.length === 0) return
+      produced += run.exercises.length
+      persist(run.exercises)
+      if (ready) cb.onAppend(run.exercises)
+      else settle(run.exercises)
+    } catch (err) {
+      errors.push(err)
+    }
+  })
+
+  if (!ready) {
+    // Nothing at all became playable. Surface the first real failure rather than an empty session.
+    if (errors.length > 0) throw errors[0]
+    settle([])
+  }
+  return {
+    exercises: [],        // streamed via callbacks; kept for the wrapper below
+    fromBank: fromBank.length,
+    missingCount: Math.max(0, wanted - produced),
+  }
+}
+
+/**
+ * The all-at-once wrapper: collects the progressive stream and returns everything together. Kept
+ * because tests and any non-streaming caller want a single array, and so the progressive core has
+ * exactly one implementation.
+ */
+export async function preparePracticeSession(opts: PrepareOptions): Promise<PreparedSession> {
+  const collected: PreparedExercise[] = []
+  const session = await preparePracticeSessionProgressive(opts, {
+    onReady:  (first) => collected.push(...first),
+    onAppend: (more)  => collected.push(...more),
+  })
+  return { ...session, exercises: collected }
 }
 
 /** Re-exported so the page can size its controls against the same cap the planner uses. */
