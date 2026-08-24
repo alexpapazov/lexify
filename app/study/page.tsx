@@ -150,6 +150,8 @@ interface ProjectCtx {
   startDate: string
   endDate:   string
   tz:        string
+  /** The row's FORWARD counterpart — reverse rows gate on its graduation, like every due surface. */
+  forwardState?: CardState | null
 }
 
 /**
@@ -190,6 +192,11 @@ function projectStateReviewDays(s: CardState, ctx: ProjectCtx): string[] {
   if (dir === 'reverse') {
     // Reverse rows are recognition (Target → Native) — inherently self-graded. `s.dormant` on the
     // reverse row = recognition paused independently (whole-card dormancy is filtered earlier).
+    // The FORWARD row must be graduated, exactly as `isCardStateDueNow` requires — a card sent back
+    // to the ladder (three Agains → un-graduated) leaves its reverse row scheduled, and projecting
+    // that row made the Today bar claim cards the due count rightly refused ("No cards due" vs
+    // "2 due today").
+    if (ctx.forwardState?.graduated !== true) return []
     if (!dirAllows('reverse') || !showSelfGraded || !trackEnabled(en, 'recall', true) || s.dormant) return []
     emit(s.recallDueAt ?? s.dueAt,
       seedStability(s.stability, s.recallIntervalDays ?? s.intervalDays, pc.reverseP),
@@ -243,6 +250,7 @@ function buildForecastDays(
     const en = enabledTracks.get(pairKey)
     const pc = cfg.get(pairKey) ?? DEFAULT_PAIR_CFG
     const threshold = thresholds.get(pairKey) ?? 20
+    const forwardByCard = new Map(states.filter(st => st.reviewDirection !== 'reverse').map(st => [st.cardId, st]))
     for (const s of states) {
       if (!s.graduated) continue
       // Dormancy is per-direction — a row is excluded by its OWN flag, so a card with production
@@ -251,7 +259,7 @@ function buildForecastDays(
       if (!accelFilterAllows(s, filters)) continue
       // One count per state-row per day (a forward row's typed+recall reviews on the same day are the
       // same card to review); reverse is its own row. Matches the click-to-expand list exactly.
-      for (const d of projectStateReviewDays(s, { en, pc, threshold, filters, todayStr, startDate, endDate, tz })) bump(d)
+      for (const d of projectStateReviewDays(s, { en, pc, threshold, filters, todayStr, startDate, endDate, tz, forwardState: forwardByCard.get(s.cardId) })) bump(d)
     }
   }
 
@@ -886,6 +894,7 @@ export default function StudyPage() {
     const pc = forecastCfg.get(pairKey) ?? DEFAULT_PAIR_CFG
     const threshold = smartThresholds.get(pairKey) ?? 20
     const dormantCards = new Set(states.filter(s => s.reviewDirection !== 'reverse' && s.dormant).map(s => s.cardId))
+    const forwardByCard = new Map(states.filter(st => st.reviewDirection !== 'reverse').map(st => [st.cardId, st]))
 
     const statesByCard = new Map<string, CardState[]>()
     for (const s of states) {
@@ -901,7 +910,7 @@ export default function StudyPage() {
         if (dormantCards.has(s.cardId)) continue
         if (!accelFilterAllows(s, forecastFilters)) continue
 
-        const reviewDays = projectStateReviewDays(s, { en, pc, threshold, filters: forecastFilters, todayStr, startDate: forecastStartDate, endDate: forecastEndDate, tz })
+        const reviewDays = projectStateReviewDays(s, { en, pc, threshold, filters: forecastFilters, todayStr, startDate: forecastStartDate, endDate: forecastEndDate, tz, forwardState: forwardByCard.get(s.cardId) })
         if (!reviewDays.includes(selectedForecastDate)) continue
 
         results.push({
