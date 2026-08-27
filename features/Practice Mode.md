@@ -387,26 +387,52 @@ same word teaches sentence recognition, not word recall. Every session now gener
 `practice_sentences` table still exists but nothing touches it — drop it whenever convenient
 (`DROP TABLE IF EXISTS practice_sentences;`). **Do not reintroduce caching without the user asking.**
 
-## Progressive session start (2026-08-22)
+## Progressive session start (2026-08-22, reshaped 2026-08-27)
 
 Pressing Practice waits for the FIRST playable sentence only; the rest generate behind the player.
-`preparePracticeSessionProgressive` (`lib/practiceBank.ts`, 6 tests) owns the wait profile:
+`preparePracticeSessionProgressive` (`lib/practiceBank.ts`, 12 tests) owns the wait profile — and,
+since 2026-08-27, the ORDER:
 
-- **Any bank hit → `onReady` fires immediately**, all generation is background.
-- **Empty bank → a STARTER batch of exactly one sentence for the first word** is generated alone
-  (assert: the first API call has `count: 1`), the remaining plan is re-carved with that word's
-  quota reduced, and later batches stream in via `onAppend`.
+- **The play order is decided before anything is generated.** `buildSlotOrder` lays the session out
+  as shuffled ROUNDS of the chosen words — every word appears once, in random order, before any
+  word appears again, and a word never sits on both sides of a round boundary when avoidable.
+  (Before this, a per-word plan generated word by word, so "2 sentences each" played both of word
+  A's sentences back-to-back — the second answerable from short-term memory.) Per-word plans lay
+  down exactly `perWord` rounds; total plans cycle rounds, a partial last round being a random
+  subset (3 sentences over 20 words = 3 random words — the words are now chosen by code, not by
+  the model).
+- **Generation fills the slots: one call per word** (`buildSlotJobs`) so all of a word's sentences
+  come from a single call and stay varied — two separate calls for the same word often repeat a
+  sentence. The one exception is the STARTER: the very first slot is carved off as its own
+  single-sentence call (assert: the first API call has `count: 1`), so the learner's wait is one
+  sentence, not the first word's whole quota; that word's remainder becomes a separate job, and a
+  sentence repeated across the split is dropped (slot vacated) rather than shown twice.
+- **Results release strictly in slot order** — a call that lands out of turn waits for the slots
+  before it; a failed or short call vacates its slots so the stream never stalls. `onReady` fires
+  on the first contiguous run, `onAppend` per run after that.
 - Once `onReady` has fired, failures degrade to a shorter session (`missingCount`), never a dead
   one; the promise rejects only when NOTHING became playable. A dead starter is recovered by the
-  first background batch firing `onReady` instead of `onAppend`.
+  next decided slot firing `onReady` instead of `onAppend`.
 - `preparePracticeSession` remains as the all-at-once wrapper over the same core (tests and any
   non-streaming caller), so there is exactly one implementation.
+- Cost note: per-word calls mean a session of N distinct words is ~N+1 small generation calls
+  rather than ⌈N/12⌉ batched ones. Accepted deliberately — the calls are Haiku-cheap, run 3 in
+  flight, and stream behind a learner who spends ~10s per sentence; batching across words cannot
+  guarantee the slot order or the per-word quotas.
 
 `ClozePlayer` appends: items may GROW mid-session, and the append effect adds only the delta —
 re-copying would wipe the redo copies spliced onto the queue's end. Reaching the end while
 `moreComing` shows "Generating the next sentence…" with a Stop-here escape rather than the summary.
 
 ## Error log (additions)
+
+- **2026-08-27 — Per-word sessions played each word's sentences back-to-back.** "2 sentences per
+  card" generated one batch per word and appended each batch as it landed, so both of a word's
+  sentences arrived adjacent — the second answered from short-term memory, defeating the drill.
+  Fixed by deciding the shuffled, round-interleaved slot order FIRST and generating into it (see
+  "Progressive session start" above). The lesson generalises: with streaming generation, play
+  order must be planned up front — arrival order is generation order, and generation batches by
+  word.
 
 - **2026-08-22 — "Due soon → Today" missed words and was silently capped.** Three defects in the
   `due` source (`engine/practiceSelect.ts`): it read `dueAt` alone, so a card whose production

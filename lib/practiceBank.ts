@@ -15,8 +15,13 @@
  * but nothing reads or writes it; drop it whenever convenient. Do not reintroduce caching here
  * without the user asking for it.
  *
- * The progressive shape stays: the learner waits for the FIRST sentence only, the rest stream in
- * behind the player.
+ * ── The order is decided FIRST, then generated ────────────────────────────────
+ * A session's play order is fixed up front as a shuffled, interleaved list of SLOTS (every word
+ * appears once, in random order, before any word appears again — no more "both sentences for word
+ * A, then both for word B", which let the learner answer the second from short-term memory).
+ * Generation then fills the slots in that order: one call per word (all of a word's sentences come
+ * from a single call, so they stay varied), the first slot carved off as a single-sentence starter
+ * so the learner's wait is ONE sentence. Later slots stream in behind the player in slot order.
  */
 
 import { plannedTotal, planGenerationBatches, type SentencePlan } from '@/engine/practiceBank'
@@ -25,6 +30,9 @@ import { generatePracticeExercises, type PreparedExercise } from '@/lib/practice
 import { GENERATE_CAP } from '@/app/api/practice/generate/route'
 import { mapLimit } from '@/lib/mapLimit'
 import type { ClozeMode } from '@/lib/practiceSchema'
+
+/** Per-word generation calls in flight. */
+const JOB_CONCURRENCY = 3
 
 export interface PrepareOptions {
   userId:         string
@@ -53,16 +61,74 @@ export interface ProgressCallbacks {
   onAppend: (more: PreparedExercise[]) => void
 }
 
+function shuffled<T>(arr: readonly T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j]!, a[i]!]
+  }
+  return a
+}
+
 /**
- * Builds a session progressively: the learner waits only for the FIRST playable sentence.
+ * The session's play order, fixed before anything is generated: rounds of the target words, each
+ * round its own shuffle, so every word appears once before any appears twice. Per-word plans lay
+ * down exactly `perWord` full rounds; total plans cycle rounds until `count` slots exist (a partial
+ * last round is a random subset — a 3-sentence session over 20 words drills 3 random words).
+ * A word is kept off the boundary between rounds when there's more than one word to swap with.
+ */
+export function buildSlotOrder(targets: PracticeTarget[], plan: SentencePlan): PracticeTarget[] {
+  const wanted = plannedTotal(plan, targets.length)
+  if (targets.length === 0 || wanted <= 0) return []
+  const out: PracticeTarget[] = []
+  while (out.length < wanted) {
+    const round = shuffled(targets).slice(0, wanted - out.length)
+    if (out.length > 0 && round.length > 1 && round[0] === out[out.length - 1]) {
+      ;[round[0], round[1]] = [round[1]!, round[0]!]
+    }
+    out.push(...round)
+  }
+  return out
+}
+
+/** One generation call: a word and the slot positions its sentences will fill. */
+interface SlotJob { target: PracticeTarget; slotIdxs: number[] }
+
+/**
+ * Groups the slot order into per-word jobs (one call per word keeps its sentences varied — a model
+ * asked for two sentences in one call writes two different ones; two separate calls often repeat).
+ * The very first slot is carved off as its own single-sentence job so the learner's wait is one
+ * sentence, not that word's whole quota. Jobs are ordered by their first slot, so generation runs
+ * in roughly the order the learner will meet the results.
+ */
+export function buildSlotJobs(slots: PracticeTarget[]): SlotJob[] {
+  const byCard = new Map<string, SlotJob>()
+  slots.forEach((t, i) => {
+    const job = byCard.get(t.cardId)
+    if (job) job.slotIdxs.push(i)
+    else byCard.set(t.cardId, { target: t, slotIdxs: [i] })
+  })
+  const jobs = [...byCard.values()]   // insertion order = first-slot order
+  const first = jobs[0]
+  if (first && first.slotIdxs.length > 1) {
+    const rest: SlotJob = { target: first.target, slotIdxs: first.slotIdxs.slice(1) }
+    first.slotIdxs = [first.slotIdxs[0]!]
+    const at = jobs.findIndex(j => j.slotIdxs[0]! > rest.slotIdxs[0]!)
+    if (at === -1) jobs.push(rest)
+    else jobs.splice(at, 0, rest)
+  }
+  return jobs
+}
+
+/**
+ * Builds a session progressively: the order is decided first (see `buildSlotOrder`), then the
+ * learner waits only for the FIRST slot's sentence while the rest generate behind the player.
  *
- * A STARTER batch of exactly one sentence for the first word is generated alone, so the wait is one
- * single-sentence API call rather than the full plan. The remaining work is re-planned with that
- * word's quota reduced by one and streamed in via `onAppend`.
- *
- * The returned promise resolves when everything has settled, with the final accounting. It rejects
- * only when NOTHING could be prepared — once `onReady` has fired, later failures degrade to a
- * shorter session (reported via `missingCount`), never a dead one.
+ * Results are released strictly in slot order — a batch that lands out of turn waits for the slots
+ * before it. A failed or short call vacates its slots (reported via `missingCount`) so the stream
+ * never stalls on them. The returned promise resolves when everything has settled; it rejects only
+ * when NOTHING could be prepared — once `onReady` has fired, later failures degrade to a shorter
+ * session, never a dead one.
  */
 export async function preparePracticeSessionProgressive(
   opts: PrepareOptions,
@@ -76,67 +142,67 @@ export async function preparePracticeSessionProgressive(
   }
   const mode = opts.mode ?? 'target'
 
-  // One group covering the whole plan; the starter is carved off it below.
-  const groups: Array<{ targets: PracticeTarget[]; count: number }> =
-    [{ targets, count: wanted }]
+  const slots = buildSlotOrder(targets, plan)
+  const jobs = buildSlotJobs(slots)
 
+  const filled: (PreparedExercise | null)[] = new Array(slots.length).fill(null)
+  const vacated: boolean[] = new Array(slots.length).fill(false)
+  // Sentences already used per word, so a word whose quota spans calls (the starter split) can't
+  // show the same sentence twice — a repeat vacates the slot instead.
+  const usedSentences = new Map<string, Set<string>>()
+  let flushedTo = 0
   let ready = false
-  const settle = (first: PreparedExercise[]) => { ready = true; cb.onReady(first) }
-
-  // Carve one single-sentence starter off the first group so the learner's wait is ONE sentence,
-  // not the plan. The group keeps the remainder.
-  let starter: { targets: PracticeTarget[] } | null = null
-  {
-    const g = groups[0]!
-    const starterTarget = g.targets[0]!
-    starter = { targets: [starterTarget] }
-    if (g.count <= 1) groups.shift()
-    else if (plan.mode === 'perWord') {
-      // Per-word groups must stay per-word exact: the starter word moves to its own reduced group.
-      const per = g.count / g.targets.length
-      g.targets = g.targets.filter(t => t !== starterTarget)
-      g.count = per * g.targets.length
-      if (per > 1) groups.push({ targets: [starterTarget], count: per - 1 })
-      if (g.targets.length === 0) groups.shift()
-    } else {
-      g.count -= 1
-    }
-  }
-
   let produced = 0
   const errors: unknown[] = []
 
-  try {
-    const run = await generatePracticeExercises({
-      targets: starter.targets, sourceLanguage, targetLanguage, count: 1, mode,
-    })
-    produced += run.exercises.length
-    settle(run.exercises)
-  } catch (err) {
-    errors.push(err)
-    // The starter died; the remaining groups are now the only chance to open the session, so the
-    // first of them to land must fire onReady instead of onAppend.
+  /** Releases the contiguous run of decided slots (filled or vacated) past the flush point. */
+  const flush = () => {
+    const out: PreparedExercise[] = []
+    while (flushedTo < slots.length && (filled[flushedTo] !== null || vacated[flushedTo])) {
+      const ex = filled[flushedTo]
+      if (ex) out.push(ex)
+      flushedTo++
+    }
+    if (out.length === 0) return
+    if (ready) cb.onAppend(out)
+    else { ready = true; cb.onReady(out) }
   }
 
-  // ── Everything else streams in behind the player ───────────────────────────
-  await mapLimit(groups, 2, async (g) => {
+  await mapLimit(jobs, JOB_CONCURRENCY, async job => {
+    const { target: t, slotIdxs } = job
+    const used = usedSentences.get(t.cardId) ?? new Set<string>()
+    usedSentences.set(t.cardId, used)
+    const got: PreparedExercise[] = []
     try {
-      const run = await generatePracticeExercises({
-        targets: g.targets, sourceLanguage, targetLanguage, count: g.count, mode,
-      })
-      if (run.exercises.length === 0) return
-      produced += run.exercises.length
-      if (ready) cb.onAppend(run.exercises)
-      else settle(run.exercises)
+      // A word's quota above the route cap (a huge per-word ask) chunks into further calls.
+      for (let done = 0; done < slotIdxs.length; done += GENERATE_CAP) {
+        const run = await generatePracticeExercises({
+          targets: [t], sourceLanguage, targetLanguage,
+          count: Math.min(GENERATE_CAP, slotIdxs.length - done), mode,
+        })
+        got.push(...run.exercises)
+      }
     } catch (err) {
       errors.push(err)
     }
+    let next = 0
+    for (const ex of got) {
+      if (next >= slotIdxs.length) break
+      const key = ex.exercise.sentence.trim()
+      if (used.has(key)) continue
+      used.add(key)
+      filled[slotIdxs[next++]!] = ex
+      produced++
+    }
+    for (; next < slotIdxs.length; next++) vacated[slotIdxs[next]!] = true
+    flush()
   })
 
   if (!ready) {
     // Nothing at all became playable. Surface the first real failure rather than an empty session.
-    if (errors.length > 0) throw errors[0]
-    settle([])
+    if (produced === 0 && errors.length > 0) throw errors[0]
+    ready = true
+    cb.onReady([])
   }
   return {
     exercises: [],        // streamed via callbacks; kept for the wrapper below
