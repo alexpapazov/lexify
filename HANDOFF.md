@@ -1,10 +1,10 @@
-# Lexify — engineering handoff (2026-08-08)
+# Lexify — engineering handoff (2026-08-22)
 
 The **broad** orientation document: what the app is, how each feature actually works, what's dead, and
 what's unfinished. `CLAUDE.md` remains the deep chronological reference (every feature's full
 implementation notes + error log); this file is the map you read first.
 
-- **Scale**: ~61,600 lines across 269 TS/TSX files, 706 commits, 1010 passing tests (63 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
+- **Scale**: ~69,400 lines across 303 TS/TSX files, 777 commits, 1024 passing tests (63 suites). Bulk card actions live in the shared `components/CardBulkPanel.tsx` (deck page + every stat-box card list). **The legacy step-pipeline study flow is eradicated (2026-08-10)**: session pages review graduated cards only; all learning runs through the configured ladder/pathway, and old new/learning session URLs redirect there.
 - **Deployed**: `lexify-flax.vercel.app` (web, auto-deploys on push) + a Capacitor iOS app.
 - **Backend**: Supabase (Postgres + Auth + RLS). Migrations applied BY HAND; `001`–`118` are archived
   and live; `119`–`121` are applied too (confirmed 2026-08-22) and archived alongside them.
@@ -176,10 +176,15 @@ the re-derived goal has already absorbed a missed day, so stacking full debt on 
 it twice. All four goal consumers branch on it. Read `features/Goal Scheduler.md` before touching it.
 
 **Daily Goals moved to its own page (2026-08-08): `/settings/goals`,** linked from Language
-configuration exactly like `/settings/ladders`. The Daily / Per weekday / **Schedule** toggle is
-GLOBAL (`profiles.goal_mode`, migration 115) — one choice for every language. It's a UI mode only;
-what drives the goal surfaces is still "does this pair have a live schedule", which is why leaving
-Schedule mode PROMPTS TO RETIRE them. In Schedule mode the page leads with a **combined calendar**:
+configuration exactly like `/settings/ladders`. The Daily / Per weekday / **Schedule** tabs are
+per-language VIEWS (2026-08-22), not a global mode. **A language with a live schedule is
+schedule-driven; otherwise its weekday goals drive it** — so Bulgarian can run a schedule while
+French keeps a plain daily number. Switching tabs never retires a schedule and never rewrites a
+goal; `profiles.goal_mode` (migration 115) now stores only which tab was last open. In fixed-goal
+tabs a scheduled pair shows a "driven by its schedule" badge instead of inert inputs, and each row
+has a **Clear week** button. (The previous GLOBAL mode forced retiring every schedule to use daily
+goals anywhere, which is how stale weekday values on unscheduled pairs became invisible ghost
+goals — see `features/Goal Scheduler.md` §6.) In Schedule mode the page leads with a **combined calendar**:
 every language on one grid, each day a pie split by language in its assigned colour, hover for exact
 percentages, drag to block out travel for everything at once, plus weekly rest-day chips. Each
 language then gets its own editor with its own drag-select calendar. **A schedule no longer needs a
@@ -343,11 +348,17 @@ in the sentence rendered red with their translation.
 Two more gates worth knowing:
 - **Quality**: every freshly generated sentence is judged by `/api/practice/verify` on
   **`claude-sonnet-5` — deliberately stronger than the Haiku that wrote it**, since a model can't
-  catch its own errors and judging is the cheap half. Rejects are never shown or banked. **Fails
-  open**: no judge means everything passes.
-- **Cache**: sentences are banked in `practice_sentences` (migration 113) by target lemma and
-  **re-scored on every read** — the verdict is never stored, because usability depends on a library
-  that grows and a slider the user moves. Bank sentences are not re-judged; they passed when written.
+  catch its own errors and judging is the cheap half. Rejects are never shown. **Fails open**: no
+  judge means everything passes.
+- **No cache (2026-08-22).** Sentences were banked in `practice_sentences` (migration 113) and
+  replayed; the bank was MODE-BLIND, so a native-cloze session served an all-Greek sentence stored
+  by a normal session. Removed at the user's explicit request — every session generates fresh, and
+  a word never arrives with a sentence you've already seen. The table is orphaned; drop it.
+- **Progressive start**: the learner waits for the FIRST sentence only (a one-sentence starter
+  batch), the rest stream in behind the player.
+- **Grading accepts every form of the target word**: the sentence's inflection is plain correct, the
+  citation form is also correct and shows the required inflection. Both tiers accept typo/accent
+  slips — practice grading is forgiving by design.
 
 Sentence modes: a full target-language sentence, or **native cloze** (the sentence is in English and
 only the blank is the target language — usable on day one). Session size is N total or N per word.
@@ -469,6 +480,16 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 
 ## 6. Traps that have burned real time
 
+- **"Due" gets re-implemented by hand and drifts. Every time.** `lib/dueStatus.ts` exists because
+  five surfaces each had their own copy; on 2026-08-22 FOUR MORE were found in one session:
+  practice's due picker read `dueAt` alone (missing smart/typed/recall/reverse schedules) and
+  compared UTC days; the catch-up pools needed the same gate; and the forecast chart projected
+  reverse rows **without checking the forward row is graduated**, so "Coming up" said 2 cards were
+  due today while the button said "No cards due" — the reverse rows of two un-graduated cards.
+  The tells: a card's real schedule can live on `smart_due_at`, `typed_due_at`, `recall_due_at` or
+  `due_at`; a production review syncs `due_at` FORWARD, hiding a still-due recall; reverse rows are
+  gated on their forward counterpart; and days must be compared in the learner's timezone. Route
+  every new reader through `activeDueDates()` rather than writing the fifth copy.
 - **Adding a column to a `profiles` SELECT before its migration is applied breaks the WHOLE query** →
   `data` is null → timezone/turnover/carryover silently reset to defaults. The study dashboard,
   LadderStudy and `lib/analyticsData.ts` have core-columns fallbacks. **`PresentSnapshot` now uses
@@ -498,42 +519,74 @@ Other files big enough to need care: `components/CardEditModal.tsx` (2,128), `ap
 
 ---
 
-## 7. Where the 2026-08-08 session left off
+## 7. Where the 2026-08-22 session left off
 
-**Everything is committed, migrations 110–114 are applied, and the tree is clean.** Practice Mode
-phases 0–5 shipped; the Goal Scheduler is complete and wired. Nothing is half-written.
+**Everything is committed and the tree is clean.** One migration is pending; two tables are now
+orphaned and safe to drop.
 
-**Pick up here — in this order:**
+### Run this before deploying
 
-0. **Click through the Goal Scheduler.** Migration 114 is applied and it is wired into all four goal
-   surfaces, but **it has never executed against a real account** — see open thread 0 for what to
-   watch on the first run.
+```sql
+-- 122: catch-up plan records (progress bars + Reassign). Idempotent.
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS catchup_plans JSONB NOT NULL DEFAULT '{}'::jsonb;
+```
 
-1. **Phase 6: more exercise modes + their grading.** Translate
-   target→native, native→target, and free production ("use this word in a sentence"). **STOP AND
-   DISCUSS BEFORE BUILDING** — the user explicitly deferred the grading design, and it is the real
-   decision: cloze reuses `gradeTyping` and is fully cacheable, whereas these modes need AI grading
-   with a **per-answer** cost, which is a different economic shape from everything built so far.
-   The design notes are in `features/Practice Mode.md` → Phase 6.
+Optional cleanup, both harmless if skipped:
 
-2. **Watch the quality-gate rejection rate, especially for Bulgarian.** The gate logs every
-   rejection to the console (`[practice] rejected N generated sentence(s):` with reasons). The user
-   reported Haiku writing poor Bulgarian; the gate now filters those out, but *filtering* is a
-   patch. **If a large fraction is being rejected, the answer is generating on a stronger model for
-   that language, not filtering harder** — that decision is open and needs the real numbers first.
+```sql
+DROP TABLE IF EXISTS practice_sentences;   -- migration 113; the sentence cache was removed
+```
 
-3. **The whole practice pipeline is thinly exercised against the real API.** It has been run enough
-   to surface (and fix) the naturalness problem, but coverage is: build, unit tests with mocked
-   fetch, and a handful of live sessions. Bank reuse across sessions, per-word plans, and native
-   cloze have had little or no real-account use.
+### What shipped
 
-**Two things a future session must not "tidy":**
-- `restrictVocabulary` defaulting to **off**. It looks like a missing default; it is the fix for the
-  central quality problem (§3.10c).
-- The bank never storing a pass/fail verdict. Re-scoring on read looks redundant; it is what keeps
-  the cache correct as the library grows and the slider moves.
+1. **Catch up on a backlog** (Settings → Data, above Redistribute) — pick a language and/or card
+   type plus a date, and overdue cards are dealt out across the days between. Rewrites real due
+   dates; safe because FSRS derives `elapsedDays` from `lastReviewedAt`, never `dueAt`. Progress
+   bars and a Reassign button track each plan. **`features/Catch Up.md` in full before touching it**
+   — it carries five error-log entries from this session alone, including two designs that were
+   built and deleted.
 
----
+2. **Goal modes are per-language and derived** — a language with a live schedule is
+   schedule-driven, otherwise its weekday goals drive it. The Daily / Per weekday / Schedule tabs
+   are non-destructive VIEWS. This replaced a global mode that forced retiring every schedule to
+   use daily goals anywhere. Each language row in the weekday view has a **Clear week** button.
+
+3. **Practice**: sessions open on the FIRST sentence and stream the rest behind the player; every
+   grammatical form of the target word is accepted (lemma → "Right word — in this sentence it takes
+   the form X"); native cloze enforces its one-target-word promise by script check; **the sentence
+   cache is gone** — every session generates fresh.
+
+4. **Four due-count divergences fixed** (see the trap below).
+
+### Pick up here
+
+0. **Verify the ghost goals are actually gone.** The user was clearing leftover per-weekday values
+   on Italian / Greek / French with the new Clear week button when the session ended. If the
+   dashboard still lists them, the values are still in `language_pairs.goals`.
+
+1. **Phase 6: more exercise modes + their grading.** Translate target→native, native→target, free
+   production. **STOP AND DISCUSS BEFORE BUILDING** — the user deferred the grading design
+   deliberately, and it is the real decision: cloze reuses `gradeTyping`, whereas these modes need
+   AI grading with a **per-answer** cost. Notes in `features/Practice Mode.md` → Phase 6.
+   Note the economics changed: sentences are no longer cached, so every session costs generation.
+
+2. **Watch native-cloze quality for same-script pairs.** `leaksTargetScript` protects Greek,
+   Bulgarian and Korean from English (different scripts). A Spanish or French native cloze has only
+   the prompt — no deterministic guard is possible without a dictionary. If leaks appear there,
+   that is the known gap, not a regression.
+
+3. **The Goal Scheduler still has thin real-account coverage** (open thread 0), and the catch-up
+   spread has been run against real data only a handful of times.
+
+**Three things a future session must not "tidy":**
+- **`lib/dueStatus.ts` is the ONLY definition of "due".** Four surfaces re-implemented it by hand
+  this session and all four drifted. Route new readers through `activeDueDates()`.
+- **No sentence caching in practice.** Removed at the user's explicit request, twice-motivated
+  (mode-blind reuse served an all-Greek sentence into a native session; replay teaches sentence
+  recognition, not recall). Do not reintroduce it unasked.
+- **Catch-up stores only `{targetDate, startedOn, total}`** — historical facts that never change.
+  Remaining is derived every load. Do not add a `remaining`/`done` field; that exact mistake was
+  built and deleted.
 
 ## 8. Open threads
 
@@ -593,7 +646,7 @@ feature, and update it afterward.** Each carries its own error log.
 `Learning Pipeline.md` · `Due Now.md` · `Typed Grading.md` · `Confusion Handling.md` ·
 `Language Syncing.md` · `Card Data.md` · `Agent Platform.md` · `Vocabulary Onboarding.md` ·
 `Batch Deck Import.md` · **`Practice Mode.md`** · **`Starred Cards.md`** · **`Goal Scheduler.md`** ·
-**`Card Organizer Agent.md`** · `Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
+**`Card Organizer Agent.md`** · **`Catch Up.md`** · `Learning Pathways (proposal).md` · `FSRS Scheduler (proposal).md` ·
 `Configurable Pipeline (proposal).md` · `Card Connection Agent (proposal).md`
 
 **`Practice Mode.md` is the one to read before touching anything under `/practice`,
