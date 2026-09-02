@@ -19,6 +19,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { langName } from '@/lib/languages'
+import type { VerifyResult, VerifyIssue } from '@/lib/onboardVerify'
 
 export const runtime = 'nodejs'
 
@@ -33,19 +34,6 @@ export const VERIFY_BATCH_CAP = 60
  *   'ambiguous'      — the gloss spans several senses, so the card can't be graded fairly
  *   'language'       — a side is in the wrong language (often the two are simply swapped)
  */
-export type VerifyIssue = 'mistranslation' | 'ambiguous' | 'language'
-
-export interface VerifyResult {
-  /** Index into the request's `cards` array. */
-  index:          number
-  issue:          VerifyIssue
-  /** One short sentence the learner can act on. */
-  note:           string
-  /** Corrected text, when the model can offer one. Absent = "you decide". */
-  suggestedFront?: string
-  suggestedBack?:  string
-}
-
 interface RequestBody {
   cards:          { front: string; back: string }[]
   sourceLanguage: string

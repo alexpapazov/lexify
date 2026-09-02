@@ -12,8 +12,7 @@ import { apiUrl } from '@/lib/apiBase'
 import { mapLimit } from '@/lib/mapLimit'
 import { planGenerationBatches } from '@/engine/practiceBank'
 import type { PracticeTarget } from '@/engine/practice'
-import { GENERATE_CAP } from '@/app/api/practice/generate/route'
-import { leaksTargetScript, type PracticeExercise, type ClozeMode } from '@/lib/practiceSchema'
+import { GENERATE_CAP, leaksTargetScript, type PracticeExercise, type ClozeMode } from '@/lib/practiceSchema'
 
 /** Generation calls in flight when one request needs several batches. */
 const GENERATE_CONCURRENCY = 3

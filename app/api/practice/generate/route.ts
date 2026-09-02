@@ -16,14 +16,11 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { langName } from '@/lib/languages'
-import { parseExercises, type ClozeMode } from '@/lib/practiceSchema'
+import { GENERATE_CAP, parseExercises, type ClozeMode } from '@/lib/practiceSchema'
 
 export const runtime = 'nodejs'
 
 const MODEL = 'claude-haiku-4-5-20251001'
-
-/** Hard ceiling on exercises per request — the client asks for far fewer. */
-export const GENERATE_CAP = 12
 
 export interface GenerateTarget {
   /** The card's front, as the learner sees it (may carry an article or a gender tag). */

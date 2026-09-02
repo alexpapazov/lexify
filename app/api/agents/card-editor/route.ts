@@ -16,13 +16,13 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import type { AgentSides } from '@/lib/agents/cardEditor'
 
 export const runtime = 'nodejs'
 
 const MODEL = 'claude-haiku-4-5-20251001'
 
 /** Which side(s) of a card the model is shown — and, consequently, allowed to change. */
-export type AgentSides = 'front' | 'back' | 'both'
 
 /** A hidden side arrives `undefined`; never assume both are present. */
 interface InCard { cardId: string; front?: string; back?: string }

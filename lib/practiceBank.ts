@@ -27,8 +27,8 @@
 import { plannedTotal, planGenerationBatches, type SentencePlan } from '@/engine/practiceBank'
 import type { PracticeTarget } from '@/engine/practice'
 import { generatePracticeExercises, type PreparedExercise } from '@/lib/practiceGenerate'
-import { GENERATE_CAP } from '@/app/api/practice/generate/route'
 import { mapLimit } from '@/lib/mapLimit'
+import { GENERATE_CAP } from '@/lib/practiceSchema'
 import type { ClozeMode } from '@/lib/practiceSchema'
 
 /** Per-word generation calls in flight. */

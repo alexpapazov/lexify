@@ -12,9 +12,10 @@ import * as gw from './gateway'
 import { normalizeFrontKey } from '@/lib/duplicates'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import type { AgentSides } from '@/app/api/agents/card-editor/route'
-
-export type { AgentSides }
+/** Which card sides the agent may read (and therefore edit). Defined here, not in the API route:
+ * client code must never import from `app/api/**` — the Capacitor build stashes that directory
+ * before the static export, and any client-reachable import of it breaks `npm run build:cap`. */
+export type AgentSides = 'front' | 'back' | 'both'
 
 export interface ScopedCard {
   deckId: string

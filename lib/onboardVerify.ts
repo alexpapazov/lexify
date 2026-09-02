@@ -9,9 +9,21 @@
 
 import { apiUrl } from '@/lib/apiBase'
 import { mapLimit, chunk } from '@/lib/mapLimit'
-import type { VerifyResult, VerifyIssue } from '@/app/api/cards/verify/route'
 
-export type { VerifyIssue }
+// Defined here, not in the verify route — client code must never import from `app/api/**`
+// (the Capacitor build stashes it; see lib/practiceSchema.ts).
+export type VerifyIssue = 'mistranslation' | 'ambiguous' | 'language'
+
+export interface VerifyResult {
+  /** Index into the request's `cards` array. */
+  index:          number
+  issue:          VerifyIssue
+  /** One short sentence the learner can act on. */
+  note:           string
+  /** Corrected text, when the model can offer one. Absent = "you decide". */
+  suggestedFront?: string
+  suggestedBack?:  string
+}
 
 /** Cards per request. Comfortably under the route's VERIFY_BATCH_CAP, and small enough that one
  *  batch's flagged list can't exhaust the response token budget. */

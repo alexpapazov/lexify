@@ -14,7 +14,17 @@
 import { apiUrl } from '@/lib/apiBase'
 import { mapLimit, chunk } from '@/lib/mapLimit'
 import { SupabaseCardRepository } from '@/lib/data/cards'
-import type { LabelResult } from '@/app/api/cards/label/route'
+import type { PartOfSpeech } from '@/domain'
+
+/** One labeled card from the label route. Defined here, not in the route — client code must never
+ * import from `app/api/**` (the Capacitor build stashes it; see lib/practiceSchema.ts). */
+export interface LabelResult {
+  /** Index into the request's `cards` array. */
+  index: number
+  pos:   PartOfSpeech
+  /** Dictionary citation form of the front. Null for 'phrase' (no single citation form). */
+  lemma: string | null
+}
 
 /** Cards per request. Comfortably under the route's LABEL_BATCH_CAP. */
 const LABEL_CHUNK = 60

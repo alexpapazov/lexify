@@ -3319,6 +3319,19 @@ points that bite:
   heading signal, cards are `front = back`. Card counts go on their OWN line — appending them to the
   deck name produced a re-imported deck called "School  [12 cards]" (caught by the round-trip test).
 
+## Client code must NEVER import from `app/api/**` (2026-08-27)
+
+`npm run build:cap` STASHES the whole `app/api` directory before the static export, so any
+client-reachable import from it — **including type-only imports** — fails the Capacitor build while
+`npm run build` stays green. This broke `build:cap` with four such imports (`GENERATE_CAP` in the two
+practice libs, `AgentSides` in `lib/agents/cardEditor.ts`, `LabelResult` in `lib/labelCards.ts`,
+`VerifyResult`/`VerifyIssue` in `lib/onboardVerify.ts`). All were moved: shared constants/types live
+in the LIB module and the route imports them from there (routes may import lib freely — they're the
+side that gets stashed). `GENERATE_CAP` now lives in `lib/practiceSchema.ts`. When adding a route
+whose response shape the client needs, define the type in the client lib that calls the route.
+**`npm run build` passing does not prove `build:cap` passes** — run both when touching imports near
+`app/api`.
+
 ## Verifying changes
 
 ```

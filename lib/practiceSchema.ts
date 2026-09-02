@@ -18,6 +18,14 @@
 import type { PartOfSpeech } from '@/domain'
 import type { AnnotatedToken } from '@/engine/practice'
 
+/**
+ * Hard ceiling on exercises per generation request — enforced by the route, used by the client
+ * planners to size batches. Lives HERE (not in the route file) because the client libs must not
+ * import from `app/api/**`: the Capacitor build stashes that whole directory away before the
+ * static export, and any client-reachable import of it breaks `npm run build:cap`.
+ */
+export const GENERATE_CAP = 12
+
 /** An annotated word, plus a native gloss so a word that survives repair can be shown translated. */
 export interface PracticeToken extends AnnotatedToken {
   gloss: string

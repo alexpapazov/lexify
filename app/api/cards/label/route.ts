@@ -18,6 +18,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { langName } from '@/lib/languages'
 import type { PartOfSpeech } from '@/domain'
+import type { LabelResult } from '@/lib/labelCards'
 
 export const runtime = 'nodejs'
 
@@ -25,14 +26,6 @@ const MODEL = 'claude-haiku-4-5-20251001'
 
 /** Hard ceiling on cards per request. The client chunks well below this. */
 export const LABEL_BATCH_CAP = 80
-
-export interface LabelResult {
-  /** Index into the request's `cards` array. */
-  index: number
-  pos:   PartOfSpeech
-  /** Dictionary citation form of the front. Null for 'phrase' (no single citation form). */
-  lemma: string | null
-}
 
 interface RequestBody {
   cards:          { front: string; back: string }[]
