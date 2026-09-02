@@ -42,6 +42,8 @@ export const routes = {
   ladderFolder:  (folderId: string, extra: Query = {}) => withQuery('/study/ladder/folder', { folder: folderId, ...extra }),
   /** Practice Mode (exercise generation from your own vocabulary). */
   practice:      (extra: Query = {}) => withQuery('/practice', { ...extra }),
+  /** Express matching review over due reverse-recognition cards (optionally `{source, target}`). */
+  express:       (extra: Query = {}) => withQuery('/study/express', { ...extra }),
   /** A folder's contents in the library. */
   library:       (folderId: string, extra: Query = {}) => withQuery('/library/folder',   { folder: folderId, ...extra }),
   /** An agent change-set review. */

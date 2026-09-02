@@ -42,6 +42,9 @@ Current feature files:
 - `features/Vocabulary Onboarding.md` — bulk intake of words you already know:
   AI accuracy check, front-only duplicate drop, four confidence bands mapped to
   FSRS difficulty/stability + spread due dates, resumable queue (migration 107).
+- `features/Express Review.md` — matching as a REAL review for due reverse-recognition
+  cards: dashboard chooser (⚡ Matching / Normal), clean match = full Good on the reverse
+  row, mismatches write nothing and stay due. `/study/express`, `lib/expressReview.ts`.
 - `features/Catch Up.md` — spread an overdue backlog across days up to a date you pick
   (Settings → Data): deferral-damage ordering, evenly-paced relearning, why moving past-due
   dates is safe. Includes an error log for the invisible first version.

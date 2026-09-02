@@ -11,7 +11,7 @@
  * never straight across from itself.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { AudioToggle, usePracticeAudio } from './usePracticeAudio'
 
 export interface MatchPair {
@@ -62,7 +62,7 @@ export interface MatchAttempt {
   confused?: MatchPair
 }
 
-export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt }: {
+export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt, renderFinish }: {
   pairs:  MatchPair[]
   onExit: () => void
   /** Which column holds the target-language words. */
@@ -71,6 +71,12 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
   onSpeakTarget?: (pair: MatchPair) => void
   /** Fire-and-forget attempt log — right or wrong, and wrong WITH WHAT. */
   onAttempt?: (a: MatchAttempt) => void
+  /**
+   * Replaces the default result screen (which says nothing was scheduled — true for practice,
+   * wrong for express review, where a clean match IS a review). Also suppresses "Play again":
+   * a replayed board would re-test cards that were just credited.
+   */
+  renderFinish?: (stats: { total: number; mistakes: number; elapsedMs: number }) => ReactNode
 }) {
   const [audioOn, toggleAudio] = usePracticeAudio()
   const [rounds,   setRounds]   = useState<Round[]>(() => buildRounds(pairs))
@@ -158,6 +164,7 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
   }
 
   if (finished) {
+    if (renderFinish) return <>{renderFinish({ total, mistakes, elapsedMs: elapsed })}</>
     const attempts = total + mistakes
     return (
       <div className="max-w-md mx-auto pt-16 space-y-4 text-center">

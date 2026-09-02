@@ -338,6 +338,8 @@ export default function StudyPage() {
   const [scheduleDone,      setScheduleDone]      = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
+  // A picked reverse row awaiting the Matching-vs-normal choice: 'all' or `${source}|${target}`.
+  const [expressPick, setExpressPick] = useState<string | null>(null)
   const duePickerRef = useRef<HTMLDivElement>(null)
   const forecastSettingsRef = useRef<HTMLDivElement>(null)
   const offline = useOfflineMode()
@@ -1198,7 +1200,7 @@ export default function StudyPage() {
                       <div key={t.key} className="border-b border-line/10 last:border-b-0">
                         <button
                           className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
-                          onClick={() => setExpandedDueType(v => v === t.key ? null : t.key)}
+                          onClick={() => { setExpressPick(null); setExpandedDueType(v => v === t.key ? null : t.key) }}
                         >
                           <span className="text-ink flex items-center gap-1.5">
                             <span className={`text-ink-faint transition-transform ${expanded ? 'rotate-90' : ''}`}>›</span>
@@ -1208,23 +1210,46 @@ export default function StudyPage() {
                         </button>
                         {expanded && (
                           <div className="bg-surface-deep/60">
-                            <button
-                              className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
-                              onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&${t.query}`) }}
-                            >
-                              <span className="text-ink-muted">All languages</span>
-                              <span className="chip text-xs ml-3">{t.count}</span>
-                            </button>
-                            {pairs.map(p => (
-                              <button
-                                key={`${p.source}|${p.target}`}
-                                className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
-                                onClick={() => { setShowDuePicker(false); router.push(`/study/all/session?category=due&${t.query}&source=${p.source}&target=${p.target}`) }}
-                              >
-                                <span className="text-ink">{t.n2t ? `${langName(p.target)} → ${langName(p.source)}` : `${langName(p.source)} → ${langName(p.target)}`}</span>
-                                <span className="chip text-xs ml-3">{t.pick(p)}</span>
-                              </button>
-                            ))}
+                            {([{ pickKey: 'all', pair: null as PairTypeDue | null, label: 'All languages', count: t.count },
+                               ...pairs.map(p => ({
+                                 pickKey: `${p.source}|${p.target}`, pair: p as PairTypeDue | null,
+                                 label: t.n2t ? `${langName(p.target)} → ${langName(p.source)}` : `${langName(p.source)} → ${langName(p.target)}`,
+                                 count: t.pick(p),
+                               }))]).map(row => {
+                              const pairQuery = row.pair ? `&source=${row.pair.source}&target=${row.pair.target}` : ''
+                              const sessionUrl = `/study/all/session?category=due&${t.query}${pairQuery}`
+                              const go = () => { setShowDuePicker(false); setExpressPick(null); router.push(sessionUrl) }
+                              return (
+                                <div key={row.pickKey}>
+                                  <button
+                                    className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
+                                    // Reverse recognition offers a choice first (matching IS a valid
+                                    // review for that track); the other rows go straight to a session.
+                                    onClick={() => t.key === 'sgReverse'
+                                      ? setExpressPick(v => v === row.pickKey ? null : row.pickKey)
+                                      : go()}
+                                  >
+                                    <span className={row.pair ? 'text-ink' : 'text-ink-muted'}>{row.label}</span>
+                                    <span className="chip text-xs ml-3">{row.count}</span>
+                                  </button>
+                                  {t.key === 'sgReverse' && expressPick === row.pickKey && (
+                                    <div className="flex gap-2 pl-9 pr-4 pb-2.5">
+                                      <button
+                                        className="btn-primary text-xs px-3 py-1.5 flex-1"
+                                        onClick={() => {
+                                          setShowDuePicker(false); setExpressPick(null)
+                                          router.push(routes.express(row.pair ? { source: row.pair.source, target: row.pair.target } : {}))
+                                        }}
+                                      >⚡ Matching</button>
+                                      <button
+                                        className="text-xs px-3 py-1.5 flex-1 rounded border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 transition-colors"
+                                        onClick={go}
+                                      >Normal review</button>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
                           </div>
                         )}
                       </div>
