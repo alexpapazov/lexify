@@ -44,6 +44,8 @@ export interface GenerateOptions {
   count:          number
   /** Native-language sentence with only the blank in the target language. */
   mode?: ClozeMode
+  /** Ask for the target word exactly in its listed dictionary form (Due Now forward cloze). */
+  exactForm?: boolean
 }
 
 /** Attaches the blank's prompt gloss to each parsed exercise. */
@@ -79,6 +81,7 @@ export async function generatePracticeExercises(opts: GenerateOptions): Promise<
           targetLanguage: opts.targetLanguage,
           count: batch.count,
           mode: opts.mode ?? 'target',
+          exactForm: opts.exactForm ?? false,
         }),
       })
       const data = await res.json()

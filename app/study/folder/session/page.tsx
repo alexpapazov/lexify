@@ -53,6 +53,8 @@ import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLin
 import { interleaveConfusablePairs } from '@/engine/confusion'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { UndoFab } from '@/components/session/UndoFab'
+import { fetchReviewCloze, clozeEligible, type ReviewCloze } from '@/lib/reviewCloze'
+import { isOfflineActive } from '@/lib/offline/mode'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -130,7 +132,29 @@ function FolderSessionInner() {
   }, [legacyLearningUrl, folderId, categoryParam])
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
+  // Forward-cloze prompts (migration 124): one generated sentence per card per session, fetched a
+  // few cards ahead. `null` = tried and failed/rejected → the plain prompt. Reverse rows never fetch.
+  const [forwardClozeOn, setForwardClozeOn] = useState(false)
+  const [clozeByCard, setClozeByCard] = useState<Map<string, ReviewCloze | null>>(new Map())
+  const clozeInFlight = useRef<Set<string>>(new Set())
+
   const [index,           setIndex]           = useState(0)
+  // Fetch cloze sentences for the next few FORWARD graduated reviews. Non-blocking: a card whose
+  // sentence isn't ready (or was rejected) just shows the plain prompt.
+  useEffect(() => {
+    if (!forwardClozeOn || isOfflineActive()) return
+    for (const item of queue.slice(index, index + 4)) {
+      if (item.isReverse || !item.state.graduated) continue
+      const c = item.card
+      if (clozeByCard.has(c.id) || clozeInFlight.current.has(c.id) || !clozeEligible(c)) continue
+      clozeInFlight.current.add(c.id)
+      void fetchReviewCloze(c)
+        .then(cz => setClozeByCard(prev => new Map(prev).set(c.id, cz)))
+        .catch(() => setClozeByCard(prev => new Map(prev).set(c.id, null)))
+        .finally(() => clozeInFlight.current.delete(c.id))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forwardClozeOn, queue, index])
   const reviewTimer = useActiveTimer(30_000)
   useEffect(() => { reviewTimer.current?.restart() }, [index])
   const [loading,         setLoading]         = useState(true)
@@ -224,6 +248,10 @@ function FolderSessionInner() {
       if (!session) { router.push('/auth'); return }
       if (!category) return   // legacy URL — the redirect effect is already navigating to the ladder
       setUserId(session.user.id)
+      // Own guarded select — referencing forward_cloze in a shared profile select would blank it
+      // wholesale if migration 124 isn't applied (the not-yet-migrated-column landmine).
+      void supabase.from('profiles').select('forward_cloze').eq('user_id', session.user.id).maybeSingle()
+        .then(r => setForwardClozeOn(((r.data as { forward_cloze?: boolean | null } | null)?.forward_cloze) ?? false), () => {})
 
       const deckRepo     = new SupabaseDeckRepository()
       const cardRepo     = new SupabaseCardRepository()
@@ -1538,7 +1566,8 @@ function FolderSessionInner() {
           onToggleStar={next => handleToggleStar(card.id, next)}
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : current.productionMode === 'self-graded' ? (
-        <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide} deckName={deckName}
+        <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
+          cloze={reviewPromptSide === 'back' ? clozeByCard.get(card.id) || undefined : undefined} deckName={deckName}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
@@ -1552,6 +1581,7 @@ function FolderSessionInner() {
           ipaText={currentIpaText} onToggleIPA={ipaToggle} />
       ) : (
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
+          cloze={reviewPromptSide === 'back' ? clozeByCard.get(card.id) || undefined : undefined}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={true} deckName={deckName}

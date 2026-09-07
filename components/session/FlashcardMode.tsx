@@ -8,6 +8,8 @@ import { hintPlan, hintGrowthFactor } from '@/lib/hints'
 import { speakCard } from '@/lib/speak'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
+import { ClozePrompt } from './ClozePrompt'
+import type { ReviewCloze } from '@/lib/reviewCloze'
 import { EditableAnswerText } from './EditableAnswerText'
 import { CardInfoButton } from './CardInfoButton'
 import { StarButton } from './StarButton'
@@ -17,8 +19,11 @@ import { StarButton } from './StarButton'
  * (rare — only if a custom pipeline ends on a recognition step).
  * Shows Again/Hard/Good/Easy once the answer is revealed.
  */
-export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRate, onAlmost, onPromptEdit, onAnswerEdit, onInfo, onToggleStar, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, resumeAnswered = false }: {
+export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRate, onAlmost, onPromptEdit, onAnswerEdit, onInfo, onToggleStar, hintable, onHint, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, resumeAnswered = false, cloze }: {
   card: Card; promptSide: 'front' | 'back'; deckName?: string; onRate: (r: Rating) => void
+  /** Forward Due Now cloze: renders the generated sentence (blank + translation) as the prompt in
+   *  place of the bare gloss; the blank fills with the answer on reveal. */
+  cloze?: ReviewCloze
   /** Due Now only: orange "Almost" rating for a near-miss recall — light penalty + re-show this
    *  session. Omit (ladder / pre-grad / re-rate views) and the button is absent. */
   onAlmost?: () => void
@@ -87,9 +92,11 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
       <div className="panel relative min-h-[160px] flex items-center justify-center text-center">
         {onInfo && <CardInfoButton onClick={onInfo} />}
         {onToggleStar && <StarButton starred={card.starred ?? false} onToggle={onToggleStar} />}
-        {onPromptEdit
-          ? <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit(t)} />
-          : <p className="text-2xl font-medium text-ink">{prompt}</p>}
+        {cloze
+          ? <ClozePrompt cloze={cloze} filled={revealed ? answer : null} />
+          : onPromptEdit
+            ? <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit(t)} />
+            : <p className="text-2xl font-medium text-ink">{prompt}</p>}
         {promptSide === 'front' && promptLanguage && (
           <button
             onClick={() => speakCard(card, promptLanguage)}

@@ -47,6 +47,8 @@ import { dedupeDueReviews, buildEnabledTracksMap, trackEnabled, activeProduction
 import { respondToProductionConfusion } from '@/lib/confusionResponse'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { UndoFab } from '@/components/session/UndoFab'
+import { fetchReviewCloze, clozeEligible, type ReviewCloze } from '@/lib/reviewCloze'
+import { isOfflineActive } from '@/lib/offline/mode'
 import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, unmarkSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
@@ -135,8 +137,30 @@ export default function SessionPage() {
   const deckUrl = category ? routes.deck(deckId, { filter: category }) : routes.deck(deckId)
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
+  // Forward-cloze prompts (migration 124): one generated sentence per card per session, fetched a
+  // few cards ahead. `null` = tried and failed/rejected → the plain prompt. Reverse rows never fetch.
+  const [forwardClozeOn, setForwardClozeOn] = useState(false)
+  const [clozeByCard, setClozeByCard] = useState<Map<string, ReviewCloze | null>>(new Map())
+  const clozeInFlight = useRef<Set<string>>(new Set())
+
   const [allCards,        setAllCards]        = useState<Card[]>([])
   const [index,           setIndex]           = useState(0)
+  // Fetch cloze sentences for the next few FORWARD graduated reviews. Non-blocking: a card whose
+  // sentence isn't ready (or was rejected) just shows the plain prompt.
+  useEffect(() => {
+    if (!forwardClozeOn || isOfflineActive()) return
+    for (const item of queue.slice(index, index + 4)) {
+      if (item.isReverse || !item.state.graduated) continue
+      const c = item.card
+      if (clozeByCard.has(c.id) || clozeInFlight.current.has(c.id) || !clozeEligible(c)) continue
+      clozeInFlight.current.add(c.id)
+      void fetchReviewCloze(c)
+        .then(cz => setClozeByCard(prev => new Map(prev).set(c.id, cz)))
+        .catch(() => setClozeByCard(prev => new Map(prev).set(c.id, null)))
+        .finally(() => clozeInFlight.current.delete(c.id))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forwardClozeOn, queue, index])
   const reviewTimer = useActiveTimer(30_000)
   useEffect(() => { reviewTimer.current?.restart() }, [index])
   const [loading,         setLoading]         = useState(true)
@@ -405,6 +429,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth'); return }
       setUserId(session.user.id)
+      // Own guarded select — referencing forward_cloze in a shared profile select would blank it
+      // wholesale if migration 124 isn't applied (the not-yet-migrated-column landmine).
+      void supabase.from('profiles').select('forward_cloze').eq('user_id', session.user.id).maybeSingle()
+        .then(r => setForwardClozeOn(((r.data as { forward_cloze?: boolean | null } | null)?.forward_cloze) ?? false), () => {})
 
       const deckRepo     = new SupabaseDeckRepository()
       const cardRepo     = new SupabaseCardRepository()
@@ -2054,6 +2082,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       ) : current.productionMode === 'self-graded' ? (
         // ── Post-graduation self-graded flashcard ────────────────────────────
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
+          cloze={reviewPromptSide === 'back' ? clozeByCard.get(card.id) || undefined : undefined}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           autoPlayAudio={gradingSettings?.autoPlayAudio ?? true}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
@@ -2083,6 +2112,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       ) : (
         // ── Post-graduation typed recall (no synonym group) ───────────────────
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
+          cloze={reviewPromptSide === 'back' ? clozeByCard.get(card.id) || undefined : undefined}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : targetLanguage}
           gradingSettings={gradingSettings!} autoPlayAudio={gradingSettings?.autoPlayAudio ?? true} gradedReview={true}

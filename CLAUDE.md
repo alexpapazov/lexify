@@ -3321,6 +3321,14 @@ points that bite:
   heading signal, cards are `front = back`. Card counts go on their OWN line — appending them to the
   deck name produced a re-imported deck called "School  [12 cards]" (caught by the round-trip test).
 
+## Forward cloze reviews (2026-09-07, migration 124 — pending)
+
+Due Now forward reviews can show a generated cloze sentence as the prompt (setting in Study
+defaults → Due Now). Grading untouched — the sentence is context only, and `lib/reviewCloze.ts`
+rejects any sentence that doesn't use the word exactly as stored. Details at the top of
+`features/Due Now.md`. Touches all three session pages (prefetch effect + `cloze` prop on the two
+graduated render sites each).
+
 ## Settings auto-save — the Save button is gone (2026-08-27)
 
 The four profile-backed sections (Profile / Time zone / Study defaults / Colors) **auto-save**: any

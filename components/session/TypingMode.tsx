@@ -10,6 +10,8 @@ import { langNativeName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
+import { ClozePrompt } from './ClozePrompt'
+import type { ReviewCloze } from '@/lib/reviewCloze'
 import { EditableAnswerText } from './EditableAnswerText'
 import { CardInfoButton } from './CardInfoButton'
 import { StarButton } from './StarButton'
@@ -28,13 +30,16 @@ import { StarButton } from './StarButton'
  */
 export function TypingMode({
   card, promptSide, promptLanguage, gradingSettings, gradedReview,
-  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, onToggleStar, hintable, onHint, onNearMiss, onTypedPenalty, strictness = DEFAULT_TYPED_STRICTNESS, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled,
+  deckName, overrideAnswers, synonyms, deckSiblings, onOverrideAnswer, onAddSynonym, onRate, onRepeat, onIDontKnow, onAdvance, onPromptEdit, onAnswerEdit, onSiblingAnswered, onResetCard, onInfo, onToggleStar, hintable, onHint, onNearMiss, onTypedPenalty, strictness = DEFAULT_TYPED_STRICTNESS, answerLanguage, autoPlayAudio = true, ipaText, onToggleIPA, softWrongEnabled, cloze,
 }: {
   card:             Card
   promptSide:       'front' | 'back'
   promptLanguage?:  string
   gradingSettings:  GradingSettings
   gradedReview:     boolean
+  /** Forward Due Now cloze: renders the generated sentence (blank + translation) as the prompt in
+   *  place of the bare gloss. Grading is untouched — the expected answer stays the card's front. */
+  cloze?:           ReviewCloze
   deckName?:        string
   overrideAnswers?: string[]
   synonyms?:        string[]
@@ -503,7 +508,9 @@ export function TypingMode({
           </div>
         ) : (
           <>
-            <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />
+            {cloze
+              ? <ClozePrompt cloze={cloze} filled={result || revealed ? displayText(expected) : null} />
+              : <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />}
             {promptLanguage && (
               <button
                 onClick={() => speakCard(card, promptLanguage)}
