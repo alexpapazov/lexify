@@ -1223,24 +1223,29 @@ export default function StudyPage() {
                                 <div key={row.pickKey}>
                                   <button
                                     className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
-                                    // Reverse recognition offers a choice first (matching IS a valid
-                                    // review for that track); the other rows go straight to a session.
-                                    onClick={() => t.key === 'sgReverse'
-                                      ? setExpressPick(v => v === row.pickKey ? null : row.pickKey)
-                                      : go()}
+                                    // Every row offers a launch choice: reverse = matching vs normal,
+                                    // forward (typed + self-graded) = cloze prompts vs normal.
+                                    onClick={() => setExpressPick(v => v === row.pickKey ? null : row.pickKey)}
                                   >
                                     <span className={row.pair ? 'text-ink' : 'text-ink-muted'}>{row.label}</span>
                                     <span className="chip text-xs ml-3">{row.count}</span>
                                   </button>
-                                  {t.key === 'sgReverse' && expressPick === row.pickKey && (
+                                  {expressPick === row.pickKey && (
                                     <div className="flex gap-2 pl-9 pr-4 pb-2.5">
-                                      <button
-                                        className="btn-primary text-xs px-3 py-1.5 flex-1"
-                                        onClick={() => {
-                                          setShowDuePicker(false); setExpressPick(null)
-                                          router.push(routes.express(row.pair ? { source: row.pair.source, target: row.pair.target } : {}))
-                                        }}
-                                      >⚡ Matching</button>
+                                      {t.key === 'sgReverse' ? (
+                                        <button
+                                          className="btn-primary text-xs px-3 py-1.5 flex-1"
+                                          onClick={() => {
+                                            setShowDuePicker(false); setExpressPick(null)
+                                            router.push(routes.express(row.pair ? { source: row.pair.source, target: row.pair.target } : {}))
+                                          }}
+                                        >⚡ Matching</button>
+                                      ) : (
+                                        <button
+                                          className="btn-primary text-xs px-3 py-1.5 flex-1"
+                                          onClick={() => { setShowDuePicker(false); setExpressPick(null); router.push(`${sessionUrl}&cloze=1`) }}
+                                        >📝 Cloze</button>
+                                      )}
                                       <button
                                         className="text-xs px-3 py-1.5 flex-1 rounded border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 transition-colors"
                                         onClick={go}

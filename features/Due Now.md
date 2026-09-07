@@ -1,9 +1,14 @@
 # Due Now — Spaced Repetition Scheduler
 
-> **Forward cloze prompts (2026-09-07, migration 124 — PENDING until run).** With
-> Settings → Study defaults → Due Now → "Forward reviews as cloze" on, a FORWARD review (typed or
-> self-graded) shows a generated target-language sentence with the reviewed word blanked out — the
-> card's gloss inside the blank, the sentence's translation underneath — instead of the bare gloss.
+> **Forward cloze prompts (2026-09-07, no migration).** Chosen AT LAUNCH, not in settings — the
+> dashboard's "Study all due" picker now offers a two-button choice on EVERY row (same pattern as
+> the reverse rows' ⚡ Matching / Normal): the forward rows (Typing, Self-graded · native→target)
+> expand into **📝 Cloze / Normal review**; Cloze appends `?cloze=1` to the session URL and the
+> session pages read that param. In cloze mode a FORWARD review (typed or self-graded) shows a
+> generated target-language sentence with the reviewed word blanked out — the card's gloss inside
+> the blank, the sentence's translation underneath — instead of the bare gloss. (A brief settings
+> toggle + migration 124 shipped and was replaced by this chooser the same day, unapplied; if 124
+> was ever run, `profiles.forward_cloze` is an unused column, safe to drop.)
 > Everything else about the review is byte-identical: typed answers grade against the stored front
 > with the full strictness/override/synonym/confusion machinery, self-graded reveals and rates as
 > always, and the blank fills with the answer after grading/reveal.
@@ -14,9 +19,10 @@
 > rejected/failed/slow sentence means the plain prompt, never a mis-graded review. One sentence per
 > card per session, prefetched 4 cards ahead (`clozeByCard` in all THREE session pages — the usual
 > triplication), rendered by `components/session/ClozePrompt.tsx` inside TypingMode/FlashcardMode
-> via their optional `cloze` prop. Reverse rows never fetch. Online-only; unlabeled and `phrase`
-> cards fall back to the plain prompt (labels are what generation builds from). Cost: one Haiku
-> call per forward review while the setting is on.
+> via their optional `cloze` prop. Reverse rows never fetch, and reverse rows in a mixed queue are
+> unaffected (the prop is gated on `reviewPromptSide === 'back'`). Online-only; unlabeled and
+> `phrase` cards fall back to the plain prompt (labels are what generation builds from). Cost: one
+> Haiku call per forward review in a cloze session.
 
 This document covers how Lexify schedules **graduated cards** — cards that have completed the learning pipeline and now live in long-term review. Everything here lives in `engine/scheduler.ts` and the post-graduation branch of `engine/pipeline.ts`. For how a card reaches graduation in the first place, see `features/Learning Pipeline.md`.
 

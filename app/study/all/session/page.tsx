@@ -140,9 +140,10 @@ function AllDueSessionInner() {
   const backHref = sourceLang && targetLang ? `/library?source=${sourceLang}&target=${targetLang}` : '/study'
 
   const [queue,           setQueue]           = useState<SessionCard[]>([])
-  // Forward-cloze prompts (migration 124): one generated sentence per card per session, fetched a
-  // few cards ahead. `null` = tried and failed/rejected → the plain prompt. Reverse rows never fetch.
-  const [forwardClozeOn, setForwardClozeOn] = useState(false)
+  // Forward-cloze prompts: chosen at launch (`?cloze=1`, the dashboard's Cloze / Normal chooser).
+  // One generated sentence per card per session, fetched a few cards ahead. `null` = tried and
+  // failed/rejected → the plain prompt. Reverse rows never fetch.
+  const forwardClozeOn = searchParams.get('cloze') === '1'
   const [clozeByCard, setClozeByCard] = useState<Map<string, ReviewCloze | null>>(new Map())
   const clozeInFlight = useRef<Set<string>>(new Set())
 
@@ -265,10 +266,6 @@ function AllDueSessionInner() {
       if (!session) { router.push('/auth'); return }
       if (!category) return   // legacy URL — the redirect effect is already navigating away
       setUserId(session.user.id)
-      // Own guarded select — referencing forward_cloze in a shared profile select would blank it
-      // wholesale if migration 124 isn't applied (the not-yet-migrated-column landmine).
-      void supabase.from('profiles').select('forward_cloze').eq('user_id', session.user.id).maybeSingle()
-        .then(r => setForwardClozeOn(((r.data as { forward_cloze?: boolean | null } | null)?.forward_cloze) ?? false), () => {})
 
       const deckRepo     = new SupabaseDeckRepository()
       const cardRepo     = new SupabaseCardRepository()

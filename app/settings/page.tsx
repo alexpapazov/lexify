@@ -475,9 +475,6 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
   // queries so an unapplied migration degrades to the default instead of blanking the page/save.
   const [expressRating, setExpressRating] = useState(false)
   const [expressRatingError, setExpressRatingError] = useState<string | null>(null)
-  // Forward reviews as cloze sentences (migration 124) — same targeted-query pattern.
-  const [forwardCloze, setForwardCloze] = useState(false)
-  const [forwardClozeError, setForwardClozeError] = useState<string | null>(null)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
@@ -555,20 +552,9 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
-        supabase.from('profiles').select('express_rating, forward_cloze').eq('user_id', uid).maybeSingle(),
+        supabase.from('profiles').select('express_rating').eq('user_id', uid).maybeSingle(),
       ])
-      // A combined flags select fails WHOLESALE when either migration (123/124) is unapplied —
-      // fall back to reading each column alone so one missing migration can't blank the other flag.
-      let flagsRow = expressRes.data as { express_rating?: boolean | null; forward_cloze?: boolean | null } | null
-      if (expressRes.error) {
-        const [er, fc] = await Promise.all([
-          supabase.from('profiles').select('express_rating').eq('user_id', uid).maybeSingle(),
-          supabase.from('profiles').select('forward_cloze').eq('user_id', uid).maybeSingle(),
-        ])
-        flagsRow = { ...(er.data as object | null), ...(fc.data as object | null) }
-      }
-      setExpressRating(flagsRow?.express_rating ?? false)
-      setForwardCloze(flagsRow?.forward_cloze ?? false)
+      setExpressRating(((expressRes.data as { express_rating?: boolean | null } | null)?.express_rating) ?? false)
 
       if (profile) {
         setDisplayName(profile.display_name ?? '')
@@ -590,16 +576,6 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Saves itself immediately (targeted update), like the carryover block — independent of the auto-saved omnibus profile write (its column may not exist yet). */
-  async function handleForwardCloze(next: boolean) {
-    setForwardCloze(next)
-    setForwardClozeError(null)
-    const { error } = await supabase.from('profiles').update({ forward_cloze: next }).eq('user_id', userId)
-    if (error) {
-      setForwardCloze(!next)
-      setForwardClozeError('Could not save — is migration 124_forward_cloze.sql applied?')
-    }
-  }
-
   async function handleExpressRating(next: boolean) {
     setExpressRating(next)
     setExpressRatingError(null)
@@ -859,11 +835,6 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
             </select>
           </SettingsRow>
           {expressRatingError && <p className="text-danger text-xs">{expressRatingError}</p>}
-          <SettingsRow label="Forward reviews as cloze"
-            hint="Typed and self-graded forward reviews show a generated sentence with the word blanked out (its meaning in the blank, translation underneath) instead of the bare meaning. Needs labeled cards; falls back to the plain prompt when no usable sentence comes back.">
-            <input type="checkbox" checked={forwardCloze} onChange={e => void handleForwardCloze(e.target.checked)} className="accent-accent w-4 h-4" />
-          </SettingsRow>
-          {forwardClozeError && <p className="text-danger text-xs">{forwardClozeError}</p>}
         </SettingsSection>
 
         <SettingsSection title="Audio"
