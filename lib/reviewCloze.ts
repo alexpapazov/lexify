@@ -45,6 +45,8 @@ export interface ReviewCloze {
   translation: string
   /** Native meaning of the blanked word — shown inside the blank, it IS the prompt. */
   gloss: string
+  /** Per-word glosses — every sentence word is tappable for its meaning, like the practice player. */
+  tokens: { text: string; gloss: string }[]
 }
 
 /**
@@ -88,6 +90,7 @@ export function buildReviewCloze(prepared: PreparedExercise, card: Card): Review
     answer: ex.sentence.slice(at, at + len),
     translation: ex.translation,
     gloss: (prepared.targetGloss || card.back).trim(),
+    tokens: ex.tokens.map(t => ({ text: t.text, gloss: t.gloss })),
   })
   const find = (needle: string): number => {
     const hay = searchable(ex.sentence)
@@ -119,7 +122,8 @@ export function storedToReviewCloze(stored: StoredClozeSentence, card: Card): Re
   const prepared = {
     exercise: {
       sentence: stored.sentence, answer: stored.answer,
-      targetLemma: card.lemma ?? '', translation: stored.translation, tokens: [],
+      targetLemma: card.lemma ?? '', translation: stored.translation,
+      tokens: (stored.tokens ?? []).map(t => ({ text: t.text, lemma: '', pos: 'other', isFunctionWord: false, gloss: t.gloss })),
     },
     targetCardId: card.id,
     targetGloss: stored.gloss,
@@ -170,6 +174,7 @@ export async function generateReviewCloze(card: Card): Promise<{ cloze: ReviewCl
       const choices = appendStoredCloze(card.choices, {
         sentence: prepared.exercise.sentence, answer: cloze.answer,
         translation: cloze.translation, gloss: cloze.gloss,
+        tokens: cloze.tokens,
       })
       try { await new SupabaseCardRepository().update(card.id, { choices }) } catch { /* best-effort */ }
       return { cloze, choices }

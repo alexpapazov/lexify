@@ -71,6 +71,19 @@ describe('buildReviewCloze — bare bones: the only rejection is "nothing to bla
     expect(cz!.answer).toBe('attrezzo')
   })
 
+  it('carries the per-word token glosses through for the tap-a-word panel', () => {
+    const ex = prepared('El perro duerme.', 'perro')
+    ex.exercise.tokens = [
+      { text: 'El', lemma: 'el', pos: 'determiner', isFunctionWord: true, gloss: 'the' },
+      { text: 'perro', lemma: 'perro', pos: 'noun', isFunctionWord: false, gloss: 'dog' },
+      { text: 'duerme', lemma: 'dormir', pos: 'verb', isFunctionWord: false, gloss: 'sleeps' },
+    ]
+    const cz = buildReviewCloze(ex, card())
+    expect(cz!.tokens).toEqual([
+      { text: 'El', gloss: 'the' }, { text: 'perro', gloss: 'dog' }, { text: 'duerme', gloss: 'sleeps' },
+    ])
+  })
+
   it('a missing translation does NOT reject — the sentence renders without the line', () => {
     const noTranslation = prepared('El perro duerme.', 'perro')
     noTranslation.exercise.translation = '  '
@@ -103,6 +116,11 @@ describe('stored cloze sentences', () => {
     expect(ok).not.toBeNull()
     expect(ok!.before).toBe('Vi el ')
     expect(ok!.answer).toBe('perro')
+    // Stored token glosses round-trip into the rebuilt cloze.
+    const withTokens = storedToReviewCloze(
+      { sentence: 'Vi el perro ayer.', answer: 'perro', translation: 'x', gloss: 'dog',
+        tokens: [{ text: 'ayer', gloss: 'yesterday' }] }, card())
+    expect(withTokens!.tokens).toEqual([{ text: 'ayer', gloss: 'yesterday' }])
     // Stored inflected form still anchors (bare-bones: locating the answer is all it takes).
     const inflected = storedToReviewCloze(
       { sentence: 'Pienso en ti.', answer: 'Pienso', translation: 'I think of you.', gloss: 'I think' },

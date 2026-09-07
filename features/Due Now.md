@@ -45,6 +45,9 @@
 > migration) keeps up to `MAX_STORED_CLOZES = 3`, newest first. Sessions generate fresh (and
 > persist) until the set is full, then ROTATE among the stored three — so a card's cloze prompt
 > becomes instant and free after its first few cloze reviews, and stored picks work offline.
+> Every sentence word is TAPPABLE for its meaning, like the practice player — the generation-time
+> token glosses travel on `ReviewCloze.tokens` and are stored with each sentence (sentences saved
+> before this shipped show "no translation available" per word until refreshed).
 > Stored sentences are RE-VALIDATED against the current card on every use
 > (`storedToReviewCloze` reruns the full anchor/reject gauntlet), so editing a card's front
 > silently retires stale sentences. The card ℹ panel has a "Cloze sentences" section: view each

@@ -610,6 +610,8 @@ export interface StoredClozeSentence {
   translation: string
   /** Native meaning shown inside the blank. */
   gloss: string
+  /** Per-word glosses for the tap-a-word panel (absent on sentences stored before this shipped). */
+  tokens?: { text: string; gloss: string }[]
 }
 
 export interface CardChoices {
