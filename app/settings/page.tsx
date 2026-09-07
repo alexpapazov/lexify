@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -482,7 +482,11 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
   const [timezone,            setTimezone]            = useState('')
   const [turnoverHour,        setTurnoverHour]        = useState(0)
   const [loading,       setLoading]       = useState(true)
-  const [saved,         setSaved]         = useState(false)
+  /** Auto-save status for the profile-backed sections: edits debounce into one profile write. */
+  const [saveState,     setSaveState]     = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+  /** False until the loaded profile has been committed into state, so hydration never "saves". */
+  const hydratedRef = useRef(false)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [tzList,            setTzList]            = useState<string[]>([])
   const [redistributing,    setRedistributing]    = useState(false)
   const [redistributeMsg,   setRedistributeMsg]   = useState<string | null>(null)
@@ -571,7 +575,7 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Saves itself immediately (targeted update), like the carryover block — not part of handleSave. */
+  /** Saves itself immediately (targeted update), like the carryover block — independent of the auto-saved omnibus profile write (its column may not exist yet). */
   async function handleExpressRating(next: boolean) {
     setExpressRating(next)
     setExpressRatingError(null)
@@ -582,23 +586,42 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
     }
   }
 
-  async function handleSave() {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) return
-    await supabase.from('profiles').update({
-      display_name:              displayName,
-      default_daily_new_cards:   dailyNewCards,
-      learning_languages:        selectedLangs,
-      timezone:                  timezone || null,
-      day_turnover_hour:         turnoverHour,
-      study_mode_autoplay:       studyModeAutoplay,
-      audio_source_default:      audioSourceDefault,
-      audio_source_by_language:  audioSourceByLang,
-      language_colors:           langColors,
-    }).eq('user_id', session.user.id)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+  async function persistProfile() {
+    setSaveState('saving')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('no session')
+      const { error } = await supabase.from('profiles').update({
+        display_name:              displayName,
+        default_daily_new_cards:   dailyNewCards,
+        learning_languages:        selectedLangs,
+        timezone:                  timezone || null,
+        day_turnover_hour:         turnoverHour,
+        study_mode_autoplay:       studyModeAutoplay,
+        audio_source_default:      audioSourceDefault,
+        audio_source_by_language:  audioSourceByLang,
+        language_colors:           langColors,
+      }).eq('user_id', session.user.id)
+      if (error) throw error
+      setSaveState('saved')
+    } catch (err) {
+      console.error('Settings auto-save failed:', err)
+      setSaveState('error')
+    }
   }
+
+  // Auto-save: any edit to a profile-backed control debounces into one write — no Save button to
+  // forget. The first run after load is the hydration commit (the profile being copied into state)
+  // and must not save. The debounce timer is deliberately NOT cleared on unmount: navigating away
+  // mid-debounce still flushes the write (a cleared timer would silently drop the edit).
+  useEffect(() => {
+    if (loading) return
+    if (!hydratedRef.current) { hydratedRef.current = true; return }
+    setSaveState('pending')
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => { void persistProfile() }, 800)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, displayName, dailyNewCards, selectedLangs, timezone, turnoverHour, studyModeAutoplay, audioSourceDefault, audioSourceByLang, langColors])
 
 
   async function handleGlobalRedistribute() {
@@ -721,9 +744,9 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
 
   if (loading) return <p className="text-sm text-ink-faint">Loading…</p>
 
-  // Sections whose controls are part of the one profile write `handleSave` performs. Everything else
-  // saves itself (theme, offline, sync rules, labels, deletes), so a Save button there would be a lie.
-  const needsSave = section === 'profile' || section === 'time' || section === 'study' || section === 'colors'
+  // Sections whose controls feed the auto-saved profile write; they show the save-status line.
+  // Everything else saves itself through its own targeted writes (theme, offline, sync, labels…).
+  const autoSaved = section === 'profile' || section === 'time' || section === 'study' || section === 'colors'
   const codes = [...new Set(langPairs.map(p => p.sourceLanguage))]
 
   return (
@@ -970,9 +993,20 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
         </SettingsSection>
       )}
 
-      {needsSave && (
-        <div className="pt-6">
-          <button className="btn-primary" onClick={handleSave}>{saved ? 'Saved ✓' : 'Save settings'}</button>
+      {autoSaved && (
+        <div className="pt-6 text-sm">
+          {saveState === 'error' ? (
+            <p className="text-danger">
+              Couldn&apos;t save your changes.{' '}
+              <button className="underline hover:text-ink" onClick={() => void persistProfile()}>Try again</button>
+            </p>
+          ) : (
+            <p className="text-ink-faint">
+              {saveState === 'pending' || saveState === 'saving' ? 'Saving…'
+                : saveState === 'saved' ? 'Saved ✓'
+                : 'Changes save automatically.'}
+            </p>
+          )}
         </div>
       )}
     </SettingsPane>

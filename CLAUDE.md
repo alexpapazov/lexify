@@ -3321,6 +3321,18 @@ points that bite:
   heading signal, cards are `front = back`. Card counts go on their OWN line — appending them to the
   deck name produced a re-imported deck called "School  [12 cards]" (caught by the round-trip test).
 
+## Settings auto-save — the Save button is gone (2026-08-27)
+
+The four profile-backed sections (Profile / Time zone / Study defaults / Colors) **auto-save**: any
+edit debounces 800ms into the one omnibus profile write (`persistProfile`), with a status line
+("Saving… / Saved ✓ / Couldn't save + Try again") where the button used to be. Rules that keep it
+correct: the first effect run after load is the HYDRATION commit and must not save
+(`hydratedRef`); the debounce timer is deliberately NOT cleared on unmount, so navigating away
+mid-debounce still flushes the write — do not add a cleanup that clears it. Deliberately still
+explicit-Save: the ladder/pathway editors and the goal-schedule editor (multi-field editors where a
+half-finished config going live mid-edit is dangerous — the edit-mid-climb landmine), and the deck
+settings modal. Everything else on the settings page already saved itself.
+
 ## Client code must NEVER import from `app/api/**` (2026-08-27)
 
 `npm run build:cap` STASHES the whole `app/api` directory before the static export, so any
