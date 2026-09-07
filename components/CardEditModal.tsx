@@ -14,6 +14,7 @@ import { SupabaseReviewEventRepository }       from '@/lib/data/reviewEvents'
 import { SupabaseLadderClimbRepository }       from '@/lib/data/ladderClimb'
 import type { Card, CardState, CardChoices, CardConfusion, CardConfusionLink, Pipeline, TypedAnswerOverride, ReviewEvent } from '@/domain'
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding } from '@/lib/distractors'
+import { generateReviewCloze, clozeEligible } from '@/lib/reviewCloze'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { speak, fetchAudioSource, playAudioClip } from '@/lib/speak'
@@ -174,6 +175,8 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   const [sourceSynonymInput, setSourceSynonymInput] = useState('')
   const [targetSynonymInput, setTargetSynonymInput] = useState('')
   const [synonymSaving,      setSynonymSaving]      = useState(false)
+  const [clozeGenerating,    setClozeGenerating]    = useState(false)
+  const [clozeError,         setClozeError]         = useState<string | null>(null)
   const [linkSynonymMode,    setLinkSynonymMode]    = useState(false)
   const [linkQuery,          setLinkQuery]          = useState('')
   const [linkSaving,         setLinkSaving]         = useState(false)
@@ -610,6 +613,29 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
       void ensureChoicesGenerated(updated, side, deckCards, sourceLanguage, targetLanguage)
         .then(ai => { if (ai) onCardChange({ ...updated, choices: ai }) })
     }
+  }
+
+  /** Fetch one new cloze sentence (Sonnet, validated) and add it to the card's stored set. */
+  async function handleNewCloze() {
+    if (clozeGenerating) return
+    if (isOfflineActive()) { setClozeError('Generating a sentence needs a connection.'); return }
+    setClozeGenerating(true)
+    setClozeError(null)
+    try {
+      const gen = await generateReviewCloze(card)
+      if (!gen) setClozeError('No usable sentence came back — try again.')
+      else onCardChange({ ...card, choices: gen.choices })
+    } finally {
+      setClozeGenerating(false)
+    }
+  }
+
+  async function handleRemoveCloze(index: number) {
+    const base: CardChoices = card.choices ?? { front: [], back: [] }
+    const list = (base.clozeSentences ?? []).filter((_, i) => i !== index)
+    const updated: CardChoices = { ...base, clozeSentences: list.length > 0 ? list : undefined }
+    await new SupabaseCardRepository().update(card.id, { choices: updated })
+    onCardChange({ ...card, choices: updated })
   }
 
   async function updateBackSynonyms(newList: string[]) {
@@ -1154,6 +1180,42 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                 </div>
               </div>
             )}
+
+            {/* ── Cloze sentences (Due Now forward cloze) ───────────────────── */}
+            <div className="space-y-2">
+              <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
+                Cloze sentences <span className="normal-case font-normal opacity-60">(used by cloze reviews — max 3, rotated)</span>
+              </div>
+              {!clozeEligible(card) ? (
+                <p className="text-xs text-ink-faint">This card needs vocabulary labels (part of speech + lemma) before sentences can be generated.</p>
+              ) : (
+                <>
+                  {(card.choices?.clozeSentences ?? []).map((cs, i) => (
+                    <div key={`${cs.sentence}-${i}`} className="flex items-start gap-2 rounded border border-line/10 bg-surface-raised/50 px-2.5 py-1.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-ink">
+                          {/* Highlight the blanked span so it's obvious what a review hides. */}
+                          {cs.sentence.split(cs.answer).flatMap((part, j, arr) => j < arr.length - 1
+                            ? [part, <span key={j} className="text-success font-medium">{cs.answer}</span>]
+                            : [part])}
+                        </p>
+                        <p className="text-xs text-ink-muted italic">{cs.translation}</p>
+                      </div>
+                      <button onClick={() => void handleRemoveCloze(i)} title="Remove this sentence"
+                        className="text-ink-faint hover:text-danger text-sm leading-none pt-0.5">×</button>
+                    </div>
+                  ))}
+                  {(card.choices?.clozeSentences?.length ?? 0) === 0 && (
+                    <p className="text-xs text-ink-faint">None yet — cloze reviews generate them as you study, or fetch one now.</p>
+                  )}
+                  <button onClick={() => void handleNewCloze()} disabled={clozeGenerating}
+                    className="text-xs text-accent-soft hover:text-accent disabled:opacity-50">
+                    {clozeGenerating ? 'Generating…' : '↻ New sentence'}
+                  </button>
+                  {clozeError && <p className="text-xs text-danger">{clozeError}</p>}
+                </>
+              )}
+            </div>
 
             {/* ── Synonyms (editable) ───────────────────────────────────────── */}
             <div className="space-y-2">

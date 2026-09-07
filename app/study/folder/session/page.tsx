@@ -53,7 +53,7 @@ import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLin
 import { interleaveConfusablePairs } from '@/engine/confusion'
 import { ConfusionDrill } from '@/components/session/ConfusionDrill'
 import { UndoFab } from '@/components/session/UndoFab'
-import { fetchReviewCloze, clozeEligible, type ReviewCloze } from '@/lib/reviewCloze'
+import { resolveReviewCloze, clozeEligible, type ReviewCloze } from '@/lib/reviewCloze'
 import { isOfflineActive } from '@/lib/offline/mode'
 import { CardEditModal } from '@/components/CardEditModal'
 
@@ -143,13 +143,15 @@ function FolderSessionInner() {
   // Fetch cloze sentences for the next few FORWARD graduated reviews. Non-blocking: a card whose
   // sentence isn't ready (or was rejected) just shows the plain prompt.
   useEffect(() => {
-    if (!forwardClozeOn || isOfflineActive()) return
+    if (!forwardClozeOn) return
     for (const item of queue.slice(index, index + 4)) {
       if (item.isReverse || !item.state.graduated) continue
       const c = item.card
       if (clozeByCard.has(c.id) || clozeInFlight.current.has(c.id) || !clozeEligible(c)) continue
       clozeInFlight.current.add(c.id)
-      void fetchReviewCloze(c)
+      // Stored sentences resolve instantly (and offline); generation only runs online, and only
+      // until the card's stored set is full — then reviews rotate among the stored three.
+      void resolveReviewCloze(c, { allowGenerate: !isOfflineActive() })
         .then(cz => setClozeByCard(prev => new Map(prev).set(c.id, cz)))
         .catch(() => setClozeByCard(prev => new Map(prev).set(c.id, null)))
         .finally(() => clozeInFlight.current.delete(c.id))

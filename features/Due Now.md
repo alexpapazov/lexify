@@ -40,6 +40,18 @@
 >
 > A rejected/failed/slow sentence means the plain prompt, never a mis-graded review.
 >
+> **Sentences are STORED on the card (2026-09-07):** `choices.clozeSentences` (JSONB, no
+> migration) keeps up to `MAX_STORED_CLOZES = 3`, newest first. Sessions generate fresh (and
+> persist) until the set is full, then ROTATE among the stored three — so a card's cloze prompt
+> becomes instant and free after its first few cloze reviews, and stored picks work offline.
+> Stored sentences are RE-VALIDATED against the current card on every use
+> (`storedToReviewCloze` reruns the full anchor/reject gauntlet), so editing a card's front
+> silently retires stale sentences. The card ℹ panel has a "Cloze sentences" section: view each
+> stored sentence (blanked span highlighted) with its translation, × to remove, "↻ New sentence"
+> to generate + persist another. This does NOT touch practice — the practice no-cache rule
+> (mode-blind replay, sentence recognition) stands; review clozes repeat their gloss prompt every
+> review anyway, so rotating three curated sentences is no weaker than the plain prompt was.
+>
 > **Generation quality (2026-09-07):** review-cloze requests pass `quality: 'best'` and run on
 > **Sonnet** (`claude-sonnet-5`) — one sentence gates a real review, so grammar outweighs the
 > single-sentence cost; practice keeps bulk Haiku. The route also carries `LANGUAGE_NOTES`, per-

@@ -601,6 +601,17 @@ export interface Deck {
 // ─── Card ─────────────────────────────────────────────────────────────────────
 
 /** Cached pool of multiple-choice distractors per side (excludes the correct answer). */
+/** One generated review-cloze sentence persisted on the card (see lib/reviewCloze.ts). */
+export interface StoredClozeSentence {
+  sentence: string
+  /** The word's surface span as the sentence uses it (inflection/casing/article included). */
+  answer: string
+  /** Native translation of the whole sentence. */
+  translation: string
+  /** Native meaning shown inside the blank. */
+  gloss: string
+}
+
 export interface CardChoices {
   front: string[]
   back:  string[]
@@ -608,6 +619,9 @@ export interface CardChoices {
   frontSynonyms?: string[]
   /** Synonyms/alternate phrasings of the correct back answer — accepted as correct in multiple choice. */
   backSynonyms?: string[]
+  /** Generated cloze sentences for Due Now forward-cloze reviews — max 3, newest first. Sessions
+   *  generate fresh until 3 exist, then rotate; the card ℹ panel shows and refreshes them. */
+  clozeSentences?: StoredClozeSentence[]
 }
 
 export type Register = 'neutral' | 'informal' | 'formal' | 'regional' | 'vulgar'

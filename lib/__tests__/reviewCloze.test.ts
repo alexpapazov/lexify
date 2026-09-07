@@ -1,6 +1,6 @@
 import type { Card } from '@/domain'
 import type { PreparedExercise } from '@/lib/practiceGenerate'
-import { buildReviewCloze, clozeEligible, clozeStrictness, sameWordFamily } from '@/lib/reviewCloze'
+import { buildReviewCloze, clozeEligible, clozeStrictness, sameWordFamily, appendStoredCloze, storedToReviewCloze, MAX_STORED_CLOZES } from '@/lib/reviewCloze'
 
 function card(over: Partial<Card> = {}): Card {
   return {
@@ -120,6 +120,17 @@ describe('buildReviewCloze', () => {
     expect(buildReviewCloze(swapped, c)).toBeNull()
   })
 
+  it('accepts a reflexive/multiword lemma reported as the bare verb', () => {
+    // Card lemma "посвещавам се"; the model reports "посвещавам" — strict lemma equality rejected
+    // EVERY sentence for reflexive cards, which read as "cloze never generates".
+    const c = card({ front: 'посвещавам се', lemma: 'посвещавам се', pos: 'verb', sourceLanguage: 'bg' })
+    const ex = prepared('Тя се посвещава на музиката.', 'посвещава')
+    ex.exercise.targetLemma = 'посвещавам'
+    const cz = buildReviewCloze(ex, c)
+    expect(cz).not.toBeNull()
+    expect(cz!.answer).toBe('посвещава')
+  })
+
   it('REJECTS a surface form whose reported lemma is a DIFFERENT word', () => {
     // Guard against the model writing about another word entirely: without the lemma check, any
     // reported answer found in the sentence would be blanked and mis-graded.
@@ -134,5 +145,32 @@ describe('buildReviewCloze', () => {
     const noTranslation = prepared('El perro duerme.', 'perro')
     noTranslation.exercise.translation = '  '
     expect(buildReviewCloze(noTranslation, card())).toBeNull()
+  })
+})
+
+describe('stored cloze sentences', () => {
+  const stored = (sentence: string, answer = 'perro') =>
+    ({ sentence, answer, translation: 'A translation.', gloss: 'dog' })
+
+  it('appendStoredCloze keeps newest first, dedupes by sentence, caps the set', () => {
+    let choices = appendStoredCloze(null, stored('Uno perro.'))
+    choices = appendStoredCloze(choices, stored('Dos perro.'))
+    choices = appendStoredCloze(choices, stored('Tres perro.'))
+    choices = appendStoredCloze(choices, stored('Cuatro perro.'))
+    expect(choices.clozeSentences!.map(s => s.sentence)).toEqual(['Cuatro perro.', 'Tres perro.', 'Dos perro.'])
+    expect(choices.clozeSentences!.length).toBe(MAX_STORED_CLOZES)
+    // Re-adding an existing sentence moves it to the front instead of duplicating.
+    const again = appendStoredCloze(choices, stored('Dos perro.'))
+    expect(again.clozeSentences!.map(s => s.sentence)).toEqual(['Dos perro.', 'Cuatro perro.', 'Tres perro.'])
+  })
+
+  it('storedToReviewCloze re-validates against the card as it is NOW', () => {
+    const ok = storedToReviewCloze(stored('Vi el perro ayer.'), card())
+    expect(ok).not.toBeNull()
+    expect(ok!.before).toBe('Vi ')
+    expect(ok!.answer).toBe('el perro')
+    // The card's front/lemma changed since the sentence was saved → the sentence must fall away.
+    const edited = card({ front: 'el gato', lemma: 'gato' })
+    expect(storedToReviewCloze(stored('Vi el perro ayer.'), edited)).toBeNull()
   })
 })
