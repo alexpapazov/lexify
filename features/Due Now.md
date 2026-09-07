@@ -29,7 +29,9 @@
 >    surface form — guarded by `targetLemma === card.lemma`, so a sentence about a different word
 >    is rejected. TypingMode then accepts the stored front AND the sentence's form
 >    (`viaClozeForm`); typing the inflection shows "Correct! (form used in the sentence)" plus the
->    existing "Card says: …" note with the stored form.
+>    existing "Card says: …" note with the stored form. The RETYPE step after a wrong answer
+>    accepts the same two forms — stored or the sentence's — and only those two
+>    (`retypeMatches`); synonyms and siblings still never complete a retype.
 >
 > A rejected/failed/slow sentence means the plain prompt, never a mis-graded review. One sentence per
 > card per session, prefetched 4 cards ahead (`clozeByCard` in all THREE session pages — the usual

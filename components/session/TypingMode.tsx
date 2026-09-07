@@ -226,14 +226,17 @@ export function TypingMode({
   const softWrongNeedsRetype  = isSoftWrong && softWrongRecallRating !== null
   // Retype checks use accent-lenient grading: the point is to type the word, not to nail accents again.
   const retypeGradingSettings: GradingSettings = { ...effectiveGradingSettings, ignoreAccents: true }
-  const softWrongRetypeCorrect = softWrongNeedsRetype &&
-    gradeTyping(retype, expected, retypeGradingSettings).status === 'correct'
+  // A cloze retype completes with the STORED form or the SENTENCE's inflected form — those two
+  // only (the learner is looking at a sentence that demands the inflection, so typing it must
+  // count; synonyms and siblings still don't complete a retype).
+  const retypeMatches = (typed: string): boolean =>
+    gradeTyping(typed, expected, retypeGradingSettings).status === 'correct' ||
+    (!!cloze && gradeTyping(typed, cloze.answer, retypeGradingSettings).status === 'correct')
+  const softWrongRetypeCorrect = softWrongNeedsRetype && retypeMatches(retype)
 
-  const retypeCorrect = needsRetype &&
-    gradeTyping(retype, expected, retypeGradingSettings).status === 'correct'
+  const retypeCorrect = needsRetype && retypeMatches(retype)
 
-  const revealedRetypeCorrect = revealed &&
-    gradeTyping(retype, expected, retypeGradingSettings).status === 'correct'
+  const revealedRetypeCorrect = revealed && retypeMatches(retype)
 
   const suggestedRating: Rating =
     finalCorrect              ? 'good' :
