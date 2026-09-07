@@ -7,14 +7,16 @@
  * sentence's translation underneath — instead of the bare gloss. Typed reviews type into the same
  * input as always; self-graded reviews reveal and rate as always.
  *
- * The load-bearing rule: **grading is completely untouched.** The expected answer stays the
- * card's stored front, with all its machinery (strictness, overrides, synonyms, confusion
- * detection) — plus one addition: the sentence's own inflected form is also accepted
- * (`viaClozeForm` in TypingMode), since sentences inflect words naturally and producing the
- * sentence's form is production too. `buildReviewCloze` anchors the blank on the full stored
- * front when the sentence carries it, else on the lemma-verified surface form, and REJECTS
- * anything else. A rejected or failed sentence just means the plain prompt — never a mis-graded
- * review.
+ * Grading: the expected answer stays the card's stored front with all its machinery (strictness,
+ * overrides, synonyms, confusion detection), plus the sentence's own form is accepted
+ * (`viaClozeForm` in TypingMode).
+ *
+ * Validation is deliberately BARE BONES (user decision 2026-09-07, after two rounds of content
+ * guards — lemma equality, stem-family checks — each rejected legitimate sentences and read as
+ * "cloze never generates"): the blank anchors on the full stored front when the sentence carries
+ * it, else on the model's reported answer, and the ONLY rejection is failing to locate either in
+ * the sentence. Known accepted risk: a model synonym swap now renders (and its form is accepted by
+ * grading) instead of being filtered. Do not re-add content guards without the user asking.
  *
  * One sentence per card per session (the session page caches results), fetched a few cards ahead
  * so the sentence is usually ready by the time the card surfaces. Online only; unlabeled cards
@@ -67,39 +69,16 @@ function searchable(s: string): string | null {
   return lowered.length === s.length ? lowered : null
 }
 
-/**
- * Deterministic "is this a form of THAT word" check: inflection changes endings, so a real form
- * shares a long prefix with its lemma ("chapotean"/"chapotear", "perros"/"perro", "corrió"/
- * "correr"), while a synonym shares almost none ("създавам"/"сътворявам": 2 of 8). The ratio is
- * measured against the SHORTER string so agglutinative endings (먹어요/먹다) don't dilute it.
- * Suppletive forms (fue/ser) fail and fall back to the plain prompt — a false rejection is safe,
- * a false acceptance is the "completely different word in the blank" bug this guards against.
- */
-export function sameWordFamily(surface: string, lemma: string): boolean {
-  const a = searchable(surface) ?? surface.toLowerCase()
-  const b = searchable(lemma) ?? lemma.toLowerCase()
-  if (!a || !b) return false
-  let i = 0
-  while (i < a.length && i < b.length && a[i] === b[i]) i++
-  return i / Math.min(a.length, b.length) >= 0.5
-}
 
 /**
- * Turns one generated exercise into a review cloze, or null when it can't be trusted.
- *
- * The blank prefers the card's FULL stored front — leading article included ("el proceso"), so the
- * sentence never shows a stray article outside the blank ("El el proceso" was the original bug).
- * When the sentence inflected the word instead ("chapotean" for "chapotear", a plural noun, a
- * feminine adjective — natural sentences do this, and they should), the blank falls back to the
- * model's reported SURFACE form, guarded by the lemma: `targetLemma` must be the card's own word,
- * or a sentence about a different word entirely would slip through. Typed grading then accepts the
- * stored front AND the sentence's form (TypingMode's `viaClozeForm`), with the "Card says" note
- * showing the stored form when the inflection was typed. A sentence passing neither anchor is
- * rejected — the review falls back to the plain prompt. Pure — separated from the fetch for tests.
+ * Turns one generated exercise into a review cloze. The blank prefers the card's FULL stored
+ * front — article included, so the sentence never shows a stray article outside the blank ("El el
+ * proceso" was the original display bug) — and otherwise covers the model's reported answer
+ * (inflections and all). Null ONLY when neither can be located in the sentence: without a span
+ * there is nothing to blank. Pure — separated from the fetch for tests.
  */
 export function buildReviewCloze(prepared: PreparedExercise, card: Card): ReviewCloze | null {
   const ex = prepared.exercise
-  if (!ex.translation.trim()) return null
 
   const span = (at: number, len: number): ReviewCloze => ({
     before: ex.sentence.slice(0, at),
@@ -120,23 +99,9 @@ export function buildReviewCloze(prepared: PreparedExercise, card: Card): Review
   const frontAt = find(front)
   if (frontAt >= 0) return span(frontAt, front.length)
 
-  // 2. The sentence's inflected surface form — only when it is a form of THIS word.
-  // Two independent signals, either suffices (ANDing them over-rejected — stem-changing verbs like
-  // "pienso"/"pensar" share almost no prefix, and demanding prefix similarity alone turned most
-  // Spanish stem-changers into plain prompts):
-  //  a) the ANSWER TOKEN's annotated lemma. `targetLemma` is copied from the request and proves
-  //     nothing (the model once wrote the synonym "създавам" under a copied "сътворявам" label),
-  //     but the per-token annotation labels what is ACTUALLY in the sentence — "pienso" annotates
-  //     as "pensar", "създавам" annotates as "създавам".
-  //  b) the deterministic stem check (`sameWordFamily`) as fallback when no token matches.
-  const lemmaKey = (card.lemma ?? '').trim()
-  if (!lemmaKey) return null
+  // 2. The model's reported answer — the word as the sentence actually uses it.
   const surface = ex.answer.trim()
   if (!surface) return null
-  const sKey = searchable(surface) ?? surface.toLowerCase()
-  const answerToken = ex.tokens.find(t => (searchable(t.text) ?? t.text.toLowerCase()) === sKey)
-  const tokenOk = !!answerToken && sameWordFamily(answerToken.lemma, lemmaKey)
-  if (!tokenOk && !sameWordFamily(surface, lemmaKey)) return null
   const surfaceAt = find(surface)
   if (surfaceAt < 0) return null
   return span(surfaceAt, surface.length)
@@ -151,12 +116,7 @@ export function storedToReviewCloze(stored: StoredClozeSentence, card: Card): Re
   const prepared = {
     exercise: {
       sentence: stored.sentence, answer: stored.answer,
-      targetLemma: card.lemma ?? '', translation: stored.translation,
-      // The saved lemma rides along as the answer's token, so a stem-changing inflection
-      // ("pienso" saved for a "pensar" card) still re-validates on later sessions.
-      tokens: stored.lemma
-        ? [{ text: stored.answer, lemma: stored.lemma, pos: 'other', isFunctionWord: false, gloss: stored.gloss }]
-        : [],
+      targetLemma: card.lemma ?? '', translation: stored.translation, tokens: [],
     },
     targetCardId: card.id,
     targetGloss: stored.gloss,
@@ -193,7 +153,6 @@ export async function generateReviewCloze(card: Card): Promise<{ cloze: ReviewCl
         targetLanguage: card.targetLanguage,
         count: 1,
         mode: 'target',
-        quality: 'best',   // one sentence gates a real review — Sonnet, not the bulk Haiku tier
       })
       const prepared = run.exercises[0]
       if (!prepared) {
@@ -205,12 +164,8 @@ export async function generateReviewCloze(card: Card): Promise<{ cloze: ReviewCl
         console.info(`[cloze] ${card.front}: sentence rejected (attempt ${attempt + 1}): "${prepared.exercise.sentence}" (answer "${prepared.exercise.answer}", lemma "${prepared.exercise.targetLemma}")`)
         continue
       }
-      const answerKey = searchable(prepared.exercise.answer) ?? prepared.exercise.answer.toLowerCase()
-      const answerLemma = prepared.exercise.tokens
-        .find(t => (searchable(t.text) ?? t.text.toLowerCase()) === answerKey)?.lemma
       const choices = appendStoredCloze(card.choices, {
         sentence: prepared.exercise.sentence, answer: cloze.answer,
-        lemma: answerLemma ?? card.lemma ?? undefined,
         translation: cloze.translation, gloss: cloze.gloss,
       })
       try { await new SupabaseCardRepository().update(card.id, { choices }) } catch { /* best-effort */ }

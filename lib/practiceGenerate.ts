@@ -44,8 +44,6 @@ export interface GenerateOptions {
   count:          number
   /** Native-language sentence with only the blank in the target language. */
   mode?: ClozeMode
-  /** 'best' = the route's stronger model (Due Now review cloze). */
-  quality?: 'standard' | 'best'
 }
 
 /** Attaches the blank's prompt gloss to each parsed exercise. */
@@ -81,7 +79,6 @@ export async function generatePracticeExercises(opts: GenerateOptions): Promise<
           targetLanguage: opts.targetLanguage,
           count: batch.count,
           mode: opts.mode ?? 'target',
-          quality: opts.quality ?? 'standard',
         }),
       })
       const data = await res.json()

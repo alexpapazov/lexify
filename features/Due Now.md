@@ -23,23 +23,17 @@
 > 2. **Typed cloze reviews auto-accept article slips** (`clozeStrictness` forces
 >    `articles: 'accept'`) — typing "proceso" against "el proceso" is plain correct in cloze mode;
 >    spelling/accent strictness keeps the pair's own settings.
-> 3. **Sentences inflect naturally, and the inflected form is accepted.** The brief `exactForm`
->    generation constraint produced ungrammatical sentences ("Los niños chapotear…") and was
->    removed. When the full front isn't in the sentence, the blank falls back to the model's
->    surface form — guarded by EITHER of two signals (ANDing them over-rejected; requiring strict
->    `targetLemma` equality before them broke reflexive lemmas — both shipped briefly and read as
->    "cloze never generates"): (a) the ANSWER TOKEN's annotated lemma matches the card's by stem
->    family — `targetLemma` is copied from the request and proves nothing (the synonym "създавам"
->    once shipped under a copied "сътворявам" label), but the per-token annotation labels what's
->    actually in the sentence, which is what lets stem-changers through ("pienso" annotates as
->    "pensar"); or (b) `sameWordFamily(surface, lemma)` — common prefix ≥ half the shorter string —
->    as the deterministic fallback. Stored sentences save the answer's lemma so they re-validate
->    the same way. Suppletive forms with no matching token (fue/ser) still fall back to the plain
->    prompt — a false rejection is safe, a false acceptance is a wrong word in the blank. TypingMode then accepts the stored front AND the sentence's form
->    (`viaClozeForm`); typing the inflection shows "Correct! (form used in the sentence)" plus the
->    existing "Card says: …" note with the stored form. The RETYPE step after a wrong answer
->    accepts the same two forms — stored or the sentence's — and only those two
->    (`retypeMatches`); synonyms and siblings still never complete a retype.
+> 3. **Sentences inflect naturally, the inflected form is accepted, and validation is BARE
+>    BONES.** Two rounds of content guards (strict lemma equality, then stem-family/token-lemma
+>    checks) each rejected legitimate sentences — reflexive lemmas, stem-changing verbs — and the
+>    user experienced "cloze never generates" twice before ordering everything stripped
+>    (2026-09-07). The ONLY rejection now is failing to locate a span to blank: full stored front
+>    preferred, else the model's reported answer. Known, accepted risk: a model synonym swap
+>    renders and its form is accepted by grading. Mitigation is prompt-side only (the "never a
+>    synonym" instruction) plus the ℹ panel's per-sentence × / ↻ curation. **Do not re-add content
+>    guards without the user asking.** Typing either the stored front or the sentence's form is
+>    correct (`viaClozeForm`), with the "Card says" note showing the stored form; the retype step
+>    accepts the same two forms only.
 >
 > A rejected/failed/slow sentence means the plain prompt, never a mis-graded review.
 >
@@ -55,13 +49,14 @@
 > (mode-blind replay, sentence recognition) stands; review clozes repeat their gloss prompt every
 > review anyway, so rotating three curated sentences is no weaker than the plain prompt was.
 >
-> **Generation quality (2026-09-07):** review-cloze requests pass `quality: 'best'` and run on
-> **Sonnet** (`claude-sonnet-5`) — one sentence gates a real review, so grammar outweighs the
-> single-sentence cost; practice keeps bulk Haiku. The route also carries `LANGUAGE_NOTES`, per-
-> language grammar reminders appended to the target-language prompt for languages the generator has
-> actually slipped on — the Bulgarian entry exists because Haiku wrote "всичко си време" (possessive
-> clitic on an indefinite phrase) where only "цялото си време" is grammatical. Add entries there
-> when a language shows a repeatable failure, with the observed counter-example. One sentence per
+> **Generation (2026-09-07, final):** review cloze uses the SAME Haiku call as practice — a brief
+> Sonnet (`quality: 'best'`) tier was added and then removed in the bare-bones rollback, since it
+> was an unverifiable variable while cloze appeared dead. What remains from the quality audit:
+> `LANGUAGE_NOTES` in the generate route (per-language grammar reminders — the Bulgarian entry
+> exists because Haiku wrote "всичко си време" where only "цялото си време" is grammatical; add
+> entries with the observed counter-example when a language slips repeatedly) and the "never a
+> synonym" prompt rule. Generation failures and rejections log `[cloze]` lines to the browser
+> console — the first place to look when a card shows a plain prompt. One sentence per
 > card per session, prefetched 4 cards ahead (`clozeByCard` in all THREE session pages — the usual
 > triplication), rendered by `components/session/ClozePrompt.tsx` inside TypingMode/FlashcardMode
 > via their optional `cloze` prop. Reverse rows never fetch, and reverse rows in a mixed queue are

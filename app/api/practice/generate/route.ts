@@ -9,8 +9,7 @@
  * in the learner's library). The old known-words steering — score, repair, verify, the "% graduated"
  * slider — is gone: it tripled the latency and produced stilted sentences.
  *
- * Model: Haiku for practice (bulk, exposure-only); `quality: 'best'` upgrades to Sonnet for the
- * Due Now review cloze, where one sentence gates a real review and a grammar slip is a bad prompt.
+ * Model: Haiku — sentence-writing at this length is well inside its range, and it's the fast tier.
  * Fails soft like the other AI routes: `{ ok: false, reason }` with a 200 when the AI is
  * unavailable or unparseable, 400 only for a malformed request.
  */
@@ -22,9 +21,6 @@ import { GENERATE_CAP, parseExercises, type ClozeMode } from '@/lib/practiceSche
 export const runtime = 'nodejs'
 
 const MODEL = 'claude-haiku-4-5-20251001'
-/** Stronger tier for review-cloze requests: ONE sentence that becomes a real review's prompt, so
- *  grammar quality outweighs the (single-sentence) cost — same reasoning as the organizer planner. */
-const BEST_MODEL = 'claude-sonnet-5'
 
 /**
  * Grammar reminders for languages the generator has actually slipped on, appended to the
@@ -61,8 +57,6 @@ interface RequestBody {
   count:          number
   /** 'target' (default) = a full target-language sentence. 'native' = only the blank is target. */
   mode?: ClozeMode
-  /** 'best' routes to the stronger model — used by Due Now review cloze (one gating sentence). */
-  quality?: 'standard' | 'best'
 }
 
 function extractJson(text: string): unknown {
@@ -216,7 +210,7 @@ export async function POST(req: NextRequest) {
         'anthropic-version': '2023-06-01',
       },
       // Generous: each exercise carries a sentence, a translation and one annotated object per word.
-      body: JSON.stringify({ model: body.quality === 'best' ? BEST_MODEL : MODEL, max_tokens: 8000, messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model: MODEL, max_tokens: 8000, messages: [{ role: 'user', content: prompt }] }),
     })
     if (!res.ok) return NextResponse.json({ ok: false, reason: 'api-error' })
 

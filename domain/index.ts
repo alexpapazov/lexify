@@ -606,8 +606,6 @@ export interface StoredClozeSentence {
   sentence: string
   /** The word's surface span as the sentence uses it (inflection/casing/article included). */
   answer: string
-  /** The answer's lemma as annotated at generation time — re-validation checks it against the card. */
-  lemma?: string
   /** Native translation of the whole sentence. */
   translation: string
   /** Native meaning shown inside the blank. */

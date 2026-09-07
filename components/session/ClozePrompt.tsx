@@ -26,7 +26,7 @@ export function ClozePrompt({ cloze, filled }: { cloze: ReviewCloze; filled?: st
         )}
         {cloze.after}
       </p>
-      <p className="text-sm text-ink-muted italic">{cloze.translation}</p>
+      {cloze.translation.trim() !== '' && <p className="text-sm text-ink-muted italic">{cloze.translation}</p>}
     </div>
   )
 }
