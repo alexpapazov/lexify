@@ -87,12 +87,15 @@ export function buildExpressPool(
 }
 
 /**
- * Applies a clean first-try match as a Good review on the card's reverse row — the same
- * scheduling a self-graded Good earns in a session (FSRS with the pair's reverse-recall retention
- * + calibration, fuzz window, density smoothing, day-start snap), and the same review event, so
+ * Applies a clean first-try match as a review on the card's reverse row — the same scheduling a
+ * self-graded rating earns in a session (FSRS with the pair's reverse-recall retention +
+ * calibration, fuzz window, density smoothing, day-start snap), and the same review event, so
  * analytics and retention calibration see it like any other recognition review.
  *
- * The pool excludes relearning rows, so a Good here always lands in the schedule branch.
+ * `rating` defaults to Good (plain express mode). Rating mode passes the learner's own
+ * Hard/Good/Easy; an **Again is never passed here** — the express pages treat it like a mismatch
+ * (write nothing, the card stays due) so a game can't trigger a lapse or the relearn loop.
+ * The pool excludes relearning rows, so a success rating here always lands in the schedule branch.
  */
 export async function creditExpressMatch(opts: {
   userId:       string
@@ -105,9 +108,10 @@ export async function creditExpressMatch(opts: {
   calMap:       Map<string, number>
   stateRepo:    CardStateRepository
   eventRepo:    ReviewEventRepository
+  rating?:      Exclude<Rating, 'again'>
 }): Promise<CardState> {
   const { card, state, now } = opts
-  const rating: Rating = 'good'
+  const rating: Rating = opts.rating ?? 'good'
   const elapsedDays = state.lastReviewedAt
     ? Math.max(0, (now.getTime() - new Date(state.lastReviewedAt).getTime()) / 86_400_000)
     : (state.recallIntervalDays ?? state.intervalDays ?? 1)
@@ -144,7 +148,8 @@ export async function creditExpressMatch(opts: {
     againStreak:        fsrs.againStreak,
     lastRating:         rating,
     lastReviewedAt:     now.toISOString(),
-    reps:               state.reps + 1,
+    // Session convention: Hard doesn't count a rep (matches the recall branch in the session pages).
+    reps:               rating !== 'hard' ? state.reps + 1 : state.reps,
     relearningStep:     0,
     recallIntervalDays: fsrs.intervalDays ?? state.recallIntervalDays,
     recallDueAt:        newDueAt,

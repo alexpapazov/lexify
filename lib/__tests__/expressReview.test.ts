@@ -140,6 +140,24 @@ describe('creditExpressMatch', () => {
     expect(next.lastRating).toBe('good')
   })
 
+  it('applies the chosen rating: Easy grows more than Good, Hard does not count a rep', async () => {
+    const c = card('a', 'perro', 'dog')
+    const s = duePair('a')[1]!
+    const rEasy = repos()
+    const easy = await creditExpressMatch({ ...creditOpts(rEasy, c, s), rating: 'easy' })
+    const rGood = repos()
+    const good = await creditExpressMatch({ ...creditOpts(rGood, c, s), rating: 'good' })
+    const rHard = repos()
+    const hard = await creditExpressMatch({ ...creditOpts(rHard, c, s), rating: 'hard' })
+    expect(easy.recallIntervalDays!).toBeGreaterThan(good.recallIntervalDays!)
+    expect(good.recallIntervalDays!).toBeGreaterThan(hard.recallIntervalDays!)
+    expect(hard.reps).toBe(s.reps)          // Hard doesn't count a rep (session convention)
+    expect(easy.reps).toBe(s.reps + 1)
+    expect(rEasy.events[0]!.rating).toBe('easy')
+    expect(rHard.events[0]!.rating).toBe('hard')
+    expect(hard.lastRating).toBe('hard')
+  })
+
   it('seeds FSRS lazily for a pre-FSRS reverse row (null difficulty/stability)', async () => {
     const r = repos()
     const s = duePair('a')[1]!

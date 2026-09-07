@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { Rating } from '@/domain'
 import { AudioToggle, usePracticeAudio } from './usePracticeAudio'
 
 export interface MatchPair {
@@ -62,7 +63,7 @@ export interface MatchAttempt {
   confused?: MatchPair
 }
 
-export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt, renderFinish }: {
+export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt, renderFinish, shouldCollectRating, onRateMatch }: {
   pairs:  MatchPair[]
   onExit: () => void
   /** Which column holds the target-language words. */
@@ -77,6 +78,14 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
    * a replayed board would re-test cards that were just credited.
    */
   renderFinish?: (stats: { total: number; mistakes: number; elapsedMs: number }) => ReactNode
+  /**
+   * Express-with-ratings hook: called on a CORRECT match; return true to pause the board and show
+   * Again/Hard/Good/Easy over the tile that completed the pair. While a rating is pending every
+   * other tile is inert, and the round can't advance until the rating lands via `onRateMatch`.
+   */
+  shouldCollectRating?: (pair: MatchPair) => boolean
+  /** The rating chosen for a pair (fires only when `shouldCollectRating` returned true for it). */
+  onRateMatch?: (pair: MatchPair, rating: Rating) => void
 }) {
   const [audioOn, toggleAudio] = usePracticeAudio()
   const [rounds,   setRounds]   = useState<Round[]>(() => buildRounds(pairs))
@@ -87,6 +96,8 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
   /** Pair ids briefly painted red after a mismatch; cleared by a timeout. */
   const [wrong,    setWrong]    = useState<{ left: string; right: string } | null>(null)
   const [mistakes, setMistakes] = useState(0)
+  /** A matched pair awaiting its rating; the overlay sits on the tile that completed the match. */
+  const [pendingRate, setPendingRate] = useState<{ pairId: string; side: 'left' | 'right' } | null>(null)
   const [elapsed,  setElapsed]  = useState(0)
   const [finished, setFinished] = useState(false)
   const startRef = useRef(Date.now())
@@ -106,8 +117,29 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
 
   const pairById = (id: string) => rounds.flatMap(r => r.pairs).find(p => p.id === id)
 
-  /** Both sides picked → judge. Matching is by pair id, so duplicate glosses can't cross-match. */
-  function judge(leftId: string, rightId: string) {
+  /** Ends the round / game once every pair of the current round is in `nextMatched`. */
+  function advanceIfRoundDone(nextMatched: Set<string>) {
+    if (!current!.pairs.every(p => nextMatched.has(p.id))) return
+    if (round + 1 < rounds.length) {
+      setRound(r => r + 1)
+    } else {
+      setElapsed(Date.now() - startRef.current)
+      setFinished(true)
+    }
+  }
+
+  /** The pending pair got its rating: report it, unfreeze the board, let the round move on. */
+  function resolveRating(rating: Rating) {
+    if (!pendingRate) return
+    const tp = pairById(pendingRate.pairId)
+    setPendingRate(null)
+    if (tp) onRateMatch?.(tp, rating)
+    advanceIfRoundDone(matched)
+  }
+
+  /** Both sides picked → judge. Matching is by pair id, so duplicate glosses can't cross-match.
+   *  `completedSide` = the column of the tap that completed the pair (where a rating overlay goes). */
+  function judge(leftId: string, rightId: string, completedSide: 'left' | 'right') {
     const targetId = targetSide === 'left' ? leftId : rightId
     const otherId  = targetSide === 'left' ? rightId : leftId
     const tp = pairById(targetId)
@@ -118,14 +150,12 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
       const nextMatched = new Set(matched).add(leftId)
       setMatched(nextMatched)
       setSelLeft(null); setSelRight(null)
-      const roundDone = current!.pairs.every(p => nextMatched.has(p.id))
-      if (!roundDone) return
-      if (round + 1 < rounds.length) {
-        setRound(r => r + 1)
-      } else {
-        setElapsed(Date.now() - startRef.current)
-        setFinished(true)
+      if (tp && shouldCollectRating?.(tp)) {
+        // Freeze here: the round only advances after the rating lands (resolveRating).
+        setPendingRate({ pairId: leftId, side: completedSide })
+        return
       }
+      advanceIfRoundDone(nextMatched)
     } else {
       setMistakes(m => m + 1)
       setWrong({ left: leftId, right: rightId })
@@ -136,6 +166,7 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
   }
 
   function pick(side: 'left' | 'right', id: string) {
+    if (pendingRate) return   // the board waits for the rating
     // Hearing the word is part of matching it — every tap of a target-language tile speaks it.
     if (side === targetSide && audioOn) {
       const p = pairById(id)
@@ -144,11 +175,11 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
     if (side === 'left') {
       const next = selLeft === id ? null : id
       setSelLeft(next)
-      if (next && selRight) judge(next, selRight)
+      if (next && selRight) judge(next, selRight, 'left')
     } else {
       const next = selRight === id ? null : id
       setSelRight(next)
-      if (next && selLeft) judge(selLeft, next)
+      if (next && selLeft) judge(selLeft, next, 'right')
     }
   }
 
@@ -157,6 +188,7 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
     setRound(0)
     setMatched(new Set())
     setSelLeft(null); setSelRight(null); setWrong(null)
+    setPendingRate(null)
     setMistakes(0)
     setElapsed(0)
     setFinished(false)
@@ -180,11 +212,19 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
     )
   }
 
+  const RATE_OPTIONS: { rating: Rating; label: string; color: string }[] = [
+    { rating: 'again', label: 'Again', color: 'border-danger/60 text-danger hover:bg-danger/10' },
+    { rating: 'hard',  label: 'Hard',  color: 'border-warning/60 text-warning hover:bg-warning/10' },
+    { rating: 'good',  label: 'Good',  color: 'border-success/60 text-success hover:bg-success/10' },
+    { rating: 'easy',  label: 'Easy',  color: 'border-accent/60 text-accent-soft hover:bg-accent/10' },
+  ]
+
   const tile = (side: 'left' | 'right', p: MatchPair) => {
     const isMatched  = matched.has(p.id)
     const isSelected = (side === 'left' ? selLeft : selRight) === p.id
     const isWrong    = wrong !== null && (side === 'left' ? wrong.left : wrong.right) === p.id
-    return (
+    const isRating   = pendingRate !== null && pendingRate.pairId === p.id && pendingRate.side === side
+    const button = (
       <button
         key={`${side}-${p.id}`}
         onClick={() => !isMatched && pick(side, p.id)}
@@ -198,6 +238,25 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
       >
         {side === targetSide ? p.front : p.back}
       </button>
+    )
+    if (!isRating) return button
+    // Rating overlay: covers the just-matched tile with the four buttons; the rest of the board
+    // is inert (pick() early-returns) until one is chosen.
+    return (
+      <div key={`${side}-${p.id}`} className="relative">
+        {button}
+        <div className="absolute inset-0 z-10 flex items-stretch gap-1 rounded-card bg-surface-deep/95 border border-success/40 p-1">
+          {RATE_OPTIONS.map(({ rating, label, color }) => (
+            <button
+              key={rating}
+              onClick={() => resolveRating(rating)}
+              className={`flex-1 rounded border text-xs font-medium transition-colors ${color}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
     )
   }
 

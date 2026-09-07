@@ -56,6 +56,11 @@ function ExpressInner() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [creditedCount, setCreditedCount] = useState(0)
   const [saveErrors, setSaveErrors] = useState(0)
+  /** Settings → Study defaults → Due Now: pause each clean match for an Again/Hard/Good/Easy. */
+  const [ratingMode, setRatingMode] = useState(false)
+  const [ratedCounts, setRatedCounts] = useState({ hard: 0, good: 0, easy: 0 })
+  /** Clean matches the learner rated Again — no write, they stay due for a real review. */
+  const againRef = useRef<Set<string>>(new Set())
 
   const tzRef = useRef(deviceTimeZone())
   const turnoverRef = useRef(0)
@@ -78,12 +83,17 @@ function ExpressInner() {
         if (!session) { setLoading(false); return }
         const uid = session.user.id
         setUserId(uid)
-        const [profileRes, cards, states, paramRows] = await Promise.all([
+        const [profileRes, ratingRes, cards, states, paramRows] = await Promise.all([
           supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', uid).maybeSingle(),
+          // Separate select with its own fallback: referencing express_rating in the main select
+          // would blank timezone/turnover wholesale if migration 123 isn't applied yet (the
+          // not-yet-migrated-profile-column landmine).
+          supabase.from('profiles').select('express_rating').eq('user_id', uid).maybeSingle().then(r => r, () => ({ data: null })),
           new SupabaseCardRepository().listAllForUser(uid),
           stateRepo.listAllForUser(uid),
           new SupabaseUserSchedulerParamsRepository().listForUser(uid),
         ])
+        setRatingMode(((ratingRes.data as { express_rating?: boolean | null } | null)?.express_rating) ?? false)
         const tz = (profileRes.data?.timezone as string | null) ?? deviceTimeZone()
         const turnover = (profileRes.data?.day_turnover_hour as number | null) ?? 0
         tzRef.current = tz
@@ -105,6 +115,25 @@ function ExpressInner() {
     })()
   }, [source, target, stateRepo])
 
+  function credit(cardId: string, rating: 'hard' | 'good' | 'easy') {
+    const cand = candidateById.get(cardId)
+    if (!cand || !userId) return
+    creditedRef.current.add(cardId)
+    void creditExpressMatch({
+      userId, card: cand.card, state: cand.state, now: new Date(),
+      tz: tzRef.current, turnoverHour: turnoverRef.current,
+      retMap: retMapRef.current, calMap: calMapRef.current,
+      stateRepo, eventRepo, rating,
+    }).then(() => {
+      setCreditedCount(n => n + 1)
+      setRatedCounts(c => ({ ...c, [rating]: c[rating] + 1 }))
+    }).catch(err => {
+      console.error('Express credit failed:', err)
+      creditedRef.current.delete(cardId)
+      setSaveErrors(n => n + 1)
+    })
+  }
+
   function handleAttempt(a: MatchAttempt) {
     if (!a.correct) {
       // A mismatch marks BOTH words — the one being matched and the one wrongly chosen. Neither
@@ -114,20 +143,16 @@ function ExpressInner() {
       return
     }
     if (dirtyRef.current.has(a.pair.id) || creditedRef.current.has(a.pair.id)) return
-    const cand = candidateById.get(a.pair.id)
-    if (!cand || !userId) return
-    creditedRef.current.add(a.pair.id)
-    void creditExpressMatch({
-      userId, card: cand.card, state: cand.state, now: new Date(),
-      tz: tzRef.current, turnoverHour: turnoverRef.current,
-      retMap: retMapRef.current, calMap: calMapRef.current,
-      stateRepo, eventRepo,
-    }).then(() => setCreditedCount(n => n + 1))
-      .catch(err => {
-        console.error('Express credit failed:', err)
-        creditedRef.current.delete(a.pair.id)
-        setSaveErrors(n => n + 1)
-      })
+    // In rating mode the credit waits for the learner's rating (handleRateMatch); the game shows
+    // the overlay because shouldCollectRating returns true for exactly this case.
+    if (ratingMode) return
+    credit(a.pair.id, 'good')
+  }
+
+  /** Rating mode: the learner rated a clean match. Again writes nothing — the card stays due. */
+  function handleRateMatch(pair: { id: string }, rating: 'again' | 'hard' | 'good' | 'easy') {
+    if (rating === 'again') { againRef.current.add(pair.id); return }
+    credit(pair.id, rating)
   }
 
   const normalUrl = `/study/all/session?category=due&present=selfgraded&dir=reverse${source && target ? `&source=${source}&target=${target}` : ''}`
@@ -173,7 +198,7 @@ function ExpressInner() {
   return (
     <div className="space-y-4">
       <p className="text-xs text-ink-faint text-center uppercase tracking-wider">
-        Express review · {scopeLabel} · a clean match counts as Good
+        Express review · {scopeLabel} · {ratingMode ? 'rate each clean match' : 'a clean match counts as Good'}
       </p>
       <MatchingGame
         pairs={pairs}
@@ -183,14 +208,23 @@ function ExpressInner() {
           speak(cand ? cand.card.front : p.front, cand?.card.sourceLanguage ?? source ?? '')
         }}
         onAttempt={handleAttempt}
+        shouldCollectRating={ratingMode
+          ? p => candidateById.has(p.id) && !dirtyRef.current.has(p.id) && !creditedRef.current.has(p.id) && !againRef.current.has(p.id)
+          : undefined}
+        onRateMatch={ratingMode ? handleRateMatch : undefined}
         renderFinish={({ total, mistakes }) => {
           const missed = total - creditedRef.current.size
+          const breakdown = ratingMode && creditedCount > 0
+            ? ` (${[['easy', ratedCounts.easy], ['good', ratedCounts.good], ['hard', ratedCounts.hard]]
+                .filter(([, n]) => (n as number) > 0).map(([l, n]) => `${n} ${l}`).join(' · ')})`
+            : ' (matched clean, counted as Good)'
+          const stayReason = ratingMode ? 'mix-ups or rated Again' : `${mistakes} wrong pairing${mistakes !== 1 ? 's' : ''}`
           return (
             <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
               <h1 className="text-2xl font-semibold text-ink">Express review done</h1>
               <p className="text-ink-muted text-sm">
-                {`${creditedCount} card${creditedCount !== 1 ? 's' : ''} scheduled forward (matched clean, counted as Good).`}
-                {missed > 0 && ` ${missed} had a mix-up (${mistakes} wrong pairing${mistakes !== 1 ? 's' : ''}) and stay${missed === 1 ? 's' : ''} due for a real review.`}
+                {`${creditedCount} card${creditedCount !== 1 ? 's' : ''} scheduled forward${breakdown}.`}
+                {missed > 0 && ` ${missed} stay${missed === 1 ? 's' : ''} due for a real review (${stayReason}).`}
                 {skipped > 0 && ` ${skipped} more due card${skipped !== 1 ? 's were' : ' was'} left out for sharing identical wording.`}
               </p>
               {saveErrors > 0 && (

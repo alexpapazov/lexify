@@ -1,7 +1,8 @@
 # Express Review — matching as a real review for reverse recognition
 
-**Status (2026-08-27): v1 shipped.** Reverse-recognition (target → native) due cards can be cleared
-through the matching game instead of a normal session. No migration.
+**Status (2026-08-27): v1 shipped, + rating mode the same day.** Reverse-recognition
+(target → native) due cards can be cleared through the matching game instead of a normal session.
+**Migration 123 (`profiles.express_rating`) — PENDING until run.** Plain mode needs nothing.
 
 ## What it is
 
@@ -22,6 +23,26 @@ review:
   goes straight to the normal reverse session, which by then contains exactly the missed cards.
 - Credit is applied **per match, immediately**, so exiting mid-game keeps everything already
   cleared.
+
+## Rating mode (Settings → Study defaults → Due Now, migration 123)
+
+`profiles.express_rating` (default false) switches the express game from "clean match = Good" to
+**rate each clean match**: on the completing tap the pair goes green and Again/Hard/Good/Easy
+buttons appear ON the matched tile (`MatchingGame`'s `shouldCollectRating`/`onRateMatch` props).
+While a rating is pending the whole board is inert and the round cannot advance.
+
+- **Hard / Good / Easy** → `creditExpressMatch` with that rating: normal FSRS growth differences,
+  and Hard doesn't count a rep (session convention).
+- **Again → writes NOTHING.** Same semantics as a mismatch: no lapse, no relearn loop, no event —
+  the card just stays due for a real review. This keeps the invariant that a game can never lapse
+  or un-graduate a card, while still letting the learner refuse credit for a lucky match.
+- The overlay appears only for matches that would earn credit (clean, uncredited, not previously
+  mismatched, not already rated Again) — a pair you already fumbled matches silently and stays due.
+- The setting is loaded and saved through its OWN targeted profile queries (settings page + express
+  page both), so an unapplied migration 123 degrades to plain mode / a visible save error instead
+  of blanking the page — the not-yet-migrated-profile-column landmine.
+- Finish screen shows the rating breakdown ("12 easy · 30 good · 5 hard").
+- No undo on a rating tap (v1) — a mis-tapped Easy stands until the card's next real review.
 
 ## Why only the reverse track
 

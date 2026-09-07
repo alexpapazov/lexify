@@ -471,6 +471,10 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
   const [displayName,   setDisplayName]   = useState('')
   const [selectedLangs, setSelectedLangs] = useState<string[]>([])
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
+  // Express reverse review flavor (migration 123). Loaded and saved through its OWN targeted
+  // queries so an unapplied migration degrades to the default instead of blanking the page/save.
+  const [expressRating, setExpressRating] = useState(false)
+  const [expressRatingError, setExpressRatingError] = useState<string | null>(null)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
@@ -537,14 +541,16 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
       if (!uid) { router.push('/auth'); return }
       setUserId(uid)
 
-      const [{ data: profile }, pairs] = await Promise.all([
+      const [{ data: profile }, pairs, expressRes] = await Promise.all([
         supabase
           .from('profiles')
           .select('display_name, default_daily_new_cards, learning_languages, timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language, language_colors')
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
+        supabase.from('profiles').select('express_rating').eq('user_id', uid).maybeSingle(),
       ])
+      setExpressRating(((expressRes.data as { express_rating?: boolean | null } | null)?.express_rating) ?? false)
 
       if (profile) {
         setDisplayName(profile.display_name ?? '')
@@ -564,6 +570,17 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
       setLoading(false)
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Saves itself immediately (targeted update), like the carryover block — not part of handleSave. */
+  async function handleExpressRating(next: boolean) {
+    setExpressRating(next)
+    setExpressRatingError(null)
+    const { error } = await supabase.from('profiles').update({ express_rating: next }).eq('user_id', userId)
+    if (error) {
+      setExpressRating(!next)
+      setExpressRatingError('Could not save — is migration 123_express_rating.sql applied?')
+    }
+  }
 
   async function handleSave() {
     const { data: { session } } = await supabase.auth.getSession()
@@ -780,6 +797,21 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
             <input type="number" min={1} max={500} className="input w-32" value={dailyNewCards}
               onChange={e => setDailyNewCards(Math.max(1, parseInt(e.target.value) || 1))} />
           </div>
+        </SettingsSection>
+
+        <SettingsSection title="Due Now"
+          description="How the express reverse review (the ⚡ Matching option on the dashboard's due picker) grades a clean match.">
+          <SettingsRow label="Express reverse review"
+            hint={expressRating
+              ? 'After each clean match, rating buttons appear on the matched tile. Again leaves the card due for a real review.'
+              : 'A clean first-try match counts as Good; mix-ups stay due for a real review.'}>
+            <select value={expressRating ? 'rated' : 'plain'} onChange={e => void handleExpressRating(e.target.value === 'rated')}
+              className="input text-sm w-52">
+              <option value="plain">Matching</option>
+              <option value="rated">Matching + ratings</option>
+            </select>
+          </SettingsRow>
+          {expressRatingError && <p className="text-danger text-xs">{expressRatingError}</p>}
         </SettingsSection>
 
         <SettingsSection title="Audio"

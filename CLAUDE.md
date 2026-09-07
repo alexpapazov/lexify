@@ -44,7 +44,9 @@ Current feature files:
   FSRS difficulty/stability + spread due dates, resumable queue (migration 107).
 - `features/Express Review.md` — matching as a REAL review for due reverse-recognition
   cards: dashboard chooser (⚡ Matching / Normal), clean match = full Good on the reverse
-  row, mismatches write nothing and stay due. `/study/express`, `lib/expressReview.ts`.
+  row, mismatches write nothing and stay due. Optional RATING mode (Settings → Study
+  defaults → Due Now, **migration 123 — pending**): rating buttons on the matched tile;
+  Again writes nothing. `/study/express`, `lib/expressReview.ts`.
 - `features/Catch Up.md` — spread an overdue backlog across days up to a date you pick
   (Settings → Data): deferral-damage ordering, evenly-paced relearning, why moving past-due
   dates is safe. Includes an error log for the invisible first version.
