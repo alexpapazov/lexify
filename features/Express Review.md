@@ -29,7 +29,15 @@ review:
 `profiles.express_rating` (default false) switches the express game from "clean match = Good" to
 **rate each clean match**: on the completing tap the pair goes green and Again/Hard/Good/Easy
 buttons appear ON the matched tile (`MatchingGame`'s `shouldCollectRating`/`onRateMatch` props).
-While a rating is pending the whole board is inert and the round cannot advance.
+
+**Ratings are NON-BLOCKING, and rounds are button-gated (2026-08-27, second pass).** Overlays stay
+on their tiles while the learner keeps matching; rate them in any order, or not at all. In rating
+mode a round NEVER advances automatically — once fully matched, a **Next round / Finish** button
+appears, and pressing it **auto-rates everything still unrated in that round as Good** (with a
+"N unrated matches will count as Good" note) before moving on. So the last pair of a round is
+always ratable, no rating can be lost to a round flip, and the session only ends through the
+Finish button. This applies ONLY to the due-now express game — classic practice matching (no
+rating props) auto-advances exactly as before.
 
 - **Hard / Good / Easy** → `creditExpressMatch` with that rating: normal FSRS growth differences,
   and Hard doesn't count a rep (session convention).
@@ -38,6 +46,9 @@ While a rating is pending the whole board is inert and the round cannot advance.
   or un-graduate a card, while still letting the learner refuse credit for a lucky match.
 - The overlay appears only for matches that would earn credit (clean, uncredited, not previously
   mismatched, not already rated Again) — a pair you already fumbled matches silently and stays due.
+  Such no-overlay matches still don't auto-advance a rating-mode round (the Continue button always
+  has the last word), because an auto-advance there would flip the board out from under
+  still-unrated overlays.
 - The setting is loaded and saved through its OWN targeted profile queries (settings page + express
   page both), so an unapplied migration 123 degrades to plain mode / a visible save error instead
   of blanking the page — the not-yet-migrated-profile-column landmine.
@@ -90,4 +101,4 @@ the forward-row gate, per-direction dormancy, track enablement, turnover-aware d
 
 | Date | Error | Fix |
 |---|---|---|
-| — | — | — |
+| 2026-08-27 | Rating mode v1 froze the board per match (modal overlay) and the user reported the LAST pair of a round losing its rating chance — the next round arrived without the overlay being answerable. Toward the end of a round the remaining pairs are disproportionately ones already involved in a mismatch (a mismatch leaves BOTH its pairs unmatched and dirty), so the final match often earned no overlay and the round auto-advanced instantly, reading as "the rating was skipped". | Redesigned rather than patched: ratings are non-blocking, and in rating mode a round never advances itself — a Next round / Finish button appears when the round is fully matched and auto-Goods whatever is still unrated. The modal freeze (`pendingRate`) is gone. |
