@@ -122,6 +122,7 @@ export async function fetchReviewCloze(card: Card): Promise<ReviewCloze | null> 
       targetLanguage: card.targetLanguage,
       count: 1,
       mode: 'target',
+      quality: 'best',   // one sentence gates a real review — Sonnet, not the bulk Haiku tier
     })
     const prepared = run.exercises[0]
     return prepared ? buildReviewCloze(prepared, card) : null

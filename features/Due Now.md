@@ -33,7 +33,15 @@
 >    accepts the same two forms — stored or the sentence's — and only those two
 >    (`retypeMatches`); synonyms and siblings still never complete a retype.
 >
-> A rejected/failed/slow sentence means the plain prompt, never a mis-graded review. One sentence per
+> A rejected/failed/slow sentence means the plain prompt, never a mis-graded review.
+>
+> **Generation quality (2026-09-07):** review-cloze requests pass `quality: 'best'` and run on
+> **Sonnet** (`claude-sonnet-5`) — one sentence gates a real review, so grammar outweighs the
+> single-sentence cost; practice keeps bulk Haiku. The route also carries `LANGUAGE_NOTES`, per-
+> language grammar reminders appended to the target-language prompt for languages the generator has
+> actually slipped on — the Bulgarian entry exists because Haiku wrote "всичко си време" (possessive
+> clitic on an indefinite phrase) where only "цялото си време" is grammatical. Add entries there
+> when a language shows a repeatable failure, with the observed counter-example. One sentence per
 > card per session, prefetched 4 cards ahead (`clozeByCard` in all THREE session pages — the usual
 > triplication), rendered by `components/session/ClozePrompt.tsx` inside TypingMode/FlashcardMode
 > via their optional `cloze` prop. Reverse rows never fetch, and reverse rows in a mixed queue are
