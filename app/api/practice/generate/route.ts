@@ -92,6 +92,8 @@ Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Requirements:
 - Concrete, ordinary situations. No riddles, no abstract word-salad, no sentences that are
   grammatical but meaningless.
 - Each sentence uses exactly one target word, inflected however the sentence needs.
+- Use the target word ITSELF — NEVER a synonym or a related word, however natural it would sound.
+  Only grammatical inflections of the listed word are allowed, and "answer" must be that form.
 - Spread the sentences across the target words rather than reusing one.
 - Grammatical, idiomatic ${srcLang} — correct agreement, tense and word order.
 - Vary sentence structure between items; do not reuse one template.

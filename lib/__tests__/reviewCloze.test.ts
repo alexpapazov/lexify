@@ -1,6 +1,6 @@
 import type { Card } from '@/domain'
 import type { PreparedExercise } from '@/lib/practiceGenerate'
-import { buildReviewCloze, clozeEligible, clozeStrictness } from '@/lib/reviewCloze'
+import { buildReviewCloze, clozeEligible, clozeStrictness, sameWordFamily } from '@/lib/reviewCloze'
 
 function card(over: Partial<Card> = {}): Card {
   return {
@@ -37,6 +37,18 @@ describe('clozeStrictness', () => {
   it('auto-accepts articles and keeps the other categories as configured', () => {
     expect(clozeStrictness({ spelling: 'penalize', accents: 'retype', articles: 'penalize' }))
       .toEqual({ spelling: 'penalize', accents: 'retype', articles: 'accept' })
+  })
+})
+
+describe('sameWordFamily', () => {
+  it('accepts inflections and rejects synonyms', () => {
+    expect(sameWordFamily('chapotean', 'chapotear')).toBe(true)
+    expect(sameWordFamily('perros', 'perro')).toBe(true)
+    expect(sameWordFamily('corrió', 'correr')).toBe(true)
+    expect(sameWordFamily('먹어요', '먹다')).toBe(true)          // short-stem agglutinative form
+    expect(sameWordFamily('създавам', 'сътворявам')).toBe(false) // synonym, near-zero shared stem
+    expect(sameWordFamily('comió', 'correr')).toBe(false)
+    expect(sameWordFamily('fue', 'ser')).toBe(false)             // suppletive → safe fallback
   })
 })
 
@@ -96,6 +108,16 @@ describe('buildReviewCloze', () => {
     expect(cz!.before).toBe('Los niños ')
     expect(cz!.after).toBe(' en la piscina.')
     expect(cz!.answer).toBe('chapotean')
+  })
+
+  it('REJECTS a SYNONYM even when the model labels it with the card lemma', () => {
+    // The real failure: card "сътворявам", sentence used the synonym "създавам", and targetLemma
+    // was dutifully copied from the request — so the label check alone passed. The surface form
+    // itself must look like an inflection of the card's word.
+    const c = card({ front: 'сътворявам', lemma: 'сътворявам', pos: 'verb', sourceLanguage: 'bg' })
+    const swapped = prepared('Всеки ден създавам нови идеи за работата.', 'създавам')
+    swapped.exercise.targetLemma = 'сътворявам'
+    expect(buildReviewCloze(swapped, c)).toBeNull()
   })
 
   it('REJECTS a surface form whose reported lemma is a DIFFERENT word', () => {

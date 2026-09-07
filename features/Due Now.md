@@ -26,8 +26,13 @@
 > 3. **Sentences inflect naturally, and the inflected form is accepted.** The brief `exactForm`
 >    generation constraint produced ungrammatical sentences ("Los niños chapotear…") and was
 >    removed. When the full front isn't in the sentence, the blank falls back to the model's
->    surface form — guarded by `targetLemma === card.lemma`, so a sentence about a different word
->    is rejected. TypingMode then accepts the stored front AND the sentence's form
+>    surface form — guarded twice: `targetLemma === card.lemma`, AND `sameWordFamily` (the surface
+>    must share ≥ half its shorter length as a common prefix with the lemma). The second guard
+>    exists because `targetLemma` is COPIED from the request and proves nothing — the model once
+>    wrote the synonym "създавам" for a "сътворявам" card while dutifully labeling it with the
+>    card's lemma, and the label check alone waved it through. Inflections share their stem;
+>    synonyms don't. Suppletive forms (fue/ser) fail the guard and fall back to the plain prompt —
+>    a false rejection is safe, a false acceptance is a wrong word in the blank. TypingMode then accepts the stored front AND the sentence's form
 >    (`viaClozeForm`); typing the inflection shows "Correct! (form used in the sentence)" plus the
 >    existing "Card says: …" note with the stored form. The RETYPE step after a wrong answer
 >    accepts the same two forms — stored or the sentence's — and only those two

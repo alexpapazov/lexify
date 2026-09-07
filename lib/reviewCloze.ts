@@ -62,6 +62,23 @@ function searchable(s: string): string | null {
 }
 
 /**
+ * Deterministic "is this a form of THAT word" check: inflection changes endings, so a real form
+ * shares a long prefix with its lemma ("chapotean"/"chapotear", "perros"/"perro", "corrió"/
+ * "correr"), while a synonym shares almost none ("създавам"/"сътворявам": 2 of 8). The ratio is
+ * measured against the SHORTER string so agglutinative endings (먹어요/먹다) don't dilute it.
+ * Suppletive forms (fue/ser) fail and fall back to the plain prompt — a false rejection is safe,
+ * a false acceptance is the "completely different word in the blank" bug this guards against.
+ */
+export function sameWordFamily(surface: string, lemma: string): boolean {
+  const a = searchable(surface) ?? surface.toLowerCase()
+  const b = searchable(lemma) ?? lemma.toLowerCase()
+  if (!a || !b) return false
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  return i / Math.min(a.length, b.length) >= 0.5
+}
+
+/**
  * Turns one generated exercise into a review cloze, or null when it can't be trusted.
  *
  * The blank prefers the card's FULL stored front — leading article included ("el proceso"), so the
@@ -103,6 +120,10 @@ export function buildReviewCloze(prepared: PreparedExercise, card: Card): Review
   if (!lemmaKey || reportedLemma !== lemmaKey) return null
   const surface = ex.answer.trim()
   if (!surface) return null
+  // The reported lemma is COPIED from the request, so it can't prove anything on its own — the
+  // model once wrote the synonym "създавам" while dutifully labeling it "сътворявам". The surface
+  // form itself must look like an inflection of the card's word.
+  if (!sameWordFamily(surface, card.lemma!)) return null
   const surfaceAt = find(surface)
   if (surfaceAt < 0) return null
   return span(surfaceAt, surface.length)
