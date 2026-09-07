@@ -1,34 +1,36 @@
 /**
- * lib/reviewCloze.ts — cloze prompts for Due Now FORWARD reviews (migration 124 setting).
+ * lib/reviewCloze.ts — cloze prompts for Due Now FORWARD reviews (`?cloze=1`, chosen from the
+ * dashboard due picker's Cloze / Normal buttons).
  *
- * With `profiles.forward_cloze` on, a forward review (native gloss → produce the target word)
- * shows a generated target-language sentence with the word blanked out — the gloss sits inside
- * the blank, the sentence's translation underneath — instead of the bare gloss. Typed reviews
- * type into the same input as always; self-graded reviews reveal and rate as always.
+ * In cloze mode a forward review (native gloss → produce the target word) shows a generated
+ * target-language sentence with the word blanked out — the gloss sits inside the blank, the
+ * sentence's translation underneath — instead of the bare gloss. Typed reviews type into the same
+ * input as always; self-graded reviews reveal and rate as always.
  *
  * The load-bearing rule: **grading is completely untouched.** The expected answer stays the
  * card's stored front, with all its machinery (strictness, overrides, synonyms, confusion
- * detection). That only stays honest if the sentence uses the word EXACTLY as stored — so
- * generation is asked for the dictionary form (`exactForm`), and `buildReviewCloze` REJECTS any
- * sentence whose surface form differs from the card's front/lemma (the model inflected anyway).
- * A rejected or failed sentence just means the plain prompt — never a mis-graded review.
+ * detection). That only stays honest if the sentence carries the front EXACTLY as stored —
+ * leading article included ("el proceso", not a bare "proceso" behind the sentence's own "El") —
+ * so generation is asked for that exact form (`exactForm` lists the front verbatim), and
+ * `buildReviewCloze` blanks the full-front span or REJECTS the sentence. A rejected or failed
+ * sentence just means the plain prompt — never a mis-graded review.
  *
  * One sentence per card per session (the session page caches results), fetched a few cards ahead
  * so the sentence is usually ready by the time the card surfaces. Online only; unlabeled cards
  * (no pos/lemma) can't generate and fall back to the plain prompt.
  */
 
-import type { Card } from '@/domain'
+import type { Card, TypedStrictness } from '@/domain'
 import type { PracticeTarget } from '@/engine/practice'
 import { generatePracticeExercises, type PreparedExercise } from '@/lib/practiceGenerate'
-import { splitForBlank } from '@/lib/practiceRender'
-import { normalizeFrontKey } from '@/lib/duplicates'
+import { stripGrammaticalTags } from '@/engine/grading'
+import { displayText } from '@/lib/cardText'
 
 export interface ReviewCloze {
   /** Sentence text before / after the blank. */
   before: string
   after: string
-  /** The surface form the sentence uses (verified equal to the card's word). */
+  /** The blanked span exactly as the sentence carries it — the full stored front, sentence casing. */
   answer: string
   /** Native translation of the whole sentence. */
   translation: string
@@ -36,28 +38,54 @@ export interface ReviewCloze {
   gloss: string
 }
 
+/**
+ * Strictness for a typed CLOZE review: articles are auto-accepted (user decision 2026-09-07).
+ * The blank spans the full stored front ("el proceso"), so the article is already on screen as
+ * part of the sentence's shape — demanding it typed again is redundant, and dropping it must not
+ * cost a penalty or a retype. Spelling and accent strictness keep the pair's own settings.
+ */
+export function clozeStrictness(s: TypedStrictness): TypedStrictness {
+  return { ...s, articles: 'accept' }
+}
+
 /** Whether a card can have a cloze prompt at all: it needs labels to generate from. */
 export function clozeEligible(card: Card): boolean {
   return !!card.pos && !!card.lemma && card.pos !== 'phrase'
 }
 
+/** Lowercased, apostrophe-unified copy for searching — same length as the input, or null when a
+ *  locale-specific case mapping changes the length (indices couldn't be trusted then). */
+function searchable(s: string): string | null {
+  const lowered = s.replace(/[’ʼ]/g, "'").toLowerCase()
+  return lowered.length === s.length ? lowered : null
+}
+
 /**
- * Turns one generated exercise into a review cloze, or null when it can't be trusted:
- * the surface form must match the card's stored front (or its lemma) after front-key
- * normalization (case, articles, grammatical tags), and the answer must be locatable in the
- * sentence. Pure — separated from the fetch for tests.
+ * Turns one generated exercise into a review cloze, or null when it can't be trusted.
+ *
+ * The blank must cover the card's FULL stored front — leading article included — because that is
+ * exactly what typed grading expects the learner to produce. Anchoring on the model's reported
+ * surface form was the bug this replaced: for "el proceso" the model reports "proceso", the blank
+ * left the sentence's own "El" visible (so typing the article was double, and omitting it was an
+ * article error), and the filled reveal read "El el proceso". So: find the full front in the
+ * sentence (case- and apostrophe-insensitive) and blank that span; a sentence that doesn't carry
+ * the front verbatim — inflected, article dropped, wrong word — is rejected and the review falls
+ * back to the plain prompt. Pure — separated from the fetch for tests.
  */
 export function buildReviewCloze(prepared: PreparedExercise, card: Card): ReviewCloze | null {
   const ex = prepared.exercise
-  const surface = normalizeFrontKey(ex.answer, card.sourceLanguage)
-  const front   = normalizeFrontKey(card.front, card.sourceLanguage)
-  const lemma   = card.lemma ? normalizeFrontKey(card.lemma, card.sourceLanguage) : null
-  if (surface !== front && surface !== lemma) return null
-  const split = splitForBlank(ex.sentence, ex.answer)
-  if (!split) return null
   if (!ex.translation.trim()) return null
+  const needle = stripGrammaticalTags(displayText(card.front)).trim()
+  if (!needle) return null
+  const hay = searchable(ex.sentence)
+  const key = searchable(needle)
+  const at = hay && key ? hay.indexOf(key) : ex.sentence.indexOf(needle)
+  if (at < 0) return null
+  const answer = ex.sentence.slice(at, at + needle.length)
   return {
-    before: split.before, after: split.after, answer: ex.answer,
+    before: ex.sentence.slice(0, at),
+    after: ex.sentence.slice(at + needle.length),
+    answer,
     translation: ex.translation,
     gloss: (prepared.targetGloss || card.back).trim(),
   }

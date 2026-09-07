@@ -93,7 +93,7 @@ export function FlashcardMode({ card, promptSide, promptLanguage, deckName, onRa
         {onInfo && <CardInfoButton onClick={onInfo} />}
         {onToggleStar && <StarButton starred={card.starred ?? false} onToggle={onToggleStar} />}
         {cloze
-          ? <ClozePrompt cloze={cloze} filled={revealed ? answer : null} />
+          ? <ClozePrompt cloze={cloze} filled={revealed ? cloze.answer : null} />
           : onPromptEdit
             ? <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit(t)} />
             : <p className="text-2xl font-medium text-ink">{prompt}</p>}

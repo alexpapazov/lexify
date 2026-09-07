@@ -11,7 +11,7 @@ import { displayText } from '@/lib/cardText'
 import { RatingButtons } from './RatingButtons'
 import { EditablePromptPanel } from './EditablePromptPanel'
 import { ClozePrompt } from './ClozePrompt'
-import type { ReviewCloze } from '@/lib/reviewCloze'
+import { clozeStrictness, type ReviewCloze } from '@/lib/reviewCloze'
 import { EditableAnswerText } from './EditableAnswerText'
 import { CardInfoButton } from './CardInfoButton'
 import { StarButton } from './StarButton'
@@ -395,7 +395,8 @@ export function TypingMode({
       ignoreDefiniteArticles: false,
       ignoreMinorTypos: false,
     }
-    return resolveTypedPenalty(gradeTyping(answered, expected, detectionSettings), strictness)
+    // Cloze prompts auto-accept article slips: the blank already spans the article on screen.
+    return resolveTypedPenalty(gradeTyping(answered, expected, detectionSettings), cloze ? clozeStrictness(strictness) : strictness)
   }
 
   // Display penalty (only meaningful mid-retype on a graded review) — drives the
@@ -509,7 +510,7 @@ export function TypingMode({
         ) : (
           <>
             {cloze
-              ? <ClozePrompt cloze={cloze} filled={result || revealed ? displayText(expected) : null} />
+              ? <ClozePrompt cloze={cloze} filled={result || revealed ? cloze.answer : null} />
               : <EditablePromptPanel text={prompt} onEdit={t => onPromptEdit?.(t)} />}
             {promptLanguage && (
               <button

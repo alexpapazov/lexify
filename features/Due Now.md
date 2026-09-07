@@ -13,10 +13,18 @@
 > with the full strictness/override/synonym/confusion machinery, self-graded reveals and rates as
 > always, and the blank fills with the answer after grading/reveal.
 >
-> The honesty rule lives in `lib/reviewCloze.ts`: generation asks for the word EXACTLY in its
-> dictionary form (`exactForm` on `/api/practice/generate`), and `buildReviewCloze` REJECTS any
-> sentence whose surface form differs from the card's front/lemma (per `normalizeFrontKey`) — a
-> rejected/failed/slow sentence means the plain prompt, never a mis-graded review. One sentence per
+> The honesty rule lives in `lib/reviewCloze.ts`: generation asks for the FRONT verbatim —
+> **leading article included** (`exactForm` on `/api/practice/generate` lists `t.front`, not the
+> lemma) — and `buildReviewCloze` blanks the full-front span found in the sentence (case- and
+> apostrophe-insensitive search) or REJECTS the sentence outright. A rejected/failed/slow sentence
+> means the plain prompt, never a mis-graded review. The first cut anchored the blank on the
+> model's reported surface form instead: for "el proceso" that left the sentence's own "El"
+> outside the blank, so typing the article was double, omitting it was an article error, and the
+> filled reveal read "El el proceso" — the full-front span rule is the fix; don't re-anchor on
+> `exercise.answer`. And since the blank already spans the article on screen, **typed cloze
+> reviews auto-accept article slips** (`clozeStrictness` forces `articles: 'accept'`; user
+> decision 2026-09-07) — typing "proceso" against "el proceso" is plain correct in cloze mode,
+> while spelling/accent strictness keeps the pair's own settings. One sentence per
 > card per session, prefetched 4 cards ahead (`clozeByCard` in all THREE session pages — the usual
 > triplication), rendered by `components/session/ClozePrompt.tsx` inside TypingMode/FlashcardMode
 > via their optional `cloze` prop. Reverse rows never fetch, and reverse rows in a mixed queue are

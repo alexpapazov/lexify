@@ -55,8 +55,10 @@ function extractJson(text: string): unknown {
 }
 
 function generatePrompt(body: RequestBody, srcLang: string, tgtLang: string): string {
+  // Exact-form mode lists the FRONT (article and all) — that whole string must appear verbatim,
+  // because the review blanks and grades exactly it. Normal mode lists the lemma as before.
   const targets = body.targets
-    .map(t => `- ${t.lemma} (${t.pos}, means "${t.back}")`)
+    .map(t => `- ${body.exactForm ? t.front : t.lemma} (${t.pos}, means "${t.back}")`)
     .join('\n')
 
   return `You are writing short practice sentences for someone learning ${srcLang}. Their native
@@ -75,7 +77,7 @@ Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Requirements:
 - Concrete, ordinary situations. No riddles, no abstract word-salad, no sentences that are
   grammatical but meaningless.
 ${body.exactForm
-    ? '- Each sentence uses exactly one target word, EXACTLY in the dictionary form listed above — no conjugation, inflection or article changes. Shape the sentence so that form is natural (e.g. an infinitive after a modal verb).'
+    ? '- Each sentence uses exactly one target word, EXACTLY as listed above — same form, and if the listing carries an article, that article too, as one contiguous phrase. No conjugation, inflection or article changes; shape the sentence so that form is natural (e.g. an infinitive after a modal verb).'
     : '- Each sentence uses exactly one target word, inflected however the sentence needs.'}
 - Spread the sentences across the target words rather than reusing one.
 - Grammatical, idiomatic ${srcLang} — correct agreement, tense and word order.
