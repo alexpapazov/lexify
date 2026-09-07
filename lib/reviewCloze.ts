@@ -9,11 +9,12 @@
  *
  * The load-bearing rule: **grading is completely untouched.** The expected answer stays the
  * card's stored front, with all its machinery (strictness, overrides, synonyms, confusion
- * detection). That only stays honest if the sentence carries the front EXACTLY as stored —
- * leading article included ("el proceso", not a bare "proceso" behind the sentence's own "El") —
- * so generation is asked for that exact form (`exactForm` lists the front verbatim), and
- * `buildReviewCloze` blanks the full-front span or REJECTS the sentence. A rejected or failed
- * sentence just means the plain prompt — never a mis-graded review.
+ * detection) — plus one addition: the sentence's own inflected form is also accepted
+ * (`viaClozeForm` in TypingMode), since sentences inflect words naturally and producing the
+ * sentence's form is production too. `buildReviewCloze` anchors the blank on the full stored
+ * front when the sentence carries it, else on the lemma-verified surface form, and REJECTS
+ * anything else. A rejected or failed sentence just means the plain prompt — never a mis-graded
+ * review.
  *
  * One sentence per card per session (the session page caches results), fetched a few cards ahead
  * so the sentence is usually ready by the time the card surfaces. Online only; unlabeled cards
@@ -63,32 +64,48 @@ function searchable(s: string): string | null {
 /**
  * Turns one generated exercise into a review cloze, or null when it can't be trusted.
  *
- * The blank must cover the card's FULL stored front — leading article included — because that is
- * exactly what typed grading expects the learner to produce. Anchoring on the model's reported
- * surface form was the bug this replaced: for "el proceso" the model reports "proceso", the blank
- * left the sentence's own "El" visible (so typing the article was double, and omitting it was an
- * article error), and the filled reveal read "El el proceso". So: find the full front in the
- * sentence (case- and apostrophe-insensitive) and blank that span; a sentence that doesn't carry
- * the front verbatim — inflected, article dropped, wrong word — is rejected and the review falls
- * back to the plain prompt. Pure — separated from the fetch for tests.
+ * The blank prefers the card's FULL stored front — leading article included ("el proceso"), so the
+ * sentence never shows a stray article outside the blank ("El el proceso" was the original bug).
+ * When the sentence inflected the word instead ("chapotean" for "chapotear", a plural noun, a
+ * feminine adjective — natural sentences do this, and they should), the blank falls back to the
+ * model's reported SURFACE form, guarded by the lemma: `targetLemma` must be the card's own word,
+ * or a sentence about a different word entirely would slip through. Typed grading then accepts the
+ * stored front AND the sentence's form (TypingMode's `viaClozeForm`), with the "Card says" note
+ * showing the stored form when the inflection was typed. A sentence passing neither anchor is
+ * rejected — the review falls back to the plain prompt. Pure — separated from the fetch for tests.
  */
 export function buildReviewCloze(prepared: PreparedExercise, card: Card): ReviewCloze | null {
   const ex = prepared.exercise
   if (!ex.translation.trim()) return null
-  const needle = stripGrammaticalTags(displayText(card.front)).trim()
-  if (!needle) return null
-  const hay = searchable(ex.sentence)
-  const key = searchable(needle)
-  const at = hay && key ? hay.indexOf(key) : ex.sentence.indexOf(needle)
-  if (at < 0) return null
-  const answer = ex.sentence.slice(at, at + needle.length)
-  return {
+
+  const span = (at: number, len: number): ReviewCloze => ({
     before: ex.sentence.slice(0, at),
-    after: ex.sentence.slice(at + needle.length),
-    answer,
+    after: ex.sentence.slice(at + len),
+    answer: ex.sentence.slice(at, at + len),
     translation: ex.translation,
     gloss: (prepared.targetGloss || card.back).trim(),
+  })
+  const find = (needle: string): number => {
+    const hay = searchable(ex.sentence)
+    const key = searchable(needle)
+    return hay && key ? hay.indexOf(key) : ex.sentence.indexOf(needle)
   }
+
+  // 1. The full stored front, article and all.
+  const front = stripGrammaticalTags(displayText(card.front)).trim()
+  if (!front) return null
+  const frontAt = find(front)
+  if (frontAt >= 0) return span(frontAt, front.length)
+
+  // 2. The sentence's inflected surface form — only when it is a form of THIS word.
+  const lemmaKey = searchable((card.lemma ?? '').trim()) ?? ''
+  const reportedLemma = searchable(ex.targetLemma.trim()) ?? ''
+  if (!lemmaKey || reportedLemma !== lemmaKey) return null
+  const surface = ex.answer.trim()
+  if (!surface) return null
+  const surfaceAt = find(surface)
+  if (surfaceAt < 0) return null
+  return span(surfaceAt, surface.length)
 }
 
 /** Generates one sentence for the card and validates it. Null on any failure — caller falls back. */
@@ -105,7 +122,6 @@ export async function fetchReviewCloze(card: Card): Promise<ReviewCloze | null> 
       targetLanguage: card.targetLanguage,
       count: 1,
       mode: 'target',
-      exactForm: true,
     })
     const prepared = run.exercises[0]
     return prepared ? buildReviewCloze(prepared, card) : null

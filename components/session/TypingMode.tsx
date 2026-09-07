@@ -89,6 +89,9 @@ export function TypingMode({
     expected:      string
     viaOverride:   boolean
     viaSynonym:    boolean
+    /** Correct because it matches the CLOZE SENTENCE's inflected form (e.g. "chapotean" for a card
+     *  storing "chapotear") — accepted, with the "Card says" note pointing at the stored form. */
+    viaClozeForm:  boolean
     normalizedUser: string
   }
 
@@ -282,7 +285,11 @@ export function TypingMode({
       (overrideAnswers ?? []).includes(base.normalizedUser)
     const viaSynonym  = !skipSynonymCheck && base.status !== 'correct' && !viaOverride &&
       effectiveSynonyms.some(s => gradeTyping(typedInput, s, effectiveGradingSettings).status === 'correct')
-    const effectivelyCorrect = base.correct || viaOverride || viaSynonym
+    // The cloze sentence may inflect the word ("chapotean" for "chapotear") — producing ITS form is
+    // a correct production too. The stored form stays visible via the "Card says" note below.
+    const viaClozeForm = !!cloze && base.status !== 'correct' && !viaOverride && !viaSynonym &&
+      gradeTyping(typedInput, cloze.answer, effectiveGradingSettings).status === 'correct'
+    const effectivelyCorrect = base.correct || viaOverride || viaSynonym || viaClozeForm
     setResult({
       status:         effectivelyCorrect ? 'correct' : base.status,
       reason:         base.reason,
@@ -291,6 +298,7 @@ export function TypingMode({
       expected,
       viaOverride,
       viaSynonym,
+      viaClozeForm,
       normalizedUser: base.normalizedUser,
     })
     setOverride(null)
@@ -311,6 +319,13 @@ export function TypingMode({
     // and skip sibling/synonym phases — prevents the word being its own "synonym".
     const directMatch = gradeTyping(input, expected, effectiveGradingSettings)
     if (directMatch.status === 'correct') {
+      gradeAndSetResult(input)
+      return
+    }
+
+    // The cloze sentence's own inflected form is always a direct accept — before sibling/synonym
+    // phases, so another card whose answer collides with the inflection can't hijack it.
+    if (cloze && gradeTyping(input, cloze.answer, effectiveGradingSettings).status === 'correct') {
       gradeAndSetResult(input)
       return
     }
@@ -745,6 +760,7 @@ export function TypingMode({
                     {override === true && <span className="text-ink-faint font-normal"> (marked correct)</span>}
                     {override === null && result.viaOverride && <span className="text-ink-faint font-normal"> (remembered override)</span>}
                     {override === null && result.viaSynonym && <span className="text-amber-400/80 font-normal"> (synonym)</span>}
+                    {override === null && result.viaClozeForm && <span className="text-ink-faint font-normal"> (form used in the sentence)</span>}
                   </p>
                   {result.viaSynonym && override !== false && (
                     <p className="text-xs text-ink-muted">

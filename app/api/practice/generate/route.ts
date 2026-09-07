@@ -39,13 +39,6 @@ interface RequestBody {
   count:          number
   /** 'target' (default) = a full target-language sentence. 'native' = only the blank is target. */
   mode?: ClozeMode
-  /**
-   * Require each target word EXACTLY as listed (dictionary form, no inflection). Used by the
-   * Due Now forward-cloze prompt, where grading compares against the stored card front — an
-   * inflected surface form there would mark the right answer wrong. The client still verifies
-   * the returned answer and falls back to a plain prompt when the model inflected anyway.
-   */
-  exactForm?: boolean
 }
 
 function extractJson(text: string): unknown {
@@ -55,10 +48,8 @@ function extractJson(text: string): unknown {
 }
 
 function generatePrompt(body: RequestBody, srcLang: string, tgtLang: string): string {
-  // Exact-form mode lists the FRONT (article and all) — that whole string must appear verbatim,
-  // because the review blanks and grades exactly it. Normal mode lists the lemma as before.
   const targets = body.targets
-    .map(t => `- ${body.exactForm ? t.front : t.lemma} (${t.pos}, means "${t.back}")`)
+    .map(t => `- ${t.lemma} (${t.pos}, means "${t.back}")`)
     .join('\n')
 
   return `You are writing short practice sentences for someone learning ${srcLang}. Their native
@@ -76,9 +67,7 @@ Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Requirements:
 - Each sentence is ONE natural, everyday ${srcLang} sentence of roughly 5 to 12 words.
 - Concrete, ordinary situations. No riddles, no abstract word-salad, no sentences that are
   grammatical but meaningless.
-${body.exactForm
-    ? '- Each sentence uses exactly one target word, EXACTLY as listed above — same form, and if the listing carries an article, that article too, as one contiguous phrase. No conjugation, inflection or article changes; shape the sentence so that form is natural (e.g. an infinitive after a modal verb).'
-    : '- Each sentence uses exactly one target word, inflected however the sentence needs.'}
+- Each sentence uses exactly one target word, inflected however the sentence needs.
 - Spread the sentences across the target words rather than reusing one.
 - Grammatical, idiomatic ${srcLang} — correct agreement, tense and word order.
 - Vary sentence structure between items; do not reuse one template.

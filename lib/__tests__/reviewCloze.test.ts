@@ -76,17 +76,38 @@ describe('buildReviewCloze', () => {
     expect(cz!.answer).toBe('l’attrezzo')
   })
 
-  it('REJECTS a sentence missing the stored article — the blank cannot demand the full answer there', () => {
-    // Front "el perro" but the sentence carries a bare "perro" (or a different article).
-    expect(buildReviewCloze(prepared('Vi un perro ayer.', 'perro'), card())).toBeNull()
+  it('falls back to the surface form when the sentence carries a different article', () => {
+    // Front "el perro", sentence "un perro": the full front isn't there, but the bare surface form
+    // is a lemma-verified form of the word — blank it, leaving the sentence's own article visible.
+    const cz = buildReviewCloze(prepared('Vi un perro ayer.', 'perro'), card())
+    expect(cz).not.toBeNull()
+    expect(cz!.before).toBe('Vi un ')
+    expect(cz!.answer).toBe('perro')
   })
 
-  it('REJECTS a sentence that inflected the word — grading would mislead', () => {
+  it('accepts an INFLECTED surface form when the reported lemma is this word', () => {
+    // "chapotear" card, sentence uses "chapotean" — natural sentences inflect; the blank covers the
+    // sentence's form and typed grading accepts both (viaClozeForm in TypingMode).
+    const c = card({ front: 'chapotear', lemma: 'chapotear', pos: 'verb' })
+    const ok = prepared('Los niños chapotean en la piscina.', 'chapotean')
+    ok.exercise.targetLemma = 'chapotear'
+    const cz = buildReviewCloze(ok, c)
+    expect(cz).not.toBeNull()
+    expect(cz!.before).toBe('Los niños ')
+    expect(cz!.after).toBe(' en la piscina.')
+    expect(cz!.answer).toBe('chapotean')
+  })
+
+  it('REJECTS a surface form whose reported lemma is a DIFFERENT word', () => {
+    // Guard against the model writing about another word entirely: without the lemma check, any
+    // reported answer found in the sentence would be blanked and mis-graded.
     const c = card({ front: 'correr', lemma: 'correr', pos: 'verb' })
-    expect(buildReviewCloze(prepared('Ayer corrió cinco kilómetros.', 'corrió'), c)).toBeNull()
+    const other = prepared('Ayer comió cinco tapas.', 'comió')
+    other.exercise.targetLemma = 'comer'
+    expect(buildReviewCloze(other, c)).toBeNull()
   })
 
-  it('rejects when the front is absent or the translation is missing', () => {
+  it('rejects when the word is absent or the translation is missing', () => {
     expect(buildReviewCloze(prepared('El gato duerme.', 'perro'), card())).toBeNull()
     const noTranslation = prepared('El perro duerme.', 'perro')
     noTranslation.exercise.translation = '  '
