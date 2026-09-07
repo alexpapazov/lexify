@@ -26,13 +26,16 @@
 > 3. **Sentences inflect naturally, and the inflected form is accepted.** The brief `exactForm`
 >    generation constraint produced ungrammatical sentences ("Los niños chapotear…") and was
 >    removed. When the full front isn't in the sentence, the blank falls back to the model's
->    surface form — guarded twice: `targetLemma === card.lemma`, AND `sameWordFamily` (the surface
->    must share ≥ half its shorter length as a common prefix with the lemma). The second guard
->    exists because `targetLemma` is COPIED from the request and proves nothing — the model once
->    wrote the synonym "създавам" for a "сътворявам" card while dutifully labeling it with the
->    card's lemma, and the label check alone waved it through. Inflections share their stem;
->    synonyms don't. Suppletive forms (fue/ser) fail the guard and fall back to the plain prompt —
->    a false rejection is safe, a false acceptance is a wrong word in the blank. TypingMode then accepts the stored front AND the sentence's form
+>    surface form — guarded by EITHER of two signals (ANDing them over-rejected; requiring strict
+>    `targetLemma` equality before them broke reflexive lemmas — both shipped briefly and read as
+>    "cloze never generates"): (a) the ANSWER TOKEN's annotated lemma matches the card's by stem
+>    family — `targetLemma` is copied from the request and proves nothing (the synonym "създавам"
+>    once shipped under a copied "сътворявам" label), but the per-token annotation labels what's
+>    actually in the sentence, which is what lets stem-changers through ("pienso" annotates as
+>    "pensar"); or (b) `sameWordFamily(surface, lemma)` — common prefix ≥ half the shorter string —
+>    as the deterministic fallback. Stored sentences save the answer's lemma so they re-validate
+>    the same way. Suppletive forms with no matching token (fue/ser) still fall back to the plain
+>    prompt — a false rejection is safe, a false acceptance is a wrong word in the blank. TypingMode then accepts the stored front AND the sentence's form
 >    (`viaClozeForm`); typing the inflection shows "Correct! (form used in the sentence)" plus the
 >    existing "Card says: …" note with the stored form. The RETYPE step after a wrong answer
 >    accepts the same two forms — stored or the sentence's — and only those two

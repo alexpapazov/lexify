@@ -121,17 +121,22 @@ export function buildReviewCloze(prepared: PreparedExercise, card: Card): Review
   if (frontAt >= 0) return span(frontAt, front.length)
 
   // 2. The sentence's inflected surface form — only when it is a form of THIS word.
-  // The reported lemma is checked by FAMILY, not equality: for a reflexive or multiword lemma
-  // ("посвещавам се", "se précipiter") the model reports the bare verb, and strict equality
-  // rejected every sentence for such cards. Family still rejects an honest different-word report.
+  // Two independent signals, either suffices (ANDing them over-rejected — stem-changing verbs like
+  // "pienso"/"pensar" share almost no prefix, and demanding prefix similarity alone turned most
+  // Spanish stem-changers into plain prompts):
+  //  a) the ANSWER TOKEN's annotated lemma. `targetLemma` is copied from the request and proves
+  //     nothing (the model once wrote the synonym "създавам" under a copied "сътворявам" label),
+  //     but the per-token annotation labels what is ACTUALLY in the sentence — "pienso" annotates
+  //     as "pensar", "създавам" annotates as "създавам".
+  //  b) the deterministic stem check (`sameWordFamily`) as fallback when no token matches.
   const lemmaKey = (card.lemma ?? '').trim()
-  if (!lemmaKey || !sameWordFamily(ex.targetLemma.trim(), lemmaKey)) return null
+  if (!lemmaKey) return null
   const surface = ex.answer.trim()
   if (!surface) return null
-  // The reported lemma is COPIED from the request, so it can't prove anything on its own — the
-  // model once wrote the synonym "създавам" while dutifully labeling it "сътворявам". The surface
-  // form itself must look like an inflection of the card's word.
-  if (!sameWordFamily(surface, card.lemma!)) return null
+  const sKey = searchable(surface) ?? surface.toLowerCase()
+  const answerToken = ex.tokens.find(t => (searchable(t.text) ?? t.text.toLowerCase()) === sKey)
+  const tokenOk = !!answerToken && sameWordFamily(answerToken.lemma, lemmaKey)
+  if (!tokenOk && !sameWordFamily(surface, lemmaKey)) return null
   const surfaceAt = find(surface)
   if (surfaceAt < 0) return null
   return span(surfaceAt, surface.length)
@@ -146,7 +151,12 @@ export function storedToReviewCloze(stored: StoredClozeSentence, card: Card): Re
   const prepared = {
     exercise: {
       sentence: stored.sentence, answer: stored.answer,
-      targetLemma: card.lemma ?? '', translation: stored.translation, tokens: [],
+      targetLemma: card.lemma ?? '', translation: stored.translation,
+      // The saved lemma rides along as the answer's token, so a stem-changing inflection
+      // ("pienso" saved for a "pensar" card) still re-validates on later sessions.
+      tokens: stored.lemma
+        ? [{ text: stored.answer, lemma: stored.lemma, pos: 'other', isFunctionWord: false, gloss: stored.gloss }]
+        : [],
     },
     targetCardId: card.id,
     targetGloss: stored.gloss,
@@ -195,8 +205,12 @@ export async function generateReviewCloze(card: Card): Promise<{ cloze: ReviewCl
         console.info(`[cloze] ${card.front}: sentence rejected (attempt ${attempt + 1}): "${prepared.exercise.sentence}" (answer "${prepared.exercise.answer}", lemma "${prepared.exercise.targetLemma}")`)
         continue
       }
+      const answerKey = searchable(prepared.exercise.answer) ?? prepared.exercise.answer.toLowerCase()
+      const answerLemma = prepared.exercise.tokens
+        .find(t => (searchable(t.text) ?? t.text.toLowerCase()) === answerKey)?.lemma
       const choices = appendStoredCloze(card.choices, {
         sentence: prepared.exercise.sentence, answer: cloze.answer,
+        lemma: answerLemma ?? card.lemma ?? undefined,
         translation: cloze.translation, gloss: cloze.gloss,
       })
       try { await new SupabaseCardRepository().update(card.id, { choices }) } catch { /* best-effort */ }

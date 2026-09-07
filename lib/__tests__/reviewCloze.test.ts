@@ -110,13 +110,27 @@ describe('buildReviewCloze', () => {
     expect(cz!.answer).toBe('chapotean')
   })
 
-  it('REJECTS a SYNONYM even when the model labels it with the card lemma', () => {
+  it('accepts a STEM-CHANGING inflection via the answer token annotation', () => {
+    // "pienso"/"pensar" share almost no prefix — the stem check alone rejected every Spanish
+    // stem-changer ("cards that used to work fine don't anymore"). The token annotation labels
+    // what's actually in the sentence, and it says pienso IS pensar.
+    const c = card({ front: 'pensar', lemma: 'pensar', pos: 'verb' })
+    const ex = prepared('Pienso en ti todos los días.', 'Pienso')
+    ex.exercise.targetLemma = 'pensar'
+    ex.exercise.tokens = [{ text: 'Pienso', lemma: 'pensar', pos: 'verb', isFunctionWord: false, gloss: 'I think' }]
+    const cz = buildReviewCloze(ex, c)
+    expect(cz).not.toBeNull()
+    expect(cz!.answer).toBe('Pienso')
+  })
+
+  it('REJECTS a SYNONYM even when the copied label lies — the token annotation tells the truth', () => {
     // The real failure: card "сътворявам", sentence used the synonym "създавам", and targetLemma
-    // was dutifully copied from the request — so the label check alone passed. The surface form
-    // itself must look like an inflection of the card's word.
+    // was dutifully copied from the request. The token annotation labels the sentence honestly
+    // ("създавам"), which is not the card's word — and the stem fallback rejects it too.
     const c = card({ front: 'сътворявам', lemma: 'сътворявам', pos: 'verb', sourceLanguage: 'bg' })
     const swapped = prepared('Всеки ден създавам нови идеи за работата.', 'създавам')
     swapped.exercise.targetLemma = 'сътворявам'
+    swapped.exercise.tokens = [{ text: 'създавам', lemma: 'създавам', pos: 'verb', isFunctionWord: false, gloss: 'I create' }]
     expect(buildReviewCloze(swapped, c)).toBeNull()
   })
 
@@ -162,6 +176,14 @@ describe('stored cloze sentences', () => {
     // Re-adding an existing sentence moves it to the front instead of duplicating.
     const again = appendStoredCloze(choices, stored('Dos perro.'))
     expect(again.clozeSentences!.map(s => s.sentence)).toEqual(['Dos perro.', 'Cuatro perro.', 'Tres perro.'])
+  })
+
+  it('a stored stem-changing sentence re-validates through its saved lemma', () => {
+    const c = card({ front: 'pensar', lemma: 'pensar', pos: 'verb' })
+    const cz = storedToReviewCloze(
+      { sentence: 'Pienso en ti todos los días.', answer: 'Pienso', lemma: 'pensar', translation: 'I think of you every day.', gloss: 'I think' }, c)
+    expect(cz).not.toBeNull()
+    expect(cz!.answer).toBe('Pienso')
   })
 
   it('storedToReviewCloze re-validates against the card as it is NOW', () => {
