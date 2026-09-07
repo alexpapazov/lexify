@@ -13,9 +13,9 @@
  *
  * Validation is deliberately BARE BONES (user decision 2026-09-07, after two rounds of content
  * guards — lemma equality, stem-family checks — each rejected legitimate sentences and read as
- * "cloze never generates"): the blank anchors on the full stored front when the sentence carries
- * it, else on the model's reported answer, and the ONLY rejection is failing to locate either in
- * the sentence. Known accepted risk: a model synonym swap now renders (and its form is accepted by
+ * "cloze never generates"): the blank anchors on the card's article-stripped word when the
+ * sentence carries it, else on the model's reported answer, and the ONLY rejection is failing to
+ * locate either in the sentence. Known accepted risk: a model synonym swap now renders (and its form is accepted by
  * grading) instead of being filtered. Do not re-add content guards without the user asking.
  *
  * One sentence per card per session (the session page caches results), fetched a few cards ahead
@@ -27,7 +27,7 @@ import type { Card, CardChoices, StoredClozeSentence, TypedStrictness } from '@/
 import type { PracticeTarget } from '@/engine/practice'
 import { generatePracticeExercises, type PreparedExercise } from '@/lib/practiceGenerate'
 import { SupabaseCardRepository } from '@/lib/data/cards'
-import { stripGrammaticalTags } from '@/engine/grading'
+import { stripGrammaticalTags, stripLeadingArticle } from '@/engine/grading'
 import { displayText } from '@/lib/cardText'
 
 /** How many generated sentences a card keeps (`choices.clozeSentences`, newest first). Sessions
@@ -39,7 +39,7 @@ export interface ReviewCloze {
   /** Sentence text before / after the blank. */
   before: string
   after: string
-  /** The blanked span exactly as the sentence carries it — the full stored front, sentence casing. */
+  /** The blanked span exactly as the sentence carries it — the bare word, sentence casing. */
   answer: string
   /** Native translation of the whole sentence. */
   translation: string
@@ -49,9 +49,9 @@ export interface ReviewCloze {
 
 /**
  * Strictness for a typed CLOZE review: articles are auto-accepted (user decision 2026-09-07).
- * The blank spans the full stored front ("el proceso"), so the article is already on screen as
- * part of the sentence's shape — demanding it typed again is redundant, and dropping it must not
- * cost a penalty or a retype. Spelling and accent strictness keep the pair's own settings.
+ * The sentence's own article sits VISIBLY before the blank ("El ___ de solicitud…"), so the
+ * learner types just the word — and typing it WITH the article must cost nothing either.
+ * Spelling and accent strictness keep the pair's own settings.
  */
 export function clozeStrictness(s: TypedStrictness): TypedStrictness {
   return { ...s, articles: 'accept' }
@@ -71,11 +71,13 @@ function searchable(s: string): string | null {
 
 
 /**
- * Turns one generated exercise into a review cloze. The blank prefers the card's FULL stored
- * front — article included, so the sentence never shows a stray article outside the blank ("El el
- * proceso" was the original display bug) — and otherwise covers the model's reported answer
- * (inflections and all). Null ONLY when neither can be located in the sentence: without a span
- * there is nothing to blank. Pure — separated from the fetch for tests.
+ * Turns one generated exercise into a review cloze. The blank covers ONLY the word itself — the
+ * sentence's own definite article stays VISIBLE outside the blank ("El ___ de solicitud…"), and
+ * the learner types just the word (user decision 2026-09-07, replacing the earlier
+ * article-in-the-blank design; typed grading accepts the answer with or without the article
+ * either way, via `clozeStrictness`). Anchor preference: the card's article-stripped front, else
+ * the model's reported answer (inflections and all). Null ONLY when neither can be located in the
+ * sentence: without a span there is nothing to blank. Pure — separated from the fetch for tests.
  */
 export function buildReviewCloze(prepared: PreparedExercise, card: Card): ReviewCloze | null {
   const ex = prepared.exercise
@@ -93,11 +95,12 @@ export function buildReviewCloze(prepared: PreparedExercise, card: Card): Review
     return hay && key ? hay.indexOf(key) : ex.sentence.indexOf(needle)
   }
 
-  // 1. The full stored front, article and all.
+  // 1. The card's word WITHOUT its leading article — the sentence's article stays visible.
   const front = stripGrammaticalTags(displayText(card.front)).trim()
   if (!front) return null
-  const frontAt = find(front)
-  if (frontAt >= 0) return span(frontAt, front.length)
+  const bare = stripLeadingArticle(front, card.sourceLanguage).trim() || front
+  const bareAt = find(bare)
+  if (bareAt >= 0) return span(bareAt, bare.length)
 
   // 2. The model's reported answer — the word as the sentence actually uses it.
   const surface = ex.answer.trim()

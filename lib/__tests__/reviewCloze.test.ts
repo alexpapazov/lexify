@@ -41,12 +41,13 @@ describe('clozeStrictness', () => {
 })
 
 describe('buildReviewCloze — bare bones: the only rejection is "nothing to blank"', () => {
-  it('blanks the FULL stored front, leading article included, when the sentence carries it', () => {
+  it('blanks ONLY the word — the sentence keeps its own article visible', () => {
+    // Card "el perro", sentence "El perro duerme…" → "El ___ duerme…", type just "perro".
     const cz = buildReviewCloze(prepared('El perro duerme en el jardín.', 'perro'), card())
     expect(cz).not.toBeNull()
-    expect(cz!.before).toBe('')
+    expect(cz!.before).toBe('El ')
     expect(cz!.after).toBe(' duerme en el jardín.')
-    expect(cz!.answer).toBe('El perro')          // the sentence's own casing, for the filled reveal
+    expect(cz!.answer).toBe('perro')
     expect(cz!.gloss).toBe('dog')
   })
 
@@ -62,11 +63,12 @@ describe('buildReviewCloze — bare bones: the only rejection is "nothing to bla
     expect(stem!.answer).toBe('Pienso')
   })
 
-  it('matches an elided article across apostrophe styles', () => {
+  it('keeps an elided article visible too', () => {
     const c = card({ front: "l'attrezzo", lemma: 'attrezzo', sourceLanguage: 'it' })
     const cz = buildReviewCloze(prepared('Ho comprato l’attrezzo nuovo.', 'attrezzo'), c)
     expect(cz).not.toBeNull()
-    expect(cz!.answer).toBe('l’attrezzo')
+    expect(cz!.before).toBe('Ho comprato l’')
+    expect(cz!.answer).toBe('attrezzo')
   })
 
   it('a missing translation does NOT reject — the sentence renders without the line', () => {
@@ -99,8 +101,8 @@ describe('stored cloze sentences', () => {
   it('storedToReviewCloze anchors a stored sentence, and drops one whose word is gone', () => {
     const ok = storedToReviewCloze(stored('Vi el perro ayer.'), card())
     expect(ok).not.toBeNull()
-    expect(ok!.before).toBe('Vi ')
-    expect(ok!.answer).toBe('el perro')
+    expect(ok!.before).toBe('Vi el ')
+    expect(ok!.answer).toBe('perro')
     // Stored inflected form still anchors (bare-bones: locating the answer is all it takes).
     const inflected = storedToReviewCloze(
       { sentence: 'Pienso en ti.', answer: 'Pienso', translation: 'I think of you.', gloss: 'I think' },

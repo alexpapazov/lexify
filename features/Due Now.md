@@ -16,10 +16,14 @@
 > The rules live in `lib/reviewCloze.ts` + TypingMode, shaped by three user decisions
 > (2026-09-07, in order):
 >
-> 1. **The blank prefers the FULL stored front, article included.** Anchoring on the model's bare
->    surface form left the sentence's own "El" outside the blank ("El el proceso" reveal, article
->    penalty for the natural answer). When the sentence carries the front verbatim (case- and
->    apostrophe-insensitive), that whole span is blanked.
+> 1. **The blank covers ONLY the word; the sentence's article stays visible** ("El ___ de
+>    solicitud…" — you type just "proceso"). This is the FINAL reversal of a design that flipped
+>    twice: v1 blanked the bare surface form but grading demanded the article (penalty for the
+>    natural answer, "El el proceso" reveal); v2 blanked the full front, article included (you had
+>    to type the article). Final rule: anchor on `stripLeadingArticle(front)` (elided articles
+>    stay visible too — "l’___"), grading accepts the word with OR without the article no matter
+>    what (rule 2 below), and the reveal fills the bare word after the sentence's own article, so
+>    doubling is structurally impossible.
 > 2. **Typed cloze reviews auto-accept article slips** (`clozeStrictness` forces
 >    `articles: 'accept'`) — typing "proceso" against "el proceso" is plain correct in cloze mode;
 >    spelling/accent strictness keeps the pair's own settings.
