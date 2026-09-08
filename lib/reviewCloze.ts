@@ -1,6 +1,7 @@
 /**
  * lib/reviewCloze.ts — cloze prompts for Due Now FORWARD reviews (`?cloze=1`, chosen from the
- * dashboard due picker's Cloze / Normal buttons).
+ * dashboard due picker's Cloze / Normal buttons) AND for learning-ladder/pathway rungs with the
+ * per-rung Cloze box checked (`Rung.cloze` / `PathwayState.cloze` — see LadderStudy).
  *
  * In cloze mode a forward review (native gloss → produce the target word) shows a generated
  * target-language sentence with the word blanked out — the gloss sits inside the blank, the

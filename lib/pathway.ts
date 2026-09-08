@@ -160,7 +160,7 @@ export function ladderToPathway(ladder: Ladder): Pathway {
   const states: PathwayState[] = rungs.map((r, i) => ({
     id: r.id, name: `State ${i + 1}`,
     type: r.type, direction: r.direction, distractorSource: r.distractorSource,
-    strictness: r.strictness, selfRated: r.selfRated, intervalInit: r.intervalInit,
+    strictness: r.strictness, selfRated: r.selfRated, cloze: r.cloze, intervalInit: r.intervalInit,
   }))
   states.push(TERMINAL)
 

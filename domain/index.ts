@@ -261,6 +261,10 @@ export interface Rung {
   strictness?:       TypedStrictness
   /** Whether the four rating buttons appear (always true for self_graded). */
   selfRated:         boolean
+  /** Typing/self_graded produce-target rungs only: present the prompt as a generated cloze
+   *  sentence (the word blanked out, gloss inside the blank) instead of the bare native gloss —
+   *  same mechanic as Due Now's `?cloze=1`. Optional so ladders saved before this load fine. */
+  cloze?:            boolean
   /** Interval-setting rung (typing/self_graded only; one per direction). */
   intervalInit:      boolean
   /** How many times you must succeed / press the advancing rating to move up. */
@@ -349,6 +353,8 @@ export interface PathwayState {
   distractorSource?: DistractorSource
   strictness?:       TypedStrictness
   selfRated:         boolean
+  /** Cloze presentation — same semantics as `Rung.cloze`. */
+  cloze?:            boolean
   intervalInit:      boolean          // sets THIS direction's graduation interval (≤1 per direction)
   /** Optional floor on how soon this state may re-appear for the card, in seconds. */
   minReshowSeconds?: number

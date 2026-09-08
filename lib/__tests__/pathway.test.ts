@@ -107,4 +107,14 @@ describe('ladderToPathway', () => {
     const skip = p.transitions.find(t => t.from === 'a' && t.to === 'c')!
     expect(skip.priority).toBeLessThan(adv.priority)
   })
+
+  it('carries the per-rung cloze flag onto the converted state', () => {
+    const rungs: Rung[] = [
+      { id: 'a', type: 'typing', direction: 'produce_target', cloze: true, selfRated: false, intervalInit: false, advanceTimes: 1, advanceInARow: true, dropBacks: [] },
+      { id: 'b', type: 'self_graded', direction: 'produce_native', selfRated: true, intervalInit: true, advanceTimes: 1, advanceInARow: true, dropBacks: [] },
+    ]
+    const p = ladderToPathway({ rungs })
+    expect(p.states.find(s => s.id === 'a')?.cloze).toBe(true)
+    expect(p.states.find(s => s.id === 'b')?.cloze).toBeFalsy()
+  })
 })

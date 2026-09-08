@@ -130,7 +130,9 @@ export function PathwayEditor({ initial, onSave, onReset, onPersistLayout, savin
               <span className="text-xs text-ink-faint">Exercise</span>
               <select className="input py-1.5" value={sel.type} onChange={e => {
                 const type = e.target.value as RungType
-                patchState(sel.id, { intervalInit: sel.intervalInit && canInitInterval(type, sel.direction) ? sel.intervalInit : false, type })
+                // Cloze only exists on typing/self-graded — switching to MCQ/dictation drops it.
+                const cloze = sel.cloze && (type === 'typing' || type === 'self_graded') ? sel.cloze : false
+                patchState(sel.id, { intervalInit: sel.intervalInit && canInitInterval(type, sel.direction) ? sel.intervalInit : false, cloze, type })
               }}>
                 {(Object.keys(TYPE_LABEL) as RungType[]).map(t => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
               </select>
@@ -139,7 +141,9 @@ export function PathwayEditor({ initial, onSave, onReset, onPersistLayout, savin
               <span className="text-xs text-ink-faint">Direction</span>
               <select className="input py-1.5" value={sel.direction} onChange={e => {
                 const direction = e.target.value as RungDirection
-                patchState(sel.id, { intervalInit: sel.intervalInit && canInitInterval(sel.type, direction) ? sel.intervalInit : false, direction })
+                // Cloze only fits producing the target word — switching away drops it.
+                const cloze = sel.cloze && direction === 'produce_target' ? sel.cloze : false
+                patchState(sel.id, { intervalInit: sel.intervalInit && canInitInterval(sel.type, direction) ? sel.intervalInit : false, cloze, direction })
               }}>
                 <option value="produce_target">Produce the target word</option>
                 <option value="produce_native">Produce the native word</option>
@@ -178,6 +182,13 @@ export function PathwayEditor({ initial, onSave, onReset, onPersistLayout, savin
                 onChange={e => patchState(sel.id, { selfRated: e.target.checked })} />
               <span className="text-ink">Show rating buttons</span>
             </label>
+            {(sel.type === 'typing' || sel.type === 'self_graded') && sel.direction === 'produce_target' && (
+              <label className="flex items-center gap-2 cursor-pointer" title="Show the word blanked out of a generated sentence (its meaning inside the blank) instead of the bare prompt.">
+                <input type="checkbox" className="accent-accent" checked={!!sel.cloze}
+                  onChange={e => patchState(sel.id, { cloze: e.target.checked })} />
+                <span className="text-ink">Cloze</span>
+              </label>
+            )}
             {canInitInterval(sel.type, sel.direction) && (
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" className="accent-accent" checked={sel.intervalInit}

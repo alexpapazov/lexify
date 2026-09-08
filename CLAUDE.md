@@ -3332,6 +3332,14 @@ pages (prefetch effect + `cloze` prop on the two graduated render sites each). M
 briefly created for a settings toggle and deleted unapplied — if it was ever run,
 `profiles.forward_cloze` is an unused column.
 
+Cloze is ALSO a per-rung option in learning ladders/pathways (2026-09-07, no migration):
+`Rung.cloze` / `PathwayState.cloze` (optional booleans, old JSONB loads fine), a "Cloze" checkbox
+in both editors shown only for typing/self-graded rungs producing the TARGET word (produce-native
+cloze would print the answer's gloss in the blank; switching type/direction away clears the flag).
+`LadderStudy` resolves sentences via the same `resolveReviewCloze` (prefetches the current + next
+few queued cards sitting at a cloze rung) and `LadderStudyCard` forwards the `cloze` prop into
+TypingMode/FlashcardMode — same grading, storage, and tap-a-word behavior as Due Now.
+
 ## Settings auto-save — the Save button is gone (2026-08-27)
 
 The four profile-backed sections (Profile / Time zone / Study defaults / Colors) **auto-save**: any

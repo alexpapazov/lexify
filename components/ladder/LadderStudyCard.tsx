@@ -8,6 +8,7 @@ import type { RungAttemptOutcome } from '@/engine/ladderEngine'
 import { mcqOutcome, typedOutcome, producesNative } from '@/lib/ladderSession'
 import { issueToErrorTypes } from '@/lib/pathway'
 import { gradeTyping, resolveTypedPenalty } from '@/engine/grading'
+import type { ReviewCloze } from '@/lib/reviewCloze'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
@@ -24,9 +25,12 @@ import { displayText } from '@/lib/cardText'
  * is a small custom screen (no existing equivalent). Each screen's result is
  * mapped to a single ladder outcome via `onOutcome`.
  */
-export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onCardEdit, onRepeat, onOutcome, onChoicesCached, onInfo, onToggleStar, ipaOn, onToggleIpa, onIpaFetched }: {
+export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguage, targetLanguage, gradingSettings, overrides, onOverrideAnswer, onChoiceEdit, onCardEdit, onRepeat, onOutcome, onChoicesCached, onInfo, onToggleStar, ipaOn, onToggleIpa, onIpaFetched, cloze }: {
   card:           Card
   rung:           Rung
+  /** Cloze presentation for a rung with the Cloze box checked (typing / self-graded, produce
+   *  target) — the resolved sentence, supplied by the session. Absent → the plain prompt. */
+  cloze?:         ReviewCloze
   deckCards:      Card[]
   deckName?:      string
   sourceLanguage: string
@@ -113,6 +117,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
       <FlashcardMode
         key={`${card.id}-${rung.id}`}
         card={card} promptSide={promptSide} deckName={deckName} onInfo={onInfo} onToggleStar={onToggleStar}
+        cloze={native ? undefined : cloze}
         promptLanguage={promptSide === 'front' ? sourceLanguage : undefined}
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
@@ -129,6 +134,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
       <TypingMode
         key={`${card.id}-${rung.id}`}
         card={card} promptSide={promptSide}
+        cloze={native ? undefined : cloze}
         promptLanguage={promptSide === 'front' ? sourceLanguage : undefined}
         answerLanguage={answerSide === 'front' ? sourceLanguage : targetLanguage}
         gradingSettings={gradingSettings} gradedReview={rung.selfRated}

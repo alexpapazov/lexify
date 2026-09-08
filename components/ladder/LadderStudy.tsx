@@ -38,6 +38,7 @@ import { apiUrl } from '@/lib/apiBase'
 import { UndoFab } from '@/components/session/UndoFab'
 import { CardEditModal } from '@/components/CardEditModal'
 import { isOfflineActive } from '@/lib/offline/mode'
+import { resolveReviewCloze, clozeEligible, type ReviewCloze } from '@/lib/reviewCloze'
 import { useActiveTimer } from '@/lib/activeTimer'
 import type { Card, CardChoices, Deck, Ladder, RungType } from '@/domain'
 
@@ -55,12 +56,19 @@ const RUNG_LABEL: Record<RungType, string> = {
   mcq: 'Recognize', typing: 'Type', self_graded: 'Recall', dictation: 'Dictation',
 }
 
+/** Whether a rung/state presents its prompt as a cloze sentence: the per-rung checkbox, on an
+ *  exercise the mechanic fits (typing / self-graded, producing the target word — a produce-native
+ *  cloze would print the answer's gloss inside the blank). */
+function rungWantsCloze(r?: { cloze?: boolean; type: RungType; direction: Rung['direction'] }): boolean {
+  return !!r?.cloze && r.direction === 'produce_target' && (r.type === 'typing' || r.type === 'self_graded')
+}
+
 /** Adapt a pathway State to the Rung shape `LadderStudyCard` expects (it only reads presentation
  *  fields). The ladder-only fields are filler — the card renderer never touches them. */
 function stateAsRung(s: PathwayState): Rung {
   return {
     id: s.id, type: s.type, direction: s.direction, distractorSource: s.distractorSource,
-    strictness: s.strictness, selfRated: s.selfRated, intervalInit: s.intervalInit,
+    strictness: s.strictness, selfRated: s.selfRated, cloze: s.cloze, intervalInit: s.intervalInit,
     advanceTimes: 1, advanceInARow: true, dropBacks: [],
   }
 }
@@ -92,6 +100,11 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const [ipaOn, setIpaOn] = useState(false)
   const [total, setTotal] = useState(0)
   const [states, setStates] = useState<Map<string, ClimbState | RouteState>>(new Map())
+  // Cloze prompts for rungs with the Cloze box checked: sentences resolve for the current card and
+  // a few queued ones ahead (see the effect below). `null` = tried and failed/rejected → the plain
+  // prompt. One sentence per card per session, exactly like Due Now's `?cloze=1`.
+  const [clozeByCard, setClozeByCard] = useState<Map<string, ReviewCloze | null>>(new Map())
+  const clozeInFlight = useRef<Set<string>>(new Set())
   // Pathway mode (per-pair): when set, this scope studies via the branched pathway engine instead of the
   // linear ladder. All ladder code paths below stay untouched; pathway logic lives in parallel branches.
   const [pathway, setPathway] = useState<Pathway | null>(null)
@@ -610,6 +623,42 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   const presentationRung: Rung | undefined = isPathway ? (currentPathState ? stateAsRung(currentPathState) : undefined) : currentRung
   const currentDeck = currentId ? deckFor(currentId) : undefined
 
+  // The rung/state a given card sits at RIGHT NOW — drives the cloze prefetch, which must only
+  // spend a generation on cards whose current exercise actually is a cloze one.
+  const rungForCard = useCallback((cardId: string): { cloze?: boolean; type: RungType; direction: Rung['direction'] } | undefined => {
+    const st = states.get(cardId)
+    if (isPathway) {
+      const sid = (st as RouteState | undefined)?.stateId ?? pathway!.startStateId
+      return pathway!.states.find(s => s.id === sid)
+    }
+    return ladder?.rungs[(st as ClimbState | undefined)?.rungIndex ?? 0]
+  }, [states, isPathway, pathway, ladder])
+
+  // Resolve cloze sentences for the current card + the next few queued cards sitting at a cloze
+  // rung. Non-blocking: a card whose sentence isn't ready (or was rejected) shows the plain prompt.
+  // Stored sentences resolve instantly (and offline); generation only runs online, and only until
+  // the card's stored set is full — then reviews rotate among the stored three.
+  useEffect(() => {
+    const upcoming = [currentId, ...queue.map(q => q.cardId)].filter((id): id is string => !!id)
+    const seen = new Set<string>()
+    let started = 0
+    for (const id of upcoming) {
+      if (started >= 4) break
+      if (seen.has(id)) continue
+      seen.add(id)
+      if (!rungWantsCloze(rungForCard(id))) continue
+      const c = cardsById.get(id)
+      if (!c || clozeByCard.has(id) || clozeInFlight.current.has(id) || !clozeEligible(c)) continue
+      clozeInFlight.current.add(id)
+      started++
+      void resolveReviewCloze(c, { allowGenerate: !isOfflineActive() })
+        .then(cz => setClozeByCard(prev => new Map(prev).set(id, cz)))
+        .catch(() => setClozeByCard(prev => new Map(prev).set(id, null)))
+        .finally(() => clozeInFlight.current.delete(id))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, currentId, states, rungForCard])
+
   // Reset the per-card timer + pending override whenever a new card is shown.
   useEffect(() => { shownAtRef.current = Date.now(); reviewTimer.current?.restart(); pendingOverrideAddRef.current = null }, [currentId])
 
@@ -929,6 +978,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       <LadderStudyCard
         key={isPathway ? `${currentId}:${currentRoute!.stateId}` : `${currentId}:${currentClimb!.rungIndex}`}
         card={currentCard} rung={presentationRung} deckCards={curDeckCards} deckName={currentDeck.name}
+        cloze={rungWantsCloze(presentationRung) ? clozeByCard.get(currentCard.id) || undefined : undefined}
         sourceLanguage={currentDeck.sourceLanguage} targetLanguage={currentDeck.targetLanguage} gradingSettings={currentDeck.gradingSettings}
         overrides={overrides} onOverrideAnswer={handleOverrideAnswer} onChoiceEdit={handleChoiceEdit}
         onCardEdit={async (id, side, newText) => {
