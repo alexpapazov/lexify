@@ -46,7 +46,7 @@ Current feature files:
   cards: launch mode set in Settings → Study → Due Now (`reverse_matching`, migration 124;
   the due-picker rows navigate straight in), clean match = full Good on the reverse
   row, mismatches write nothing and stay due. Optional RATING mode (same select,
-  `express_rating`, **migration 123 — pending**): rating buttons on the matched tile;
+  `express_rating`, migration 123): rating buttons on the matched tile;
   Again writes nothing. `/study/express`, `lib/expressReview.ts`.
 - `features/Catch Up.md` — spread an overdue backlog across days up to a date you pick
   (Settings → Data): deferral-damage ordering, evenly-paced relearning, why moving past-due
@@ -2679,7 +2679,7 @@ get a confident wrong number (this shipped once as "you have 0 words" on a 1000-
 Project `card_id`. Related rule: never `.catch(() => 0)` a count the user reads as data — an
 unreadable value and a real zero are different facts and must look different.
 
-**A schedule needs a target OR just numbers (migration 116 — PENDING).** `targetCount`/`deadline` are
+**A schedule needs a target OR just numbers (migration 116).** `targetCount`/`deadline` are
 NULLABLE: a "pattern" schedule ("8 a day, none Sundays") is open-ended, its goal each day is simply
 `dayCapacity`, drawn over a rolling `PATTERN_HORIZON_DAYS` (180) window. Pattern measures report
 NEUTRAL values (`feasible: true`, `pace: 0`) rather than zeroes that read as no-progress. A target
@@ -2695,7 +2695,7 @@ re-derives from what's left. The banner flags what spilled PAST the horizon (wor
 not "days over the limit", which no longer exist by construction. In Daily/Per weekday mode the
 withheld words only return if carryover is on — schedule mode re-derives them for free.
 
-**The Daily/Per weekday/Schedule toggle is GLOBAL** (`profiles.goal_mode`, migration 115 — PENDING),
+**The Daily/Per weekday/Schedule toggle is GLOBAL** (`profiles.goal_mode`, migration 115),
 one choice for all languages. It is a UI mode: NO consumer reads it, so leaving Schedule mode prompts
 to retire the live schedules rather than letting them drive goals invisibly, and a page load with any
 live schedule opens in Schedule mode regardless. The column is read behind a full-then-core select
@@ -2733,7 +2733,7 @@ which now saves itself with a TARGETED profile update — the settings page's om
 longer writes the `goal_*` columns, so don't put them back.
 
 
-## Sequential goals (2026-08-13, migration 120 — PENDING)
+## Sequential goals (2026-08-13, migration 120)
 
 A pair may now hold a QUEUE of live schedules: finish one, the next takes over by DATE, automatically.
 Migration `120_sequential_goal_schedules.sql` drops the one-live-schedule-per-pair unique index
@@ -2758,7 +2758,7 @@ Migration `120_sequential_goal_schedules.sql` drops the one-live-schedule-per-pa
 - Checkpoints (click a calendar day) already existed and are unchanged — they're the
   "one long goal with interim targets" answer; queues are the "goal after goal" answer.
 
-## Plan kinds + pattern debt (2026-08-10, migration 117 — PENDING)
+## Plan kinds + pattern debt (2026-08-10, migration 117)
 
 The study-plan editor now leads with **Long-term goal / Daily goal / Weekly goal**. The kind is
 DERIVED, never stored: `targetCount != null` → long-term, `weeklyTarget != null` → weekly, else
@@ -2877,7 +2877,7 @@ selection just more boards. A "Word side" toggle picks which column holds the ta
 glosses can't cross-match. Tracks time + mistakes; the cloze-only sections hide in matching mode.
 Matching draws from `chosen` (labeled, drillable targets) — an unlabeled card can't be picked.
 
-## Practice: audio toggle + attempt log (2026-08-12, migration 119 — PENDING)
+## Practice: audio toggle + attempt log (2026-08-12, migration 119)
 
 - **Audio**: 🔊 toggle in BOTH players' headers (`usePracticeAudio.tsx`, localStorage
   `lexify-practice-audio`, device-level on purpose). Cloze speaks the ANSWER (the inflected surface
@@ -3023,7 +3023,7 @@ ladder/pathway (`LadderStudy`).
   banner. Sanity check when touching sessions: `grep "productionMode: null" app/` must stay empty —
   that was the marker of a step-learning queue item.
 
-## Ladder logs frozen + pathway replays (2026-08-10, migration 118 — PENDING)
+## Ladder logs frozen + pathway replays (2026-08-10, migration 118)
 
 **Bug (user report: "the learning pipeline logs no longer work")** — two independent failures:
 
@@ -3325,8 +3325,8 @@ points that bite:
 ## Forward cloze reviews (2026-09-07; launch mode moved to settings 2026-09-09)
 
 Due Now forward reviews can show a generated cloze sentence as the prompt — enabled in
-**Settings → Study → Due Now** (`profiles.forward_cloze`, **migration `124_due_review_modes.sql`
-— pending**, which also adds `profiles.reverse_matching` for the express-matching launch). The
+**Settings → Study → Due Now** (`profiles.forward_cloze`, migration `124_due_review_modes.sql`,
+which also adds `profiles.reverse_matching` for the express-matching launch). The
 dashboard due-picker rows navigate STRAIGHT into the configured mode (📝/⚡ tag on the row; the
 2026-09-07 per-row two-button chooser is gone), still carried as `?cloze=1` on the session URL —
 the session pages only read that param. Grading untouched — the sentence is context only, and

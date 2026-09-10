@@ -1,12 +1,12 @@
 # Goal Scheduler
 
-**Sequential goals shipped 2026-08-13 (migration 120 — PENDING): a pair can hold a QUEUE of
+**Sequential goals shipped 2026-08-13 (migration 120): a pair can hold a QUEUE of
 schedules; the date-active one (`pickCurrentSchedule`) drives every surface, and finishing one
 hands over to the next automatically. See CLAUDE.md §Sequential goals for the rules.**
 
 
 **Status (2026-08-10): complete and wired.** Data model, engine, calendar editor, its own settings
-page, and all four goal consumers read it. Migrations **114–116 are applied; 117 is PENDING**
+page, and all four goal consumers read it. Migrations **114–120 are all applied**
 (weekly patterns + per-pattern debt: `weekly_target`, `debt_carry_missed`, `debt_carry_extra`,
 `debt_reset_at`). **Never verified against a real account** (§7).
 
@@ -150,7 +150,7 @@ its stored snapshot — re-reading it live would silently move the finish line.
 | `components/settings/GoalScheduleCalendar.tsx` | The calendar: drag-select days, time off, per-date caps, checkpoints |
 | `components/settings/GoalScheduleOverview.tsx` | Every language on ONE calendar: pie days, hover breakdown, global time off |
 | `app/settings/goals/page.tsx` | **The whole Daily Goals page** — the global mode toggle, schedules, carryover |
-| `supabase/migrations/115_goal_mode.sql` | **PENDING** — `profiles.goal_mode` |
+| `supabase/migrations/115_goal_mode.sql` | applied — `profiles.goal_mode` |
 | `domain/index.ts` | `GoalSchedule`, `GoalScheduleCheckpoint`, `GoalTargetKind` |
 | `supabase/migrations/archive/114_goal_schedules.sql` | Applied 2026-08-08 |
 | `lib/data/goalSchedules.ts` | Repo + `scheduleProgress` / `progressForSchedules` / `currentVocabularySize` |

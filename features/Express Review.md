@@ -2,7 +2,7 @@
 
 **Status (2026-08-27): v1 shipped, + rating mode the same day.** Reverse-recognition
 (target → native) due cards can be cleared through the matching game instead of a normal session.
-**Migration 123 (`profiles.express_rating`) — PENDING until run.** Plain mode needs nothing.
+Migration 123 (`profiles.express_rating`) is applied (2026-09-09, archived).
 
 ## What it is
 
