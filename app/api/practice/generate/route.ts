@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { langName } from '@/lib/languages'
-import { GENERATE_CAP, parseExercises, type ClozeMode } from '@/lib/practiceSchema'
+import { GENERATE_CAP, parseExercises, primaryGloss, type ClozeMode } from '@/lib/practiceSchema'
 
 export const runtime = 'nodejs'
 
@@ -66,8 +66,10 @@ function extractJson(text: string): unknown {
 }
 
 function generatePrompt(body: RequestBody, srcLang: string, tgtLang: string): string {
+  // One sense per word, deterministically the first — the full multi-translation back read as
+  // "the meaning" steered the model toward paraphrases and inhibited generation (2026-09-09).
   const targets = body.targets
-    .map(t => `- ${t.lemma} (${t.pos}, means "${t.back}")`)
+    .map(t => `- ${t.lemma} (${t.pos}, means "${primaryGloss(t.back)}")`)
     .join('\n')
 
   return `You are writing short practice sentences for someone learning ${srcLang}. Their native
@@ -88,6 +90,9 @@ Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Requirements:
 - Each sentence uses exactly one target word, inflected however the sentence needs.
 - Use the target word ITSELF — NEVER a synonym or a related word, however natural it would sound.
   Only grammatical inflections of the listed word are allowed, and "answer" must be that form.
+- Write each SENTENCE first, from the target word alone — the quoted meaning is only a sense
+  hint, never a constraint on the sentence. Then produce "translation" by translating YOUR OWN
+  completed sentence into ${tgtLang}.
 - Spread the sentences across the target words rather than reusing one.
 - Grammatical, idiomatic ${srcLang} — correct agreement, tense and word order.
 - Vary sentence structure between items; do not reuse one template.
@@ -130,7 +135,7 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
  */
 function nativePrompt(body: RequestBody, srcLang: string, tgtLang: string): string {
   const targets = body.targets
-    .map(t => `- ${t.lemma} (${t.pos}, means "${t.back}")`)
+    .map(t => `- ${t.lemma} (${t.pos}, means "${primaryGloss(t.back)}")`)
     .join('\n')
 
   return `You are writing beginner practice sentences for someone learning ${srcLang}. Their native

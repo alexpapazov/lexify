@@ -74,8 +74,14 @@
 > `LANGUAGE_NOTES` in the generate route (per-language grammar reminders — the Bulgarian entry
 > exists because Haiku wrote "всичко си време" where only "цялото си време" is grammatical; add
 > entries with the observed counter-example when a language slips repeatedly) and the "never a
-> synonym" prompt rule. Generation failures and rejections log `[cloze]` lines to the browser
-> console — the first place to look when a card shows a plain prompt. One sentence per
+> synonym" prompt rule. Multi-translation backs ("to take out, to extract; …") were inhibiting
+> generation, so the prompt now sends ONE sense per word — deterministically the FIRST listed
+> translation (`primaryGloss` in `lib/practiceSchema.ts`, parentheticals stripped before
+> splitting; user decision 2026-09-09) — labeled as only a sense hint, with an explicit
+> "write the sentence first, then translate YOUR OWN sentence" instruction; the translation was
+> never validated against the card's back and still isn't. Applies to practice generation too
+> (same route, same prompt line). Generation failures and rejections log `[cloze]` lines to the
+> browser console — the first place to look when a card shows a plain prompt. One sentence per
 > card per session, prefetched 4 cards ahead (`clozeByCard` in all THREE session pages — the usual
 > triplication), rendered by `components/session/ClozePrompt.tsx` inside TypingMode/FlashcardMode
 > via their optional `cloze` prop. Reverse rows never fetch, and reverse rows in a mixed queue are

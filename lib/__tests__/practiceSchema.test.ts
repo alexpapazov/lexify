@@ -1,4 +1,21 @@
-import { parseExercise, parseExercises, leaksTargetScript } from '@/lib/practiceSchema'
+import { parseExercise, parseExercises, leaksTargetScript, primaryGloss } from '@/lib/practiceSchema'
+
+describe('primaryGloss — deterministically the FIRST listed translation', () => {
+  it('takes the first of comma/semicolon/slash-separated senses', () => {
+    expect(primaryGloss('to take out, to extract; to draw (from)')).toBe('to take out')
+    expect(primaryGloss('dog; hound')).toBe('dog')
+    expect(primaryGloss('to extract/draw')).toBe('to extract')
+  })
+
+  it('drops parentheticals first, so their own separators cannot split the sense', () => {
+    expect(primaryGloss('to draw (from, out of) water')).toBe('to draw water')
+  })
+
+  it('passes a single-sense back through, without quoted-literal quotes', () => {
+    expect(primaryGloss('dog')).toBe('dog')
+    expect(primaryGloss('"to extract, to draw"')).toBe('to extract')
+  })
+})
 
 const goodToken = { text: 'pluie', lemma: 'pluie', pos: 'noun', isFunctionWord: false, gloss: 'rain' }
 

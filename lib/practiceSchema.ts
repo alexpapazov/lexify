@@ -17,6 +17,7 @@
 
 import type { PartOfSpeech } from '@/domain'
 import type { AnnotatedToken } from '@/engine/practice'
+import { displayText } from '@/lib/cardText'
 
 /**
  * Hard ceiling on exercises per generation request — enforced by the route, used by the client
@@ -25,6 +26,20 @@ import type { AnnotatedToken } from '@/engine/practice'
  * static export, and any client-reachable import of it breaks `npm run build:cap`.
  */
 export const GENERATE_CAP = 12
+
+/**
+ * The FIRST listed translation of a possibly multi-sense back, for the generation prompt —
+ * "to take out, to extract; to draw (from)" → "to take out". Deterministic (user decision
+ * 2026-09-09): a card's whole stack of alternatives read as the word's "meaning" both muddied the
+ * instruction and steered the model toward paraphrases that fail the cloze anchor, so exactly one
+ * sense goes to the generator as a hint. Parentheticals go first (they can contain the separators
+ * themselves); the display form is used so a quoted-literal back loses its quotes.
+ */
+export function primaryGloss(back: string): string {
+  const display = displayText(back).trim()
+  const first = display.replace(/\([^)]*\)/g, ' ').split(/[;,/]/)[0]?.replace(/\s+/g, ' ').trim()
+  return first || display
+}
 
 /** An annotated word, plus a native gloss so a word that survives repair can be shown translated. */
 export interface PracticeToken extends AnnotatedToken {
