@@ -1,6 +1,6 @@
 import type { Card } from '@/domain'
 import type { PreparedExercise } from '@/lib/practiceGenerate'
-import { buildReviewCloze, clozeEligible, clozeStrictness, appendStoredCloze, storedToReviewCloze, MAX_STORED_CLOZES } from '@/lib/reviewCloze'
+import { buildReviewCloze, clozeEligible, clozeStrictness, appendStoredCloze, chooseStoredCloze, storedToReviewCloze, MAX_STORED_CLOZES } from '@/lib/reviewCloze'
 
 function card(over: Partial<Card> = {}): Card {
   return {
@@ -63,6 +63,18 @@ describe('buildReviewCloze — bare bones: the only rejection is "nothing to bla
     expect(stem!.answer).toBe('Pienso')
   })
 
+  it('grows the blank to the WHOLE inflected word when the front matches inside it', () => {
+    // Bulgarian screenshot 2026-09-09: front "озаглавен" matched inside "озаглавена", leaving the
+    // "-а" visible and grading against the stem. The blank must cover the entire word, and the
+    // answer is the full inflected form the learner has to type.
+    const c = card({ front: 'озаглавен', lemma: 'озаглавен', pos: 'adjective', sourceLanguage: 'bg' })
+    const cz = buildReviewCloze(prepared('Статията е озаглавена „Промени“.', 'озаглавена'), c)
+    expect(cz).not.toBeNull()
+    expect(cz!.before).toBe('Статията е ')
+    expect(cz!.answer).toBe('озаглавена')
+    expect(cz!.after).toBe(' „Промени“.')
+  })
+
   it('keeps an elided article visible too', () => {
     const c = card({ front: "l'attrezzo", lemma: 'attrezzo', sourceLanguage: 'it' })
     const cz = buildReviewCloze(prepared('Ho comprato l’attrezzo nuovo.', 'attrezzo'), c)
@@ -109,6 +121,17 @@ describe('stored cloze sentences', () => {
     expect(choices.clozeSentences!.length).toBe(MAX_STORED_CLOZES)
     const again = appendStoredCloze(choices, stored('Dos perro.'))
     expect(again.clozeSentences!.map(s => s.sentence)).toEqual(['Dos perro.', 'Cuatro perro.', 'Tres perro.'])
+  })
+
+  it('chooseStoredCloze moves the picked sentence to the front — the ACTIVE slot reviews use', () => {
+    let choices = appendStoredCloze(null, stored('Uno perro.'))
+    choices = appendStoredCloze(choices, stored('Dos perro.'))
+    choices = appendStoredCloze(choices, stored('Tres perro.'))   // list: Tres, Dos, Uno
+    const picked = chooseStoredCloze(choices, 2)
+    expect(picked.clozeSentences!.map(s => s.sentence)).toEqual(['Uno perro.', 'Tres perro.', 'Dos perro.'])
+    // Already-active and out-of-range picks are no-ops (same object back).
+    expect(chooseStoredCloze(picked, 0)).toBe(picked)
+    expect(chooseStoredCloze(picked, 9)).toBe(picked)
   })
 
   it('storedToReviewCloze anchors a stored sentence, and drops one whose word is gone', () => {

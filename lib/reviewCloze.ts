@@ -31,9 +31,10 @@ import { SupabaseCardRepository } from '@/lib/data/cards'
 import { stripGrammaticalTags, stripLeadingArticle } from '@/engine/grading'
 import { displayText } from '@/lib/cardText'
 
-/** How many generated sentences a card keeps (`choices.clozeSentences`, newest first). Sessions
- *  generate fresh sentences until this many exist, then rotate among them — variety builds over a
- *  card's first cloze reviews, after which its cloze prompt is instant and free. */
+/** How many sentences a card keeps (`choices.clozeSentences`). The FIRST one is the ACTIVE
+ *  sentence — the one cloze reviews show. Sessions generate ONLY when a card has no usable stored
+ *  sentence (user decision 2026-09-09: once generated, reuse — never regenerate per session);
+ *  extra sentences are added and the active one picked in the card ℹ panel. */
 export const MAX_STORED_CLOZES = 3
 
 export interface ReviewCloze {
@@ -85,14 +86,28 @@ function searchable(s: string): string | null {
 export function buildReviewCloze(prepared: PreparedExercise, card: Card): ReviewCloze | null {
   const ex = prepared.exercise
 
-  const span = (at: number, len: number): ReviewCloze => ({
-    before: ex.sentence.slice(0, at),
-    after: ex.sentence.slice(at + len),
-    answer: ex.sentence.slice(at, at + len),
-    translation: ex.translation,
-    gloss: (prepared.targetGloss || card.back).trim(),
-    tokens: ex.tokens.map(t => ({ text: t.text, gloss: t.gloss })),
-  })
+  // The blank covers the WHOLE word around the matched span (user decision 2026-09-09: the card's
+  // bare front matched INSIDE an inflected form — "озаглавен" within "озаглавена" — leaving the
+  // ending visible and grading against the stem; the learner must type the entire inflected word).
+  // Letters/marks only, so a space, apostrophe or elided article ("l’") is never swallowed.
+  const wholeWord = (at: number, len: number): { at: number; len: number } => {
+    const isWordChar = (ch: string | undefined) => !!ch && /[\p{L}\p{M}]/u.test(ch)
+    let start = at, end = at + len
+    while (isWordChar(ex.sentence[start - 1])) start--
+    while (isWordChar(ex.sentence[end])) end++
+    return { at: start, len: end - start }
+  }
+  const span = (foundAt: number, foundLen: number): ReviewCloze => {
+    const { at, len } = wholeWord(foundAt, foundLen)
+    return {
+      before: ex.sentence.slice(0, at),
+      after: ex.sentence.slice(at + len),
+      answer: ex.sentence.slice(at, at + len),
+      translation: ex.translation,
+      gloss: (prepared.targetGloss || card.back).trim(),
+      tokens: ex.tokens.map(t => ({ text: t.text, gloss: t.gloss })),
+    }
+  }
   const find = (needle: string): number => {
     const hay = searchable(ex.sentence)
     const key = searchable(needle)
@@ -132,11 +147,22 @@ export function storedToReviewCloze(stored: StoredClozeSentence, card: Card): Re
   return buildReviewCloze(prepared, card)
 }
 
-/** Adds one sentence to a card's stored set: newest first, de-duplicated, capped. */
+/** Adds one sentence to a card's stored set: at the front (a fresh sentence becomes the ACTIVE
+ *  one), de-duplicated, capped. */
 export function appendStoredCloze(choices: CardChoices | null, stored: StoredClozeSentence): CardChoices {
   const base: CardChoices = choices ?? { front: [], back: [] }
   const rest = (base.clozeSentences ?? []).filter(s => s.sentence !== stored.sentence)
   return { ...base, clozeSentences: [stored, ...rest].slice(0, MAX_STORED_CLOZES) }
+}
+
+/** Marks the stored sentence at `index` ACTIVE by moving it to the front — cloze reviews always
+ *  use the first stored sentence that validates. The ℹ panel's "Use" button calls this. */
+export function chooseStoredCloze(choices: CardChoices | null, index: number): CardChoices {
+  const base: CardChoices = choices ?? { front: [], back: [] }
+  const list = base.clozeSentences ?? []
+  const chosen = list[index]
+  if (!chosen || index === 0) return base
+  return { ...base, clozeSentences: [chosen, ...list.filter((_, i) => i !== index)] }
 }
 
 /**
@@ -186,21 +212,18 @@ export async function generateReviewCloze(card: Card): Promise<{ cloze: ReviewCl
   return null
 }
 
-const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)]!
-
 /**
- * The session entry point: a stored sentence when the card's set is full (or generation isn't
- * allowed — offline), else a freshly generated one (persisted into the set), else whatever stored
- * remains valid, else null → the plain prompt.
+ * The session entry point: the ACTIVE stored sentence — the first one that still validates (the ℹ
+ * panel's "Use" pick, or the newest generated) — else, online, one freshly generated + persisted,
+ * else null → the plain prompt. Once a card has ANY usable stored sentence it is REUSED every
+ * review, never regenerated (user decision 2026-09-09); variety is curated in the ℹ panel.
  */
 export async function resolveReviewCloze(card: Card, opts: { allowGenerate: boolean }): Promise<ReviewCloze | null> {
   if (!clozeEligible(card)) return null
-  const valid = (card.choices?.clozeSentences ?? [])
-    .map(s => storedToReviewCloze(s, card))
-    .filter((c): c is ReviewCloze => c !== null)
-  if (valid.length >= MAX_STORED_CLOZES || (!opts.allowGenerate && valid.length > 0)) return pick(valid)
+  for (const s of card.choices?.clozeSentences ?? []) {
+    const cz = storedToReviewCloze(s, card)
+    if (cz) return cz
+  }
   if (!opts.allowGenerate) return null
-  const gen = await generateReviewCloze(card)
-  if (gen) return gen.cloze
-  return valid.length > 0 ? pick(valid) : null
+  return (await generateReviewCloze(card))?.cloze ?? null
 }

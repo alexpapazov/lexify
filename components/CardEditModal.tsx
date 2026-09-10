@@ -14,7 +14,7 @@ import { SupabaseReviewEventRepository }       from '@/lib/data/reviewEvents'
 import { SupabaseLadderClimbRepository }       from '@/lib/data/ladderClimb'
 import type { Card, CardState, CardChoices, CardConfusion, CardConfusionLink, Pipeline, TypedAnswerOverride, ReviewEvent } from '@/domain'
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding } from '@/lib/distractors'
-import { generateReviewCloze, clozeEligible } from '@/lib/reviewCloze'
+import { generateReviewCloze, clozeEligible, chooseStoredCloze } from '@/lib/reviewCloze'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { speak, fetchAudioSource, playAudioClip } from '@/lib/speak'
@@ -615,7 +615,8 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     }
   }
 
-  /** Fetch one new cloze sentence (Sonnet, validated) and add it to the card's stored set. */
+  /** Fetch one new cloze sentence (validated) and add it to the card's stored set — a fresh
+   *  sentence lands at the front, i.e. becomes the ACTIVE one. */
   async function handleNewCloze() {
     if (clozeGenerating) return
     if (isOfflineActive()) { setClozeError('Generating a sentence needs a connection.'); return }
@@ -634,6 +635,14 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
     const base: CardChoices = card.choices ?? { front: [], back: [] }
     const list = (base.clozeSentences ?? []).filter((_, i) => i !== index)
     const updated: CardChoices = { ...base, clozeSentences: list.length > 0 ? list : undefined }
+    await new SupabaseCardRepository().update(card.id, { choices: updated })
+    onCardChange({ ...card, choices: updated })
+  }
+
+  /** Makes the picked sentence the ACTIVE one (first in the list) — cloze reviews use it. */
+  async function handleChooseCloze(index: number) {
+    const updated = chooseStoredCloze(card.choices, index)
+    if (updated === card.choices) return
     await new SupabaseCardRepository().update(card.id, { choices: updated })
     onCardChange({ ...card, choices: updated })
   }
@@ -1184,14 +1193,17 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
             {/* ── Cloze sentences (Due Now forward cloze) ───────────────────── */}
             <div className="space-y-2">
               <div className="text-[10px] text-ink-faint uppercase tracking-wider font-semibold border-b border-line/5 pb-1">
-                Cloze sentences <span className="normal-case font-normal opacity-60">(used by cloze reviews — max 3, rotated)</span>
+                Cloze sentences <span className="normal-case font-normal opacity-60">(cloze reviews show the active one — max 3)</span>
               </div>
               {!clozeEligible(card) ? (
                 <p className="text-xs text-ink-faint">This card needs vocabulary labels (part of speech + lemma) before sentences can be generated.</p>
               ) : (
                 <>
                   {(card.choices?.clozeSentences ?? []).map((cs, i) => (
-                    <div key={`${cs.sentence}-${i}`} className="flex items-start gap-2 rounded border border-line/10 bg-surface-raised/50 px-2.5 py-1.5">
+                    // The FIRST sentence is the ACTIVE one — the one every cloze review shows.
+                    // "Use" moves another to the front; a freshly generated sentence also lands first.
+                    <div key={`${cs.sentence}-${i}`}
+                      className={`flex items-start gap-2 rounded border px-2.5 py-1.5 ${i === 0 ? 'border-accent/40 bg-accent/5' : 'border-line/10 bg-surface-raised/50'}`}>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-ink">
                           {/* Highlight the blanked span so it's obvious what a review hides. */}
@@ -1201,12 +1213,18 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         </p>
                         <p className="text-xs text-ink-muted italic">{cs.translation}</p>
                       </div>
+                      {i === 0 ? (
+                        <span className="text-[10px] text-accent-soft uppercase tracking-wider pt-0.5 shrink-0">Active</span>
+                      ) : (
+                        <button onClick={() => void handleChooseCloze(i)} title="Show this sentence in cloze reviews"
+                          className="text-xs text-accent-soft hover:text-accent pt-0.5 shrink-0">Use</button>
+                      )}
                       <button onClick={() => void handleRemoveCloze(i)} title="Remove this sentence"
                         className="text-ink-faint hover:text-danger text-sm leading-none pt-0.5">×</button>
                     </div>
                   ))}
                   {(card.choices?.clozeSentences?.length ?? 0) === 0 && (
-                    <p className="text-xs text-ink-faint">None yet — cloze reviews generate them as you study, or fetch one now.</p>
+                    <p className="text-xs text-ink-faint">None yet — your first cloze review generates one, or fetch one now.</p>
                   )}
                   <button onClick={() => void handleNewCloze()} disabled={clozeGenerating}
                     className="text-xs text-accent-soft hover:text-accent disabled:opacity-50">

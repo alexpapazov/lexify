@@ -636,8 +636,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
 
   // Resolve cloze sentences for the current card + the next few queued cards sitting at a cloze
   // rung. Non-blocking: a card whose sentence isn't ready (or was rejected) shows the plain prompt.
-  // Stored sentences resolve instantly (and offline); generation only runs online, and only until
-  // the card's stored set is full — then reviews rotate among the stored three.
+  // The card's ACTIVE stored sentence resolves instantly (and offline); generation only runs
+  // online, and only for a card with no usable stored sentence — once one exists it is reused.
   useEffect(() => {
     const upcoming = [currentId, ...queue.map(q => q.cardId)].filter((id): id is string => !!id)
     const seen = new Set<string>()

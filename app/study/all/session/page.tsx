@@ -157,8 +157,8 @@ function AllDueSessionInner() {
       const c = item.card
       if (clozeByCard.has(c.id) || clozeInFlight.current.has(c.id) || !clozeEligible(c)) continue
       clozeInFlight.current.add(c.id)
-      // Stored sentences resolve instantly (and offline); generation only runs online, and only
-      // until the card's stored set is full — then reviews rotate among the stored three.
+      // The card's ACTIVE stored sentence resolves instantly (and offline); generation only runs
+      // online, and only for a card with no usable stored sentence — once one exists it is reused.
       void resolveReviewCloze(c, { allowGenerate: !isOfflineActive() })
         .then(cz => setClozeByCard(prev => new Map(prev).set(c.id, cz)))
         .catch(() => setClozeByCard(prev => new Map(prev).set(c.id, null)))

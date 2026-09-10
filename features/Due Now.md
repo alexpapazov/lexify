@@ -50,23 +50,34 @@
 >    guards without the user asking.** Typing either the stored front or the sentence's form is
 >    correct (`viaClozeForm`), with the "Card says" note showing the stored form; the retype step
 >    accepts the same two forms only.
+> 4. **The blank covers the WHOLE inflected word** (2026-09-09): the bare front matching INSIDE an
+>    inflected form ("озаглавен" within "озаглавена") used to leave the ending visible and grade
+>    against the stem — the span now grows to the surrounding word (letters/marks only, so
+>    articles and elisions like "l’" stay outside), and the learner types the entire inflected
+>    form (or the card's stored form, as ever). Anchor/generation untouched — this is purely how a
+>    found span becomes the blank, and stale stored answers self-correct on render.
 >
 > A rejected/failed/slow sentence means the plain prompt, never a mis-graded review.
 >
-> **Sentences are STORED on the card (2026-09-07):** `choices.clozeSentences` (JSONB, no
-> migration) keeps up to `MAX_STORED_CLOZES = 3`, newest first. Sessions generate fresh (and
-> persist) until the set is full, then ROTATE among the stored three — so a card's cloze prompt
-> becomes instant and free after its first few cloze reviews, and stored picks work offline.
+> **Sentences are STORED on the card (2026-09-07; reuse-first + active pick 2026-09-09):**
+> `choices.clozeSentences` (JSONB, no migration) keeps up to `MAX_STORED_CLOZES = 3`. The FIRST
+> entry is the ACTIVE sentence — the one every cloze review shows. Sessions generate ONLY when a
+> card has no usable stored sentence (once generated, always reused; the earlier
+> generate-until-3-then-rotate behavior is gone), so a card's cloze prompt is instant and free
+> from its second review, and works offline. Variety is deliberate curation now: the ℹ panel's
+> "↻ New sentence" adds one (it lands first, i.e. becomes active) and each non-active sentence
+> has a "Use" button (`chooseStoredCloze` — moves it to the front).
 > Every sentence word is TAPPABLE for its meaning, like the practice player — the generation-time
 > token glosses travel on `ReviewCloze.tokens` and are stored with each sentence (sentences saved
 > before this shipped show "no translation available" per word until refreshed).
 > Stored sentences are RE-VALIDATED against the current card on every use
 > (`storedToReviewCloze` reruns the full anchor/reject gauntlet), so editing a card's front
-> silently retires stale sentences. The card ℹ panel has a "Cloze sentences" section: view each
-> stored sentence (blanked span highlighted) with its translation, × to remove, "↻ New sentence"
-> to generate + persist another. This does NOT touch practice — the practice no-cache rule
-> (mode-blind replay, sentence recognition) stands; review clozes repeat their gloss prompt every
-> review anyway, so rotating three curated sentences is no weaker than the plain prompt was.
+> silently retires stale sentences (the active pick falls through to the next valid one). The
+> card ℹ panel's "Cloze sentences" section: each stored sentence (blanked span highlighted) with
+> its translation, an Active badge / "Use" button, × to remove, "↻ New sentence" to generate +
+> persist another. This does NOT touch practice — the practice no-cache rule (mode-blind replay,
+> sentence recognition) stands; review clozes repeat their gloss prompt every review anyway, so a
+> fixed curated sentence is no weaker than the plain prompt was.
 >
 > **Generation (2026-09-07, final):** review cloze uses the SAME Haiku call as practice — a brief
 > Sonnet (`quality: 'best'`) tier was added and then removed in the bare-bones rollback, since it
