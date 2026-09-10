@@ -593,7 +593,8 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
     const { error } = await supabase.from('profiles').update({ forward_cloze: cloze }).eq('user_id', userId)
     if (error) {
       setForwardCloze(prev)
-      setDueModeError('Could not save — is migration 124_due_review_modes.sql applied?')
+      // Show the REAL failure — "is the migration applied?" alone hid the actual cause once.
+      setDueModeError(`Could not save (${error.message}) — is migration 124_due_review_modes.sql applied?`)
     }
   }
 
@@ -609,7 +610,7 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
     if (error) {
       setReverseMatching(prev.matching)
       setExpressRating(prev.rating)
-      setDueModeError('Could not save — are migrations 123_express_rating.sql and 124_due_review_modes.sql applied?')
+      setDueModeError(`Could not save (${error.message}) — are migrations 123_express_rating.sql and 124_due_review_modes.sql applied?`)
     }
   }
 
