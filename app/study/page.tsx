@@ -338,8 +338,11 @@ export default function StudyPage() {
   const [scheduleDone,      setScheduleDone]      = useState<Map<string, number>>(new Map())
   const [showDuePicker, setShowDuePicker] = useState(false)
   const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
-  // A picked reverse row awaiting the Matching-vs-normal choice: 'all' or `${source}|${target}`.
-  const [expressPick, setExpressPick] = useState<string | null>(null)
+  // Due Now launch modes (Settings → Study → Due Now, migration 124): a due-picker row launches
+  // straight into the configured mode — forward rows into cloze prompts, reverse rows into the
+  // express matching session. Defaults (false/false) = normal reviews, incl. pre-migration.
+  const [forwardCloze, setForwardCloze] = useState(false)
+  const [reverseMatching, setReverseMatching] = useState(false)
   const duePickerRef = useRef<HTMLDivElement>(null)
   const forecastSettingsRef = useRef<HTMLDivElement>(null)
   const offline = useOfflineMode()
@@ -367,6 +370,9 @@ export default function StudyPage() {
     const decksP   = deckRepo.list(uid)
     const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals, daily_word_ceiling').eq('user_id', uid).single())
     const paramsP  = new SupabaseUserSchedulerParamsRepository().listForUser(uid)
+    // Targeted, not part of the omnibus profile select: migration 124 unapplied must degrade to
+    // normal-review launches, never blank the goal columns via the fallback select.
+    const dueModesP = supabase.from('profiles').select('forward_cloze, reverse_matching').eq('user_id', uid).maybeSingle()
     // A missing goal_schedules table (migration 114 not yet applied) must never blank the dashboard.
     const schedulesP = new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[])
     const cardsP   = cardRepo.listAllForUser(uid)
@@ -391,6 +397,10 @@ export default function StudyPage() {
     if (!profileRes.data) {
       profileRes = await loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', uid).single())
     }
+
+    const dueModes = (await dueModesP).data as { forward_cloze?: boolean | null; reverse_matching?: boolean | null } | null
+    setForwardCloze(dueModes?.forward_cloze ?? false)
+    setReverseMatching(dueModes?.reverse_matching ?? false)
 
     const tz           = (profileRes.data?.timezone as string | null) ?? deviceTimeZone()
     const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
@@ -1200,7 +1210,7 @@ export default function StudyPage() {
                       <div key={t.key} className="border-b border-line/10 last:border-b-0">
                         <button
                           className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
-                          onClick={() => { setExpressPick(null); setExpandedDueType(v => v === t.key ? null : t.key) }}
+                          onClick={() => setExpandedDueType(v => v === t.key ? null : t.key)}
                         >
                           <span className="text-ink flex items-center gap-1.5">
                             <span className={`text-ink-faint transition-transform ${expanded ? 'rotate-90' : ''}`}>›</span>
@@ -1218,41 +1228,32 @@ export default function StudyPage() {
                                }))]).map(row => {
                               const pairQuery = row.pair ? `&source=${row.pair.source}&target=${row.pair.target}` : ''
                               const sessionUrl = `/study/all/session?category=due&${t.query}${pairQuery}`
-                              const go = () => { setShowDuePicker(false); setExpressPick(null); router.push(sessionUrl) }
+                              // The launch mode comes from Settings → Study → Due Now — a row goes
+                              // straight in (the per-row Cloze/Matching chooser is gone): reverse
+                              // rows into express matching, forward rows into cloze prompts.
+                              const go = () => {
+                                setShowDuePicker(false)
+                                if (t.key === 'sgReverse' && reverseMatching) {
+                                  router.push(routes.express(row.pair ? { source: row.pair.source, target: row.pair.target } : {}))
+                                } else {
+                                  router.push(t.key !== 'sgReverse' && forwardCloze ? `${sessionUrl}&cloze=1` : sessionUrl)
+                                }
+                              }
+                              const modeTag = t.key === 'sgReverse'
+                                ? (reverseMatching ? '⚡' : null)
+                                : (forwardCloze ? '📝' : null)
                               return (
-                                <div key={row.pickKey}>
-                                  <button
-                                    className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
-                                    // Every row offers a launch choice: reverse = matching vs normal,
-                                    // forward (typed + self-graded) = cloze prompts vs normal.
-                                    onClick={() => setExpressPick(v => v === row.pickKey ? null : row.pickKey)}
-                                  >
-                                    <span className={row.pair ? 'text-ink' : 'text-ink-muted'}>{row.label}</span>
-                                    <span className="chip text-xs ml-3">{row.count}</span>
-                                  </button>
-                                  {expressPick === row.pickKey && (
-                                    <div className="flex gap-2 pl-9 pr-4 pb-2.5">
-                                      {t.key === 'sgReverse' ? (
-                                        <button
-                                          className="btn-primary text-xs px-3 py-1.5 flex-1"
-                                          onClick={() => {
-                                            setShowDuePicker(false); setExpressPick(null)
-                                            router.push(routes.express(row.pair ? { source: row.pair.source, target: row.pair.target } : {}))
-                                          }}
-                                        >⚡ Matching</button>
-                                      ) : (
-                                        <button
-                                          className="btn-primary text-xs px-3 py-1.5 flex-1"
-                                          onClick={() => { setShowDuePicker(false); setExpressPick(null); router.push(`${sessionUrl}&cloze=1`) }}
-                                        >📝 Cloze</button>
-                                      )}
-                                      <button
-                                        className="text-xs px-3 py-1.5 flex-1 rounded border border-line/20 text-ink-muted hover:text-ink hover:border-line/40 transition-colors"
-                                        onClick={go}
-                                      >Normal review</button>
-                                    </div>
-                                  )}
-                                </div>
+                                <button key={row.pickKey}
+                                  className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
+                                  onClick={go}
+                                >
+                                  <span className={row.pair ? 'text-ink' : 'text-ink-muted'}>
+                                    {row.label}
+                                    {/* A quiet reminder of the configured mode (change it in Settings). */}
+                                    {modeTag && <span className="ml-1.5 text-xs">{modeTag}</span>}
+                                  </span>
+                                  <span className="chip text-xs ml-3">{row.count}</span>
+                                </button>
                               )
                             })}
                           </div>

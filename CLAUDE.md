@@ -43,9 +43,10 @@ Current feature files:
   AI accuracy check, front-only duplicate drop, four confidence bands mapped to
   FSRS difficulty/stability + spread due dates, resumable queue (migration 107).
 - `features/Express Review.md` — matching as a REAL review for due reverse-recognition
-  cards: dashboard chooser (⚡ Matching / Normal), clean match = full Good on the reverse
-  row, mismatches write nothing and stay due. Optional RATING mode (Settings → Study
-  defaults → Due Now, **migration 123 — pending**): rating buttons on the matched tile;
+  cards: launch mode set in Settings → Study → Due Now (`reverse_matching`, migration 124;
+  the due-picker rows navigate straight in), clean match = full Good on the reverse
+  row, mismatches write nothing and stay due. Optional RATING mode (same select,
+  `express_rating`, **migration 123 — pending**): rating buttons on the matched tile;
   Again writes nothing. `/study/express`, `lib/expressReview.ts`.
 - `features/Catch Up.md` — spread an overdue backlog across days up to a date you pick
   (Settings → Data): deferral-damage ordering, evenly-paced relearning, why moving past-due
@@ -3321,16 +3322,20 @@ points that bite:
   heading signal, cards are `front = back`. Card counts go on their OWN line — appending them to the
   deck name produced a re-imported deck called "School  [12 cards]" (caught by the round-trip test).
 
-## Forward cloze reviews (2026-09-07, no migration)
+## Forward cloze reviews (2026-09-07; launch mode moved to settings 2026-09-09)
 
-Due Now forward reviews can show a generated cloze sentence as the prompt — chosen AT LAUNCH from
-the dashboard due picker (every row now expands a two-button choice: forward rows 📝 Cloze / Normal,
-reverse rows ⚡ Matching / Normal), carried as `?cloze=1` on the session URL. Grading untouched —
-the sentence is context only, and `lib/reviewCloze.ts` rejects any sentence that doesn't use the
-word exactly as stored. Details at the top of `features/Due Now.md`. Touches all three session
-pages (prefetch effect + `cloze` prop on the two graduated render sites each). Migration 124 was
-briefly created for a settings toggle and deleted unapplied — if it was ever run,
-`profiles.forward_cloze` is an unused column.
+Due Now forward reviews can show a generated cloze sentence as the prompt — enabled in
+**Settings → Study → Due Now** (`profiles.forward_cloze`, **migration `124_due_review_modes.sql`
+— pending**, which also adds `profiles.reverse_matching` for the express-matching launch). The
+dashboard due-picker rows navigate STRAIGHT into the configured mode (📝/⚡ tag on the row; the
+2026-09-07 per-row two-button chooser is gone), still carried as `?cloze=1` on the session URL —
+the session pages only read that param. Grading untouched — the sentence is context only, and
+`lib/reviewCloze.ts` rejects any sentence that doesn't use the word exactly as stored. Details at
+the top of `features/Due Now.md`. Touches all three session pages (prefetch effect + `cloze` prop
+on the two graduated render sites each). Both new columns load through targeted guarded selects
+(settings page + dashboard) — the landmine rule. (History: the ORIGINAL 124_forward_cloze.sql was
+deleted unapplied on 2026-09-07; today's 124 recreates the column with IF NOT EXISTS, so either
+history is safe.)
 
 Cloze is ALSO a per-rung option in learning ladders/pathways (2026-09-07, no migration):
 `Rung.cloze` / `PathwayState.cloze` (optional booleans, old JSONB loads fine), a "Cloze" checkbox

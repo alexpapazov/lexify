@@ -6,9 +6,12 @@
 
 ## What it is
 
-The Study dashboard's "Study all due → Self-graded · target → native" rows (All languages and each
-pair) no longer navigate immediately: they expand a two-button choice, **⚡ Matching** or **Normal
-review**. Matching opens `/study/express` (`routes.express({source, target})`), which runs the
+Whether the dashboard's "Study all due → Self-graded · target → native" rows (All languages and
+each pair) launch matching is chosen in **Settings → Study → Due Now** (2026-09-09,
+`profiles.reverse_matching`, migration 124 — one Normal / Matching / Matching + ratings select
+that also drives `express_rating`); the rows navigate straight into the configured mode, with a ⚡
+tag when matching is on. (2026-08-27–09-09 this was a per-row two-button chooser instead.)
+Matching opens `/study/express` (`routes.express({source, target})`), which runs the
 existing `MatchingGame` (rounds of 8) over every due reverse row in scope — and here the game IS a
 review:
 
@@ -24,7 +27,7 @@ review:
 - Credit is applied **per match, immediately**, so exiting mid-game keeps everything already
   cleared.
 
-## Rating mode (Settings → Study defaults → Due Now, migration 123)
+## Rating mode (the "Matching + ratings" option of the reverse select, migration 123)
 
 `profiles.express_rating` (default false) switches the express game from "clean match = Good" to
 **rate each clean match**: on the completing tap the pair goes green and Again/Hard/Good/Easy
@@ -82,7 +85,7 @@ the forward-row gate, per-direction dormancy, track enablement, turnover-aware d
 | Pool + credit | `lib/expressReview.ts` (`buildExpressPool`, `creditExpressMatch`) — 8 tests |
 | Page | `app/study/express/page.tsx` (query params `?source=&target=`, static-export safe) |
 | Route builder | `routes.express` in `lib/routes.ts` |
-| Chooser | the sgReverse rows of the dashboard due picker (`app/study/page.tsx`, `expressPick` state) |
+| Launch mode | Settings → Study → Due Now (`reverse_matching`); the sgReverse due-picker rows in `app/study/page.tsx` read it and navigate directly |
 | Game hook | `MatchingGame`'s new optional `renderFinish` prop — replaces the practice result screen (which says "nothing was scheduled" — wrong here) and suppresses Play again (a replay would re-test just-credited cards) |
 
 ## Traps

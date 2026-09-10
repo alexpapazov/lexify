@@ -1,14 +1,19 @@
 # Due Now — Spaced Repetition Scheduler
 
-> **Forward cloze prompts (2026-09-07, no migration).** Chosen AT LAUNCH, not in settings — the
-> dashboard's "Study all due" picker now offers a two-button choice on EVERY row (same pattern as
-> the reverse rows' ⚡ Matching / Normal): the forward rows (Typing, Self-graded · native→target)
-> expand into **📝 Cloze / Normal review**; Cloze appends `?cloze=1` to the session URL and the
-> session pages read that param. In cloze mode a FORWARD review (typed or self-graded) shows a
-> generated target-language sentence with the reviewed word blanked out — the card's gloss inside
-> the blank, the sentence's translation underneath — instead of the bare gloss. (A brief settings
-> toggle + migration 124 shipped and was replaced by this chooser the same day, unapplied; if 124
-> was ever run, `profiles.forward_cloze` is an unused column, safe to drop.)
+> **Forward cloze prompts (2026-09-07; launch mode moved to SETTINGS 2026-09-09).** Chosen in
+> **Settings → Study → Due Now** (migration `124_due_review_modes.sql`: `profiles.forward_cloze` +
+> `profiles.reverse_matching`) — a due-picker row launches STRAIGHT into the configured mode, no
+> per-row chooser. Forward rows (Typing, Self-graded · native→target) launch with `?cloze=1` when
+> `forward_cloze` is on; reverse rows launch the express matching session when `reverse_matching`
+> is on (the settings row folds matching + `express_rating` into one Normal / Matching /
+> Matching + ratings select). The picker rows show a quiet 📝/⚡ tag when a mode is on. The
+> session pages still just read `?cloze=1`. In cloze mode a FORWARD review (typed or self-graded)
+> shows a generated target-language sentence with the reviewed word blanked out — the card's gloss
+> inside the blank, the sentence's translation underneath — instead of the bare gloss.
+> (History: a settings toggle shipped 2026-09-07 and was replaced by a per-row launch chooser the
+> same day; 2026-09-09 the user moved the choice BACK into settings, now per direction. The
+> original `124_forward_cloze.sql` was deleted unapplied; today's 124 recreates `forward_cloze`
+> with `IF NOT EXISTS`.)
 > Everything else about the review is byte-identical: typed answers grade against the stored front
 > with the full strictness/override/synonym/confusion machinery, self-graded reveals and rates as
 > always, and the blank fills with the answer after grading/reveal.

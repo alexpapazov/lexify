@@ -471,10 +471,14 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
   const [displayName,   setDisplayName]   = useState('')
   const [selectedLangs, setSelectedLangs] = useState<string[]>([])
   const [dailyNewCards, setDailyNewCards] = useState(DEFAULT_DAILY_NEW_CARDS)
-  // Express reverse review flavor (migration 123). Loaded and saved through its OWN targeted
-  // queries so an unapplied migration degrades to the default instead of blanking the page/save.
+  // Due Now launch modes (migrations 123 + 124). Loaded and saved through their OWN targeted
+  // queries so an unapplied migration degrades to the defaults instead of blanking the page/save.
+  // Reverse folds two columns into one control: reverse_matching (launch matching at all) and
+  // express_rating (whether matches then collect ratings).
   const [expressRating, setExpressRating] = useState(false)
-  const [expressRatingError, setExpressRatingError] = useState<string | null>(null)
+  const [forwardCloze, setForwardCloze] = useState(false)
+  const [reverseMatching, setReverseMatching] = useState(false)
+  const [dueModeError, setDueModeError] = useState<string | null>(null)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
   const [audioSourceByLang,   setAudioSourceByLangState]  = useState<Record<string, string>>({})
@@ -552,9 +556,14 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
-        supabase.from('profiles').select('express_rating').eq('user_id', uid).maybeSingle(),
+        supabase.from('profiles').select('express_rating, forward_cloze, reverse_matching').eq('user_id', uid).maybeSingle()
+          // 124 not yet applied fails the combined select — fall back to the 123 column alone.
+          .then(async r => r.data ? r : supabase.from('profiles').select('express_rating').eq('user_id', uid).maybeSingle()),
       ])
-      setExpressRating(((expressRes.data as { express_rating?: boolean | null } | null)?.express_rating) ?? false)
+      const modes = expressRes.data as { express_rating?: boolean | null; forward_cloze?: boolean | null; reverse_matching?: boolean | null } | null
+      setExpressRating(modes?.express_rating ?? false)
+      setForwardCloze(modes?.forward_cloze ?? false)
+      setReverseMatching(modes?.reverse_matching ?? false)
 
       if (profile) {
         setDisplayName(profile.display_name ?? '')
@@ -575,14 +584,32 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Saves itself immediately (targeted update), like the carryover block — independent of the auto-saved omnibus profile write (its column may not exist yet). */
-  async function handleExpressRating(next: boolean) {
-    setExpressRating(next)
-    setExpressRatingError(null)
-    const { error } = await supabase.from('profiles').update({ express_rating: next }).eq('user_id', userId)
+  /** Saves itself immediately (targeted update), like the carryover block — independent of the
+   *  auto-saved omnibus profile write (its columns may not exist yet). */
+  async function handleForwardMode(cloze: boolean) {
+    const prev = forwardCloze
+    setForwardCloze(cloze)
+    setDueModeError(null)
+    const { error } = await supabase.from('profiles').update({ forward_cloze: cloze }).eq('user_id', userId)
     if (error) {
-      setExpressRating(!next)
-      setExpressRatingError('Could not save — is migration 123_express_rating.sql applied?')
+      setForwardCloze(prev)
+      setDueModeError('Could not save — is migration 124_due_review_modes.sql applied?')
+    }
+  }
+
+  /** One select drives two columns: 'normal' | 'matching' | 'rated' (matching + ratings). */
+  async function handleReverseMode(mode: 'normal' | 'matching' | 'rated') {
+    const prev = { matching: reverseMatching, rating: expressRating }
+    setReverseMatching(mode !== 'normal')
+    setExpressRating(mode === 'rated')
+    setDueModeError(null)
+    const { error } = await supabase.from('profiles')
+      .update({ reverse_matching: mode !== 'normal', express_rating: mode === 'rated' })
+      .eq('user_id', userId)
+    if (error) {
+      setReverseMatching(prev.matching)
+      setExpressRating(prev.rating)
+      setDueModeError('Could not save — are migrations 123_express_rating.sql and 124_due_review_modes.sql applied?')
     }
   }
 
@@ -823,18 +850,32 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
         </SettingsSection>
 
         <SettingsSection title="Due Now"
-          description="How the express reverse review (the ⚡ Matching option on the dashboard's due picker) grades a clean match.">
-          <SettingsRow label="Express reverse review"
-            hint={expressRating
-              ? 'After each clean match, rating buttons appear on the matched tile. Again leaves the card due for a real review.'
-              : 'A clean first-try match counts as Good; mix-ups stay due for a real review.'}>
-            <select value={expressRating ? 'rated' : 'plain'} onChange={e => void handleExpressRating(e.target.value === 'rated')}
+          description="How the dashboard's due picker launches each direction — a row goes straight into the mode chosen here.">
+          <SettingsRow label="Forward reviews (native → target)"
+            hint={forwardCloze
+              ? 'Typing and self-graded due reviews show the word blanked out of a generated sentence, its meaning inside the blank.'
+              : 'Typing and self-graded due reviews show the plain prompt.'}>
+            <select value={forwardCloze ? 'cloze' : 'normal'} onChange={e => void handleForwardMode(e.target.value === 'cloze')}
               className="input text-sm w-52">
-              <option value="plain">Matching</option>
-              <option value="rated">Matching + ratings</option>
+              <option value="normal">Normal review</option>
+              <option value="cloze">📝 Cloze</option>
             </select>
           </SettingsRow>
-          {expressRatingError && <p className="text-danger text-xs">{expressRatingError}</p>}
+          <SettingsRow label="Reverse reviews (target → native)"
+            hint={!reverseMatching
+              ? 'Due reverse self-graded cards run as normal flip-and-rate reviews.'
+              : expressRating
+                ? 'Due reverse cards run as matching rounds; after each clean match, rating buttons appear on the matched tile. Again leaves the card due for a real review.'
+                : 'Due reverse cards run as matching rounds; a clean first-try match counts as Good, mix-ups stay due for a real review.'}>
+            <select value={!reverseMatching ? 'normal' : expressRating ? 'rated' : 'matching'}
+              onChange={e => void handleReverseMode(e.target.value as 'normal' | 'matching' | 'rated')}
+              className="input text-sm w-52">
+              <option value="normal">Normal review</option>
+              <option value="matching">⚡ Matching</option>
+              <option value="rated">⚡ Matching + ratings</option>
+            </select>
+          </SettingsRow>
+          {dueModeError && <p className="text-danger text-xs">{dueModeError}</p>}
         </SettingsSection>
 
         <SettingsSection title="Audio"
