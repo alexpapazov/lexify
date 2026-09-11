@@ -277,8 +277,10 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
           </svg>
         </button>
         <p className="text-xs text-ink-faint uppercase tracking-wider">{native ? 'Dictation — type the translation' : 'Dictation — type what you hear'}</p>
-        {/* Cloze rung: the generated sentence with the heard word blanked, filled on reveal. */}
-        {cloze && <ClozePrompt cloze={cloze} filled={result ? cloze.answer : null} />}
+        {/* Cloze rung: the generated sentence with the heard word blanked. While ANSWERING, no
+            native meaning shows anywhere — empty blank, no translation line — or the transcription
+            test would become a meaning test; the reveal shows both, like the rest of the result. */}
+        {cloze && <ClozePrompt cloze={cloze} filled={result ? cloze.answer : null} hideMeaning={!result} />}
       </div>
       {result ? (
         <>

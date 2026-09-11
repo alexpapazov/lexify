@@ -19,7 +19,14 @@ import { useState } from 'react'
 import type { ReviewCloze } from '@/lib/reviewCloze'
 import { segmentWords } from '@/lib/practiceRender'
 
-export function ClozePrompt({ cloze, filled }: { cloze: ReviewCloze; filled?: string | null }) {
+export function ClozePrompt({ cloze, filled, hideMeaning }: {
+  cloze: ReviewCloze
+  filled?: string | null
+  /** Dictation cloze, pre-answer: the sentence shows with an EMPTY blank and no translation line —
+   *  any native meaning on screen would turn a transcription test into a meaning test (user
+   *  decision 2026-09-10). The reveal (once `filled`/graded) passes false and shows everything. */
+  hideMeaning?: boolean
+}) {
   const [picked, setPicked] = useState<string | null>(null)
 
   const glossFor = (text: string): string | null => {
@@ -45,12 +52,12 @@ export function ClozePrompt({ cloze, filled }: { cloze: ReviewCloze; filled?: st
           <span className="text-success font-medium">{filled}</span>
         ) : (
           <span className="inline-block align-baseline border-b-2 border-accent/60 min-w-[6ch] mx-1 px-1">
-            <span className="text-base italic text-accent-soft/90">{cloze.gloss}</span>
+            <span className="text-base italic text-accent-soft/90">{hideMeaning ? '\u00A0' : cloze.gloss}</span>
           </span>
         )}
         {render(cloze.after)}
       </p>
-      {cloze.translation.trim() !== '' && <p className="text-sm text-ink-muted italic">{cloze.translation}</p>}
+      {!hideMeaning && cloze.translation.trim() !== '' && <p className="text-sm text-ink-muted italic">{cloze.translation}</p>}
       {picked && (
         <p className="text-sm">
           <span className="text-ink font-medium">{picked}</span>

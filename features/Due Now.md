@@ -22,7 +22,9 @@
 > `Rung.cloze` / `PathwayState.cloze` — a "Cloze" checkbox in both editors on ANY rung where the
 > learner produces the TARGET word (`clozeCapable` in `lib/ladder.ts`: typing, self-graded,
 > dictation — the dictation screen renders the sentence under its audio prompt and accepts the
-> sentence's inflected form). `LadderStudy` resolves sentences with the same `resolveReviewCloze`
+> sentence's inflected form; while ANSWERING it hides all native meaning — empty blank, no
+> translation line (`hideMeaning`) — so the transcription test stays a transcription test, and
+> reveals both after grading). `LadderStudy` resolves sentences with the same `resolveReviewCloze`
 > (prefetching the current + next few queued cards at a cloze rung) and passes them into
 > TypingMode/FlashcardMode via `LadderStudyCard`, so grading, stored-sentence rotation, and
 > tap-a-word glosses all behave exactly as below.
