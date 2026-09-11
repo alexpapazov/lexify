@@ -261,9 +261,10 @@ export interface Rung {
   strictness?:       TypedStrictness
   /** Whether the four rating buttons appear (always true for self_graded). */
   selfRated:         boolean
-  /** Typing/self_graded produce-target rungs only: present the prompt as a generated cloze
-   *  sentence (the word blanked out, gloss inside the blank) instead of the bare native gloss —
-   *  same mechanic as Due Now's `?cloze=1`. Optional so ladders saved before this load fine. */
+  /** Produce-target rungs where the learner PRODUCES the word (typing, self_graded, dictation —
+   *  see `clozeCapable`): present a generated cloze sentence (the word blanked out, gloss inside
+   *  the blank) alongside the rung's normal prompt — same mechanic as Due Now's `?cloze=1`.
+   *  Optional so ladders saved before this load fine. */
   cloze?:            boolean
   /** Interval-setting rung (typing/self_graded only; one per direction). */
   intervalInit:      boolean

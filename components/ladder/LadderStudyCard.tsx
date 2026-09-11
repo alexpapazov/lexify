@@ -8,7 +8,8 @@ import type { RungAttemptOutcome } from '@/engine/ladderEngine'
 import { mcqOutcome, typedOutcome, producesNative } from '@/lib/ladderSession'
 import { issueToErrorTypes } from '@/lib/pathway'
 import { gradeTyping, resolveTypedPenalty } from '@/engine/grading'
-import type { ReviewCloze } from '@/lib/reviewCloze'
+import { clozeStrictness, type ReviewCloze } from '@/lib/reviewCloze'
+import { ClozePrompt } from '@/components/session/ClozePrompt'
 import { MultipleChoiceMode } from '@/components/session/MultipleChoiceMode'
 import { TypingMode } from '@/components/session/TypingMode'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
@@ -164,6 +165,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   // Dictation — custom (no existing screen): play the TARGET audio; type either the target (what you
   // hear) or the native (its translation), per the rung's direction.
   return <Dictation card={card} rung={rung} deckName={deckName} onOutcome={onOutcome} onInfo={onInfo}
+    cloze={native ? undefined : cloze}
     overrideAnswers={Array.from(overrides?.get(`${card.id}:${answerSide}`) ?? [])}
     onOverrideAnswer={(answerText, accept) => onOverrideAnswer?.(card.id, answerSide, answerText, accept)}
     onAnswerEdit={onCardEdit ? (newText => onCardEdit(card.id, answerSide, newText)) : undefined}
@@ -177,11 +179,14 @@ function DictationInfoButton({ onInfo }: { onInfo?: () => void }) {
   )
 }
 
-function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer, onAnswerEdit, onPromptEdit }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void
+function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, onOverrideAnswer, onAnswerEdit, onPromptEdit, cloze }: { card: Card; rung: Rung; deckName?: string; onOutcome: (o: RungAttemptOutcome, overridden?: boolean, almost?: boolean, errorTypes?: ErrorType[]) => void; onInfo?: () => void; overrideAnswers?: string[]; onOverrideAnswer?: (answerText: string, accept: boolean) => void
   /** Save an edited answer back to the card (already bound to this rung's answer side). */
   onAnswerEdit?: (newText: string) => void
   /** Save an edited OTHER-side text back to the card (already bound to this rung's prompt side). */
-  onPromptEdit?: (newText: string) => void }) {
+  onPromptEdit?: (newText: string) => void
+  /** Cloze presentation (produce-target rungs with the Cloze box): the sentence with the heard
+   *  word blanked renders under the audio prompt; everything else about the rung is unchanged. */
+  cloze?: ReviewCloze }) {
   // You always HEAR the target word (card.front). Producing the target = type what you hear; producing
   // the native = type its translation (card.back). Audio is unchanged; only the graded side differs.
   const native = producesNative(rung)
@@ -217,7 +222,13 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
     // (either gloss accepted), transcription answers the TARGET side (must be typed in full).
     const settings: GradingSettings = { gradingMode: 'flexible', ignoreAccents: false, ignoreCapitalization: true, ignoreMinorTypos: false, ignoreDefiniteArticles: false, requireParentheticalContent: false, commaAlternativesMode: 'split_into_cards', autoPlayAudio: false, answerLanguage: answerLang, isNativeAnswer: native }
     // Grade against the answer side without its "(f)"/"(m)" annotation.
-    const res = gradeTyping(input, stripAnnotations(answerText), settings)
+    let res = gradeTyping(input, stripAnnotations(answerText), settings)
+    // Cloze dictation: the sentence may inflect the heard word — the sentence's own form is
+    // equally correct, same acceptance the typing cloze gives (`viaClozeForm`).
+    if (cloze && res.status !== 'correct' && res.status !== 'almost') {
+      const viaCloze = gradeTyping(input, cloze.answer, settings)
+      if (viaCloze.status === 'correct' || viaCloze.status === 'almost') res = viaCloze
+    }
 
     // "Type the translation" answered with the word you just heard → transcription, not translation.
     // Accept it and re-ask for the native side rather than scoring a miss.
@@ -229,8 +240,10 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
         return
       }
     }
+    // Cloze auto-accepts article slips, like the typing cloze (`clozeStrictness`).
+    const strict = cloze ? clozeStrictness(rung.strictness ?? DEFAULT_TYPED_STRICTNESS) : (rung.strictness ?? DEFAULT_TYPED_STRICTNESS)
     let status: 'pass' | 'almost' | 'miss' = res.status === 'correct' ? 'pass'
-      : res.status === 'almost' ? (resolveTypedPenalty(res, rung.strictness ?? DEFAULT_TYPED_STRICTNESS).requiresRetype ? 'almost' : 'pass') : 'miss'
+      : res.status === 'almost' ? (resolveTypedPenalty(res, strict).requiresRetype ? 'almost' : 'pass') : 'miss'
     // Honour a persisted override for this exact typed answer (marked OK before).
     const viaOverride = status !== 'pass' && !!res.normalizedUser && (overrideAnswers ?? []).includes(res.normalizedUser)
     if (viaOverride) status = 'pass'
@@ -264,6 +277,8 @@ function Dictation({ card, rung, deckName, onOutcome, onInfo, overrideAnswers, o
           </svg>
         </button>
         <p className="text-xs text-ink-faint uppercase tracking-wider">{native ? 'Dictation — type the translation' : 'Dictation — type what you hear'}</p>
+        {/* Cloze rung: the generated sentence with the heard word blanked, filled on reveal. */}
+        {cloze && <ClozePrompt cloze={cloze} filled={result ? cloze.answer : null} />}
       </div>
       {result ? (
         <>

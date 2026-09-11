@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import type { Ladder, Rung, RungType, RungOutcome, RungDirection, DistractorSource, TypedStrictnessLevel, AdvanceRule, SkipTrigger } from '@/domain'
-import { newRung, validateLadder, canInitInterval } from '@/lib/ladder'
+import { newRung, validateLadder, canInitInterval, clozeCapable } from '@/lib/ladder'
 
 const TYPE_LABEL: Record<RungType, string> = {
   mcq: 'Multiple choice', typing: 'Typing', self_graded: 'Self-graded', dictation: 'Dictation',
@@ -130,7 +130,7 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                   if (r.intervalInit && !canInitInterval(r.type, direction)) patch.intervalInit = false
                   // Cloze only fits producing the target word (the blank's gloss would print the
                   // answer otherwise) — switching away drops it.
-                  if (r.cloze && direction !== 'produce_target') patch.cloze = false
+                  if (r.cloze && !clozeCapable(r.type, direction)) patch.cloze = false
                   update(r.id, patch)
                 }}>
                 <option value="produce_target">Produce the target word</option>
@@ -179,8 +179,8 @@ export function LadderEditor({ initial, onSave, onReset, saving }: {
                 onChange={e => update(r.id, { selfRated: e.target.checked })} />
               <span className="text-ink">Show rating buttons (Again/Hard/Good/Easy)</span>
             </label>
-            {(r.type === 'typing' || r.type === 'self_graded') && r.direction === 'produce_target' && (
-              <label className="flex items-center gap-2 cursor-pointer" title="Show the word blanked out of a generated sentence (its meaning inside the blank) instead of the bare prompt.">
+            {clozeCapable(r.type, r.direction) && (
+              <label className="flex items-center gap-2 cursor-pointer" title="Show the word blanked out of a generated sentence (its meaning inside the blank) alongside the exercise's normal prompt.">
                 <input type="checkbox" className="accent-accent" checked={!!r.cloze}
                   onChange={e => update(r.id, { cloze: e.target.checked })} />
                 <span className="text-ink">Cloze</span>

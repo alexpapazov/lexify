@@ -45,6 +45,17 @@ export function canInitInterval(type: RungType, direction?: RungDirection): bool
 }
 
 /**
+ * Whether a rung/state can present as a CLOZE exercise (the per-rung Cloze checkbox): any
+ * exercise where the learner PRODUCES the target word — typing, self-graded recall, and
+ * dictation transcription (user decision 2026-09-10: "no matter whether it is self-graded,
+ * dictation, or writing"). MCQ never (nothing is produced), and produce-native never — the
+ * blank's gloss would print the answer.
+ */
+export function clozeCapable(type: RungType, direction?: RungDirection): boolean {
+  return direction === 'produce_target' && (type === 'typing' || type === 'self_graded' || type === 'dictation')
+}
+
+/**
  * Validates a ladder for saving. Returns a list of human-readable problems
  * (empty = OK). Mirrors the spec: at least one rung; interval-init only on eligible rungs
  * (typing/self_graded, or native-producing dictation); and interval-init is all-or-nothing —

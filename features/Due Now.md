@@ -18,9 +18,11 @@
 > with the full strictness/override/synonym/confusion machinery, self-graded reveals and rates as
 > always, and the blank fills with the answer after grading/reveal.
 >
-> **Cloze is also a learning-ladder/pathway option (2026-09-07):** `Rung.cloze` /
-> `PathwayState.cloze` — a "Cloze" checkbox in both editors on typing/self-graded rungs that
-> produce the TARGET word. `LadderStudy` resolves sentences with the same `resolveReviewCloze`
+> **Cloze is also a learning-ladder/pathway option (2026-09-07; + dictation 2026-09-10):**
+> `Rung.cloze` / `PathwayState.cloze` — a "Cloze" checkbox in both editors on ANY rung where the
+> learner produces the TARGET word (`clozeCapable` in `lib/ladder.ts`: typing, self-graded,
+> dictation — the dictation screen renders the sentence under its audio prompt and accepts the
+> sentence's inflected form). `LadderStudy` resolves sentences with the same `resolveReviewCloze`
 > (prefetching the current + next few queued cards at a cloze rung) and passes them into
 > TypingMode/FlashcardMode via `LadderStudyCard`, so grading, stored-sentence rotation, and
 > tap-a-word glosses all behave exactly as below.

@@ -16,7 +16,7 @@ import { setAudioPlaybackRate, setAudioVolume, setAudioSourceDefault, setAudioSo
 import { SupabaseLadderRepository } from '@/lib/data/ladders'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseLadderEventRepository } from '@/lib/data/ladderEvents'
-import { resolveEffectiveLadder } from '@/lib/ladder'
+import { resolveEffectiveLadder, clozeCapable } from '@/lib/ladder'
 import { reviewRung, applyWindow, initialClimbState, type ClimbState, type RungAttemptOutcome, type IntervalRange } from '@/engine/ladderEngine'
 import { stepPathway, initialRouteState, type RouteState, type PathwayEvent } from '@/engine/pathwayEngine'
 import { SupabasePathwayRepository } from '@/lib/data/pathways'
@@ -57,10 +57,10 @@ const RUNG_LABEL: Record<RungType, string> = {
 }
 
 /** Whether a rung/state presents its prompt as a cloze sentence: the per-rung checkbox, on an
- *  exercise the mechanic fits (typing / self-graded, producing the target word — a produce-native
- *  cloze would print the answer's gloss inside the blank). */
+ *  exercise the mechanic fits (`clozeCapable` — typing / self-graded / dictation, producing the
+ *  target word). */
 function rungWantsCloze(r?: { cloze?: boolean; type: RungType; direction: Rung['direction'] }): boolean {
-  return !!r?.cloze && r.direction === 'produce_target' && (r.type === 'typing' || r.type === 'self_graded')
+  return !!r?.cloze && clozeCapable(r.type, r.direction)
 }
 
 /** Adapt a pathway State to the Rung shape `LadderStudyCard` expects (it only reads presentation

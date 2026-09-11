@@ -1,6 +1,6 @@
 import type { Ladder, Rung } from '@/domain'
 import { DEFAULT_LADDER } from '@/domain'
-import { validateLadder, newRung, canInitInterval, resolveEffectiveLadder } from '@/lib/ladder'
+import { validateLadder, newRung, canInitInterval, clozeCapable, resolveEffectiveLadder } from '@/lib/ladder'
 
 const rung = (over: Partial<Rung>): Rung => ({
   id: Math.random().toString(36).slice(2), type: 'typing', direction: 'produce_target',
@@ -76,6 +76,21 @@ describe('canInitInterval', () => {
     expect(canInitInterval('dictation', 'produce_native')).toBe(true)
     expect(canInitInterval('dictation', 'produce_target')).toBe(false)
     expect(canInitInterval('dictation')).toBe(false)  // no direction → not allowed
+  })
+})
+
+describe('clozeCapable', () => {
+  it('any produce-target exercise where the learner produces the word — typing, self_graded, dictation', () => {
+    expect(clozeCapable('typing', 'produce_target')).toBe(true)
+    expect(clozeCapable('self_graded', 'produce_target')).toBe(true)
+    expect(clozeCapable('dictation', 'produce_target')).toBe(true)
+  })
+  it('never MCQ, never produce-native (the blank gloss would print the answer)', () => {
+    expect(clozeCapable('mcq', 'produce_target')).toBe(false)
+    expect(clozeCapable('typing', 'produce_native')).toBe(false)
+    expect(clozeCapable('self_graded', 'produce_native')).toBe(false)
+    expect(clozeCapable('dictation', 'produce_native')).toBe(false)
+    expect(clozeCapable('typing')).toBe(false)  // no direction → not allowed
   })
 })
 
