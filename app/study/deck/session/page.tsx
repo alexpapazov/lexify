@@ -1881,7 +1881,10 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       <div className="space-y-8">
         <div className="relative flex items-center justify-between">
           <Link href={deckUrl} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
-          <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>
+            {/* The denominator counts every attempt still owed: relearn-pool cards (Again / relearn-loop
+              Hard) count from the moment they're rated, not only once they resurface into the queue —
+              otherwise a redo bumped the numerator now and the total only minutes later. */}
+          <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length + relearnPool.length}</div>
           <div className="text-xs text-warning">Confusion drill</div>
         </div>
         <UndoFab show={undoStack.length > 0 || reRate !== null} onUndo={() => void handleUndo()} />
@@ -1961,7 +1964,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
       )}
       <div className="relative flex items-center justify-between">
         <Link href={deckUrl} className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
-        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length}</div>
+        <div className="absolute left-1/2 -translate-x-1/2 text-xs text-ink-muted">{index + 1} / {queue.length + relearnPool.length}</div>
         <div className="flex items-center gap-3">
           <div className="text-xs text-ink-muted">
             {state.graduated
