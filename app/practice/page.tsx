@@ -572,8 +572,9 @@ function PracticeInner() {
         </div>
       )}
 
-      {/* Word picker — six sources that COMPOSE into one target set. */}
-      <div className="panel space-y-3">
+      {/* Word picker — six sources that COMPOSE into one target set. data-tour: the intro tour
+          spotlights this panel as its Practice stop. */}
+      <div className="panel space-y-3" data-tour="practice-words">
         <div className="flex items-center justify-between gap-3">
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Words to practice</label>
           {chosen.length > 0 && (

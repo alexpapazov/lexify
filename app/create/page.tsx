@@ -1079,7 +1079,7 @@ function OnlineCreatePage() {
         </div>
 
         {aiFormatEnabled && (
-          <div className="space-y-1.5" data-tour="upload-ai-prompt">
+          <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label className="text-sm text-ink-muted">Prompt</label>
               <span className="text-xs text-ink-faint">{aiPrompt.length} / {INSTRUCTIONS_CHAR_CAP}</span>

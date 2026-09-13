@@ -20,11 +20,15 @@ export default function AnalyticsPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <h1 className="text-2xl font-semibold text-ink">Analytics</h1>
-      <Segmented<View>
-        value={view}
-        onChange={setView}
-        options={[{ value: 'past', label: 'Past' }, { value: 'present', label: 'Present' }, { value: 'future', label: 'Future' }]}
-      />
+      {/* data-tour: the tour spotlights this switcher — it's the only element on this page that is
+          always rendered (each chart lives behind one of the three views). */}
+      <div data-tour="analytics-views" className="inline-block">
+        <Segmented<View>
+          value={view}
+          onChange={setView}
+          options={[{ value: 'past', label: 'Past' }, { value: 'present', label: 'Present' }, { value: 'future', label: 'Future' }]}
+        />
+      </div>
 
       {view === 'past' && (
         <div className="panel p-5 space-y-3">
