@@ -3348,6 +3348,15 @@ sentence's inflected form + cloze article leniency.
 few queued cards sitting at a cloze rung) and `LadderStudyCard` forwards the `cloze` prop into
 TypingMode/FlashcardMode — same grading, storage, and tap-a-word behavior as Due Now.
 
+## Journal — free-writing entries, v1 data-only (2026-09-21, migration 125 — PENDING)
+
+`/study/journal` (Study nav sub-item, expected to move later): write an entry, tag the language(s)
+it was written in (chips from the user's pairs, learned languages first), list/edit/soft-delete
+past entries. Table `journal_entries` (migration `125_journal_entries.sql`); repo
+`lib/data/journal.ts`; online-only like practice. Schedule-neutral — touches no reviews or goals.
+Prompts + AI feedback are PLANNED, not built: the `prompt` column and `JournalEntry.prompt` field
+are reserved for them (null = free write) so shipping them needs no migration.
+
 ## Ladder drill mode — schedule-neutral re-runs (2026-09-21, no migration)
 
 `category=drill` on the ladder pages re-runs the ladder/pathway over ANY cards — graduated

@@ -410,6 +410,22 @@ export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
   autoPlayAudio:               true,
 }
 
+// ─── Journal ──────────────────────────────────────────────────────────────────
+// Free-writing practice entries (migration 125). v1 stores only the data; prompts/AI feedback are
+// planned — `prompt` is reserved for them (null = free write). Schedule-neutral by design.
+
+export interface JournalEntry {
+  id:        string
+  userId:    UserId
+  content:   string
+  /** Language codes the entry was written in — the learner picks one or more per entry. */
+  languages: string[]
+  prompt:    string | null
+  createdAt: string
+  updatedAt: string
+  deletedAt: string | null
+}
+
 // ─── Scheduler params ─────────────────────────────────────────────────────────
 
 export interface SchedulerParams {

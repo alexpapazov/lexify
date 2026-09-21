@@ -232,10 +232,12 @@ export function Navbar() {
   )
 }
 
-// "Study" itself links to the dashboard; Practice hangs under it (drilling your own vocabulary is a
-// mode of studying, not a separate destination). Offline the list is emptied — Practice needs AI.
+// "Study" itself links to the dashboard; Practice and Journal hang under it (drilling or writing
+// your own vocabulary is a mode of studying, not a separate destination). Offline the list is
+// emptied — Practice needs AI, and journal entries aren't in the offline bundle.
 const STUDY_SUBS = [
   { href: '/practice', label: 'Practice' },
+  { href: '/study/journal', label: 'Journal' },
 ]
 
 /** Desktop nav "Study" item — a hover dropdown to its sub-pages. */
