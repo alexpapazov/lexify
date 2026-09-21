@@ -1,14 +1,20 @@
 'use client'
 
 /**
- * /study/journal — free-writing practice (v1: keep the data, nothing else).
+ * /study/journal — free-writing practice, second pass (2026-09-21).
  *
- * Write an entry, tag WHICH language(s) it was written in (chips built from your language pairs —
- * learned languages first, native ones after), and it's saved. Past entries list below, editable
- * in place, soft-deleted on remove. Schedule-neutral: nothing here touches reviews or goals.
+ * Two views. The LIST is the menu: one card per entry (created day, edited days, languages, word
+ * count, preview) plus "New entry". Opening an entry — or starting a new one — takes over the
+ * WHOLE SCREEN (fixed overlay, safe-area aware): a top bar with Back / language chips / Save, and
+ * the writing area filling everything else.
  *
- * Planned but deliberately NOT in v1: writing prompts and AI feedback (the `prompt` column and
- * domain field already exist for them). The page sits under Study for now — expected to move.
+ * History: every save of an existing entry pushes the prior text onto `revisions` (migration 126),
+ * so an entry keeps the day it was created, every day it was edited, and every version. The
+ * editor's History panel shows word-level diffs between adjacent versions (green = added,
+ * red struck = removed), derived on render by lib/textDiff.ts — snapshots stored, diffs computed.
+ *
+ * Explicit Save (an editor, like the ladder/goal editors — not auto-save); Back with unsaved
+ * changes asks first. Schedule-neutral: nothing here touches reviews or goals.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -17,12 +23,13 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseJournalRepository } from '@/lib/data/journal'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { langFlag, langName } from '@/lib/languages'
+import { diffWords, diffStats } from '@/lib/textDiff'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 import type { JournalEntry } from '@/domain'
 
-/** Word count on whitespace runs — fine for the space-separated languages Lexify targets. */
 const wordCount = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0)
+const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 
 function LanguageChips({ options, selected, onToggle }: {
   options: string[]
@@ -33,7 +40,7 @@ function LanguageChips({ options, selected, onToggle }: {
     <div className="flex gap-1.5 flex-wrap">
       {options.map(code => (
         <button key={code} type="button" onClick={() => onToggle(code)}
-          className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+          className={`px-2.5 py-1 rounded-lg text-xs border transition-colors ${
             selected.has(code) ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
           }`}>
           {langFlag(code)} {langName(code)}
@@ -43,24 +50,54 @@ function LanguageChips({ options, selected, onToggle }: {
   )
 }
 
+/** One edit in the History panel: when, ±word counts, and the inline word diff. */
+function RevisionDiff({ from, to, when }: { from: string; to: string; when: string }) {
+  const segments = useMemo(() => diffWords(from, to), [from, to])
+  const stats = segments ? diffStats(segments) : null
+  return (
+    <div className="rounded border border-line/10 bg-surface-raised/50 px-3 py-2 space-y-1.5">
+      <p className="text-xs text-ink-faint">
+        {day(when)}
+        {stats && (stats.added > 0 || stats.removed > 0) && (
+          <span className="ml-2">
+            {stats.added > 0 && <span className="text-success">+{stats.added} word{stats.added === 1 ? '' : 's'}</span>}
+            {stats.added > 0 && stats.removed > 0 && ' · '}
+            {stats.removed > 0 && <span className="text-danger">−{stats.removed} word{stats.removed === 1 ? '' : 's'}</span>}
+          </span>
+        )}
+      </p>
+      {segments ? (
+        <p className="text-sm leading-relaxed">
+          {segments.map((s, i) =>
+            s.type === 'same' ? <span key={i} className="text-ink-muted">{s.text} </span>
+            : s.type === 'added' ? <span key={i} className="text-success">{s.text} </span>
+            : <span key={i} className="text-danger line-through decoration-danger/60">{s.text} </span>)}
+        </p>
+      ) : (
+        // Above the diff size cap — show the version this edit produced instead of freezing.
+        <p className="text-sm text-ink-muted whitespace-pre-wrap">{to}</p>
+      )}
+    </div>
+  )
+}
+
 export default function JournalPage() {
   const offline = useOfflineMode()
   const router = useRouter()
   const [userId, setUserId] = useState<string | null>(null)
   const [langOptions, setLangOptions] = useState<string[]>([])
+  const [defaultLang, setDefaultLang] = useState<string | null>(null)
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Composer
-  const [draft, setDraft] = useState('')
-  const [draftLangs, setDraftLangs] = useState<Set<string>>(new Set())
+  // Editor overlay: null = list view; 'new' = composing; an id = editing that entry.
+  const [openId, setOpenId] = useState<'new' | string | null>(null)
+  const [text, setText] = useState('')
+  const [notes, setNotes] = useState('')
+  const [langs, setLangs] = useState<Set<string>>(new Set())
   const [saving, setSaving] = useState(false)
-
-  // In-place editing of one past entry at a time.
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editText, setEditText] = useState('')
-  const [editLangs, setEditLangs] = useState<Set<string>>(new Set())
+  const [showHistory, setShowHistory] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -75,16 +112,12 @@ export default function JournalPage() {
           new SupabaseLanguagePairRepository().list(uid),
           new SupabaseJournalRepository().list(uid),
         ])
-        // Learned languages first (that's what you practice writing), native ones after — deduped.
         const learned = pairs.map(p => p.sourceLanguage)
         const native  = pairs.map(p => p.targetLanguage)
-        const opts = [...new Set([...learned, ...native])]
-        setLangOptions(opts)
-        // One learned language → preselect it; otherwise the learner picks per entry.
-        if (new Set(learned).size === 1 && learned[0]) setDraftLangs(new Set([learned[0]]))
+        setLangOptions([...new Set([...learned, ...native])])
+        if (new Set(learned).size === 1 && learned[0]) setDefaultLang(learned[0])
         setEntries(list)
       } catch (e) {
-        // Most likely cause on a fresh deploy: migration 125 not applied yet.
         setError(e instanceof Error ? e.message : String(e))
       } finally {
         setLoading(false)
@@ -92,50 +125,60 @@ export default function JournalPage() {
     })()
   }, [offline, router])
 
-  const toggle = (set: Set<string>, code: string): Set<string> => {
-    const next = new Set(set)
-    if (next.has(code)) next.delete(code); else next.add(code)
-    return next
+  const openEntry = openId && openId !== 'new' ? entries.find(e => e.id === openId) ?? null : null
+  const dirty = openId === 'new'
+    ? text.trim() !== '' || notes.trim() !== ''
+    : !!openEntry && (text !== openEntry.content || notes !== (openEntry.notes ?? '')
+        || [...langs].sort().join() !== [...openEntry.languages].sort().join())
+
+  function openNew() {
+    setOpenId('new')
+    setText('')
+    setNotes('')
+    setLangs(defaultLang ? new Set([defaultLang]) : new Set())
+    setShowHistory(false)
+    setError(null)
+  }
+
+  function openExisting(entry: JournalEntry) {
+    setOpenId(entry.id)
+    setText(entry.content)
+    setNotes(entry.notes ?? '')
+    setLangs(new Set(entry.languages))
+    setShowHistory(false)
+    setError(null)
+  }
+
+  function closeEditor() {
+    if (dirty && !window.confirm('Discard unsaved changes?')) return
+    setOpenId(null)
   }
 
   async function handleSave() {
-    if (!userId || saving || !draft.trim() || draftLangs.size === 0) return
+    if (!userId || saving || !text.trim() || langs.size === 0) return
     setSaving(true)
     setError(null)
+    const repo = new SupabaseJournalRepository()
+    const orderedLangs = langOptions.filter(c => langs.has(c))
     try {
-      const entry = await new SupabaseJournalRepository().create(userId, {
-        content: draft.trim(),
-        // Keep the chip order (learned first) rather than insertion order.
-        languages: langOptions.filter(c => draftLangs.has(c)),
-      })
-      setEntries(prev => [entry, ...prev])
-      setDraft('')
+      if (openId === 'new') {
+        const entry = await repo.create(userId, { content: text.trim(), languages: orderedLangs, notes: notes.trim() || null })
+        setEntries(prev => [entry, ...prev])
+        setOpenId(entry.id)
+      } else if (openEntry) {
+        // The prior version joins the history — `editedAt` is the moment it was replaced. A save
+        // that changed only the languages records no text revision (there's no diff to keep).
+        const revisions = text.trim() !== openEntry.content
+          ? [...openEntry.revisions, { content: openEntry.content, editedAt: new Date().toISOString() }]
+          : openEntry.revisions
+        // Notes are a scratchpad, not prose — they save with the entry but keep no revision trail.
+        const updated = await repo.update(openEntry.id, { content: text.trim(), languages: orderedLangs, notes: notes.trim() || null, revisions })
+        setEntries(prev => prev.map(e => e.id === updated.id ? updated : e))
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setSaving(false)
-    }
-  }
-
-  function startEdit(entry: JournalEntry) {
-    setEditingId(entry.id)
-    setEditText(entry.content)
-    setEditLangs(new Set(entry.languages))
-    setConfirmDeleteId(null)
-  }
-
-  async function handleEditSave() {
-    if (!editingId || !editText.trim() || editLangs.size === 0) return
-    setError(null)
-    try {
-      const updated = await new SupabaseJournalRepository().update(editingId, {
-        content: editText.trim(),
-        languages: langOptions.filter(c => editLangs.has(c)),
-      })
-      setEntries(prev => prev.map(e => e.id === updated.id ? updated : e))
-      setEditingId(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -145,10 +188,15 @@ export default function JournalPage() {
       await new SupabaseJournalRepository().softDelete(id)
       setEntries(prev => prev.filter(e => e.id !== id))
       setConfirmDeleteId(null)
-      if (editingId === id) setEditingId(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
+  }
+
+  /** "Created Sep 20 · edited Sep 21, Sep 23" — distinct days only, from the revision timestamps. */
+  function editedLine(entry: JournalEntry): string {
+    const days = [...new Set(entry.revisions.map(r => day(r.editedAt)))]
+    return days.length === 0 ? `Created ${day(entry.createdAt)}` : `Created ${day(entry.createdAt)} · edited ${days.join(', ')}`
   }
 
   const totalWords = useMemo(() => entries.reduce((s, e) => s + wordCount(e.content), 0), [entries])
@@ -156,102 +204,130 @@ export default function JournalPage() {
   if (offline) return <OfflineUnavailable feature="Journal" />
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading journal…</div>
 
-  return (
-    <div className="space-y-6 max-w-2xl mx-auto pb-12">
-      <div>
-        <h1 className="text-2xl font-semibold text-ink">Journal</h1>
-        <p className="text-sm text-ink-muted mt-1">
-          Free writing practice. Tag each entry with the language(s) you wrote it in.
-          Nothing here changes your review schedule.
-        </p>
-      </div>
+  // ── Full-screen editor ────────────────────────────────────────────────────────
+  if (openId !== null) {
+    // Versions for the history panel: every save's diff, newest edit first. Version i's text is
+    // revisions[i].content; the text it BECAME is the next revision's content (or the live text).
+    const history = openEntry ? openEntry.revisions.map((rev, i) => ({
+      from: rev.content,
+      to: openEntry.revisions[i + 1]?.content ?? openEntry.content,
+      when: rev.editedAt,
+    })).reverse() : []
 
-      {/* Composer */}
-      <div className="panel space-y-3">
-        <textarea
-          className="input min-h-[140px] resize-y text-[15px] leading-relaxed"
-          placeholder="Write in the language you're learning…"
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-        />
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="space-y-1.5">
-            <p className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Written in</p>
-            <LanguageChips options={langOptions} selected={draftLangs}
-              onToggle={code => setDraftLangs(prev => toggle(prev, code))} />
-          </div>
+    return (
+      <div className="fixed inset-0 z-[60] bg-surface-deep flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+        {/* Top bar */}
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line/10">
+          <button className="text-sm text-ink-muted hover:text-ink shrink-0" onClick={closeEditor}>← Entries</button>
+          <span className="text-xs text-ink-faint truncate">
+            {openEntry ? editedLine(openEntry) : 'New entry'}
+          </span>
+          <button className="btn-primary text-sm px-5 disabled:opacity-40 shrink-0" onClick={() => void handleSave()}
+            disabled={saving || !text.trim() || langs.size === 0 || !dirty}
+            title={langs.size === 0 ? 'Pick the language(s) you wrote in' : undefined}>
+            {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+          </button>
+        </div>
+
+        {/* Languages + word count */}
+        <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-line/5 flex-wrap">
+          <LanguageChips options={langOptions} selected={langs}
+            onToggle={code => setLangs(prev => { const n = new Set(prev); if (n.has(code)) n.delete(code); else n.add(code); return n })} />
           <div className="flex items-center gap-3 ml-auto">
-            <span className="text-xs text-ink-faint">{wordCount(draft)} word{wordCount(draft) === 1 ? '' : 's'}</span>
-            <button className="btn-primary text-sm px-5 disabled:opacity-40" onClick={() => void handleSave()}
-              disabled={saving || !draft.trim() || draftLangs.size === 0}
-              title={draftLangs.size === 0 ? 'Pick the language(s) you wrote in' : undefined}>
-              {saving ? 'Saving…' : 'Save entry'}
-            </button>
+            <span className="text-xs text-ink-faint">{wordCount(text)} word{wordCount(text) === 1 ? '' : 's'}</span>
+            {openEntry && openEntry.revisions.length > 0 && (
+              <button className={`text-xs ${showHistory ? 'text-accent' : 'text-ink-faint hover:text-ink'}`}
+                onClick={() => setShowHistory(v => !v)}>
+                History ({openEntry.revisions.length})
+              </button>
+            )}
           </div>
         </div>
+
+        {error && <p className="px-4 py-2 text-sm text-danger">{error}</p>}
+
+        {/* Writing area fills the rest of the screen; History slides in beside/instead on toggle. */}
+        {showHistory && openEntry ? (
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+            <p className="text-xs text-ink-faint">
+              Every save keeps the previous version — green was added by that edit, struck red was removed.
+            </p>
+            {history.map((h, i) => <RevisionDiff key={i} from={h.from} to={h.to} when={h.when} />)}
+            <button className="text-xs text-ink-faint hover:text-ink" onClick={() => setShowHistory(false)}>← Back to writing</button>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col min-h-0">
+            <textarea
+              className="flex-1 w-full bg-transparent px-4 py-3 text-[16px] leading-relaxed text-ink outline-none resize-none"
+              placeholder="Write in the language you're learning…"
+              value={text}
+              onChange={e => setText(e.target.value)}
+              autoFocus
+            />
+            {/* Side notes: new words / grammar spotted while writing. Just a field for now —
+                functionality on top of it is planned. */}
+            <div className="border-t border-line/10 px-4 py-2 space-y-1">
+              <label className="text-[10px] font-semibold text-ink-faint uppercase tracking-wider">
+                Notes — new words, grammar, things to remember
+              </label>
+              <textarea
+                className="w-full bg-transparent text-sm leading-relaxed text-ink outline-none resize-none min-h-[64px] max-h-[20vh]"
+                placeholder="e.g. сътворявам — to create · все пак = after all"
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── List view (the entries menu) ──────────────────────────────────────────────
+  return (
+    <div className="space-y-6 max-w-2xl mx-auto pb-12">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-ink">Journal</h1>
+          <p className="text-sm text-ink-muted mt-1">
+            Free writing practice — every entry keeps its full edit history.
+          </p>
+        </div>
+        <button className="btn-primary text-sm px-5 shrink-0" onClick={openNew}>New entry</button>
       </div>
 
       {error && <p className="text-sm text-danger">{error}</p>}
 
-      {/* Past entries */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-medium text-ink">Entries</h2>
-          {entries.length > 0 && (
-            <span className="text-xs text-ink-faint">
-              {entries.length} entr{entries.length === 1 ? 'y' : 'ies'} · {totalWords} words
-            </span>
-          )}
+      {entries.length === 0 ? (
+        <div className="panel text-sm text-ink-muted text-center py-10">
+          No entries yet — start your first one.
         </div>
-
-        {entries.length === 0 && (
-          <div className="panel text-sm text-ink-muted text-center py-8">
-            No entries yet — your first one goes right above.
-          </div>
-        )}
-
-        {entries.map(entry => (
-          <div key={entry.id} className="panel space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-ink-faint">
-                {new Date(entry.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
-                {' · '}{entry.languages.map(c => `${langFlag(c)} ${langName(c)}`).join(' · ')}
-                {' · '}{wordCount(entry.content)} word{wordCount(entry.content) === 1 ? '' : 's'}
-              </span>
-              <div className="flex items-center gap-2 text-xs">
-                {confirmDeleteId === entry.id ? (
-                  <>
-                    <span className="text-ink-muted">Delete?</span>
-                    <button className="text-danger hover:underline" onClick={() => void handleDelete(entry.id)}>Yes</button>
-                    <button className="text-ink-faint hover:text-ink" onClick={() => setConfirmDeleteId(null)}>No</button>
-                  </>
-                ) : (
-                  <>
-                    <button className="text-ink-faint hover:text-ink" onClick={() => startEdit(entry)}>Edit</button>
-                    <button className="text-ink-faint hover:text-danger" onClick={() => { setConfirmDeleteId(entry.id); setEditingId(null) }}>Delete</button>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {editingId === entry.id ? (
-              <div className="space-y-3">
-                <textarea className="input min-h-[120px] resize-y text-[15px] leading-relaxed"
-                  value={editText} onChange={e => setEditText(e.target.value)} />
-                <LanguageChips options={langOptions} selected={editLangs}
-                  onToggle={code => setEditLangs(prev => toggle(prev, code))} />
-                <div className="flex items-center gap-2">
-                  <button className="btn-primary text-sm px-4 disabled:opacity-40" onClick={() => void handleEditSave()}
-                    disabled={!editText.trim() || editLangs.size === 0}>Save</button>
-                  <button className="btn-ghost text-sm" onClick={() => setEditingId(null)}>Cancel</button>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-xs text-ink-faint text-right">{entries.length} entr{entries.length === 1 ? 'y' : 'ies'} · {totalWords} words</p>
+          {entries.map(entry => (
+            <div key={entry.id} className="panel space-y-1.5 cursor-pointer hover:border-line/20 transition-colors"
+              onClick={() => openExisting(entry)}>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-ink-faint">{editedLine(entry)}</span>
+                <div className="flex items-center gap-2 text-xs shrink-0" onClick={e => e.stopPropagation()}>
+                  <span className="text-ink-faint">{entry.languages.map(c => langFlag(c)).join(' ')} · {wordCount(entry.content)} w</span>
+                  {confirmDeleteId === entry.id ? (
+                    <>
+                      <span className="text-ink-muted">Delete?</span>
+                      <button className="text-danger hover:underline" onClick={() => void handleDelete(entry.id)}>Yes</button>
+                      <button className="text-ink-faint hover:text-ink" onClick={() => setConfirmDeleteId(null)}>No</button>
+                    </>
+                  ) : (
+                    <button className="text-ink-faint hover:text-danger" onClick={() => setConfirmDeleteId(entry.id)}>Delete</button>
+                  )}
                 </div>
               </div>
-            ) : (
-              <p className="text-[15px] leading-relaxed text-ink whitespace-pre-wrap">{entry.content}</p>
-            )}
-          </div>
-        ))}
-      </div>
+              <p className="text-sm text-ink-muted line-clamp-3 whitespace-pre-wrap">{entry.content}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

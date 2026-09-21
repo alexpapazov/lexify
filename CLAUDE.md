@@ -3348,12 +3348,18 @@ sentence's inflected form + cloze article leniency.
 few queued cards sitting at a cloze rung) and `LadderStudyCard` forwards the `cloze` prop into
 TypingMode/FlashcardMode — same grading, storage, and tap-a-word behavior as Due Now.
 
-## Journal — free-writing entries, v1 data-only (2026-09-21, migration 125 — PENDING)
+## Journal — free-writing entries, v1 data-only (2026-09-21, migration 125)
 
-`/study/journal` (Study nav sub-item, expected to move later): write an entry, tag the language(s)
-it was written in (chips from the user's pairs, learned languages first), list/edit/soft-delete
-past entries. Table `journal_entries` (migration `125_journal_entries.sql`); repo
-`lib/data/journal.ts`; online-only like practice. Schedule-neutral — touches no reviews or goals.
+`/study/journal` (Study nav sub-item, expected to move later): an entries LIST (the menu) plus a
+FULL-SCREEN editor overlay (fixed inset-0, safe-area aware) for writing/editing; language chips
+from the user's pairs (learned first), explicit Save, dirty-check on Back. REVISION HISTORY
+(migration `126_journal_revisions.sql`): every save of an existing entry appends the prior text to
+`journal_entries.revisions` (`[{content, editedAt}]`, oldest first) — snapshots stored, diffs
+DERIVED at render by `lib/textDiff.ts` (word-level LCS, null above a size cap → show the version
+instead). A second, shorter NOTES field per entry (new words / grammar spotted while writing —
+`journal_entries.notes`, also migration 126) saves with the entry but keeps no revision trail;
+functionality on top of it is planned. Table from migration 125 (applied + archived); repo `lib/data/journal.ts`; online-only
+like practice. Schedule-neutral — touches no reviews or goals.
 Prompts + AI feedback are PLANNED, not built: the `prompt` column and `JournalEntry.prompt` field
 are reserved for them (null = free write) so shipping them needs no migration.
 

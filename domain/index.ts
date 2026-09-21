@@ -414,6 +414,13 @@ export const DEFAULT_GRADING_SETTINGS: GradingSettings = {
 // Free-writing practice entries (migration 125). v1 stores only the data; prompts/AI feedback are
 // planned — `prompt` is reserved for them (null = free write). Schedule-neutral by design.
 
+/** One superseded version of an entry's text. `editedAt` = when the edit REPLACED this version.
+ *  Diffs between versions are derived at display time (lib/textDiff.ts), never stored. */
+export interface JournalRevision {
+  content:  string
+  editedAt: string
+}
+
 export interface JournalEntry {
   id:        string
   userId:    UserId
@@ -421,6 +428,10 @@ export interface JournalEntry {
   /** Language codes the entry was written in — the learner picks one or more per entry. */
   languages: string[]
   prompt:    string | null
+  /** Side notes — new words, grammar constructions spotted while writing (plain text for now). */
+  notes:     string | null
+  /** Prior versions, oldest first (migration 126). Empty for a never-edited entry. */
+  revisions: JournalRevision[]
   createdAt: string
   updatedAt: string
   deletedAt: string | null
