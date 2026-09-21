@@ -48,6 +48,10 @@ Current feature files:
   row, mismatches write nothing and stay due. Optional RATING mode (same select,
   `express_rating`, migration 123): rating buttons on the matched tile;
   Again writes nothing. `/study/express`, `lib/expressReview.ts`.
+- `features/Phrasebook (proposal).md` — DEFERRED idea (2026-09-21, nothing built): per-pair
+  idioms/constructions whose mastery signal is usage in journal entries; on-demand Sonnet
+  analysis stored on the entry, mastery aggregates, struggle-driven journal prompts. Read it
+  before building anything phrasebook- or journal-analysis-shaped.
 - `features/Catch Up.md` — spread an overdue backlog across days up to a date you pick
   (Settings → Data): deferral-damage ordering, evenly-paced relearning, why moving past-due
   dates is safe. Includes an error log for the invisible first version.
@@ -3353,7 +3357,7 @@ TypingMode/FlashcardMode — same grading, storage, and tap-a-word behavior as D
 `/study/journal` (Study nav sub-item, expected to move later): an entries LIST (the menu) plus a
 FULL-SCREEN editor overlay (fixed inset-0, safe-area aware) for writing/editing; language chips
 from the user's pairs (learned first), explicit Save, dirty-check on Back. REVISION HISTORY
-(migration `126_journal_revisions.sql`): every save of an existing entry appends the prior text to
+(migration `126_journal_revisions.sql`, applied + archived): every save of an existing entry appends the prior text to
 `journal_entries.revisions` (`[{content, editedAt}]`, oldest first) — snapshots stored, diffs
 DERIVED at render by `lib/textDiff.ts` (word-level LCS, null above a size cap → show the version
 instead). A second, shorter NOTES field per entry (new words / grammar spotted while writing —
