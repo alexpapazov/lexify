@@ -1742,6 +1742,9 @@ export default function DeckDetailPage() {
           />
           <Link href={routes.deckAdd(deckId)}     className="btn-ghost text-sm">Add cards</Link>
           <Link href={routes.deckEdit(deckId)}    className="btn-ghost text-sm">Edit</Link>
+          {/* Drill: re-run the ladder over the WHOLE deck, graduated cards included — a
+              schedule-neutral rehearsal (nothing is written), available anytime. */}
+          <Link href={routes.ladderDeck(deckId, { category: 'drill' })} className="btn-ghost text-sm" title="Practice run through the ladder — includes graduated cards, changes nothing">Drill</Link>
           <Link href={routes.ladderDeck(deckId)}  className="btn-primary text-sm">Study</Link>
         </div>
       </div>

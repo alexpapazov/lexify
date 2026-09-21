@@ -7,6 +7,14 @@
 import type { Rung, Rating } from '@/domain'
 import type { RungAttemptOutcome, IntervalRange, ReshowHint } from '@/engine/ladderEngine'
 
+/**
+ * sessionStorage key for a DRILL launched from a card selection: a JSON array of card ids. The
+ * bulk panel writes it and routes to the ladder page with `category=drill&sel=1`; the ladder page
+ * reads it only when `sel=1`, so a later whole-scope drill can't be filtered by a stale selection.
+ * Drills are schedule-neutral re-runs of the ladder/pathway — see LadderStudy.
+ */
+export const DRILL_CARDS_KEY = 'lexify-drill-cards'
+
 /** Which existing study screen renders a given rung. */
 type RungUI = 'mcq' | 'typing' | 'flashcard' | 'dictation'
 

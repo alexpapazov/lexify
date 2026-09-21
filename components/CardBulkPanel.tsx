@@ -19,7 +19,9 @@
  */
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { DRILL_CARDS_KEY } from '@/lib/ladderSession'
 import { invalidateReads } from '@/lib/readCache'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
@@ -55,6 +57,7 @@ export function CardBulkPanel({ userId, cards, states, selectedIds, onClear, onA
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [accelerated,   setAccelerated]   = useState(false)
   const [error,         setError]         = useState<string | null>(null)
+  const router = useRouter()
 
   if (selectedIds.size === 0) return null
 
@@ -147,6 +150,19 @@ export function CardBulkPanel({ userId, cards, states, selectedIds, onClear, onA
     return { type: 'dormant', ids: withState, value: makingDormant }
   })
 
+  /** Drill the selection: a schedule-neutral re-run of the ladder/pathway over exactly these
+   *  cards, graduated included (LadderStudy `category=drill&sel=1` — writes nothing). A ladder is
+   *  per language pair, so a mixed selection drills only the first card's pair. Ids travel via
+   *  sessionStorage (they don't fit in a URL). */
+  const handleDrill = () => {
+    const sel = cards.filter(c => selectedIds.has(c.id) && existing.has(c.id))
+    if (sel.length === 0) return
+    const src = sel[0]!.sourceLanguage, tgt = sel[0]!.targetLanguage
+    const pairIds = sel.filter(c => c.sourceLanguage === src && c.targetLanguage === tgt).map(c => c.id)
+    try { sessionStorage.setItem(DRILL_CARDS_KEY, JSON.stringify(pairIds)) } catch { return }
+    router.push(`/study/ladder/all?source=${src}&target=${tgt}&category=drill&sel=1`)
+  }
+
   const handleDelete = () => {
     setDeleteConfirm(false)
     void run('delete', async () => {
@@ -230,6 +246,13 @@ export function CardBulkPanel({ userId, cards, states, selectedIds, onClear, onA
                 </div>
               )}
             </div>
+            <button
+              onClick={handleDrill}
+              title="Practice run through the ladder — includes graduated cards, changes nothing"
+              className="text-xs px-3 py-1 rounded border border-line/10 hover:border-line/20 text-ink-muted hover:text-ink transition-colors"
+            >
+              Drill
+            </button>
             <button
               onClick={handleStar}
               disabled={busy === 'star'}

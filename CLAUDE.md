@@ -3348,6 +3348,17 @@ sentence's inflected form + cloze article leniency.
 few queued cards sitting at a cloze rung) and `LadderStudyCard` forwards the `cloze` prop into
 TypingMode/FlashcardMode — same grading, storage, and tap-a-word behavior as Due Now.
 
+## Ladder drill mode — schedule-neutral re-runs (2026-09-21, no migration)
+
+`category=drill` on the ladder pages re-runs the ladder/pathway over ANY cards — graduated
+included. Contract: NOTHING is written — no `ladder_climb` rows (state is in-memory per session),
+no `ladder_events`, no `card_states` graduation, no goal credit; undo is local-only (in drill it
+must NEVER delete card_states — that would destroy a real graduated schedule). Entry points: the
+deck page's "Drill" link (whole deck) and CardBulkPanel's "Drill" (selection → ids in
+sessionStorage `DRILL_CARDS_KEY` from `lib/ladderSession.ts`, URL carries `sel=1`; mixed-pair
+selections drill only the first card's pair). All gated on the `drill` flag inside
+`components/ladder/LadderStudy.tsx`; the engines are untouched.
+
 ## Settings auto-save — the Save button is gone (2026-08-27)
 
 The four profile-backed sections (Profile / Time zone / Study defaults / Colors) **auto-save**: any

@@ -23,7 +23,7 @@ import { SupabasePathwayRepository } from '@/lib/data/pathways'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { resolveEffectivePathway, ladderToPathway } from '@/lib/pathway'
 import type { Pathway, PathwayState, Rung, ErrorType } from '@/domain'
-import { pickNextCard, rungReshowMs, type QueueItem } from '@/lib/ladderSession'
+import { pickNextCard, rungReshowMs, DRILL_CARDS_KEY, type QueueItem } from '@/lib/ladderSession'
 import { prefetchAudio } from '@/lib/distractors'
 import { hydrateSessionAudio, needsAudioHydration, applyAudioPatch, type AudioPatch } from '@/lib/sessionAudio'
 import { snapDueAtToStartOfDay, getToday, localDateWithTurnover } from '@/lib/dates'
@@ -87,7 +87,14 @@ function backHref(scope: LadderScope): string {
 }
 
 export function LadderStudy({ scope }: { scope: LadderScope }) {
-  const category = useSearchParams().get('category') // 'new' | 'learning' | 'starred' | null
+  const searchParams = useSearchParams()
+  const category = searchParams.get('category') // 'new' | 'learning' | 'starred' | 'drill' | null
+  // DRILL (user request 2026-09-21): a schedule-neutral re-run of the ladder/pathway over ANY cards
+  // — graduated included. Climb state lives in memory only for the session; NOTHING is written:
+  // no ladder_climb rows, no ladder_events, no card_states graduation, no goal credit. Exiting
+  // mid-drill discards progress. `sel=1` scopes the drill to the bulk panel's stored selection.
+  const drill = category === 'drill'
+  const drillSelected = drill && searchParams.get('sel') === '1'
   const [userId, setUserId] = useState<string | null>(null)
   const [decksById, setDecksById] = useState<Map<string, Deck>>(new Map())
   const [deckByCard, setDeckByCard] = useState<Map<string, string>>(new Map())
@@ -352,7 +359,10 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
         return (cl as ClimbState).rungIndex < effLadder.rungs.length
       }
 
-      const climb = await new SupabaseLadderClimbRepository().listForCards(uid, allCards.map(c => c.id))
+      // A drill never reads (or later writes) real climbs — every card runs fresh, in memory.
+      const climb = drill
+        ? new Map<string, ClimbState | RouteState>()
+        : await new SupabaseLadderClimbRepository().listForCards(uid, allCards.map(c => c.id))
 
       // Deck order is preserved end-to-end: `allCards` is built deck-by-deck (deck position) and
       // card-by-card (card position) from `listForDecks`, so `fresh`/`learning` come out in the
@@ -375,6 +385,21 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
           if (cl && !cl.graduated) repaired.push(c.id)
         }
         ;(alreadyLearning ? learning : fresh).push(c.id)
+      }
+      // Drill: ignore everything the loop above decided — every drilled card (graduated or not)
+      // starts fresh at the bottom of the ladder, in memory only.
+      let drillQ: string[] | null = null
+      if (drill) {
+        let wanted: Set<string> | null = null
+        if (drillSelected) {
+          try {
+            const ids = JSON.parse(sessionStorage.getItem(DRILL_CARDS_KEY) ?? 'null') as string[] | null
+            if (Array.isArray(ids) && ids.length > 0) wanted = new Set(ids)
+          } catch { /* fall through to whole scope */ }
+        }
+        drillQ = allCards.filter(c => !wanted || wanted.has(c.id)).map(c => c.id)
+        reconciled.clear()
+        for (const id of drillQ) reconciled.set(id, freshState())
       }
       setStates(reconciled)
 
@@ -416,7 +441,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       // from this pool, so the session stops introducing once the budget is exhausted).
       let eligibleFresh = fresh
       const wantGoalCap = !!prefs?.capNewToGoal && scope.kind === 'deck'
-        && category !== 'new' && category !== 'learning' && !offline
+        && category !== 'new' && category !== 'learning' && !drill && !offline
       if (wantGoalCap) {
         const src = primary.sourceLanguage, tgt = primary.targetLanguage
         const todayStr = getToday(tzRef.current, turnoverRef.current)
@@ -531,7 +556,9 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       let q: string[]
       rollingRef.current = false
       pendingFreshRef.current = []
-      if (category === 'new')          q = [...fresh]
+      // Drill: the fresh-start pool computed above — graduated cards included, no caps/budgets.
+      if (drill)                       q = drillQ!
+      else if (category === 'new')     q = [...fresh]
       else if (category === 'learning') {
         // "Study Learning" = every card the deck's Learning filter shows: a non-graduated forward state
         // (pristine/booted included) or a climb in progress. Not budget-capped — climb them all to grad.
@@ -572,7 +599,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       setAnswered(0)
       setQueue(items); setTotal(rollingRef.current ? items.length + pendingFreshRef.current.length : items.length)
       // Rolling mode already holds the whole set (queue + pending) → nothing more to load afterwards.
-      setHasMore(rollingRef.current ? false : (eligibleFresh.length + learning.length) > items.length)
+      setHasMore(drill || rollingRef.current ? false : (eligibleFresh.length + learning.length) > items.length)
 
       // Stored-clip hydration for the trimmed card read (SESSION_CARD_COLUMNS). Without it,
       // LadderStudyCard's play path would treat a stored clip as missing, REGENERATE via TTS and
@@ -749,7 +776,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     const toIdx = res.graduated
       ? pathway.states.length
       : Math.max(0, pathway.states.findIndex(st => st.id === res.route.stateId))
-    const eventIdP = new SupabaseLadderEventRepository().log(userId, {
+    // Drill: nothing is logged — a rehearsal must not feed analytics, replays, or goals.
+    const eventIdP = drill ? null : new SupabaseLadderEventRepository().log(userId, {
       sessionId: sessionIdRef.current, cardId: currentId, deckId: deckByCard.get(currentId) ?? null,
       label: cardsById.get(currentId)?.front ?? null,
       sourceLanguage: logDeck?.sourceLanguage ?? null, targetLanguage: logDeck?.targetLanguage ?? null,
@@ -765,14 +793,15 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     // Graduation persists in the BACKGROUND. Awaiting it between the state updates left the
     // graduated card remounted blank for two round trips — the "flash" the user reported. Undo
     // awaits this promise before deleting card_states, so the write can't race the undo.
-    const gradP = res.graduated
+    // Drill: no graduation write and no climb save — the run is schedule-neutral by contract.
+    const gradP = res.graduated && !drill
       ? graduate(currentId, res.route.targetInterval, res.route.nativeInterval).catch(console.error)
       : null
     setUndoStack(prev => [...prev.slice(-19), {
       cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
       wasGraduated: res.graduated, prevAnswered: answered, eventIdP, overrideAdd, gradP,
     }])
-    await new SupabaseLadderClimbRepository().save(userId, currentId, deckByCard.get(currentId) ?? '', res.route).catch(console.error)
+    if (!drill) await new SupabaseLadderClimbRepository().save(userId, currentId, deckByCard.get(currentId) ?? '', res.route).catch(console.error)
 
     let nextQueue: QueueItem[]
     if (res.graduated) {
@@ -811,7 +840,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     // undo can delete it (undo+redo counts once).
     const rungCount = ladder.rungs.length
     const logDeck = deckFor(currentId)
-    const eventIdP = new SupabaseLadderEventRepository().log(userId, {
+    // Drill: nothing is logged — a rehearsal must not feed analytics, replays, or goals.
+    const eventIdP = drill ? null : new SupabaseLadderEventRepository().log(userId, {
       sessionId: sessionIdRef.current, cardId: currentId, deckId: deckByCard.get(currentId) ?? null,
       label: cardsById.get(currentId)?.front ?? null,
       sourceLanguage: logDeck?.sourceLanguage ?? null, targetLanguage: logDeck?.targetLanguage ?? null,
@@ -825,14 +855,15 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     const overrideAdd = pendingOverrideAddRef.current?.cardId === currentId ? pendingOverrideAddRef.current : null
     pendingOverrideAddRef.current = null
     // Graduation persists in the BACKGROUND — see the pathway branch note. Undo awaits gradP.
-    const gradP = res.state.graduated
+    // Drill: no graduation write and no climb save — the run is schedule-neutral by contract.
+    const gradP = res.state.graduated && !drill
       ? graduate(currentId, res.state.targetInterval, res.state.nativeInterval).catch(console.error)
       : null
     setUndoStack(prev => [...prev.slice(-19), {
       cardId: currentId, prevClimb: states.get(currentId), prevQueueItem: queue.find(e => e.cardId === currentId),
       wasGraduated: res.state.graduated, prevAnswered: answered, eventIdP, overrideAdd, gradP,
     }])
-    await new SupabaseLadderClimbRepository().save(userId, currentId, deckByCard.get(currentId) ?? '', res.state).catch(console.error)
+    if (!drill) await new SupabaseLadderClimbRepository().save(userId, currentId, deckByCard.get(currentId) ?? '', res.state).catch(console.error)
 
     let nextQueue: QueueItem[]
     if (res.state.graduated) {
@@ -868,21 +899,25 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     // Delete the logged attempt (so undo+redo is one attempt) and roll back a just-added override.
     if (eventIdP) eventIdP.then(id => { if (id) new SupabaseLadderEventRepository().deleteById(id).catch(() => {}) })
     if (overrideAdd) handleOverrideAnswer(overrideAdd.cardId, overrideAdd.answerSide, overrideAdd.answerText, false)
+    // Drill: the whole undo is local — there are no climb rows or graduation writes to revert,
+    // and deleting card_states here would destroy a REAL graduated card's schedule.
     const climbRepo = new SupabaseLadderClimbRepository()
     if (prevClimb) {
-      await climbRepo.save(userId, cardId, deckByCard.get(cardId) ?? '', prevClimb).catch(console.error)
+      if (!drill) await climbRepo.save(userId, cardId, deckByCard.get(cardId) ?? '', prevClimb).catch(console.error)
       setStates(prev => new Map(prev).set(cardId, prevClimb))
     } else {
-      await climbRepo.remove(userId, cardId).catch(console.error)
+      if (!drill) await climbRepo.remove(userId, cardId).catch(console.error)
       setStates(prev => { const m = new Map(prev); m.delete(cardId); return m })
     }
     if (wasGraduated) {
       // The graduation upserts run in the background; deleting before they land would let them
       // re-create the rows we just deleted. Wait for the write, then remove it.
-      if (gradP) await gradP
-      const stateRepo = new SupabaseCardStateRepository()
-      await stateRepo.delete(userId, cardId, 'forward').catch(() => {})
-      await stateRepo.delete(userId, cardId, 'reverse').catch(() => {})
+      if (!drill) {
+        if (gradP) await gradP
+        const stateRepo = new SupabaseCardStateRepository()
+        await stateRepo.delete(userId, cardId, 'forward').catch(() => {})
+        await stateRepo.delete(userId, cardId, 'reverse').catch(() => {})
+      }
       setGraduated(g => Math.max(0, g - 1))
       setQueue(prev => prev.some(e => e.cardId === cardId) ? prev : [...prev, fallbackItem])
     } else {
@@ -890,7 +925,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     }
     setAnswered(prevAnswered)
     setCurrentId(cardId)
-  }, [undoStack, userId, deckByCard, handleOverrideAnswer])
+  }, [undoStack, userId, deckByCard, handleOverrideAnswer, drill])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -926,8 +961,12 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
   if (!currentCard || !presentationRung || !currentDeck || (isPathway ? !currentRoute : !currentClimb)) {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-6">
-        <h1 className="text-xl font-semibold text-ink">Session complete</h1>
-        <p className="text-ink-muted">{graduated > 0 ? `Graduated ${graduated} card${graduated === 1 ? '' : 's'}.` : 'Nothing to learn right now.'}</p>
+        <h1 className="text-xl font-semibold text-ink">{drill ? 'Drill complete' : 'Session complete'}</h1>
+        <p className="text-ink-muted">
+          {drill
+            ? (graduated > 0 ? `Completed ${graduated} card${graduated === 1 ? '' : 's'} — nothing was scheduled or recorded.` : 'Nothing to drill here.')
+            : graduated > 0 ? `Graduated ${graduated} card${graduated === 1 ? '' : 's'}.` : 'Nothing to learn right now.'}
+        </p>
         <div className="flex flex-wrap justify-center gap-3">
           <a href={back} className="btn-ghost">Back</a>
           {hasMore && <button onClick={() => window.location.reload()} className="btn-primary">Continue</button>}
@@ -958,7 +997,7 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       <div className="relative flex items-center justify-between">
         <a href={back} className="text-base text-ink-muted hover:text-ink">✕ End session</a>
         <div className="absolute left-1/2 -translate-x-1/2 text-sm text-ink-muted">
-          {isPathway ? `${graduated}/${total} graduated` : `${pct}% · ${graduated}/${total} graduated`}
+          {isPathway ? `${graduated}/${total} ${drill ? 'completed' : 'graduated'}` : `${pct}% · ${graduated}/${total} ${drill ? 'completed' : 'graduated'}`}
         </div>
         <div className="text-sm text-ink-muted">
           {isPathway ? `${currentPathState!.name} · ${RUNG_LABEL[presentationRung.type]}` : `Rung ${currentClimb!.rungIndex + 1} · ${RUNG_LABEL[presentationRung.type]}`}
@@ -971,7 +1010,8 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
       )}
       {category && (
         <p className="text-xs text-accent text-center">
-          {category === 'new' ? 'Studying unlearned cards.' : category === 'starred' ? 'Studying your starred cards.' : 'Studying cards still in the learning pipeline.'}
+          {drill ? 'Drill — a practice run through the ladder. Nothing is scheduled or recorded.'
+            : category === 'new' ? 'Studying unlearned cards.' : category === 'starred' ? 'Studying your starred cards.' : 'Studying cards still in the learning pipeline.'}
         </p>
       )}
 
