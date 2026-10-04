@@ -15,7 +15,8 @@ import { SupabaseCardRepository }        from '@/lib/data/cards'
 import { SupabaseCardStateRepository }   from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
-import { buildEnabledTracksMap, trackEnabled, activeProductionTrack, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
+import { deckDuePools } from '@/lib/todayPools'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
@@ -508,50 +509,24 @@ export default function StudyPage() {
         if (climbInProgress(climb.get(cardId)) || (s && !s.graduated)) return 'learning'
         return 'new'
       }
+      // Due-presentation pools — extracted to lib/todayPools.ts (shared with the Today page) so
+      // the picker counts and the Today rows can never drift apart.
       const en = enabledMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`)
-      const isDueByDate = (dateStr: string | null | undefined) =>
-        !!dateStr && new Date(dateStr).toLocaleDateString('en-CA', { timeZone: tz }) <= todayStr
-      // Track-aware due checks — a disabled track never counts as due. Production is one
-      // lane (typed/smart mutually exclusive), visible if EITHER production mode is enabled
-      // (smart defaults off, so gating on it alone would hide migrated production). Legacy
-      // cards (no typed/smart due date) fall back to dueAt.
-      const prodEnabled = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false)
-      const prodDueOn   = (s: CardState) => !s.dormant && prodEnabled && (
-        s.smartDueAt ? isDueByDate(s.smartDueAt)
-        : s.typedDueAt ? isDueByDate(s.typedDueAt)
-        : isDueByDate(s.dueAt))
-      const recallDueOn = (s: CardState) => !s.dormant && trackEnabled(en, 'recall', false) && isDueByDate(s.recallDueAt)
-      // Reverse rows are scheduled by recall_due_at; their due_at is often stale in the
-      // past. Prefer recall_due_at (fall back to due_at only when recall is null) so a
-      // reverse card whose real schedule is in the future isn't counted as due.
-      // Dormancy is per-direction: gate on the REVERSE row's own `dormant` only (the forward row's
-      // dormancy pauses production, not recognition). The forward GRADUATED check stays.
-      const reverseDueOn = (s: CardState) => trackEnabled(en, 'recall', true) &&
-        stateMap.get(s.cardId)?.graduated === true &&
-        !s.dormant && isDueByDate(s.recallDueAt ?? s.dueAt)
-      // How a due forward card is presented (mirrors the session: enabled production lane wins over
-      // recall). Uses the active lane (not the date column) so a legacy/ladder card scheduled on
-      // due_at/typed_due_at is classified the same way the session presents it.
-      const threshold = thresholdMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`) ?? 20
-      const prodTrack = activeProductionTrack(en)
-      const forwardPresentedTyping = (s: CardState) => {
-        if (prodTrack && prodDueOn(s)) return forwardProductionMode(s, prodTrack, threshold) === 'typed'
-        return false  // recall-only due → self-graded
-      }
-      const dueNowReverse = states.filter(s => s.graduated && s.reviewDirection === 'reverse' && reverseDueOn(s)).length
-      const dueNowTyping = forwardStates.filter(s => s.graduated && (prodDueOn(s) || recallDueOn(s)) && forwardPresentedTyping(s)).length
-      const dueNowForward = forwardStates.filter(s => s.graduated && (prodDueOn(s) || recallDueOn(s))).length
+      const pools = deckDuePools({
+        states, forwardMap: stateMap, tracks: en,
+        smartThresholdDays: thresholdMap.get(`${deck.sourceLanguage}|${deck.targetLanguage}`) ?? 20,
+        tz, today: todayStr,
+      })
+      const dueNowReverse = pools.reverse.length
+      const dueNowTyping = pools.typing.length
+      const dueNowForward = pools.typing.length + pools.sgForward.length
       return {
         deck, cards, states,
         unlearned: cards.filter(c => statusOf(c.id) === 'new').length,
         learning:  cards.filter(c => statusOf(c.id) === 'learning').length,
         graduated: cards.filter(c => statusOf(c.id) === 'graduated').length,
         dormant:   cards.filter(c => statusOf(c.id) === 'dormant').length,
-        dueNow:        states.filter(s => {
-          if (!s.graduated) return false
-          if (s.reviewDirection === 'reverse') return reverseDueOn(s)
-          return prodDueOn(s) || recallDueOn(s)
-        }).length,
+        dueNow:        dueNowForward + dueNowReverse,
         dueNowForward,
         dueNowReverse,
         dueNowTyping,

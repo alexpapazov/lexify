@@ -236,6 +236,7 @@ export function Navbar() {
 // your own vocabulary is a mode of studying, not a separate destination). Offline the list is
 // emptied — Practice needs AI, and journal entries aren't in the offline bundle.
 const STUDY_SUBS = [
+  { href: '/study/today', label: 'Today' },
   { href: '/practice', label: 'Practice' },
   { href: '/study/journal', label: 'Journal' },
 ]

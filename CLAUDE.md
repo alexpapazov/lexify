@@ -3367,6 +3367,19 @@ like practice. Schedule-neutral — touches no reviews or goals.
 Prompts + AI feedback are PLANNED, not built: the `prompt` column and `JournalEntry.prompt` field
 are reserved for them (null = free write) so shipping them needs no migration.
 
+## Today page — per-launch mode picking (2026-10-04, no migration)
+
+`/study/today` (Study nav sub-item, v1 under critique): a day-progress bar (done = today's
+`review_events` mode 'due', turnover-aware) plus ONE ROW PER POOL — typed / self-graded forward /
+reverse recall / new words — each with a mode picker (seeded from Settings → Due Now, last pick
+remembered in localStorage `lexify-today-modes`), a language scope, and Start buttons that launch
+the EXISTING sessions (`?cloze=1`, `routes.express`, ladder pages). Pool counts come from
+`deckDuePools` in `lib/todayPools.ts` — EXTRACTED from the dashboard's stats block, which now
+calls it too, so the two pages share one due-presentation definition (typed vs self-graded vs
+reverse; the smart-lane threshold split). Matching eligibility + the dashed "Normal review only"
+bucket use `buildExpressPool`. Story mode is a disabled pill (see the story/passage design in
+this file's history + Phrasebook proposal pattern).
+
 ## Ladder drill mode — schedule-neutral re-runs (2026-09-21, no migration)
 
 `category=drill` on the ladder pages re-runs the ladder/pathway over ANY cards — graduated
