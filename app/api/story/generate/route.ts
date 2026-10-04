@@ -38,6 +38,13 @@ interface RequestBody {
   story?:         string
 }
 
+/** The response's TEXT block. Models with thinking (claude-sonnet-5) put a thinking block FIRST,
+ *  so `content[0].text` is undefined — reading it made every story a "parse-error". */
+function responseText(data: unknown): string {
+  const content = (data as { content?: Array<{ type?: string; text?: string }> } | null)?.content
+  return content?.find(b => b?.type === 'text')?.text ?? ''
+}
+
 function extractJson(text: string): unknown {
   const match = /\{[\s\S]*\}/.exec(text)
   if (!match) return null
@@ -144,9 +151,12 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
         headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
         body: JSON.stringify({ model: GLOSS_MODEL, max_tokens: 12000, messages: [{ role: 'user', content: glossPrompt }] }),
       })
-      if (!res.ok) return NextResponse.json({ ok: false, reason: 'api-error' })
+      if (!res.ok) {
+        console.error('[story] upstream error', res.status, (await res.text()).slice(0, 300))
+        return NextResponse.json({ ok: false, reason: `api-error-${res.status}` })
+      }
       const data = await res.json()
-      const tokens = parseStoryTokens(extractJson(data?.content?.[0]?.text ?? ''))
+      const tokens = parseStoryTokens(extractJson(responseText(data)))
       if (tokens.length === 0) return NextResponse.json({ ok: false, reason: 'parse-error' })
       return NextResponse.json({ ok: true, tokens })
     } catch {
@@ -168,11 +178,13 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
       // that is what makes the story fast; do not fold tokens back into this call.
       body: JSON.stringify({ model: MODEL, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] }),
     })
-    if (!res.ok) return NextResponse.json({ ok: false, reason: 'api-error' })
+    if (!res.ok) {
+      console.error('[story] upstream error', res.status, (await res.text()).slice(0, 300))
+      return NextResponse.json({ ok: false, reason: `api-error-${res.status}` })
+    }
 
     const data = await res.json()
-    const text: string = data?.content?.[0]?.text ?? ''
-    const story = parseStory(extractJson(text))
+    const story = parseStory(extractJson(responseText(data)))
     if (!story) return NextResponse.json({ ok: false, reason: 'parse-error' })
 
     return NextResponse.json({ ok: true, story })

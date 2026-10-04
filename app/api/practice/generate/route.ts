@@ -220,7 +220,9 @@ export async function POST(req: NextRequest) {
     if (!res.ok) return NextResponse.json({ ok: false, reason: 'api-error' })
 
     const data = await res.json()
-    const text: string = data?.content?.[0]?.text ?? ''
+    // The TEXT block, not content[0]: a thinking-enabled model (e.g. claude-sonnet-5) puts a
+    // thinking block first — reading content[0].text silently parses an empty string.
+    const text: string = (data?.content as Array<{ type?: string; text?: string }> | undefined)?.find(b => b?.type === 'text')?.text ?? ''
     const exercises = parseExercises(extractJson(text))
     // Every exercise malformed (or none returned) is a parse failure; a partial batch is fine.
     if (exercises.length === 0) return NextResponse.json({ ok: false, reason: 'parse-error' })

@@ -40,6 +40,8 @@ import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 
 interface BatchState {
   status: 'loading' | 'error' | 'ready'
+  /** Why generation failed (the route's reason string) — shown so failures are diagnosable. */
+  reason?: string
   story?: GeneratedStory
   spans?: TargetSpan[]
   /** Tap-a-word glosses arrive from a PARALLEL Haiku call after the story renders. */
@@ -108,15 +110,15 @@ function StoryInner() {
             passage,
           }),
         })
-        const data = await res.json() as { ok: boolean; story?: GeneratedStory }
-        if (!data.ok || !data.story) throw new Error('generate-failed')
+        const data = await res.json() as { ok: boolean; story?: GeneratedStory; reason?: string }
+        if (!data.ok || !data.story) throw new Error(data.reason ?? `generate-failed (HTTP ${res.status})`)
         const spans = locateTargets(data.story.story, data.story.usages, batch)
         setBatchStates(prev => new Map(prev).set(i, { status: 'ready', story: data.story, spans, glossStatus: passage === 'target' ? 'loading' : 'ready' }))
         // Tap-a-word glosses: fired in parallel, never blocking the read (that split is what made
         // stories fast — the Sonnet call now writes prose only).
         if (passage === 'target') void fetchGlosses(i, data.story!)
-      } catch {
-        setBatchStates(prev => new Map(prev).set(i, { status: 'error' }))
+      } catch (err) {
+        setBatchStates(prev => new Map(prev).set(i, { status: 'error', reason: err instanceof Error ? err.message : String(err) }))
       } finally {
         generatingRef.current.delete(i)
       }
@@ -338,7 +340,7 @@ function StoryInner() {
       )}
       {bs?.status === 'error' && (
         <div className="panel text-center py-12 space-y-3">
-          <p className="text-sm text-danger">This story failed to generate.</p>
+          <p className="text-sm text-danger">This story failed to generate{bs.reason ? ` (${bs.reason})` : ''}.</p>
           <div className="flex justify-center gap-3">
             <button className="btn-primary text-sm" onClick={() => generateBatch(batchIdx)}>Try again</button>
             <button className="btn-ghost text-sm" onClick={() => batchIdx + 1 < batches.length ? setBatchIdx(batchIdx + 1) : setDone(true)}>Skip story</button>
