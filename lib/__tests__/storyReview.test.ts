@@ -1,6 +1,6 @@
 import type { Card, CardState } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
-import { buildStoryPool, batchStories, locateTargets, parseStory, storyTargets } from '@/lib/storyReview'
+import { buildStoryPool, batchStories, locateTargets, parseStory, parseStoryTokens, storyTargets } from '@/lib/storyReview'
 import type { ExpressCandidate } from '@/lib/expressReview'
 
 const TZ = 'UTC'
@@ -100,6 +100,12 @@ describe('parseStory / storyTargets', () => {
     })!
     expect(parsed.usages).toEqual([{ lemma: 'perro', surface: 'perro' }])
     expect(parsed.tokens).toEqual([{ text: 'perro', gloss: 'dog' }])
+  })
+
+  it('parseStoryTokens keeps only well-formed glossed tokens', () => {
+    expect(parseStoryTokens({ tokens: [{ text: 'perro', gloss: 'dog' }, { text: 'el', gloss: '' }, { text: 7 }] }))
+      .toEqual([{ text: 'perro', gloss: 'dog' }])
+    expect(parseStoryTokens(null)).toEqual([])
   })
 
   it('rejects a storyless payload', () => {

@@ -42,6 +42,9 @@ interface BatchState {
   status: 'loading' | 'error' | 'ready'
   story?: GeneratedStory
   spans?: TargetSpan[]
+  /** Tap-a-word glosses arrive from a PARALLEL Haiku call after the story renders. */
+  glosses?: Map<string, string>
+  glossStatus?: 'loading' | 'ready' | 'error'
 }
 
 export default function StoryReviewPage() {
@@ -108,11 +111,47 @@ function StoryInner() {
         const data = await res.json() as { ok: boolean; story?: GeneratedStory }
         if (!data.ok || !data.story) throw new Error('generate-failed')
         const spans = locateTargets(data.story.story, data.story.usages, batch)
-        setBatchStates(prev => new Map(prev).set(i, { status: 'ready', story: data.story, spans }))
+        setBatchStates(prev => new Map(prev).set(i, { status: 'ready', story: data.story, spans, glossStatus: passage === 'target' ? 'loading' : 'ready' }))
+        // Tap-a-word glosses: fired in parallel, never blocking the read (that split is what made
+        // stories fast — the Sonnet call now writes prose only).
+        if (passage === 'target') void fetchGlosses(i, data.story!)
       } catch {
         setBatchStates(prev => new Map(prev).set(i, { status: 'error' }))
       } finally {
         generatingRef.current.delete(i)
+      }
+    })()
+  }
+
+  function fetchGlosses(i: number, story: GeneratedStory) {
+    const batch = batchesRef.current[i]
+    if (!batch) return
+    void (async () => {
+      try {
+        const res = await fetch(apiUrl('/api/story/generate'), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            phase: 'gloss', story: story.story,
+            targets: storyTargets(batch),
+            sourceLanguage: batch[0]!.card.sourceLanguage,
+            targetLanguage: batch[0]!.card.targetLanguage,
+            passage,
+          }),
+        })
+        const data = await res.json() as { ok: boolean; tokens?: { text: string; gloss: string }[] }
+        if (!data.ok || !data.tokens) throw new Error('gloss-failed')
+        const m = new Map<string, string>()
+        for (const t of data.tokens) if (!m.has(t.text.toLowerCase())) m.set(t.text.toLowerCase(), t.gloss)
+        setBatchStates(prev => {
+          const cur = prev.get(i)
+          return cur ? new Map(prev).set(i, { ...cur, glosses: m, glossStatus: 'ready' }) : prev
+        })
+      } catch {
+        setBatchStates(prev => {
+          const cur = prev.get(i)
+          return cur ? new Map(prev).set(i, { ...cur, glossStatus: 'error' }) : prev
+        })
       }
     })()
   }
@@ -147,7 +186,10 @@ function StoryInner() {
         const built = batchStories(pool, deckIdByCard)
         batchesRef.current = built
         setBatches(built)
+        // The first TWO stories generate in parallel — the cold start is the only wait a reader
+        // ever feels, so halve it; later batches prefetch one ahead as usual.
         if (built.length > 0) generateBatch(0)
+        if (built.length > 1) generateBatch(1)
       } catch (err) {
         setLoadError(err instanceof Error ? err.message : 'Failed to load.')
       } finally {
@@ -168,11 +210,7 @@ function StoryInner() {
   const batch = batches[batchIdx]
   const bs = batchStates.get(batchIdx)
   const cardById = useMemo(() => new Map((batch ?? []).map(c => [c.card.id, c])), [batch])
-  const tokenGloss = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const t of bs?.story?.tokens ?? []) if (t.gloss && !m.has(t.text.toLowerCase())) m.set(t.text.toLowerCase(), t.gloss)
-    return m
-  }, [bs])
+  const tokenGloss = bs?.glosses ?? new Map<string, string>()
 
   /** Credit everything located + unrevealed in this story, tally the rest, advance. */
   function finishStory() {
@@ -318,7 +356,9 @@ function StoryInner() {
                 <span className="text-ink font-medium">{picked}</span>
                 {tokenGloss.get(picked.toLowerCase())
                   ? <span className="text-ink-muted"> — {tokenGloss.get(picked.toLowerCase())}</span>
-                  : <span className="text-ink-faint"> — no translation available</span>}
+                  : bs?.glossStatus === 'loading'
+                    ? <span className="text-ink-faint"> — translating…</span>
+                    : <span className="text-ink-faint"> — no translation available</span>}
               </p>
             )}
           </div>

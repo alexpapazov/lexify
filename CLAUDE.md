@@ -3373,7 +3373,11 @@ are reserved for them (null = free write) so shipping them needs no migration.
 📖 Story pill + passage sub-toggle, remembered in `lexify-today-modes`): the due reverse pool is
 batched (deck-mates adjacent, `STORY_BATCH_SIZE=40`) and each batch becomes ONE Sonnet-written
 story (route `app/api/story/generate`, model `claude-sonnet-5` — deliberately the powerful tier,
-user decision) with targets HIGHLIGHTED. Credit contract = express matching, verbatim: untapped
+user decision) with targets HIGHLIGHTED. TWO-PHASE generation (2026-10-04, speed fix): the Sonnet
+call writes prose + usages ONLY (max_tokens 4000); tap-a-word glosses come from a separate
+`phase: 'gloss'` Haiku call fired in parallel after the story renders ("translating…" until it
+lands) — folding tokens into the Sonnet call made the output ~5x longer and was why stories took
+forever; do not fold them back. The first TWO batches generate in parallel on load. Credit contract = express matching, verbatim: untapped
 located targets earn a reverse Good via `creditExpressMatch` behind the per-story Finish button;
 TAPPING a target reveals its meaning and writes NOTHING (stays due); unwoven/unlocatable targets
 stay due; relearning rows never enter. Pool = `buildStoryPool` in `lib/storyReview.ts` (express

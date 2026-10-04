@@ -124,6 +124,19 @@ export function parseStory(raw: unknown): GeneratedStory | null {
   return { title: typeof r.title === 'string' ? r.title.trim() : '', story, usages, tokens }
 }
 
+/** Defensive parse of the gloss phase's `{ tokens: [...] }` payload (the parallel Haiku call —
+ *  see the route). Malformed entries drop individually; [] = the whole payload was unusable. */
+export function parseStoryTokens(raw: unknown): { text: string; gloss: string }[] {
+  if (typeof raw !== 'object' || raw === null) return []
+  const list = (raw as { tokens?: unknown }).tokens
+  if (!Array.isArray(list)) return []
+  return list
+    .map(t => (typeof t === 'object' && t !== null && typeof (t as Record<string, unknown>).text === 'string')
+      ? { text: ((t as Record<string, unknown>).text as string).trim(), gloss: typeof (t as Record<string, unknown>).gloss === 'string' ? ((t as Record<string, unknown>).gloss as string).trim() : '' }
+      : null)
+    .filter((t): t is { text: string; gloss: string } => t !== null && t.text.length > 0 && t.gloss.length > 0)
+}
+
 // ─── Locating targets in the story text ────────────────────────────────────────
 
 export interface TargetSpan {

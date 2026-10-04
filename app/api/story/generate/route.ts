@@ -17,17 +17,25 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { langName } from '@/lib/languages'
-import { parseStory, STORY_BATCH_SIZE, type StoryTarget, type StoryPassageMode } from '@/lib/storyReview'
+import { parseStory, parseStoryTokens, STORY_BATCH_SIZE, type StoryTarget, type StoryPassageMode } from '@/lib/storyReview'
 
 export const runtime = 'nodejs'
 
 const MODEL = 'claude-sonnet-5'
+/** Tap-a-word glosses are a separate, parallel call on the FAST tier: annotating finished text is
+ *  Haiku-grade work, and folding it into the Sonnet call made the output ~5x longer — the whole
+ *  reason stories took forever (generation time scales with output tokens). */
+const GLOSS_MODEL = 'claude-haiku-4-5-20251001'
 
 interface RequestBody {
+  /** 'story' (default) writes the story; 'gloss' annotates an already-written story's words. */
+  phase?:         'story' | 'gloss'
   targets:        StoryTarget[]
   sourceLanguage: string
   targetLanguage: string
   passage:        StoryPassageMode
+  /** gloss phase only: the story text to annotate. */
+  story?:         string
 }
 
 function extractJson(text: string): unknown {
@@ -56,18 +64,14 @@ Requirements:
   target's GIVEN sense, not another sense of the same word.
 - Everyday, grammatical, idiomatic ${srcLang}. Simple vocabulary around the targets.
 
-Also report:
-- "usages": for EVERY target word, its citation form copied from the list above and the word
-  exactly as it appears in your story (the inflected surface form).
-- "tokens": EVERY word of the story, in any order but with no word missing — "text" exactly as it
-  appears, "gloss" a one-or-two-word ${tgtLang} meaning AS USED HERE. Skip punctuation only.
+Also report "usages": for EVERY target word, its citation form copied from the list above and
+the word exactly as it appears in your story (the inflected surface form).
 
 Respond with ONLY a JSON object, no other text, in exactly this shape:
 {
   "title": "<a short ${srcLang} title>",
   "story": "<the full story, paragraphs separated by \\n\\n>",
-  "usages": [ { "lemma": "...", "surface": "..." } ],
-  "tokens": [ { "text": "...", "gloss": "..." } ]
+  "usages": [ { "lemma": "...", "surface": "..." } ]
 }`
 }
 
@@ -117,6 +121,39 @@ export async function POST(req: NextRequest) {
 
   const srcLang = langName(body.sourceLanguage)
   const tgtLang = langName(body.targetLanguage)
+
+  // Gloss phase: annotate a finished story's words (Haiku), fired by the client in PARALLEL with
+  // reading — the story never waits on it.
+  if (body.phase === 'gloss') {
+    if (typeof body.story !== 'string' || !body.story.trim()) {
+      return NextResponse.json({ ok: false, reason: 'bad-request' }, { status: 400 })
+    }
+    try {
+      const glossPrompt = `Here is a short ${srcLang} story:
+
+${body.story}
+
+Report EVERY word of the story — content words AND grammatical words, articles and prepositions
+included (skip punctuation only): "text" exactly as it appears, "gloss" a one-or-two-word
+${tgtLang} meaning AS USED HERE.
+
+Respond with ONLY a JSON object, no other text, in exactly this shape:
+{ "tokens": [ { "text": "...", "gloss": "..." } ] }`
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: GLOSS_MODEL, max_tokens: 12000, messages: [{ role: 'user', content: glossPrompt }] }),
+      })
+      if (!res.ok) return NextResponse.json({ ok: false, reason: 'api-error' })
+      const data = await res.json()
+      const tokens = parseStoryTokens(extractJson(data?.content?.[0]?.text ?? ''))
+      if (tokens.length === 0) return NextResponse.json({ ok: false, reason: 'parse-error' })
+      return NextResponse.json({ ok: true, tokens })
+    } catch {
+      return NextResponse.json({ ok: false, reason: 'exception' })
+    }
+  }
+
   const prompt = body.passage === 'native' ? nativePrompt(body, srcLang, tgtLang) : targetPrompt(body, srcLang, tgtLang)
 
   try {
@@ -127,8 +164,9 @@ export async function POST(req: NextRequest) {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
       },
-      // Generous: a 40-target story carries ~300 words of prose plus one annotated token per word.
-      body: JSON.stringify({ model: MODEL, max_tokens: 16000, messages: [{ role: 'user', content: prompt }] }),
+      // Prose + usages only (glosses are the separate Haiku phase), so the output stays small —
+      // that is what makes the story fast; do not fold tokens back into this call.
+      body: JSON.stringify({ model: MODEL, max_tokens: 4000, messages: [{ role: 'user', content: prompt }] }),
     })
     if (!res.ok) return NextResponse.json({ ok: false, reason: 'api-error' })
 
