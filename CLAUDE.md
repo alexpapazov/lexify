@@ -3367,6 +3367,23 @@ like practice. Schedule-neutral — touches no reviews or goals.
 Prompts + AI feedback are PLANNED, not built: the `prompt` column and `JournalEntry.prompt` field
 are reserved for them (null = free write) so shipping them needs no migration.
 
+## Story review — due reverse words woven into stories (2026-10-04, no migration)
+
+`/study/story?passage=target|native&source=&target=` (launched from the Today page's reverse row;
+📖 Story pill + passage sub-toggle, remembered in `lexify-today-modes`): the due reverse pool is
+batched (deck-mates adjacent, `STORY_BATCH_SIZE=40`) and each batch becomes ONE Sonnet-written
+story (route `app/api/story/generate`, model `claude-sonnet-5` — deliberately the powerful tier,
+user decision) with targets HIGHLIGHTED. Credit contract = express matching, verbatim: untapped
+located targets earn a reverse Good via `creditExpressMatch` behind the per-story Finish button;
+TAPPING a target reveals its meaning and writes NOTHING (stays due); unwoven/unlocatable targets
+stay due; relearning rows never enter. Pool = `buildStoryPool` in `lib/storyReview.ts` (express
+pool minus FUNCTION WORDS — prepositions/pronouns/determiners/etc., untestable by reading). Spans
+located client-side (`locateTargets`: model-reported surface else bare front, case-insensitive,
+WHOLE-WORD growth, positions claimed once). 'target' passages carry per-word token glosses
+(tap-a-word, like practice); 'native' passages are the learner's language with only targets in
+the learned one. Wire types + `parseStory` live in lib/storyReview.ts (routes import from lib —
+Capacitor trap). Stories generate progressively (next batch prefetches while reading).
+
 ## Today page — per-launch mode picking (2026-10-04, no migration)
 
 `/study/today` (Study nav sub-item, v1 under critique): a day-progress bar (done = today's
@@ -3377,8 +3394,7 @@ the EXISTING sessions (`?cloze=1`, `routes.express`, ladder pages). Pool counts 
 `deckDuePools` in `lib/todayPools.ts` — EXTRACTED from the dashboard's stats block, which now
 calls it too, so the two pages share one due-presentation definition (typed vs self-graded vs
 reverse; the smart-lane threshold split). Matching eligibility + the dashed "Normal review only"
-bucket use `buildExpressPool`. Story mode is a disabled pill (see the story/passage design in
-this file's history + Phrasebook proposal pattern).
+bucket use `buildExpressPool`; story eligibility from `buildStoryPool`.
 
 ## Ladder drill mode — schedule-neutral re-runs (2026-09-21, no migration)
 

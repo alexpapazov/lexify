@@ -30,6 +30,7 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { deckDuePools } from '@/lib/todayPools'
 import { buildExpressPool } from '@/lib/expressReview'
+import { buildStoryPool } from '@/lib/storyReview'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { climbInProgress } from '@/lib/climbProgress'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
@@ -43,8 +44,9 @@ import type { Card, CardState } from '@/domain'
 const MODES_KEY = 'lexify-today-modes'
 
 type ForwardMode = 'normal' | 'cloze'
-type ReverseMode = 'normal' | 'matching'
-interface RowModes { typed: ForwardMode; sg: ForwardMode; reverse: ReverseMode }
+type ReverseMode = 'normal' | 'matching' | 'story'
+type StoryPassage = 'target' | 'native'
+interface RowModes { typed: ForwardMode; sg: ForwardMode; reverse: ReverseMode; storyPassage: StoryPassage }
 
 interface PairPools {
   source: string
@@ -101,7 +103,7 @@ export default function TodayPage() {
   const [done, setDone] = useState({ typed: 0, sg: 0, reverse: 0 })
   const [tzToday, setTzToday] = useState<{ tz: string; today: string }>({ tz: 'UTC', today: '' })
 
-  const [modes, setModes] = useState<RowModes>({ typed: 'normal', sg: 'normal', reverse: 'normal' })
+  const [modes, setModes] = useState<RowModes>({ typed: 'normal', sg: 'normal', reverse: 'normal', storyPassage: 'target' })
   const [scopes, setScopes] = useState({ typed: 'all', sg: 'all', reverse: 'all' })
 
   useEffect(() => {
@@ -194,6 +196,7 @@ export default function TodayPage() {
           typed: dm?.forward_cloze ? 'cloze' : 'normal',
           sg: dm?.forward_cloze ? 'cloze' : 'normal',
           reverse: dm?.reverse_matching ? 'matching' : 'normal',
+          storyPassage: 'target',
         }
         try {
           const stored = JSON.parse(localStorage.getItem(MODES_KEY) ?? 'null') as Partial<RowModes> | null
@@ -229,6 +232,15 @@ export default function TodayPage() {
     return { playable: pool.length, duplicates: skippedAmbiguous, relearn }
   }, [cards, states, tracksByPair, tzToday, scopes.reverse, pairPools])
 
+  // Story eligibility for the CURRENT reverse scope — what /study/story will actually serve.
+  const storyInfo = useMemo(() => {
+    const [source, target] = scopes.reverse === 'all' ? [null, null] : (scopes.reverse.split('|') as [string, string])
+    const { pool, skippedAmbiguous, skippedFunctionWords } = buildStoryPool(cards, states, { source, target, tracksByPair, tz: tzToday.tz, today: tzToday.today })
+    const scoped = pairPools.filter(p => scopes.reverse === 'all' || `${p.source}|${p.target}` === scopes.reverse)
+    const relearn = scoped.reduce((n, p) => n + p.reverse.filter(st => st.relearning || st.relearningStep > 0).length, 0)
+    return { readable: pool.length, duplicates: skippedAmbiguous, functionWords: skippedFunctionWords, relearn }
+  }, [cards, states, tracksByPair, tzToday, scopes.reverse, pairPools])
+
   const lockedCount = useMemo(() => {
     const { skippedAmbiguous } = buildExpressPool(cards, states, { source: null, target: null, tracksByPair, tz: tzToday.tz, today: tzToday.today })
     const relearnAll = pairPools.reduce((n, p) => n + p.reverse.filter(s => s.relearning || s.relearningStep > 0).length, 0)
@@ -248,6 +260,8 @@ export default function TodayPage() {
     if (mode === 'matching') {
       const [source, target] = scope === 'all' ? [undefined, undefined] : scope.split('|')
       router.push(routes.express(source && target ? { source, target } : {}))
+    } else if (mode === 'story') {
+      router.push(`/study/story?passage=${modes.storyPassage}${pairQuery(scope)}`)
     } else {
       router.push(`/study/all/session?category=due&present=selfgraded&dir=reverse${pairQuery(scope)}`)
     }
@@ -346,7 +360,7 @@ export default function TodayPage() {
           <div className={pillGroup}>
             <ModePill active={modes.reverse === 'normal'} onClick={() => setMode({ reverse: 'normal' })}>Normal</ModePill>
             <ModePill active={modes.reverse === 'matching'} onClick={() => setMode({ reverse: 'matching' })}>⚡ Matching</ModePill>
-            <ModePill active={false} disabled onClick={() => {}} title="Planned — stories woven from your due words">📖 Story</ModePill>
+            <ModePill active={modes.reverse === 'story'} onClick={() => setMode({ reverse: 'story' })}>📖 Story</ModePill>
           </div>
           <ScopeSelect pairs={pairPools} value={scopes.reverse} onChange={v => setScopes(s => ({ ...s, reverse: v }))} pick={p => p.reverse.length} />
           <button className="btn-primary text-sm px-5 ml-auto disabled:opacity-40" disabled={sum(p => p.reverse.length, scopes.reverse) === 0}
@@ -358,6 +372,24 @@ export default function TodayPage() {
             {expressInfo.relearn + expressInfo.duplicates > 0 && <> — {expressInfo.relearn + expressInfo.duplicates} need a normal review
               {' '}({[expressInfo.relearn > 0 ? `${expressInfo.relearn} relearning` : null, expressInfo.duplicates > 0 ? `${expressInfo.duplicates} duplicate meanings` : null].filter(Boolean).join(', ')})</>}
           </p>
+        )}
+        {modes.reverse === 'story' && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-ink-faint">Passage:</span>
+              <div className={pillGroup}>
+                <ModePill active={modes.storyPassage === 'target'} onClick={() => setMode({ storyPassage: 'target' })}>Full passage in language</ModePill>
+                <ModePill active={modes.storyPassage === 'native'} onClick={() => setMode({ storyPassage: 'native' })}>Only target words in language</ModePill>
+              </div>
+            </div>
+            {sum(p => p.reverse.length, scopes.reverse) > 0 && (
+              <p className="text-[11px] text-ink-faint">
+                {storyInfo.readable} of {sum(p => p.reverse.length, scopes.reverse)} go into stories
+                {storyInfo.relearn + storyInfo.duplicates + storyInfo.functionWords > 0 && <> — {storyInfo.relearn + storyInfo.duplicates + storyInfo.functionWords} stay in normal review
+                  {' '}({[storyInfo.relearn > 0 ? `${storyInfo.relearn} relearning` : null, storyInfo.duplicates > 0 ? `${storyInfo.duplicates} duplicate meanings` : null, storyInfo.functionWords > 0 ? `${storyInfo.functionWords} function words` : null].filter(Boolean).join(', ')})</>}
+              </p>
+            )}
+          </div>
         )}
       </div>
 
