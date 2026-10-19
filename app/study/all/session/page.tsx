@@ -476,7 +476,10 @@ function AllDueSessionInner() {
     const dueMs = (c: SessionCard) => c.state.dueAt ? new Date(c.state.dueAt).getTime() : 0
     const due = relearnPool.filter(c => dueMs(c) <= now)
     if (due.length > 0) {
-      setQueue(prev => { const at = Math.min(prev.length, index + 3); const next = [...prev]; next.splice(at, 0, ...due); return next })
+      // Wrong answers return at the END of the queue, whatever the exercise type (user decision
+      // 2026-10-19) — never spliced in near the current card. The relearn copy keeps its
+      // presentation (a cloze card redoes its cloze: the session's cloze cache is per card id).
+      setQueue(prev => [...prev, ...due])
       setRelearnPool(prev => prev.filter(c => !due.includes(c)))
       return
     }

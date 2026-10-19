@@ -74,7 +74,8 @@ function StoryInner() {
   const [batchStates, setBatchStates] = useState<Map<number, BatchState>>(new Map())
   const [batchIdx, setBatchIdx] = useState(0)
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
-  const [picked, setPicked] = useState<string | null>(null)
+  /** The one open word bubble — keyed per INSTANCE so tapping "el" opens one bubble, not ten. */
+  const [picked, setPicked] = useState<{ key: string; text: string } | null>(null)
   const [credited, setCredited] = useState(0)
   const [stayedDue, setStayedDue] = useState(0)
   const [notWoven, setNotWoven] = useState(0)
@@ -246,13 +247,40 @@ function StoryInner() {
     else setDone(true)
   }
 
+  /** The floating definition bubble, anchored ABOVE the tapped word — the practice cloze player's
+   *  panel style (raised card, hairline border), positioned instead of inlined (user request). */
+  function Bubble({ children }: { children: React.ReactNode }) {
+    return (
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-20 whitespace-nowrap rounded-card border border-line/15 bg-surface-raised shadow-lg px-3 py-1.5 text-sm text-center pointer-events-none">
+        {children}
+      </span>
+    )
+  }
+
   /** A plain (non-target) stretch of story text — tappable per word in target mode. */
   function renderPlain(text: string, keyBase: string) {
     if (passage === 'native') return <span key={keyBase}>{text}</span>
-    return segmentWords(text).map((run, j) => run.isWord
-      ? <button key={`${keyBase}-${j}`} type="button" onClick={() => setPicked(p => p === run.text ? null : run.text)}
-          className={`rounded-sm transition-colors ${picked === run.text ? 'bg-accent/15 text-accent-soft' : 'hover:bg-accent/10'}`}>{run.text}</button>
-      : <span key={`${keyBase}-${j}`}>{run.text}</span>)
+    return segmentWords(text).map((run, j) => {
+      if (!run.isWord) return <span key={`${keyBase}-${j}`}>{run.text}</span>
+      const k = `${keyBase}-${j}`
+      const active = picked?.key === k
+      return (
+        <span key={k} className="relative inline-block">
+          {active && (
+            <Bubble>
+              <span className="text-ink font-medium">{run.text}</span>
+              {tokenGloss.get(run.text.toLowerCase())
+                ? <span className="text-ink-muted"> — {tokenGloss.get(run.text.toLowerCase())}</span>
+                : bs?.glossStatus === 'loading'
+                  ? <span className="text-ink-faint"> — translating…</span>
+                  : <span className="text-ink-faint"> — no translation available</span>}
+            </Bubble>
+          )}
+          <button type="button" onClick={() => setPicked(prev => prev?.key === k ? null : { key: k, text: run.text })}
+            className={`rounded-sm transition-colors ${active ? 'bg-accent/15 text-accent-soft' : 'hover:bg-accent/10'}`}>{run.text}</button>
+        </span>
+      )
+    })
   }
 
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
@@ -309,15 +337,39 @@ function StoryInner() {
       if (sp.start > cursor) segments.push(renderPlain(story.story.slice(cursor, sp.start), `p${i}`))
       const cand = cardById.get(sp.cardId)
       const isRevealed = revealed.has(sp.cardId)
+      const tk = `t${i}`
+      const tActive = picked?.key === tk
       segments.push(
-        <button key={`t${i}`} type="button"
-          onClick={() => setRevealed(prev => { const n = new Set(prev); n.add(sp.cardId); return n })}
-          title={isRevealed ? undefined : 'Tap to reveal the meaning — the card then stays due'}
-          className={`rounded px-0.5 font-medium transition-colors ${isRevealed
-            ? 'bg-warning/15 text-warning'
-            : 'bg-accent/15 text-accent-soft hover:bg-accent/25'}`}>
-          {sp.surface}{isRevealed && cand && <span className="font-normal text-xs"> ({displayText(cand.card.back)})</span>}
-        </button>,
+        // Target taps are a three-step cycle so a mis-tap never silently costs credit:
+        // unrevealed → reveal + bubble; revealed (bubble closed) → reopen bubble;
+        // revealed + bubble open → UN-reveal (counts as known again) and close.
+        <span key={tk} className="relative inline-block">
+          {tActive && cand && (
+            <Bubble>
+              <span className="text-ink font-medium">{sp.surface}</span>
+              <span className="text-ink-muted"> — {displayText(cand.card.back)}</span>
+              <span className="block text-[10px] text-ink-faint">stays due · tap again if you knew it</span>
+            </Bubble>
+          )}
+          <button type="button"
+            onClick={() => {
+              if (!isRevealed) {
+                setRevealed(prev => { const n = new Set(prev); n.add(sp.cardId); return n })
+                setPicked({ key: tk, text: sp.surface })
+              } else if (!tActive) {
+                setPicked({ key: tk, text: sp.surface })
+              } else {
+                setRevealed(prev => { const n = new Set(prev); n.delete(sp.cardId); return n })
+                setPicked(null)
+              }
+            }}
+            title={isRevealed ? undefined : 'Tap to reveal the meaning — the card then stays due'}
+            className={`rounded px-0.5 font-medium transition-colors ${isRevealed
+              ? 'bg-warning/15 text-warning'
+              : 'bg-accent/15 text-accent-soft hover:bg-accent/25'}`}>
+            {sp.surface}
+          </button>
+        </span>,
       )
       cursor = sp.end
     })
@@ -353,19 +405,9 @@ function StoryInner() {
           <div className="panel space-y-4">
             {story.title && <h1 className="text-lg font-semibold text-ink">{story.title}</h1>}
             <p className="text-[17px] leading-[1.9] text-ink whitespace-pre-wrap">{segments}</p>
-            {picked && passage === 'target' && (
-              <p className="text-sm border-t border-line/10 pt-3">
-                <span className="text-ink font-medium">{picked}</span>
-                {tokenGloss.get(picked.toLowerCase())
-                  ? <span className="text-ink-muted"> — {tokenGloss.get(picked.toLowerCase())}</span>
-                  : bs?.glossStatus === 'loading'
-                    ? <span className="text-ink-faint"> — translating…</span>
-                    : <span className="text-ink-faint"> — no translation available</span>}
-              </p>
-            )}
           </div>
           <p className="text-xs text-ink-faint text-center">
-            Highlighted words are your due cards — read past the ones you understood, tap any you'd have missed.
+            Highlighted words are your due cards — read past the ones you understood, tap any you'd have missed (tap twice to unmark a mis-tap).
             {spans.length < (batch?.length ?? 0) && ` ${(batch?.length ?? 0) - spans.length} of this batch couldn't be woven in and stay due.`}
           </p>
           <div className="flex justify-center">

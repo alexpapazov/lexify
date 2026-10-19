@@ -208,6 +208,11 @@ function ExpressInner() {
           speak(cand ? cand.card.front : p.front, cand?.card.sourceLanguage ?? source ?? '')
         }}
         onAttempt={handleAttempt}
+        redoMissed
+        // A redo life un-dirties the pair: the redo is a REAL attempt — matching it cleanly now
+        // earns credit (mismatching re-dirties it and spawns another life). Again-rated pairs are
+        // deliberately NOT reborn: that was an explicit "leave it for a real review".
+        onRedoRound={ids => ids.forEach(id => dirtyRef.current.delete(id))}
         shouldCollectRating={ratingMode
           ? p => candidateById.has(p.id) && !dirtyRef.current.has(p.id) && !creditedRef.current.has(p.id) && !againRef.current.has(p.id)
           : undefined}
@@ -218,7 +223,9 @@ function ExpressInner() {
             ? ` (${[['easy', ratedCounts.easy], ['good', ratedCounts.good], ['hard', ratedCounts.hard]]
                 .filter(([, n]) => (n as number) > 0).map(([l, n]) => `${n} ${l}`).join(' · ')})`
             : ' (matched clean, counted as Good)'
-          const stayReason = ratingMode ? 'mix-ups or rated Again' : `${mistakes} wrong pairing${mistakes !== 1 ? 's' : ''}`
+          // With redo rounds, missed pairs replay until matched clean — what's left unscheduled
+          // is only pairs the learner RATED Again (an explicit "keep it due").
+          const stayReason = ratingMode ? 'rated Again' : 'left unfinished'
           return (
             <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
               <h1 className="text-2xl font-semibold text-ink">Express review done</h1>

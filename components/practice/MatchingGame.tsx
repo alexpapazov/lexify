@@ -63,7 +63,7 @@ export interface MatchAttempt {
   confused?: MatchPair
 }
 
-export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt, renderFinish, shouldCollectRating, onRateMatch }: {
+export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt, renderFinish, shouldCollectRating, onRateMatch, redoMissed, onRedoRound }: {
   pairs:  MatchPair[]
   onExit: () => void
   /** Which column holds the target-language words. */
@@ -89,6 +89,15 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
   shouldCollectRating?: (pair: MatchPair) => boolean
   /** The rating chosen for a pair — tapped on its tile, or 'good' applied by the Continue button. */
   onRateMatch?: (pair: MatchPair, rating: Rating) => void
+  /**
+   * Due-now express mode: pairs MISSED during the built rounds come back as fresh REDO rounds at
+   * the END, repeating until every pair has been matched cleanly in its latest life — a due pile
+   * finishes in THIS mode instead of being deferred to a normal session (user decision
+   * 2026-10-19). `onRedoRound` tells the owner which pairs start a new life (the express page
+   * un-dirties them so a clean redo match earns credit again).
+   */
+  redoMissed?: boolean
+  onRedoRound?: (pairIds: string[]) => void
 }) {
   const [audioOn, toggleAudio] = usePracticeAudio()
   const [rounds,   setRounds]   = useState<Round[]>(() => buildRounds(pairs))
@@ -99,6 +108,9 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
   /** Pair ids briefly painted red after a mismatch; cleared by a timeout. */
   const [wrong,    setWrong]    = useState<{ left: string; right: string } | null>(null)
   const [mistakes, setMistakes] = useState(0)
+  /** Pairs missed in their CURRENT life — reborn as redo rounds at the end (see `redoMissed`). */
+  const missedRef = useRef<Set<string>>(new Set())
+  const [missedCount, setMissedCount] = useState(0)
   /** Matched pairs awaiting a rating (pair id → the tile side carrying the overlay). */
   const [unrated, setUnrated] = useState<Map<string, 'left' | 'right'>>(new Map())
   const [elapsed,  setElapsed]  = useState(0)
@@ -125,10 +137,23 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
     if (!current!.pairs.every(p => nextMatched.has(p.id))) return
     if (round + 1 < rounds.length) {
       setRound(r => r + 1)
-    } else {
-      setElapsed(Date.now() - startRef.current)
-      setFinished(true)
+      return
     }
+    // Redo lives: everything missed on the way here plays again in fresh rounds at the end,
+    // un-matched and (via onRedoRound) un-dirtied — so the redo is a real, creditable attempt.
+    if (redoMissed && missedRef.current.size > 0) {
+      const redoIds = new Set(missedRef.current)
+      missedRef.current = new Set()
+      setMissedCount(0)
+      const redoPairs = pairs.filter(p => redoIds.has(p.id))
+      onRedoRound?.(redoPairs.map(p => p.id))
+      setMatched(prev => { const n = new Set(prev); redoIds.forEach(id => n.delete(id)); return n })
+      setRounds(prev => [...prev, ...buildRounds(redoPairs)])
+      setRound(r => r + 1)
+      return
+    }
+    setElapsed(Date.now() - startRef.current)
+    setFinished(true)
   }
 
   /** Rating mode = the express due-now game; the classic game passes no rating hook. */
@@ -176,6 +201,12 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
       advanceIfRoundDone(nextMatched)
     } else {
       setMistakes(m => m + 1)
+      if (redoMissed) {
+        missedRef.current.add(targetId)
+        const other = pairById(otherId)
+        if (other) missedRef.current.add(other.id)
+        setMissedCount(missedRef.current.size)
+      }
       setWrong({ left: leftId, right: rightId })
       setSelLeft(null); setSelRight(null)
       if (wrongTimer.current) clearTimeout(wrongTimer.current)
@@ -309,7 +340,7 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
       {ratingMode && current!.pairs.every(p => matched.has(p.id)) && (
         <div className="text-center space-y-1.5 pt-2">
           <button className="btn-primary px-10" onClick={continueRound}>
-            {round + 1 < rounds.length ? 'Next round' : 'Finish'}
+            {round + 1 < rounds.length || (redoMissed && missedCount > 0) ? 'Next round' : 'Finish'}
           </button>
           {unrated.size > 0 && (
             <p className="text-xs text-ink-faint">

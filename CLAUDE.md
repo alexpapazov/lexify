@@ -45,7 +45,12 @@ Current feature files:
 - `features/Express Review.md` — matching as a REAL review for due reverse-recognition
   cards: launch mode set in Settings → Study → Due Now (`reverse_matching`, migration 124;
   the due-picker rows navigate straight in), clean match = full Good on the reverse
-  row, mismatches write nothing and stay due. Optional RATING mode (same select,
+  row, mismatches write nothing. REDO ROUNDS (2026-10-19): missed pairs come back as fresh
+  rounds at the END (`MatchingGame` `redoMissed`/`onRedoRound`, the express page un-dirties
+  reborn pairs) and a clean redo match EARNS credit — the pile finishes in-mode; only
+  Again-rated pairs stay for a normal session. Same day: session-page relearn re-shows
+  append to the END of the queue (was index+3 splice), keeping their presentation (cloze
+  cards redo their cloze). Optional RATING mode (same select,
   `express_rating`, migration 123): rating buttons on the matched tile;
   Again writes nothing. `/study/express`, `lib/expressReview.ts`.
 - `features/Phrasebook (proposal).md` — DEFERRED idea (2026-09-21, nothing built): per-pair

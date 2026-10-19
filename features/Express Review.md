@@ -20,10 +20,12 @@ review:
   fuzz window, density smoothing, day-start snap, `reps + 1`, and a `review_events` row
   (`mode: 'recognition'`, `reviewDirection: 'reverse'`, `rating: 'good'`) so measured retention and
   analytics count it like any other recognition review.
-- **A mismatch schedules NOTHING.** No lapse, no relearn loop, no event — the card (and the card
-  whose meaning was wrongly chosen; both sides of a mix-up are marked) simply stays due, and the
-  normal session makes the real judgement later. The finish screen's "Review the rest (N)" button
-  goes straight to the normal reverse session, which by then contains exactly the missed cards.
+- **A mismatch schedules NOTHING.** No lapse, no relearn loop, no event — both sides of a mix-up
+  are marked dirty for their current life. **Redo rounds (2026-10-19):** after the built rounds,
+  every missed pair comes back in fresh rounds at the END, un-dirtied — the redo is a real attempt,
+  so a clean redo match EARNS credit, and a second miss spawns another life (repeat until clean).
+  The pile finishes in-mode; only pairs the learner explicitly RATED Again are left for the normal
+  session ("Review the rest").
 - Credit is applied **per match, immediately**, so exiting mid-game keeps everything already
   cleared.
 
