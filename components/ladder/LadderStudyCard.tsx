@@ -63,7 +63,7 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   // Fetch (and persist) IPA on demand when IPA is on and this card has none — mirrors the session pages,
   // so it works even for cards that were never transcribed.
   useEffect(() => {
-    if (!showIpa || card.ipa || fetchedIpa) return
+    if (!showIpa || !native || card.ipa || fetchedIpa) return
     let cancelled = false
     fetch(apiUrl('/api/ipa'), {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -82,7 +82,13 @@ export function LadderStudyCard({ card, rung, deckCards, deckName, sourceLanguag
   // Shared "corner button" wiring: ? (give up → a miss/again), IPA toggle, and info.
   const missOutcome: RungAttemptOutcome = rung.selfRated ? 'again' : 'miss'
   const effectiveIpa = card.ipa ?? fetchedIpa
-  const ipaProps = { ipaText: showIpa ? (effectiveIpa ?? undefined) : undefined, onToggleIPA: () => onToggleIpa?.() }
+  // IPA transcribes the TARGET word (card.front), so it exists only when that word is the PROMPT
+  // (produce-native rungs). On a produce-target rung the prompt is the native gloss and the IPA
+  // would literally spell out the answer (user report 2026-10-19: "twig" + [IPA] = free answer).
+  // Same rule as the session pages' `promptShowsSource` gate.
+  const ipaProps = native
+    ? { ipaText: showIpa ? (effectiveIpa ?? undefined) : undefined, onToggleIPA: () => onToggleIpa?.() }
+    : {}
 
   // Track whether this attempt was marked correct via override (accept=true), so the replay can
   // flash the overridden result rather than the natural grade. Resets each card (component remounts).
