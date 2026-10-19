@@ -11,7 +11,7 @@ import { createClient } from '@/lib/supabase/client'
 import type { UserId } from '@/domain'
 
 export interface PracticeAttemptInput {
-  exercise: 'cloze' | 'matching'
+  exercise: 'cloze' | 'matching' | 'bank'   // 'bank' = the word-bank mode (column is free text)
   cardId:   string | null
   sourceLanguage: string
   targetLanguage: string

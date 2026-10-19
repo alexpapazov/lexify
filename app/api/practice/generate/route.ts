@@ -57,6 +57,8 @@ interface RequestBody {
   count:          number
   /** 'target' (default) = a full target-language sentence. 'native' = only the blank is target. */
   mode?: ClozeMode
+  /** Word-bank story style: the sentences read IN ORDER as one continuous narrative. */
+  narrative?: boolean
 }
 
 function extractJson(text: string): unknown {
@@ -95,7 +97,12 @@ Write ${body.count} sentence${body.count !== 1 ? 's' : ''}. Requirements:
   completed sentence into ${tgtLang}.
 - Spread the sentences across the target words rather than reusing one.
 - Grammatical, idiomatic ${srcLang} — correct agreement, tense and word order.
-- Vary sentence structure between items; do not reuse one template.
+${body.narrative
+  ? `- The sentences TELL ONE CONTINUOUS STORY, in the exact order of the target list above:
+  shared characters and setting, each sentence following naturally from the one before — someone
+  reading them top to bottom reads one little narrative. Still exactly one target word per
+  sentence, one sentence per target.`
+  : '- Vary sentence structure between items; do not reuse one template.'}
 ${languageNote(body.sourceLanguage)}
 
 For each sentence also report EVERY word in it — content words AND grammatical words, articles and

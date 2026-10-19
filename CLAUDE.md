@@ -3372,6 +3372,18 @@ like practice. Schedule-neutral — touches no reviews or goals.
 Prompts + AI feedback are PLANNED, not built: the `prompt` column and `JournalEntry.prompt` field
 are reserved for them (null = free write) so shipping them needs no migration.
 
+## Word Bank practice mode (2026-10-19, no migration)
+
+Third Exercise pill on `/practice`: the chosen words become a BANK of chips (each the inflected
+form its sentence uses, shuffled); each generated sentence shows ONE blank with deliberately NO
+gloss and NO translation — the learner tap-places the right chip from context (translation reveals
+after solving). Styles: 'sentences' (independent) / 'story' (`narrative: true` on the practice
+generate route — the sentences read in order as one continuous narrative; >12 targets chunk into
+sequential mini-stories). Generation bypasses the practice sentence bank on purpose (one FRESH
+sentence per word; stories must be written in one piece) — `lib/wordBank.ts`; player
+`components/practice/WordBankPlayer.tsx`; attempts log as exercise 'bank' (column is free text).
+Wrong picks flash and return — same sentence until solved; schedule-neutral like all practice.
+
 ## Story review — due reverse words woven into stories (2026-10-04, no migration)
 
 `/study/story?passage=target|native&source=&target=` (launched from the Today page's reverse row;

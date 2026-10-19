@@ -36,6 +36,8 @@ import { getToday } from '@/lib/dates'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { ClozePlayer } from '@/components/practice/ClozePlayer'
 import { MatchingGame, type MatchPair, type MatchAttempt } from '@/components/practice/MatchingGame'
+import { WordBankPlayer, type BankAttempt } from '@/components/practice/WordBankPlayer'
+import { generateWordBank, type WordBankStyle } from '@/lib/wordBank'
 import { type ClozeAttempt } from '@/components/practice/ClozePlayer'
 import { SupabasePracticeAttemptRepository } from '@/lib/data/practiceAttempts'
 import { speak, speakCard } from '@/lib/speak'
@@ -174,7 +176,10 @@ function PracticeInner() {
   const [rangeLimit, setRangeLimit] = useState(DEFAULT_RANGE_LIMIT)
   const [rangeSeed,  setRangeSeed]  = useState(1)
 
-  const [exercise,  setExercise]  = useState<'cloze' | 'matching'>('cloze')
+  const [exercise,  setExercise]  = useState<'cloze' | 'matching' | 'bank'>('cloze')
+  // Word-bank style: independent sentences, or sentences that read in order as one story.
+  const [bankStyle, setBankStyle] = useState<WordBankStyle>('sentences')
+  const [bankSession, setBankSession] = useState<import('@/lib/practiceGenerate').PreparedExercise[] | null>(null)
   /** Which matching column holds the target-language words. */
   const [targetSide, setTargetSide] = useState<'left' | 'right'>('left')
   const [clozeMode, setClozeMode] = useState<ClozeMode>('target')
@@ -392,6 +397,32 @@ function PracticeInner() {
     }
   }
 
+  /** Word bank: one fresh sentence per chosen word (story style = one continuous narrative). */
+  async function startBank() {
+    if (!pair || chosen.length === 0 || generating) return
+    setGenerating(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const run = await generateWordBank({
+        targets: chosen,
+        sourceLanguage: pair.sourceLanguage,
+        targetLanguage: pair.targetLanguage,
+        style: bankStyle,
+      })
+      if (run.items.length === 0) {
+        setError('The generator didn’t return any usable sentences. Try again, or pick different words.')
+        return
+      }
+      if (run.missing > 0) setNotice(`${run.missing} word${run.missing !== 1 ? 's' : ''} couldn’t be woven in and sat out.`)
+      setBankSession(run.items)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Generation failed.')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   /** Matching needs no generation: every chosen word plays, in rounds. */
   function startMatching() {
     if (!pair || chosen.length === 0) return
@@ -409,6 +440,15 @@ function PracticeInner() {
       sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
       prompt: a.item.exercise.sentence, expected: a.item.exercise.answer,
       response: a.response || null, correct: a.correct, overridden: a.overridden,
+    }).catch(() => {})
+  }
+  function logBank(a: BankAttempt) {
+    if (!userId || !pair) return
+    void attemptRepo.record(userId, {
+      exercise: 'bank', cardId: a.item.targetCardId,
+      sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
+      prompt: a.item.exercise.sentence, expected: a.item.exercise.answer,
+      response: a.response || null, correct: a.correct,
     }).catch(() => {})
   }
   function logMatch(a: MatchAttempt) {
@@ -476,6 +516,17 @@ function PracticeInner() {
       <Link href="/auth" className="btn-primary inline-block">Sign in</Link>
     </div>
   )
+
+  if (bankSession) {
+    return (
+      <WordBankPlayer
+        items={bankSession}
+        storyMode={bankStyle === 'story'}
+        onExit={() => { setBankSession(null); setNotice(null) }}
+        onAttempt={logBank}
+      />
+    )
+  }
 
   if (matchPairs) {
     return (
@@ -827,7 +878,7 @@ function PracticeInner() {
         <div className="space-y-2">
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Exercise</label>
           <div className="flex gap-1.5 flex-wrap">
-            {([['cloze', 'Fill the blank'], ['matching', 'Matching pairs']] as const).map(([m, label]) => (
+            {([['cloze', 'Fill the blank'], ['matching', 'Matching pairs'], ['bank', 'Word bank']] as const).map(([m, label]) => (
               <button key={m} onClick={() => setExercise(m)}
                 className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
                   exercise === m ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
@@ -839,7 +890,9 @@ function PracticeInner() {
           <p className="text-xs text-ink-faint">
             {exercise === 'cloze'
               ? 'Type the missing word in a generated sentence.'
-              : 'Pair each word with its meaning, in rounds of 8. Starts instantly — no sentences to generate, and no limit on how many words.'}
+              : exercise === 'matching'
+                ? 'Pair each word with its meaning, in rounds of 8. Starts instantly — no sentences to generate, and no limit on how many words.'
+                : 'Your words become a bank of chips. Each sentence has one blank and no translation — place the right chip from context alone.'}
           </p>
         </div>
 
@@ -856,6 +909,27 @@ function PracticeInner() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {exercise === 'bank' && (
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Style</label>
+            <div className="flex gap-1.5 flex-wrap">
+              {([['sentences', 'Separate sentences'], ['story', 'One story']] as const).map(([styleKey, label]) => (
+                <button key={styleKey} onClick={() => setBankStyle(styleKey)}
+                  className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                    bankStyle === styleKey ? 'border-accent text-accent bg-accent/10' : 'border-line/20 text-ink-muted hover:text-ink'
+                  }`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-ink-faint">
+              {bankStyle === 'story'
+                ? 'The sentences read in order as one continuous little story — one blank per sentence.'
+                : 'Each sentence stands alone — one blank per sentence.'}
+            </p>
           </div>
         )}
 
@@ -922,7 +996,7 @@ function PracticeInner() {
       {notice && <p className="text-ink-muted text-sm">{notice}</p>}
 
       <button
-        onClick={() => exercise === 'matching' ? startMatching() : void start()}
+        onClick={() => exercise === 'matching' ? startMatching() : exercise === 'bank' ? void startBank() : void start()}
         disabled={generating || chosen.length === 0}
         className="btn-primary w-full disabled:opacity-50"
       >
@@ -932,7 +1006,9 @@ function PracticeInner() {
             ? 'Pick at least one word'
             : exercise === 'matching'
               ? `Match ${chosen.length} word${chosen.length !== 1 ? 's' : ''}`
-              : `Practice ${chosen.length} word${chosen.length !== 1 ? 's' : ''}`}
+              : exercise === 'bank'
+                ? `Fill ${chosen.length} blank${chosen.length !== 1 ? 's' : ''} from the bank`
+                : `Practice ${chosen.length} word${chosen.length !== 1 ? 's' : ''}`}
       </button>
     </div>
   )
