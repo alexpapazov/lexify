@@ -53,6 +53,11 @@ Current feature files:
   cards redo their cloze). Optional RATING mode (same select,
   `express_rating`, migration 123): rating buttons on the matched tile;
   Again writes nothing. `/study/express`, `lib/expressReview.ts`.
+- `features/Media Intake (proposal).md` — DEFERRED plan (2026-11-05, nothing built): the
+  vocabulary-buddy mission — annotated book-page photos parsed by Claude vision (sliding page
+  windows, full extraction, lemma dedupe with skip/attach/add/replace), YouTube transcripts
+  (captions.list provenance gate + Supadata), onboarding mode setting, media-sourced cloze,
+  lemma backfill as Stage 0. Read it before building anything intake-shaped.
 - `features/Phrasebook (proposal).md` — DEFERRED idea (2026-09-21, nothing built): per-pair
   idioms/constructions whose mastery signal is usage in journal entries; on-demand Sonnet
   analysis stored on the entry, mastery aggregates, struggle-driven journal prompts. Read it
