@@ -3382,7 +3382,9 @@ generate route — the sentences read in order as one continuous narrative; >12 
 sequential mini-stories). Generation bypasses the practice sentence bank on purpose (one FRESH
 sentence per word; stories must be written in one piece) — `lib/wordBank.ts`; player
 `components/practice/WordBankPlayer.tsx`; attempts log as exercise 'bank' (column is free text).
-Wrong picks flash and return — same sentence until solved; schedule-neutral like all practice.
+The WHOLE board shows at once (all sentences, all blanks, filled in any order — 2026-10-19);
+chips place by tap (into the selected/first open blank) or HTML5 drag onto any blank (touch
+stays tap-only). Wrong picks flash chip + blank and return; schedule-neutral like all practice.
 
 ## Story review — due reverse words woven into stories (2026-10-04, no migration)
 
