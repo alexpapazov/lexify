@@ -53,7 +53,12 @@ Current feature files:
   cards redo their cloze). Optional RATING mode (same select,
   `express_rating`, migration 123): rating buttons on the matched tile;
   Again writes nothing. `/study/express`, `lib/expressReview.ts`.
-- `features/Media Intake (proposal).md` — DEFERRED plan (2026-11-05, nothing built): the
+- `features/Media Intake (proposal).md` — plan recorded 2026-11-05; STAGE 0 BUILT the same
+  day: `SupabaseCardRepository.labelInBackground` fire-and-forget labels every freshly INSERTED
+  card (bulkCreate + forkInDeck — the only two insert paths, so every creation flow is covered
+  by construction; dynamic import avoids the labelCards cycle; offline/SSR guarded), and
+  Settings → Vocabulary labels now counts pos-missing OR lemma-missing (non-phrase) cards as
+  uncovered — the backstop button. Stages 1+ still deferred: the
   vocabulary-buddy mission — annotated book-page photos parsed by Claude vision (sliding page
   windows, full extraction, lemma dedupe with skip/attach/add/replace), YouTube transcripts
   (captions.list provenance gate + Supadata), onboarding mode setting, media-sourced cloze,

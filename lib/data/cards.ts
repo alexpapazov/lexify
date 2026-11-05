@@ -300,6 +300,26 @@ export class SupabaseCardRepository implements CardRepository {
     }
   }
 
+  /**
+   * Fire-and-forget pos/lemma labeling for freshly INSERTED cards, so every creation path —
+   * create page, deck add/edit, quick-add, onboarding, forks — labels at birth alongside the
+   * rest of the enrichment (user decision 2026-11-05; lemma coverage is what intake dedupe and
+   * practice lean on). Lives HERE, in the one layer all paths share, so a new creation flow can
+   * never forget it. Dynamic import breaks the would-be cycle (labelCards persists through this
+   * repo); failures are silent — Settings → Vocabulary labels is the backstop.
+   */
+  private labelInBackground(cards: Card[]): void {
+    if (typeof window === 'undefined' || isOfflineActive()) return
+    const unlabeled = cards.filter(c => !c.pos)
+    if (unlabeled.length === 0) return
+    void import('@/lib/labelCards')
+      .then(({ labelCards }) => labelCards(unlabeled.map(c => ({
+        id: c.id, front: c.front, back: c.back,
+        sourceLanguage: c.sourceLanguage, targetLanguage: c.targetLanguage,
+      }))))
+      .catch(() => {})
+  }
+
   async bulkCreate(deckId: DeckId, ownerId: UserId, sourceLanguage: string, targetLanguage: string, inputs: CreateCardInput[]): Promise<Card[]> {
     if (inputs.length === 0) return []
     invalidateReads('cards:')
@@ -336,6 +356,7 @@ export class SupabaseCardRepository implements CardRepository {
       if (error) throw new Error(error.message)
       const created = (data ?? []).map(rowToCard)
       toInsert.forEach(({ index }, j) => { results[index] = created[j]! })
+      this.labelInBackground(created)
     }
 
     // Link every resulting card (new or reused) into this deck.
@@ -438,6 +459,9 @@ export class SupabaseCardRepository implements CardRepository {
       .update({ card_id: newCard.id })
       .eq('deck_id', deckId).eq('card_id', cardId)
     if (updateLinkError) throw new Error(updateLinkError.message)
+
+    // A fork is a new row (possibly with a changed front) — label it like any other birth.
+    this.labelInBackground([newCard])
 
     return { card: newCard, forked: true }
   }

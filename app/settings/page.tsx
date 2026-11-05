@@ -157,7 +157,10 @@ function VocabularyLabelsPanel({ userId }: { userId: string }) {
   async function loadUnlabeled(): Promise<void> {
     try {
       const cards = await new SupabaseCardRepository().listAllForUser(userId)
-      setUnlabeled(cards.filter(c => !c.pos).map(c => ({
+      // Coverage means BOTH labels: a card labeled before lemmas shipped has pos but no lemma,
+      // and lemma is what intake duplicate-detection and practice match on. Phrases legitimately
+      // have no lemma, so they only count as uncovered when pos itself is missing.
+      setUnlabeled(cards.filter(c => !c.pos || (!c.lemma && c.pos !== 'phrase')).map(c => ({
         id: c.id, front: c.front, back: c.back,
         sourceLanguage: c.sourceLanguage, targetLanguage: c.targetLanguage,
       })))
@@ -193,9 +196,10 @@ function VocabularyLabelsPanel({ userId }: { userId: string }) {
       <div>
         <h2 className="text-sm font-medium text-ink-muted uppercase tracking-wider">Vocabulary labels</h2>
         <p className="text-xs text-ink-faint mt-1">
-          Tags every card with its word class (noun, verb, …) and dictionary form — the groundwork for
-          practice exercises that build sentences from your vocabulary. Safe to re-run any time: only
-          unlabeled cards are sent.
+          Tags every card with its word class (noun, verb, …) and dictionary form (lemma) — what
+          practice sentences and duplicate detection match on. New cards label themselves at
+          creation; this button covers everything made before that, and anything a network blip
+          skipped. Safe to re-run any time: only uncovered cards are sent.
         </p>
       </div>
       {message && <p className="text-xs text-success">{message}</p>}
