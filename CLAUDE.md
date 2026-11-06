@@ -58,7 +58,14 @@ Current feature files:
   card (bulkCreate + forkInDeck — the only two insert paths, so every creation flow is covered
   by construction; dynamic import avoids the labelCards cycle; offline/SSR guarded), and
   Settings → Vocabulary labels now counts pos-missing OR lemma-missing (non-phrase) cards as
-  uncovered — the backstop button. Stages 1+ still deferred: the
+  uncovered — the backstop button. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
+  page-pair window per call, marker presets + per-book free text, images never stored) →
+  lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /
+  compareWithLexicon lemma-primary with bare-front fallback) → review screen (new words
+  editable+selectable; lexicon matches get skip/attach/add/replace with suggested defaults by
+  card status) → commit: deck named after the book (found or created), book sentences stored
+  via appendStoredCloze (translation empty — cloze hides an empty line). Stages 2+ deferred: the
   vocabulary-buddy mission — annotated book-page photos parsed by Claude vision (sliding page
   windows, full extraction, lemma dedupe with skip/attach/add/replace), YouTube transcripts
   (captions.list provenance gate + Supadata), onboarding mode setting, media-sourced cloze,

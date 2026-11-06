@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState, useMemo, useEffect } from 'react'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
@@ -1053,6 +1054,13 @@ function OnlineCreatePage() {
         <h1 className="text-2xl font-semibold text-ink">Create</h1>
         <ModeSwitch2 value={mode} onChange={setMode} />
       </div>
+
+      {/* Media intake Stage 1 entry: cards from photographed, annotated book pages. */}
+      <Link href="/create/book"
+        className="panel flex items-center justify-between gap-3 py-3 px-4 text-sm hover:border-line/25 transition-colors">
+        <span className="text-ink">📖 From book pages — photograph what you read, import the words you marked</span>
+        <span className="text-ink-faint">→</span>
+      </Link>
 
       {mode === 'batch' ? <BatchDeckImport /> : (
       <>
