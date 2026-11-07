@@ -1,5 +1,5 @@
 import type { Card } from '@/domain'
-import { windowPages, collapseOccurrences, compareWithLexicon, parseOccurrences, type PageOccurrence } from '@/lib/mediaIntake'
+import { windowPages, collapseOccurrences, compareWithLexicon, parseOccurrences, parseAllLemmas, unmarkedLemmas, splitUnmarkedLemmas, type PageOccurrence } from '@/lib/mediaIntake'
 
 function occ(over: Partial<PageOccurrence>): PageOccurrence {
   return { text: 'sentier', lemma: 'sentier', kind: 'word', gloss: 'path', sentence: 'Le sentier est fermé.', marker: 'underlined', ...over }
@@ -67,6 +67,35 @@ describe('compareWithLexicon — stage C', () => {
     expect(sentier!.existing?.id).toBe('a')      // lemma vs bare front of "le sentier"
     expect(clairiere!.existing?.id).toBe('c')    // unlabeled legacy card, bare-front match
     expect(torrent!.existing).toBeNull()
+  })
+})
+
+describe('stage D — unmarked lemmas', () => {
+  it('parseAllLemmas keeps strings, trims, dedupes case-insensitively, drops junk', () => {
+    const out = parseAllLemmas({ allLemmas: ['Sentier', ' berge ', 'sentier', '', 42, null] })
+    expect(out).toEqual(['Sentier', 'berge'])
+    expect(parseAllLemmas({ occurrences: [] })).toEqual([])
+    expect(parseAllLemmas(null)).toEqual([])
+  })
+
+  it('unmarkedLemmas merges overlapping windows and subtracts the marked candidates', () => {
+    const candidates = collapseOccurrences([occ({})])   // "sentier" was marked
+    const out = unmarkedLemmas([
+      ['sentier', 'berge', 'mousse'],      // window 1+2
+      ['Mousse', 'torrent'],               // window 2+3 re-sees mousse
+    ], candidates)
+    expect(out).toEqual(['berge', 'mousse', 'torrent'])
+  })
+
+  it('splitUnmarkedLemmas uses the same lemma/bare-front matching, pair-scoped', () => {
+    const cards = [
+      card('a', 'le sentier', 'path'),
+      card('c', 'la clairière', 'clearing', { pos: null, lemma: null }),   // legacy unlabeled
+      card('d', 'berge', 'bank', { sourceLanguage: 'es' }),                // other pair
+    ]
+    const { known, unknown } = splitUnmarkedLemmas(['sentier', 'clairière', 'berge'], cards, 'fr', 'en')
+    expect(known.map(k => [k.lemma, k.card.id])).toEqual([['sentier', 'a'], ['clairière', 'c']])
+    expect(unknown).toEqual(['berge'])
   })
 })
 

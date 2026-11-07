@@ -26,7 +26,7 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseMediaEntryRepository } from '@/lib/data/mediaEntries'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { appendStoredCloze } from '@/lib/reviewCloze'
-import { windowPages, collapseOccurrences, compareWithLexicon, DEFAULT_MARKERS, type MarkerConfig, type PageOccurrence, type LexiconMatch, type IntakeCandidate } from '@/lib/mediaIntake'
+import { windowPages, collapseOccurrences, compareWithLexicon, unmarkedLemmas, splitUnmarkedLemmas, DEFAULT_MARKERS, type MarkerConfig, type PageOccurrence, type LexiconMatch, type IntakeCandidate } from '@/lib/mediaIntake'
 import { mapLimit } from '@/lib/mapLimit'
 import { apiUrl } from '@/lib/apiBase'
 import { routes } from '@/lib/routes'
@@ -89,6 +89,7 @@ export default function MediaPage() {
   const [rows, setRows] = useState<ReviewRow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [summary, setSummary] = useState<{ created: number; attached: number; replaced: number; skipped: number; deckId: string } | null>(null)
+  const [unmarkedSummary, setUnmarkedSummary] = useState<{ total: number; known: number; unknown: number } | null>(null)
 
   const libraryRef = useRef<{ cards: Card[]; forward: Map<string, CardState> }>({ cards: [], forward: new Map() })
   /** The log row for the wizard run in progress — created when parsing finishes. */
@@ -138,7 +139,7 @@ export default function MediaPage() {
   const anyMarker = markers.circled || markers.underlined || markers.lineToMargin || markers.questionMark || markers.highlighted || markers.custom.trim() !== ''
 
   function startWizard() {
-    setTitle(''); setMarkers(DEFAULT_MARKERS); setPhotos([]); setRows([]); setSummary(null); setError(null)
+    setTitle(''); setMarkers(DEFAULT_MARKERS); setPhotos([]); setRows([]); setSummary(null); setUnmarkedSummary(null); setError(null)
     entryRef.current = null
     setStep('setup')
     setView('wizard')
@@ -160,6 +161,7 @@ export default function MediaPage() {
       const windows = windowPages(photos)
       setProgress({ done: 0, total: windows.length })
       const all: PageOccurrence[] = []
+      const windowLemmas: string[][] = []
       let failed = 0
       await mapLimit(windows, PARSE_CONCURRENCY, async w => {
         try {
@@ -171,9 +173,10 @@ export default function MediaPage() {
               sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
             }),
           })
-          const data = await res.json() as { ok: boolean; occurrences?: PageOccurrence[] }
+          const data = await res.json() as { ok: boolean; occurrences?: PageOccurrence[]; allLemmas?: string[] }
           if (!data.ok || !Array.isArray(data.occurrences)) throw new Error('window-failed')
           all.push(...data.occurrences)
+          if (Array.isArray(data.allLemmas)) windowLemmas.push(data.allLemmas)
         } catch {
           failed++
           setFailedWindows(failed)
@@ -184,6 +187,11 @@ export default function MediaPage() {
       })
 
       const candidates = collapseOccurrences(all).sort((a, b) => b.count - a.count)
+      // Stage D: everything you read and did NOT mark is evidence too. Split against the lexicon
+      // for the summary; the lemma list itself is stored as fact on the entry (Stage E acts on it).
+      const unmarked = unmarkedLemmas(windowLemmas, candidates)
+      const split = splitUnmarkedLemmas(unmarked, libraryRef.current.cards, pair.sourceLanguage, pair.targetLanguage)
+      setUnmarkedSummary({ total: unmarked.length, known: split.known.length, unknown: split.unknown.length })
 
       // The log row saves NOW — what you read is recorded even if you abandon the review.
       try {
@@ -191,7 +199,8 @@ export default function MediaPage() {
           title: title.trim() || 'Untitled book',
           sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
           pages: photos.length, markers, candidates,
-          stats: { found: candidates.length, failedWindows: failed },
+          unmarkedLemmas: unmarked,
+          stats: { found: candidates.length, failedWindows: failed, unmarked: unmarked.length, unmarkedKnown: split.known.length, unmarkedUnknown: split.unknown.length },
         })
         entryRef.current = entry
         setEntries(prev => [entry, ...prev])
@@ -324,6 +333,12 @@ export default function MediaPage() {
               {typeof st.attached === 'number' && st.attached > 0 ? ` · ${st.attached} gained sentences` : ''}
               {typeof st.failedWindows === 'number' && st.failedWindows > 0 ? ` · ${st.failedWindows} window${st.failedWindows !== 1 ? 's' : ''} failed` : ''}
             </p>
+            {detail.unmarkedLemmas.length > 0 && (
+              <p className="text-xs text-ink-faint mt-1">
+                {detail.unmarkedLemmas.length} unmarked word{detail.unmarkedLemmas.length !== 1 ? 's' : ''} read
+                {typeof st.unmarkedKnown === 'number' ? ` — ${st.unmarkedKnown} in your library, ${st.unmarkedUnknown ?? 0} not yet` : ''}.
+              </p>
+            )}
           </div>
           <button className="btn-ghost text-danger text-sm shrink-0" onClick={() => void deleteEntry(detail)}>Delete</button>
         </div>
@@ -385,6 +400,11 @@ export default function MediaPage() {
           <p className="text-sm text-ink-muted mt-1">
             {rows.length} word{rows.length !== 1 ? 's' : ''} found{failedWindows > 0 ? ` · ${failedWindows} window${failedWindows !== 1 ? 's' : ''} failed to parse (re-run those pages later)` : ''}. The entry is logged; no cards are saved until you confirm.
           </p>
+          {unmarkedSummary && unmarkedSummary.total > 0 && (
+            <p className="text-xs text-ink-faint mt-1">
+              You also read {unmarkedSummary.total} unmarked word{unmarkedSummary.total !== 1 ? 's' : ''} — {unmarkedSummary.known} in your library, {unmarkedSummary.unknown} not yet.
+            </p>
+          )}
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
 

@@ -74,7 +74,10 @@ Current feature files:
   /create/book flow, which is now a redirect stub), `lib/data/mediaEntries.ts` +
   `MediaEntry` domain type, **migration `128_media_entries.sql` must be applied**; entry row
   saves when parsing finishes, commit updates stats; markers recalled from the book's latest
-  entry; Media nav link hidden offline. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  entry; Media nav link hidden offline. STAGE D BUILT 2026-11-07: parse-page also returns
+  `allLemmas` (content lemmas only, max_tokens 16000); `unmarkedLemmas` +
+  `splitUnmarkedLemmas` in lib/mediaIntake; unmarked list stored on the entry, split counts
+  in stats, summary lines on review/detail. Stage E (chips + credit wiring) is next. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /

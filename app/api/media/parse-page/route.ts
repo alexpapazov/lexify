@@ -5,6 +5,9 @@
  * photos — in, the marked words/phrases out, each with lemma, in-context gloss, and the COMPLETE
  * sentence it appears in (the second page exists precisely to finish sentences that run over the
  * break; extraction happens from BOTH pages — the client's collapse stage absorbs the overlap).
+ * Stage D (2026-11-07): the same call also returns `allLemmas` — every distinct printed CONTENT
+ * lemma (function words / proper names / numerals excluded) — the unmarked ones are passive
+ * evidence of known vocabulary (implicit credit + add-as-known chips).
  *
  * Model: Sonnet VISION — reading handwriting-annotated book photographs is exactly the powerful
  * tier's job, and one window parses in seconds where the user's previous manual chat workflow
@@ -18,7 +21,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { langName } from '@/lib/languages'
-import { parseOccurrences, type MarkerConfig } from '@/lib/mediaIntake'
+import { parseOccurrences, parseAllLemmas, type MarkerConfig } from '@/lib/mediaIntake'
 
 export const runtime = 'nodejs'
 
@@ -86,12 +89,19 @@ For EVERY marked word or phrase, on either page, report:
 
 Rules:
 - Extract from BOTH pages when two are given.
-- Only marked items — never unmarked words, never marginal notes themselves.
+- Only marked items in "occurrences" — never marginal notes themselves.
 - Printed text only for "text" and "sentence" — ignore the reader's handwriting content.
 - When unsure whether something is a mark, include it (the reader reviews everything).
 
+SEPARATELY, report "allLemmas": the ${srcLang} dictionary citation form of every distinct
+CONTENT word printed on the page${body.images.length === 2 ? 's' : ''} — nouns, verbs, adjectives, adverbs — marked or not.
+One entry per distinct lemma, no duplicates. EXCLUDE pure function words (articles, pronouns,
+prepositions, conjunctions, auxiliaries), proper names of people/places, and numerals. The
+reader's unmarked words are evidence of vocabulary they know — completeness matters.
+
 Respond with ONLY a JSON object, no other text, in exactly this shape:
-{ "occurrences": [ { "text": "...", "lemma": "...", "kind": "word", "gloss": "...", "sentence": "...", "marker": "underlined" } ] }`
+{ "occurrences": [ { "text": "...", "lemma": "...", "kind": "word", "gloss": "...", "sentence": "...", "marker": "underlined" } ],
+  "allLemmas": [ "...", "..." ] }`
 }
 
 export async function POST(req: NextRequest) {
@@ -118,7 +128,8 @@ export async function POST(req: NextRequest) {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
-        model: MODEL, max_tokens: 8000,
+        // A page pair's full content-lemma list rides alongside the occurrences — budget for both.
+        model: MODEL, max_tokens: 16000,
         messages: [{
           role: 'user',
           content: [
@@ -133,8 +144,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, reason: `api-error-${res.status}` })
     }
     const data = await res.json()
-    const occurrences = parseOccurrences(extractJson(responseText(data)))
-    return NextResponse.json({ ok: true, occurrences })
+    const payload = extractJson(responseText(data))
+    const occurrences = parseOccurrences(payload)
+    const allLemmas = parseAllLemmas(payload)
+    return NextResponse.json({ ok: true, occurrences, allLemmas })
   } catch {
     return NextResponse.json({ ok: false, reason: 'exception' })
   }

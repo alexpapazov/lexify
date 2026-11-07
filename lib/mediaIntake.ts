@@ -143,6 +143,31 @@ export interface LexiconMatch {
   existing:  Card | null
 }
 
+interface LexiconIndex {
+  byLemma:     Map<string, Card>
+  byBareFront: Map<string, Card>
+}
+
+/** Pair-scoped lemma + bare-front lookup maps — the one matching index both the marked-word
+ *  compare and the unmarked-lemma split read from. */
+function buildLexiconIndex(cards: Card[], sourceLanguage: string, targetLanguage: string): LexiconIndex {
+  const byLemma = new Map<string, Card>()
+  const byBareFront = new Map<string, Card>()
+  for (const c of cards) {
+    if (c.deletedAt || c.sourceLanguage !== sourceLanguage || c.targetLanguage !== targetLanguage) continue
+    if (c.lemma && !byLemma.has(normLemma(c.lemma))) byLemma.set(normLemma(c.lemma), c)
+    const bare = normLemma(stripLeadingArticle(stripGrammaticalTags(displayText(c.front)), c.sourceLanguage))
+    if (bare && !byBareFront.has(bare)) byBareFront.set(bare, c)
+  }
+  return { byLemma, byBareFront }
+}
+
+function lookupLemma(idx: LexiconIndex, lemma: string, bareText: string): Card | null {
+  return idx.byLemma.get(normLemma(lemma))
+    ?? idx.byBareFront.get(normLemma(lemma))
+    ?? (bareText ? idx.byBareFront.get(bareText) ?? idx.byLemma.get(bareText) ?? null : null)
+}
+
 /** Lemma-primary match with a bare-front fallback for unlabeled legacy cards. Only cards of the
  *  intake's language pair are considered (the caller passes its whole library). */
 export function compareWithLexicon(
@@ -151,19 +176,73 @@ export function compareWithLexicon(
   sourceLanguage: string,
   targetLanguage: string,
 ): LexiconMatch[] {
-  const pairCards = cards.filter(c => !c.deletedAt && c.sourceLanguage === sourceLanguage && c.targetLanguage === targetLanguage)
-  const byLemma = new Map<string, Card>()
-  const byBareFront = new Map<string, Card>()
-  for (const c of pairCards) {
-    if (c.lemma && !byLemma.has(normLemma(c.lemma))) byLemma.set(normLemma(c.lemma), c)
-    const bare = normLemma(stripLeadingArticle(stripGrammaticalTags(displayText(c.front)), c.sourceLanguage))
-    if (bare && !byBareFront.has(bare)) byBareFront.set(bare, c)
-  }
+  const idx = buildLexiconIndex(cards, sourceLanguage, targetLanguage)
   return candidates.map(candidate => {
     const bare = normLemma(stripLeadingArticle(stripGrammaticalTags(candidate.text), sourceLanguage))
-    const existing = byLemma.get(normLemma(candidate.lemma))
-      ?? byBareFront.get(normLemma(candidate.lemma))
-      ?? (bare ? byBareFront.get(bare) ?? byLemma.get(bare) ?? null : null)
-    return { candidate, existing }
+    return { candidate, existing: lookupLemma(idx, candidate.lemma, bare) }
   })
+}
+
+// ─── Stage D: every printed lemma (unmarked words are evidence too) ────────────
+
+/** Defensive parse of a window's `allLemmas` array (same payload object as `occurrences`):
+ *  strings only, trimmed, case-insensitively deduped, first-seen casing kept. */
+export function parseAllLemmas(raw: unknown): string[] {
+  if (typeof raw !== 'object' || raw === null) return []
+  const list = (raw as { allLemmas?: unknown }).allLemmas
+  if (!Array.isArray(list)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const l of list) {
+    if (typeof l !== 'string') continue
+    const t = l.trim()
+    if (!t || seen.has(normLemma(t))) continue
+    seen.add(normLemma(t))
+    out.push(t)
+  }
+  return out
+}
+
+/** Merge per-window lemma lists (windows overlap pages, so re-sightings are expected),
+ *  then drop every MARKED lemma — what remains is the page's passive-knowledge evidence. */
+export function unmarkedLemmas(windowLemmas: string[][], candidates: IntakeCandidate[]): string[] {
+  const marked = new Set(candidates.map(c => normLemma(c.lemma)))
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const window of windowLemmas) {
+    for (const l of window) {
+      const key = normLemma(l)
+      if (!key || marked.has(key) || seen.has(key)) continue
+      seen.add(key)
+      out.push(l)
+    }
+  }
+  return out
+}
+
+export interface UnmarkedSplit {
+  /** Unmarked lemmas that map to a card of this pair — Stage B credit / Stage E chip targets. */
+  known:   { lemma: string; card: Card }[]
+  /** Unmarked lemmas with no card — Stage E add-as-known chip candidates. */
+  unknown: string[]
+}
+
+/** Splits the unmarked lemmas against the lexicon with the SAME index the marked compare uses
+ *  (lemma-primary, bare-front fallback, pair-scoped). */
+export function splitUnmarkedLemmas(
+  lemmas: string[],
+  cards: Card[],
+  sourceLanguage: string,
+  targetLanguage: string,
+): UnmarkedSplit {
+  const idx = buildLexiconIndex(cards, sourceLanguage, targetLanguage)
+  const known: UnmarkedSplit['known'] = []
+  const unknown: string[] = []
+  for (const lemma of lemmas) {
+    const bare = normLemma(stripLeadingArticle(stripGrammaticalTags(lemma), sourceLanguage))
+    const card = lookupLemma(idx, lemma, bare)
+    if (card) known.push({ lemma, card })
+    else unknown.push(lemma)
+  }
+  return { known, unknown }
 }

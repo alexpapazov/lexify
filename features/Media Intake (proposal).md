@@ -110,11 +110,19 @@ create wizard:
 - Per-book marker memory moves from localStorage onto the entry/book record.
 - `/create/book` redirects here (or the Create card links here).
 
-## Stage D — Full-page extraction
+## Stage D — Full-page extraction — BUILT 2026-11-07
 
-Extend the parse-page prompt: alongside the rich marked items, return **`allLemmas`** — every
-distinct printed lemma on the page(s), flat list, no gloss/sentence (cheap tokens, same single
-Sonnet call). The entry then splits unmarked lemmas against the lexicon:
+The parse-page call also returns **`allLemmas`** — every distinct printed CONTENT lemma
+(nouns/verbs/adjectives/adverbs; function words, proper names, numerals excluded;
+max_tokens 16000). `lib/mediaIntake.ts`: `parseAllLemmas` (defensive, case-insensitive
+dedupe), `unmarkedLemmas(windowLemmas, candidates)` (merges overlapping windows, subtracts
+marked lemmas), `splitUnmarkedLemmas` (same lemma-primary + bare-front index as the marked
+compare, via the shared `buildLexiconIndex`). The media page stores the unmarked list on the
+entry (`unmarked_lemmas`) with split counts in `stats`
+(`unmarked`/`unmarkedKnown`/`unmarkedUnknown`) and shows a summary line on review + detail.
+Stage E turns the list into credit + chips.
+
+The entry splits unmarked lemmas against the lexicon:
 
 - unmarked + **in library, graduated** → credit candidates (Stage B feed);
 - unmarked + **in library, NOT graduated** (added long ago, never studied, or mid-pipeline) →
