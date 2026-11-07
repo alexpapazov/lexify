@@ -61,10 +61,10 @@ Current feature files:
   uncovered — the backstop button. 2026-11-06: `update()` with `front`/`back` in the patch nulls
   pos/lemma in the same write and relabels in the background — an edited card can never keep a
   stale lemma (offline edits null only; the backstop catches them after sync). Spec revised
-  2026-11-06: media LOG tab, two maturity phases (long-term = interval ≥ 60d), implicit credit
+  2026-11-06: media LOG tab, two maturity phases (long-term = interval ≥ 30d; was 60 for a day), implicit credit
   for unmarked sightings of long-term cards, chip-bucket add-as-known (short=14d spread /
   long=~90d), auto-graduating existing never-studied cards from chips — re-read the proposal.
-  STAGES A+B BUILT 2026-11-06: `engine/implicitCredit.ts` (maturityPhase, 60d threshold,
+  STAGES A+B BUILT 2026-11-06: `engine/implicitCredit.ts` (maturityPhase, 30d threshold,
   row/lane sighting eligibility) + `lib/implicitCredit.ts` (`creditCardSighting` — one FSRS
   advance per row, per-lane interval recompute, grow-only, sets lastReviewedAt+lastImplicitAt,
   NO review_events, ≥20h per-row cap) + ℹ-panel Phase rows. **Migration

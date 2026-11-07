@@ -9,12 +9,12 @@ function grad(overrides: Partial<CardState> = {}): CardState {
   return { ...initialCardState('u', 'c', 'p'), graduated: true, ...overrides }
 }
 
-describe('maturityPhase — two phases, split at 60 days (user decision: no medium band)', () => {
+describe('maturityPhase — two phases, split at 30 days (user decisions: no medium band; 30d cutoff)', () => {
   it('long-term at and past the threshold, short-term below, short-term when unscheduled', () => {
-    expect(LONG_TERM_THRESHOLD_DAYS).toBe(60)
-    expect(maturityPhase(60)).toBe('long_term')
+    expect(LONG_TERM_THRESHOLD_DAYS).toBe(30)
+    expect(maturityPhase(30)).toBe('long_term')
     expect(maturityPhase(90)).toBe('long_term')
-    expect(maturityPhase(59.9)).toBe('short_term')
+    expect(maturityPhase(29.9)).toBe('short_term')
     expect(maturityPhase(null)).toBe('short_term')
     expect(maturityPhase(undefined)).toBe('short_term')
   })
@@ -42,7 +42,7 @@ describe('laneSightingEligible', () => {
     expect(laneSightingEligible({ intervalDays: 90, dueAt: iso(30) }, NOW)).toBe(true)
   })
   it('short-term lanes earn nothing from a sighting', () => {
-    expect(laneSightingEligible({ intervalDays: 30, dueAt: iso(10) }, NOW)).toBe(false)
+    expect(laneSightingEligible({ intervalDays: 20, dueAt: iso(10) }, NOW)).toBe(false)
   })
   it('an overdue lane stays due — a sighting never stands in for an owed review', () => {
     expect(laneSightingEligible({ intervalDays: 90, dueAt: iso(-1) }, NOW)).toBe(false)

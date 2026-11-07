@@ -73,7 +73,7 @@ describe('creditCardSighting', () => {
 
   it('a short-term lane earns nothing', async () => {
     const { repo, upserts } = fakeRepo()
-    const forward = longTermForward({ smartIntervalDays: 30, intervalDays: 30 })
+    const forward = longTermForward({ smartIntervalDays: 20, intervalDays: 20 })
     expect(await creditCardSighting({ card, forward, reverse: null }, ctx(repo))).toBeNull()
     expect(upserts).toHaveLength(0)
   })
@@ -97,7 +97,7 @@ describe('creditCardSighting', () => {
     const { repo, upserts } = fakeRepo()
     const reverse = longTermReverse()
     const out = await creditCardSighting(
-      { card, forward: longTermForward({ smartIntervalDays: 10, intervalDays: 10 }), reverse }, ctx(repo))
+      { card, forward: longTermForward({ smartIntervalDays: 8, intervalDays: 8 }), reverse }, ctx(repo))
     expect(out?.reverse).toBeDefined()                              // reverse credited on its own maturity
     expect(out?.forward).toBeUndefined()                            // short-term production untouched
     expect(out!.reverse!.recallIntervalDays!).toBeGreaterThanOrEqual(90)

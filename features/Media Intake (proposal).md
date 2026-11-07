@@ -37,16 +37,16 @@ that: lemma-keyed matching, chips for bulk known-marking, and auto-graduating st
 
 ## Stage A — Maturity phases (two, not three) — BUILT 2026-11-06
 
-`engine/implicitCredit.ts`: `maturityPhase(intervalDays)` / `LONG_TERM_THRESHOLD_DAYS = 60`,
+`engine/implicitCredit.ts`: `maturityPhase(intervalDays)` / `LONG_TERM_THRESHOLD_DAYS = 30` (user decision 2026-11-06: lowered from 60 after trajectory simulation — reading volume takes over sooner),
 classified on the lane's ideal interval. Card ℹ panel shows a Phase row per track group
-("Long-term (earns reading credit)" / "Short-term (long-term at 60d)") plus a "Last reading
+("Long-term (earns reading credit)" / "Short-term (long-term at 30d)") plus a "Last reading
 credit" row when set.
 
 **User decision 2026-11-06: no medium band.** Exactly two phases, derived from the card's FSRS
 state — pure classification:
 
-- **Short-term:** scheduled interval < **60 days** (2 months).
-- **Long-term:** scheduled interval ≥ **60 days**. Only long-term cards are eligible for
+- **Short-term:** scheduled interval < **30 days**.
+- **Long-term:** scheduled interval ≥ **30 days**. Only long-term cards are eligible for
   implicit credit from reading.
 
 Classify on the **scheduled interval** of the relevant row (production lane interval), not raw
@@ -130,7 +130,7 @@ For a page of ~100 words with 5 marked:
    - **Short term** → known, due dates **spread over the next ~2 weeks** (the existing
      bulk_known fast-track spreading — 14 days, never the old dynamic formula).
    - **Long term** → known with an initial interval of **~3 months** (90 days — above the
-     60-day threshold, so immediately long-term phase and implicit-credit eligible). Spread
+     30-day threshold, so immediately long-term phase and implicit-credit eligible). Spread
      within a window around 90d so a big page doesn't pile one future day.
    - **Words I don't know** (the forgot-to-underline correction) → joins bucket 1's add-as-
      unlearned flow.
