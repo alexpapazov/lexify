@@ -35,10 +35,15 @@ that: lemma-keyed matching, chips for bulk known-marking, and auto-graduating st
   after the book, book sentences stored via appendStoredCloze. **Stage C below restructures this
   into the media log; the parse pipeline is reused as-is.**
 
-## Stage A — Maturity phases (two, not three)
+## Stage A — Maturity phases (two, not three) — BUILT 2026-11-06
+
+`engine/implicitCredit.ts`: `maturityPhase(intervalDays)` / `LONG_TERM_THRESHOLD_DAYS = 60`,
+classified on the lane's ideal interval. Card ℹ panel shows a Phase row per track group
+("Long-term (earns reading credit)" / "Short-term (long-term at 60d)") plus a "Last reading
+credit" row when set.
 
 **User decision 2026-11-06: no medium band.** Exactly two phases, derived from the card's FSRS
-state — no migration, pure classification:
+state — pure classification:
 
 - **Short-term:** scheduled interval < **60 days** (2 months).
 - **Long-term:** scheduled interval ≥ **60 days**. Only long-term cards are eligible for
@@ -52,10 +57,23 @@ OPEN (user has not decided): the optional long-term **retention discount** (long
 target a lower retention, lengthening their intervals independent of reading). Ask before
 building it into this stage.
 
-## Stage B — Implicit credit engine
+## Stage B — Implicit credit engine — BUILT 2026-11-06
 
-`engine/implicitCredit.ts`, pure + tested. A **sighting** = the user read a page containing a
-lemma that maps to a card, and did NOT mark it.
+Eligibility in `engine/implicitCredit.ts` (`rowSightingEligible` / `laneSightingEligible`),
+application in `lib/implicitCredit.ts` (`creditCardSighting`). **Migration
+`127_implicit_credit.sql` (card_states.last_implicit_at) must be applied before wiring a
+caller.** Key implementation facts: ONE FSRS advance per ROW (lanes share D/S — a sighting must
+never compound them), each eligible lane's interval recomputed from the new stability with its
+own retention + calibration, intervals can only GROW (`Math.max` floor at the current value),
+`lastReviewedAt` IS set to the sighting (the advance consumed the elapsed time — not setting it
+would double-grow stability at the next real review), reps/lastRating untouched, **NO
+review_events row** (the per-day cap uses `last_implicit_at`, ≥20h gap; the media entry log is
+the audit trail — this keeps calibration + analytics honest by construction), disabled tracks
+never credited, reverse credit requires the forward row graduated (forward dormancy does NOT
+gate it — per-direction). No caller yet: Stage E wires sightings from media entries.
+
+A **sighting** = the user read a page containing a lemma that maps to a card, and did NOT mark
+it.
 
 - **Long-term card + sighting → counts like a review** (a passive Good): advance the FSRS
   schedule from elapsed time, same stability-growth path as a Good rating, new due date pushed

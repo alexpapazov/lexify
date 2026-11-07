@@ -15,6 +15,7 @@ import { SupabaseLadderClimbRepository }       from '@/lib/data/ladderClimb'
 import type { Card, CardState, CardChoices, CardConfusion, CardConfusionLink, Pipeline, TypedAnswerOverride, ReviewEvent } from '@/domain'
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding } from '@/lib/distractors'
 import { generateReviewCloze, clozeEligible, chooseStoredCloze } from '@/lib/reviewCloze'
+import { maturityPhase, LONG_TERM_THRESHOLD_DAYS } from '@/engine/implicitCredit'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { speak, fetchAudioSource, playAudioClip } from '@/lib/speak'
@@ -1538,20 +1539,35 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     const prodDisabled    = enabledTracks != null && !(enabledTracks.typed || enabledTracks.smart)
                     const recallDisabled  = enabledTracks != null && !enabledTracks.recall
                     const reverseDisabled = enabledTracks != null && !enabledTracks.reverse
+                    // Maturity phase per track (two phases, split at 60 days — see engine/implicitCredit).
+                    // Long-term tracks earn implicit credit from reading sightings in logged media.
+                    const phaseLabel = (interval: number | null | undefined, graduated: boolean) =>
+                      !graduated ? null
+                        : maturityPhase(interval) === 'long_term'
+                          ? 'Long-term (earns reading credit)'
+                          : `Short-term (long-term at ${LONG_TERM_THRESHOLD_DAYS}d)`
+                    const prodPhase    = phaseLabel(prodInterval, state.graduated)
+                    const recallPhase  = phaseLabel(state.recallIntervalDays, state.graduated)
+                    const reversePhase = reverseCardState
+                      ? phaseLabel(reverseCardState.recallIntervalDays ?? reverseCardState.intervalDays, reverseCardState.graduated)
+                      : null
                     return (<>
                       {/* Production track (typed / smart / self-graded forward reviews) */}
                       <StatGroup title={prodTitle} rows={[
                         ...(prodDisabled ? [['Status', 'Track disabled — due date ghosted'] as [string, string]] : []),
+                        ...(prodPhase ? [['Phase', prodPhase] as [string, string]] : []),
                         ['Interval (ideal)',    formatIntervalDays(prodInterval)],
                         ['Scheduled interval',  formatIntervalDays(state.scheduledIntervalDays)],
                         ['Next due',            state.graduated ? formatDate(prodDue) : '—'],
                         ['Last reviewed',       formatDate(state.lastReviewedAt, 'Never')],
+                        ...(state.lastImplicitAt ? [['Last reading credit', formatDate(state.lastImplicitAt)] as [string, string]] : []),
                       ]} />
 
                       {/* Forward self-graded recall track (its own schedule on the forward row) */}
                       {hasRecallTrack && (
                         <StatGroup title="Self-graded recall track" rows={[
                           ...(recallDisabled ? [['Status', 'Track disabled — due date ghosted'] as [string, string]] : []),
+                          ...(recallPhase && state.recallDueAt != null ? [['Phase', recallPhase] as [string, string]] : []),
                           ['Interval',  formatIntervalDays(state.recallIntervalDays)],
                           ['Next due',  formatDate(state.recallDueAt, '—')],
                         ]} />
@@ -1562,9 +1578,11 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                         <StatGroup title="Recognition (reverse) track" rows={[
                           ['Status', reverseCardState.dormant ? 'Paused'
                             : reverseDisabled ? 'Track disabled — due date ghosted' : 'Active'],
+                          ...(reversePhase ? [['Phase', reversePhase] as [string, string]] : []),
                           ['Interval',      formatIntervalDays(reverseCardState.recallIntervalDays ?? reverseCardState.intervalDays)],
                           ['Next due',      reverseCardState.graduated ? formatDate(reverseCardState.recallDueAt ?? reverseCardState.dueAt) : '—'],
                           ['Last reviewed', formatDate(reverseCardState.lastReviewedAt, 'Never')],
+                          ...(reverseCardState.lastImplicitAt ? [['Last reading credit', formatDate(reverseCardState.lastImplicitAt)] as [string, string]] : []),
                         ]} />
                       )}
 

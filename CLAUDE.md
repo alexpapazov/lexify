@@ -63,7 +63,13 @@ Current feature files:
   stale lemma (offline edits null only; the backstop catches them after sync). Spec revised
   2026-11-06: media LOG tab, two maturity phases (long-term = interval ≥ 60d), implicit credit
   for unmarked sightings of long-term cards, chip-bucket add-as-known (short=14d spread /
-  long=~90d), auto-graduating existing never-studied cards from chips — re-read the proposal. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  long=~90d), auto-graduating existing never-studied cards from chips — re-read the proposal.
+  STAGES A+B BUILT 2026-11-06: `engine/implicitCredit.ts` (maturityPhase, 60d threshold,
+  row/lane sighting eligibility) + `lib/implicitCredit.ts` (`creditCardSighting` — one FSRS
+  advance per row, per-lane interval recompute, grow-only, sets lastReviewedAt+lastImplicitAt,
+  NO review_events, ≥20h per-row cap) + ℹ-panel Phase rows. **Migration
+  `127_implicit_credit.sql` (card_states.last_implicit_at) must be applied.** No caller yet —
+  Stage E (entry review) wires sightings. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /

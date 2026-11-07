@@ -941,6 +941,12 @@ export interface CardState {
   /** Timestamp this card most recently (re-)graduated into long-term review. */
   graduatedAt:       string | null
   /**
+   * Timestamp of this row's most recent IMPLICIT credit — a passive sighting in logged media
+   * (read the word in a book, did not mark it) applied as a schedule-only advance (migration
+   * 127). Gates the one-credit-per-row-per-day cap. Null = never implicitly credited.
+   */
+  lastImplicitAt:    string | null
+  /**
    * 0 = not in the 10-minute "Again" relearn loop. >= 1 = how many failed
    * retries have happened since the last graduated-review lapse (the card
    * stays "due" again ~10 minutes later until it recovers or hits a 3rd

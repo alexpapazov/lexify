@@ -63,6 +63,7 @@ export function initialCardState(
     lastReviewedAt:   null,
     introducedDate:   new Date().toISOString().slice(0, 10), // YYYY-MM-DD
     graduatedAt:       null,
+    lastImplicitAt:    null,
     relearningStep:    0,
     typedAccuracyWindow: [],
     typedReviewCount:    0,
