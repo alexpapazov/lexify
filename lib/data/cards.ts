@@ -400,7 +400,13 @@ export class SupabaseCardRepository implements CardRepository {
 
   async update(cardId: CardId, patch: Partial<Pick<Card, 'front' | 'back' | 'hints' | 'choices' | 'audioGenerated' | 'audioData' | 'audioSource' | 'audioSources' | 'ipa'>>): Promise<Card> {
     invalidateReads('cards:')
-    if (isOfflineActive()) return localUpdateCard(cardId, patch)
+    // Any text write invalidates the pos/lemma labels — a card edited to a different word with the
+    // OLD lemma attached would poison lemma-keyed features (intake dedupe, implicit credit). Null
+    // them IN THE SAME WRITE (stale labels can never survive, even if relabeling fails — Settings →
+    // Vocabulary labels is the backstop) and relabel in the background. Same-text saves relabel
+    // harmlessly to the same values.
+    const textChanged = patch.front !== undefined || patch.back !== undefined
+    if (isOfflineActive()) return localUpdateCard(cardId, textChanged ? { ...patch, pos: null, lemma: null } : patch)
     const dbPatch: Record<string, unknown> = {}
     if (patch.front          !== undefined) dbPatch.front           = patch.front
     if (patch.back           !== undefined) dbPatch.back            = patch.back
@@ -411,9 +417,12 @@ export class SupabaseCardRepository implements CardRepository {
     if (patch.audioSource    !== undefined) dbPatch.audio_source    = patch.audioSource
     if (patch.audioSources   !== undefined) dbPatch.audio_sources   = patch.audioSources
     if (patch.ipa            !== undefined) dbPatch.ipa             = patch.ipa
+    if (textChanged) { dbPatch.pos = null; dbPatch.lemma = null }
     const { data, error } = await this.db.from('cards').update(dbPatch).eq('id', cardId).select().single()
     if (error) throw new Error(error.message)
-    return rowToCard(data)
+    const card = rowToCard(data)
+    if (textChanged) this.labelInBackground([card])
+    return card
   }
 
   async softDelete(cardId: CardId): Promise<void> {

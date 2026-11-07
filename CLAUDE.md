@@ -58,7 +58,12 @@ Current feature files:
   card (bulkCreate + forkInDeck — the only two insert paths, so every creation flow is covered
   by construction; dynamic import avoids the labelCards cycle; offline/SSR guarded), and
   Settings → Vocabulary labels now counts pos-missing OR lemma-missing (non-phrase) cards as
-  uncovered — the backstop button. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  uncovered — the backstop button. 2026-11-06: `update()` with `front`/`back` in the patch nulls
+  pos/lemma in the same write and relabels in the background — an edited card can never keep a
+  stale lemma (offline edits null only; the backstop catches them after sync). Spec revised
+  2026-11-06: media LOG tab, two maturity phases (long-term = interval ≥ 60d), implicit credit
+  for unmarked sightings of long-term cards, chip-bucket add-as-known (short=14d spread /
+  long=~90d), auto-graduating existing never-studied cards from chips — re-read the proposal. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /
