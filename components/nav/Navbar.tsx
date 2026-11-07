@@ -17,6 +17,7 @@ const NAV_LINKS = [
   { href: '/library',   label: 'Library'  },
   { href: '/browse',    label: 'Browse'   },
   { href: '/create',    label: 'Create'   },
+  { href: '/media',     label: 'Media'    },
   { href: '/agents',    label: 'Agents'   },
   { href: '/progress',  label: 'Analytics' },
   { href: '/settings',  label: 'Settings' },
@@ -67,7 +68,7 @@ export function Navbar() {
   // Offline: hide destinations that need a connection (AI agent, community browse, full analytics).
   // Upload stays — it offers a manual, no-AI entry mode offline. Study/Library/Settings remain.
   // Practice is online-only too, but it's a Study sub-item now, so it's filtered via `studySubs`.
-  const OFFLINE_HIDDEN = new Set(['/agents', '/browse', '/progress'])
+  const OFFLINE_HIDDEN = new Set(['/agents', '/browse', '/progress', '/media'])
   const navLinks = offline ? NAV_LINKS.filter(l => !OFFLINE_HIDDEN.has(l.href)) : NAV_LINKS
   const studySubs = offline ? [] : STUDY_SUBS
 

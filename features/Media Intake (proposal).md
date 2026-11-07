@@ -86,7 +86,18 @@ it.
   calibration and measured-retention displays** — a sighting is not a recall; letting it in would
   inflate measured retention and stretch intervals twice.
 
-## Stage C — Media tab: the log
+## Stage C — Media tab: the log — BUILT 2026-11-06
+
+`app/media/page.tsx` (list / detail / wizard views in one page), `lib/data/mediaEntries.ts`
+(`SupabaseMediaEntryRepository`, online-only, soft delete), **migration
+`128_media_entries.sql`**, `MediaEntry` in domain. Nav gains Media (hidden offline);
+`/create/book` is now a redirect stub and the Create card points at `/media`. The entry row is
+created THE MOMENT parsing finishes (candidates + markers + pages + found/failedWindows) —
+the log records what was read even if the review is abandoned ("review not saved" in the
+list); commit then updates `stats` (created/attached/replaced/skipped/deckId). Marker configs
+are recalled from the book's latest entry (legacy localStorage store is a read-only fallback).
+Entry detail shows the extraction and links to the book's deck; deleting an entry never
+touches the cards it created.
 
 A new top-level **Media** tab (`/media`). The book flow becomes **entries in a log**, not a
 create wizard:

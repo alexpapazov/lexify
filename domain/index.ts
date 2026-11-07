@@ -437,6 +437,36 @@ export interface JournalEntry {
   deletedAt: string | null
 }
 
+// ─── Media log ────────────────────────────────────────────────────────────────
+// One row per logged reading session (migration 128): the extraction facts (marked-word
+// candidates + sentences, marker config, unmarked lemmas) and a loose stats summary of the
+// actions taken. Images are parsed and discarded — never stored. See lib/mediaIntake.ts for
+// the candidate shape; this type stays `unknown`-flavored at the JSONB edges so the domain
+// layer doesn't import from lib.
+
+export interface MediaEntry {
+  id:             string
+  userId:         UserId
+  kind:           'book' | 'youtube'
+  /** The book (or video) title — groups entries and recalls the book's marker config. */
+  title:          string
+  sourceLanguage: string
+  targetLanguage: string
+  /** Photos parsed in this entry. */
+  pages:          number
+  /** MarkerConfig used for the parse (lib/mediaIntake.ts). */
+  markers:        unknown
+  /** IntakeCandidate[] (lib/mediaIntake.ts) — the marked words with their sentences. */
+  candidates:     unknown[]
+  /** Every unmarked printed lemma (Stage D; empty until then). */
+  unmarkedLemmas: string[]
+  /** Loose action summary: found/created/attached/replaced/skipped/failedWindows/deckId/… */
+  stats:          Record<string, unknown>
+  createdAt:      string
+  updatedAt:      string
+  deletedAt:      string | null
+}
+
 // ─── Scheduler params ─────────────────────────────────────────────────────────
 
 export interface SchedulerParams {

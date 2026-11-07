@@ -68,8 +68,13 @@ Current feature files:
   row/lane sighting eligibility) + `lib/implicitCredit.ts` (`creditCardSighting` — one FSRS
   advance per row, per-lane interval recompute, grow-only, sets lastReviewedAt+lastImplicitAt,
   NO review_events, ≥20h per-row cap) + ℹ-panel Phase rows. **Migration
-  `127_implicit_credit.sql` (card_states.last_implicit_at) must be applied.** No caller yet —
-  Stage E (entry review) wires sightings. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  `127_implicit_credit.sql` (card_states.last_implicit_at) must be applied** (user ran it
+  2026-11-06). No caller yet — Stage E (entry review) wires sightings. STAGE C BUILT
+  2026-11-06: `/media` log tab (list/detail/wizard in one page; wizard = the former
+  /create/book flow, which is now a redirect stub), `lib/data/mediaEntries.ts` +
+  `MediaEntry` domain type, **migration `128_media_entries.sql` must be applied**; entry row
+  saves when parsing finishes, commit updates stats; markers recalled from the book's latest
+  entry; Media nav link hidden offline. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /

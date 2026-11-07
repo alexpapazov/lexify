@@ -1055,10 +1055,10 @@ function OnlineCreatePage() {
         <ModeSwitch2 value={mode} onChange={setMode} />
       </div>
 
-      {/* Media intake Stage 1 entry: cards from photographed, annotated book pages. */}
-      <Link href="/create/book"
+      {/* Book-page intake lives in the Media log now (Stage C) — this is a pointer, not a flow. */}
+      <Link href="/media"
         className="panel flex items-center justify-between gap-3 py-3 px-4 text-sm hover:border-line/25 transition-colors">
-        <span className="text-ink">📖 From book pages — photograph what you read, import the words you marked</span>
+        <span className="text-ink">📖 From book pages — log what you read in the Media tab, import the words you marked</span>
         <span className="text-ink-faint">→</span>
       </Link>
 
