@@ -91,6 +91,15 @@ export class SupabaseMediaEntryRepository {
     return rowToEntry(data as Record<string, unknown>)
   }
 
+  /** Re-pairs every entry of a book (the book's language was set wrong at creation). */
+  async updatePairForBook(bookId: string, sourceLanguage: string, targetLanguage: string): Promise<void> {
+    const { error } = await this.db
+      .from('media_entries')
+      .update({ source_language: sourceLanguage, target_language: targetLanguage, updated_at: new Date().toISOString() })
+      .eq('book_id', bookId)
+    if (error) throw error
+  }
+
   async softDelete(id: string): Promise<void> {
     const { error } = await this.db
       .from('media_entries')

@@ -126,6 +126,11 @@ export default function MediaPage() {
 
   const [view, setView] = useState<'books' | 'book' | 'detail' | 'wizard'>('books')
   const [activeBook, setActiveBook] = useState<MediaBook | null>(null)
+  const [changingLang, setChangingLang] = useState(false)
+  const [movePairKey, setMovePairKey] = useState('')
+  const [moving, setMoving] = useState(false)
+  /** Set when the parsed pages' detected language disagrees with the book's pair. */
+  const [langWarning, setLangWarning] = useState<string | null>(null)
   const [detail, setDetail] = useState<MediaEntry | null>(null)
   /** The book this wizard run logs to — preset when launched from a book, created at parse otherwise. */
   const [wizardBook, setWizardBook] = useState<MediaBook | null>(null)
@@ -277,6 +282,7 @@ export default function MediaPage() {
       setProgress({ done: 0, total: windows.length })
       const all: PageOccurrence[] = []
       const windowLemmas: string[][] = []
+      const detectedLangs: string[] = []
       let failed = 0
       await mapLimit(windows, PARSE_CONCURRENCY, async w => {
         try {
@@ -288,10 +294,11 @@ export default function MediaPage() {
               sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
             }),
           })
-          const data = await res.json() as { ok: boolean; occurrences?: PageOccurrence[]; allLemmas?: string[] }
+          const data = await res.json() as { ok: boolean; occurrences?: PageOccurrence[]; allLemmas?: string[]; pageLanguage?: string }
           if (!data.ok || !Array.isArray(data.occurrences)) throw new Error('window-failed')
           all.push(...data.occurrences)
           if (Array.isArray(data.allLemmas)) windowLemmas.push(data.allLemmas)
+          if (typeof data.pageLanguage === 'string' && data.pageLanguage) detectedLangs.push(data.pageLanguage.toLowerCase())
         } catch {
           failed++
           setFailedWindows(failed)
@@ -300,6 +307,14 @@ export default function MediaPage() {
         }
         return null
       })
+
+      // Language guard: the pages' actual language vs the book's pair. A French book filed
+      // under Bulgarian poisons everything downstream (labels, glosses, the lexicon match), so
+      // disagree loudly before anything is saved to the library.
+      const langTally = new Map<string, number>()
+      for (const l of detectedLangs) langTally.set(l, (langTally.get(l) ?? 0) + 1)
+      const detected = [...langTally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+      setLangWarning(detected && detected !== pair.sourceLanguage.toLowerCase() ? detected : null)
 
       const candidates = collapseOccurrences(all).sort((a, b) => b.count - a.count)
       // Stage D: everything you read and did NOT mark is evidence too. Split against the lexicon
@@ -594,6 +609,32 @@ export default function MediaPage() {
     setDetail(null)
   }
 
+  /** Moves a book — its entries, deck, and every card in the deck — to a different language
+   *  pair (fixing a book created under the wrong language). Language-derived card caches
+   *  (labels, distractors, IPA, audio) clear and regenerate; schedules are untouched. */
+  async function moveBookPair(book: MediaBook, src: string, tgt: string) {
+    setMoving(true)
+    setError(null)
+    try {
+      if (book.deckId) {
+        const cardRepo = new SupabaseCardRepository()
+        const cards = await cardRepo.listByDeck(book.deckId)
+        await cardRepo.moveToPair(cards.map(c => c.id), src, tgt)
+        await new SupabaseDeckRepository().update(book.deckId, { sourceLanguage: src, targetLanguage: tgt })
+      }
+      await new SupabaseMediaEntryRepository().updatePairForBook(book.id, src, tgt)
+      const updated = await new SupabaseMediaBookRepository().update(book.id, { sourceLanguage: src, targetLanguage: tgt })
+      setBooks(prev => prev.map(b => b.id === updated.id ? updated : b))
+      setEntries(prev => prev.map(e => e.bookId === book.id ? { ...e, sourceLanguage: src, targetLanguage: tgt } : e))
+      setActiveBook(updated)
+      setChangingLang(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not change the language.')
+    } finally {
+      setMoving(false)
+    }
+  }
+
   async function deleteEntry(entry: MediaEntry) {
     if (!window.confirm(`Delete the ${entryDate(entry)} entry for “${entry.title}”? The cards it created stay in your library.`)) return
     try {
@@ -712,6 +753,12 @@ export default function MediaPage() {
           <p className="text-sm text-ink-muted mt-1">
             {rows.length} word{rows.length !== 1 ? 's' : ''} found{failedWindows > 0 ? ` · ${failedWindows} window${failedWindows !== 1 ? 's' : ''} failed to parse (re-run those pages later)` : ''}. The entry is logged; no cards are saved until you confirm.
           </p>
+          {langWarning && pair && (
+            <p className="text-sm text-warning mt-2">
+              ⚠ These pages read as {langName(langWarning)}, but this book is set to {langName(pair.sourceLanguage)}.
+              If the book's language is wrong, go back WITHOUT saving and use “Change language” on the book's page first.
+            </p>
+          )}
           {unmarkedSummary && unmarkedSummary.total > 0 && (
             <p className="text-xs text-ink-faint mt-1">
               You also read {unmarkedSummary.total} unmarked word{unmarkedSummary.total !== 1 ? 's' : ''} — {unmarkedSummary.known} in your library, {unmarkedSummary.unknown} not yet.
@@ -990,8 +1037,40 @@ export default function MediaPage() {
           <button className="btn-primary shrink-0" onClick={() => startWizard(activeBook)}>+ Log pages</button>
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
-        {activeBook.deckId && (
-          <Link href={routes.deck(activeBook.deckId)} className="btn-ghost inline-block text-sm">Open the book&apos;s deck →</Link>
+        <div className="flex items-center gap-3 flex-wrap">
+          {activeBook.deckId && (
+            <Link href={routes.deck(activeBook.deckId)} className="btn-ghost inline-block text-sm">Open the book&apos;s deck →</Link>
+          )}
+          {!changingLang && (
+            <button className="text-xs text-ink-faint hover:text-ink transition-colors"
+              onClick={() => { setChangingLang(true); setMovePairKey('') }}>
+              Change language
+            </button>
+          )}
+        </div>
+        {changingLang && (
+          <div className="panel space-y-3">
+            <p className="text-sm text-ink-muted">
+              Move this book — its entries, its deck, and every card in it — to a different language
+              pair. Card labels, distractors, and audio regenerate under the new language; review
+              schedules are untouched.
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select className="input py-1.5 text-sm w-auto" value={movePairKey} onChange={e => setMovePairKey(e.target.value)}>
+                <option value="">Pick the correct pair…</option>
+                {pairs.filter(p => `${p.sourceLanguage}|${p.targetLanguage}` !== `${activeBook.sourceLanguage}|${activeBook.targetLanguage}`).map(p => (
+                  <option key={p.id} value={`${p.sourceLanguage}|${p.targetLanguage}`}>
+                    {langFlag(p.sourceLanguage)} {langName(p.sourceLanguage)} → {langName(p.targetLanguage)}
+                  </option>
+                ))}
+              </select>
+              <button className="btn-primary text-sm disabled:opacity-50" disabled={!movePairKey || moving}
+                onClick={() => { const [src, tgt] = movePairKey.split('|'); void moveBookPair(activeBook, src!, tgt!) }}>
+                {moving ? 'Moving…' : 'Move book'}
+              </button>
+              <button className="btn-ghost text-sm" disabled={moving} onClick={() => setChangingLang(false)}>Cancel</button>
+            </div>
+          </div>
         )}
         {bookEntries.length === 0 ? (
           <div className="panel text-sm text-ink-muted text-center py-10">No entries yet — log the first pages you read.</div>
@@ -1033,7 +1112,7 @@ export default function MediaPage() {
             const lastRead = sortedEntries(bookEntries)[0]
             return (
               <button key={b.id} className="panel w-full text-left hover:border-accent/40 transition-colors"
-                onClick={() => { setActiveBook(b); setView('book'); setError(null) }}>
+                onClick={() => { setActiveBook(b); setView('book'); setError(null); setChangingLang(false) }}>
                 <div className="flex items-baseline gap-3 flex-wrap">
                   <span className="font-medium text-ink text-base">{langFlag(b.sourceLanguage)} {b.title}</span>
                   {lastRead && <span className="text-xs text-ink-faint ml-auto">last read {entryDate(lastRead)}</span>}

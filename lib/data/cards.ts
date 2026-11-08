@@ -425,6 +425,30 @@ export class SupabaseCardRepository implements CardRepository {
     return card
   }
 
+  /**
+   * Moves cards to a different language pair (fixing a book/deck created under the wrong
+   * language). Everything derived FROM the language is cleared in the same write — pos/lemma
+   * labels, cached distractors/synonyms, IPA, generated audio — so it regenerates under the
+   * right language (labels via the background labeler below; the rest lazily, as usual).
+   * Schedules (card_states) are untouched: they're language-agnostic.
+   */
+  async moveToPair(cardIds: CardId[], sourceLanguage: string, targetLanguage: string): Promise<void> {
+    if (cardIds.length === 0) return
+    invalidateReads('cards:')
+    const CHUNK = 200
+    for (let i = 0; i < cardIds.length; i += CHUNK) {
+      const { error } = await this.db.from('cards').update({
+        source_language: sourceLanguage, target_language: targetLanguage,
+        pos: null, lemma: null, choices: null, ipa: null,
+        audio_generated: false, audio_data: null, audio_source: null, audio_sources: null,
+      }).in('id', cardIds.slice(i, i + CHUNK))
+      if (error) throw new Error(error.message)
+    }
+    // Relabel under the correct language (same backstop story as text edits).
+    const { data } = await this.db.from('cards').select(BULK_CARD_COLUMNS).in('id', cardIds.slice(0, 400))
+    if (data) this.labelInBackground((data as unknown as Record<string, unknown>[]).map(rowToCard))
+  }
+
   async softDelete(cardId: CardId): Promise<void> {
     invalidateReads('cards:')
     const { error } = await this.db.rpc('soft_delete_card', { p_card_id: cardId })

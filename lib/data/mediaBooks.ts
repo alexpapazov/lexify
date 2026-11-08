@@ -49,11 +49,13 @@ export class SupabaseMediaBookRepository {
     return rowToBook(data as Record<string, unknown>)
   }
 
-  async update(id: string, patch: Partial<Pick<MediaBook, 'title' | 'markers' | 'deckId'>>): Promise<MediaBook> {
+  async update(id: string, patch: Partial<Pick<MediaBook, 'title' | 'markers' | 'deckId' | 'sourceLanguage' | 'targetLanguage'>>): Promise<MediaBook> {
     const dbPatch: Record<string, unknown> = { updated_at: new Date().toISOString() }
-    if (patch.title   !== undefined) dbPatch.title   = patch.title
-    if (patch.markers !== undefined) dbPatch.markers = patch.markers
-    if (patch.deckId  !== undefined) dbPatch.deck_id = patch.deckId
+    if (patch.title          !== undefined) dbPatch.title           = patch.title
+    if (patch.markers        !== undefined) dbPatch.markers         = patch.markers
+    if (patch.deckId         !== undefined) dbPatch.deck_id         = patch.deckId
+    if (patch.sourceLanguage !== undefined) dbPatch.source_language = patch.sourceLanguage
+    if (patch.targetLanguage !== undefined) dbPatch.target_language = patch.targetLanguage
     const { data, error } = await this.db
       .from('media_books')
       .update(dbPatch)

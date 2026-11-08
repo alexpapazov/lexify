@@ -99,9 +99,13 @@ One entry per distinct lemma, no duplicates. EXCLUDE pure function words (articl
 prepositions, conjunctions, auxiliaries), proper names of people/places, and numerals. The
 reader's unmarked words are evidence of vocabulary they know — completeness matters.
 
+Also report "pageLanguage": the two-letter ISO 639-1 code of the language the printed text is
+ACTUALLY written in (it should be ${srcLang} — report what you really see, not what is expected).
+
 Respond with ONLY a JSON object, no other text, in exactly this shape:
 { "occurrences": [ { "text": "...", "lemma": "...", "kind": "word", "gloss": "...", "sentence": "...", "marker": "underlined" } ],
-  "allLemmas": [ "...", "..." ] }`
+  "allLemmas": [ "...", "..." ],
+  "pageLanguage": "fr" }`
 }
 
 export async function POST(req: NextRequest) {
@@ -147,7 +151,9 @@ export async function POST(req: NextRequest) {
     const payload = extractJson(responseText(data))
     const occurrences = parseOccurrences(payload)
     const allLemmas = parseAllLemmas(payload)
-    return NextResponse.json({ ok: true, occurrences, allLemmas })
+    const rawLang = (payload as { pageLanguage?: unknown } | null)?.pageLanguage
+    const pageLanguage = typeof rawLang === 'string' && /^[a-z]{2,3}$/i.test(rawLang.trim()) ? rawLang.trim().toLowerCase() : null
+    return NextResponse.json({ ok: true, occurrences, allLemmas, pageLanguage })
   } catch {
     return NextResponse.json({ ok: false, reason: 'exception' })
   }

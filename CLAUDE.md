@@ -105,7 +105,13 @@ Current feature files:
   ≤8 images/call) reads each printed page number, `orderPages` sorts (unknowns keep upload
   order, after the numbered ones, badged "p. N"/none on thumbnails), and
   `windowOrderedPages` REPLACED windowPages: pair windows only for genuinely consecutive
-  numbers (gap ⇒ each page parses alone; unknown gets benefit of the doubt). STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  numbers (gap ⇒ each page parses alone; unknown gets benefit of the doubt). LANGUAGE GUARD
+  + BOOK MOVE (2026-11-08): parse-page also returns `pageLanguage` (what the print actually
+  is); a majority mismatch vs the book's pair shows a warning banner on review. The book
+  page's "Change language" moves book + entries + deck + ALL deck cards to another pair
+  (`cardRepo.moveToPair` clears pos/lemma/choices/ipa/audio in the same write and relabels;
+  schedules untouched). ENGINE OVERHAUL DESIGN in `features/Media Extraction Engine (design
+  draft).md` — user is annotating; do NOT build it until the rounds conclude. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /
