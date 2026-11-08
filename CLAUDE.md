@@ -139,9 +139,16 @@ Current feature files:
   lapse+1, relearn armed; sendToLadder ignored; pipeline cards never punished).
   `lib/implicitCredit.ts` now applies **stability ×1.3** (SIGHTING_STABILITY_FACTOR — NOT a
   full Good; lastReviewedAt untouched). /media view 'rate': bucket painting w/ pre-paints,
-  penalty rows (Didn't recognize ↔ Accidental mark), per-page Save + Save all (wlRef mirror —
-  sequential saves must never read stale state), credits auto-apply on open, gloss-failed
-  items stay unrated and reappear, stats.remaining drives "Continue rating (N left)".
+  penalty rows (Didn't recognize ↔ Accidental mark), credits auto-apply on open, gloss-failed
+  items stay unrated and reappear, stats.remaining drives the row label. AUTO-SAVE
+  (2026-11-08, user decisions): NO save buttons — chips commit via a 5s idle timer
+  (scheduleAutoSave on load + every interaction), PENALTIES commit only on LEAVE
+  (flushOnLeave on the back button + unmount cleanup via commitWorkRef — the visit is the
+  window to flip an accidental mark); commitWork spans ALL pages, wlRef mirror keeps
+  sequential commits honest, "Saving…/All changes saved" indicator. A v2-done entry row opens
+  the WORKLIST directly (no detail hop; detail remains for processing/legacy only). The gloss
+  route also returns `display` (noun-article flashcard form per entry.options.nounArticle) so
+  unmarked chips' cards get "la berge" fronts, not bare lemmas.
   Saving links marked existing cards into the book's deck (addToDeck) + attaches sentences.
   collapseOccurrences/unmarkedLemmas/splitUnmarkedLemmas DELETED (worklist supersedes).
   OLD STAGE 1 (superseded): /create/book (entry card on

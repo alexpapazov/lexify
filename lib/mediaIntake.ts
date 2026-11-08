@@ -193,9 +193,11 @@ export const CHIP_WINDOWS: Record<'short' | 'long', { min: number; max: number; 
  *  onboarding bands: short ≈ "recognize it" (hard), long ≈ "know it cold" (easy)). */
 export const CHIP_SEED_RATING: Record<'short' | 'long', Rating> = { short: 'hard', long: 'easy' }
 
-/** Defensive parse of the gloss route's `{ glosses: [{ index, gloss }] }` payload → index → gloss. */
-export function parseGlosses(raw: unknown): Map<number, string> {
-  const out = new Map<number, string>()
+/** Defensive parse of the gloss route's `{ glosses: [{ index, gloss, display }] }` payload.
+ *  `display` is the flashcard form (noun with article when the book wants it) — null when the
+ *  model skipped it; the caller falls back to the lemma. */
+export function parseGlosses(raw: unknown): Map<number, { gloss: string; display: string | null }> {
+  const out = new Map<number, { gloss: string; display: string | null }>()
   if (typeof raw !== 'object' || raw === null) return out
   const list = (raw as { glosses?: unknown }).glosses
   if (!Array.isArray(list)) return out
@@ -203,7 +205,8 @@ export function parseGlosses(raw: unknown): Map<number, string> {
     if (typeof g !== 'object' || g === null) continue
     const r = g as Record<string, unknown>
     const gloss = typeof r.gloss === 'string' ? r.gloss.trim() : ''
-    if (typeof r.index === 'number' && Number.isInteger(r.index) && r.index >= 0 && gloss) out.set(r.index, gloss)
+    const display = typeof r.display === 'string' && r.display.trim() ? r.display.trim() : null
+    if (typeof r.index === 'number' && Number.isInteger(r.index) && r.index >= 0 && gloss) out.set(r.index, { gloss, display })
   }
   return out
 }

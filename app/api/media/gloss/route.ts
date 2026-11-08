@@ -22,6 +22,8 @@ interface RequestBody {
   lemmas:         string[]
   sourceLanguage: string
   targetLanguage: string
+  /** Nouns display with their definite article (the book's noun-form option). */
+  nounArticle?:   boolean
 }
 
 function extractJson(text: string): unknown {
@@ -53,12 +55,17 @@ export async function POST(req: NextRequest) {
 
   const srcLang = langName(body.sourceLanguage)
   const tgtLang = langName(body.targetLanguage)
-  const prompt = `These are ${srcLang} dictionary lemmas. For each, give a short ${tgtLang} gloss (one to four words — the most common meaning; for a verb, the infinitive form of the translation).
+  const nounForm = body.nounArticle
+    ? 'nominative singular WITH its definite article (the way a learner cards gender)'
+    : 'nominative singular, no article'
+  const prompt = `These are ${srcLang} dictionary lemmas. For each, give:
+- "gloss": a short ${tgtLang} translation (one to four words; for a verb, the infinitive form of the translation). Give ONE translation almost always; only a word with genuinely distinct meanings may have two, at most three, separated by "; ".
+- "display": the flashcard form — a noun in ${nounForm}; a verb as the infinitive; an adjective masculine singular; anything else unchanged.
 
 ${body.lemmas.map((l, i) => `${i}. ${l}`).join('\n')}
 
 Respond with ONLY a JSON object, no other text, in exactly this shape:
-{ "glosses": [ { "index": 0, "gloss": "..." } ] }`
+{ "glosses": [ { "index": 0, "gloss": "...", "display": "..." } ] }`
 
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -76,7 +83,7 @@ Respond with ONLY a JSON object, no other text, in exactly this shape:
     const data = await res.json()
     const glosses = [...parseGlosses(extractJson(responseText(data))).entries()]
       .filter(([i]) => i < body.lemmas.length)
-      .map(([index, gloss]) => ({ index, gloss }))
+      .map(([index, g]) => ({ index, gloss: g.gloss, display: g.display }))
     return NextResponse.json({ ok: true, glosses })
   } catch {
     return NextResponse.json({ ok: false, reason: 'exception' })

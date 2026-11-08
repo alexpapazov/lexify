@@ -38,9 +38,10 @@ export interface RateDeps {
   load:         Map<number, number>
 }
 
-/** Haiku batch glosses for chips that become cards without an in-context gloss. */
-export async function fetchGlosses(lemmas: string[], src: string, tgt: string): Promise<Map<string, string>> {
-  const out = new Map<string, string>()
+/** Haiku batch glosses + display forms for chips that become cards without in-context data.
+ *  `display` carries the noun-article flashcard form when the book's option asks for it. */
+export async function fetchGlosses(lemmas: string[], src: string, tgt: string, nounArticle: boolean): Promise<Map<string, { gloss: string; display: string | null }>> {
+  const out = new Map<string, { gloss: string; display: string | null }>()
   if (lemmas.length === 0) return out
   const batches = chunk(lemmas, 100)
   await mapLimit(batches, 2, async batch => {
@@ -48,13 +49,13 @@ export async function fetchGlosses(lemmas: string[], src: string, tgt: string): 
       const res = await fetch(apiUrl('/api/media/gloss'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ lemmas: batch, sourceLanguage: src, targetLanguage: tgt }),
+        body: JSON.stringify({ lemmas: batch, sourceLanguage: src, targetLanguage: tgt, nounArticle }),
       })
-      const data = await res.json() as { ok: boolean; glosses?: { index: number; gloss: string }[] }
-      if (data.ok && Array.isArray(data.glosses)) {
-        for (const [i, gloss] of parseGlosses(data)) {
+      const data = await res.json() as { ok: boolean }
+      if (data.ok) {
+        for (const [i, g] of parseGlosses(data)) {
           const lemma = batch[i]
-          if (lemma) out.set(lemma, gloss)
+          if (lemma) out.set(lemma, g)
         }
       }
     } catch { /* unglossed chips are skipped by the caller, never saved with an empty back */ }

@@ -54,12 +54,12 @@ describe('stage E — chip constants + gloss parsing', () => {
     expect(CHIP_SEED_RATING.long).toBe('easy')
   })
 
-  it('parseGlosses keeps valid index/gloss pairs, drops junk', () => {
+  it('parseGlosses keeps valid entries with optional display forms, drops junk', () => {
     const out = parseGlosses({ glosses: [
-      { index: 0, gloss: ' path ' }, { index: 2, gloss: 'moss' },
+      { index: 0, gloss: ' path ', display: 'le sentier' }, { index: 2, gloss: 'moss', display: '' },
       { index: -1, gloss: 'x' }, { index: 1, gloss: '' }, { index: 1.5, gloss: 'y' }, 'junk', null,
     ] })
-    expect([...out.entries()]).toEqual([[0, 'path'], [2, 'moss']])
+    expect([...out.entries()]).toEqual([[0, { gloss: 'path', display: 'le sentier' }], [2, { gloss: 'moss', display: null }]])
     expect(parseGlosses(null).size).toBe(0)
   })
 })

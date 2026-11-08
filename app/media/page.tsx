@@ -142,7 +142,11 @@ export default function MediaPage() {
     wlRef.current = next
     setWl(next)
   }
-  const [savingPage, setSavingPage] = useState<number | 'all' | null>(null)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const commitBusyRef = useRef(false)
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Latest commitWork, so the unmount flush never runs a stale closure. */
+  const commitWorkRef = useRef<((opts: { chips: boolean; penalties: boolean }) => Promise<void>) | null>(null)
 
   const libraryRef = useRef<{ cards: Card[]; forward: Map<string, CardState>; reverse: Map<string, CardState> }>({ cards: [], forward: new Map(), reverse: new Map() })
   /** Scheduler config loaded at parse time: track flags + per-track retention/calibration. */
@@ -378,6 +382,8 @@ export default function MediaPage() {
         detectedLang: built.detectedLang,
       })
       if (built.creditTargets.length > 0) void applyCredits(entry, built.creditTargets)
+      setSaveState('idle')
+      scheduleAutoSave()   // untouched pre-paints commit hands-off after a short idle
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load the results.')
       backToLog(book)
@@ -441,154 +447,168 @@ export default function MediaPage() {
     return { deckId: deck.id, pipelineId: defaultPipeline.id }
   }
 
-  /** Saves ONE page's items exactly as painted. Items whose gloss fails stay unrated. */
-  async function doSavePage(pageIdx: number) {
+  /**
+   * Commits worklist items exactly as painted — CHIPS on the idle auto-save (a few seconds
+   * after the last interaction), PENALTIES only when leaving the entry (the whole visit is the
+   * window to flip an accidental mark). Items whose gloss fails stay unrated and retry on the
+   * next trigger. There is no Save button anywhere — this runs itself.
+   */
+  async function commitWork(opts: { chips: boolean; penalties: boolean }) {
     const entry = entryRef.current
     const wlNow = wlRef.current
-    if (!wlNow || !entry) return
-    const items = wlNow.pages[pageIdx]?.items ?? []
-    if (items.length === 0) return
+    if (!wlNow || !entry || commitBusyRef.current) return
+    const all = wlNow.pages.flatMap(pg => pg.items)
+    const penalties  = opts.penalties ? all.filter(it => it.cls === 'penalty' && it.penalize) : []
+    const dismissed  = opts.penalties ? all.filter(it => it.cls === 'penalty' && !it.penalize) : []
+    const chipsItems = opts.chips ? all.filter(it => it.cls !== 'penalty') : []
+    if (penalties.length + dismissed.length + chipsItems.length === 0) return
 
-    const cardRepo = new SupabaseCardRepository()
-    const stateRepo = new SupabaseCardStateRepository()
-    const { retMap, calMap, tracksByPair } = paramsRef.current
-    const tracks = tracksByPair.get(`${entry.sourceLanguage}|${entry.targetLanguage}`)
-    const now = new Date()
-
-    const penalties  = items.filter(it => it.cls === 'penalty' && it.penalize)
-    const dismissed  = items.filter(it => it.cls === 'penalty' && !it.penalize)
-    const chipsItems = items.filter(it => it.cls !== 'penalty')
-    const dontKnow   = chipsItems.filter(it => it.bucket === 'dontknow')
-    const shortLong  = chipsItems.filter(it => it.bucket === 'short' || it.bucket === 'long')
-    const ignored    = chipsItems.filter(it => it.bucket === null)
-    const dkNew      = dontKnow.filter(it => !it.existing)
-    const dkExisting = dontKnow.filter(it => it.existing)
-    const slNew      = shortLong.filter(it => !it.existing)
-    const slExisting = shortLong.filter(it => it.existing)
-
-    // Glosses: marked items carry theirs from the page; unmarked new cards gloss now.
-    const needGloss = [...dkNew, ...slNew].filter(it => !it.gloss)
-    const glossMap = needGloss.length > 0 ? await fetchGlosses(needGloss.map(it => it.lemma), entry.sourceLanguage, entry.targetLanguage) : new Map<string, string>()
-    const glossOf = (it: UIItem) => it.gloss ?? glossMap.get(it.lemma) ?? null
-    const dkReady = dkNew.filter(it => glossOf(it) != null)
-    const slReady = slNew.filter(it => glossOf(it) != null)
-    const glossSkipped = (dkNew.length - dkReady.length) + (slNew.length - slReady.length)
-
-    const needsDeck = dkReady.length + slReady.length + dkExisting.length + penalties.length > 0
-    let deckId: string | null = null
-    let pipelineId = ''
-    if (needsDeck) ({ deckId, pipelineId } = await ensureDeck(entry))
-    // Graduating an existing never-studied card needs a pipeline id even when no deck is touched.
-    if (!pipelineId && slExisting.length > 0) pipelineId = (await new SupabasePipelineRepository().getDefault()).id
-
-    // New cards: don't-know = learning; short/long = born graduated. Fronts use the DISPLAY form.
-    const toCreate = [...dkReady, ...slReady]
-    const created = toCreate.length > 0 ? await cardRepo.bulkCreate(
-      deckId!, userId, entry.sourceLanguage, entry.targetLanguage,
-      toCreate.map((it, i) => ({ front: it.display, back: glossOf(it)!, position: 1000 + i })),
-    ) : []
-    for (let i = 0; i < created.length; i++) {
-      const it = toCreate[i]!
-      if (it.sentences.length === 0) continue
-      let choices = created[i]!.choices
-      for (const sn of it.sentences.slice(0, 3)) {
-        choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: glossOf(it)! })
-      }
-      await cardRepo.update(created[i]!.id, { choices })
-    }
-    const slCreated = created.slice(dkReady.length)
-
-    // Graduated seeding — new known cards + existing never-studied cards painted short/long.
-    if (slCreated.length + slExisting.length > 0) {
-      const deps = {
-        userId, src: entry.sourceLanguage, tgt: entry.targetLanguage, now, tracks,
-        retMap, calMap, stateRepo, pipelineId,
-        load: await seedOnboardLoad(userId, now, 110, stateRepo),
-      }
-      const states: CardState[] = []
-      slCreated.forEach((c, i) => states.push(...seedKnownStates(c.id, slReady[i]!.bucket as 'short' | 'long', undefined, undefined, deps)))
-      for (const it of slExisting) {
-        states.push(...seedKnownStates(it.existing!.id, it.bucket as 'short' | 'long',
-          libraryRef.current.forward.get(it.existing!.id), libraryRef.current.reverse.get(it.existing!.id), deps))
-      }
-      await stateRepo.upsertBatch(states)
-    }
-
-    // Marked words whose card exists: link into the book's deck + attach the sentences.
-    let linkPos = 100000
-    for (const it of [...dkExisting, ...penalties]) {
-      if (deckId) await cardRepo.addToDeck(deckId, it.existing!.id, linkPos++)
-      if (it.sentences.length > 0) {
-        let choices = it.existing!.choices
-        for (const sn of it.sentences.slice(0, 3)) {
-          choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: it.gloss ?? displayText(it.existing!.back) })
-        }
-        await cardRepo.update(it.existing!.id, { choices })
-      }
-    }
-
-    // Recognition failures: the real FSRS Again, due today, on every graduated row.
-    if (penalties.length > 0) {
-      const deps = { userId, src: entry.sourceLanguage, tgt: entry.targetLanguage, now, tracks, retMap, calMap, stateRepo, pipelineId, load: new Map<number, number>() }
-      for (const it of penalties) {
-        await applyRecognitionPenalty(it.existing!, libraryRef.current.forward.get(it.existing!.id) ?? null, libraryRef.current.reverse.get(it.existing!.id) ?? null, deps)
-      }
-    }
-
-    // Ratings + stats — items that failed to gloss get NO rating and reappear next time.
-    const ratings = { ...(entryRef.current?.ratings ?? entry.ratings) }
-    for (const it of [...dkReady, ...dkExisting]) ratings[it.key] = 'dontknow'
-    for (const it of [...slReady, ...slExisting]) ratings[it.key] = it.bucket as string
-    for (const it of ignored) ratings[it.key] = 'ignored'
-    for (const it of penalties) ratings[it.key] = 'penalized'
-    for (const it of dismissed) ratings[it.key] = 'dismissed'
-
-    const prevStats = (entryRef.current?.stats ?? entry.stats) as Record<string, unknown>
-    const n = (k: string) => Number(prevStats[k] ?? 0)
-    const remaining = wlNow.pages.reduce((sum, pg, i) =>
-      sum + (i === pageIdx ? pg.items.filter(it => ratings[it.key] == null).length : pg.items.length), 0)
-    const stats = {
-      ...prevStats,
-      dontKnowAdded: n('dontKnowAdded') + dkReady.length,
-      knownAdded: n('knownAdded') + slReady.length,
-      graduatedExisting: n('graduatedExisting') + slExisting.length,
-      linked: n('linked') + dkExisting.length + penalties.length,
-      penalized: n('penalized') + penalties.length,
-      chipSkipped: n('chipSkipped') + glossSkipped,
-      remaining,
-      ...(deckId ? { deckId } : {}),
-    }
-    const updated = await new SupabaseMediaEntryRepository().update(entry.id, { ratings, stats })
-    entryRef.current = updated
-    setEntries(prev => prev.map(e => e.id === updated.id ? updated : e))
-    const cur = wlRef.current
-    if (cur) setWorklist({
-      ...cur,
-      pages: cur.pages.map((pg, i) => i === pageIdx
-        ? { ...pg, items: pg.items.filter(it => ratings[it.key] == null), settled: pg.settled + items.filter(it => ratings[it.key] != null).length }
-        : pg),
-    })
-    if (glossSkipped > 0) setError(`${glossSkipped} word${glossSkipped !== 1 ? 's' : ''} got no translation — they stayed on the list, try saving again.`)
-  }
-
-  async function savePage(pageIdx: number) {
-    if (savingPage !== null) return
-    setSavingPage(pageIdx)
-    setError(null)
-    try { await doSavePage(pageIdx) } catch (e) { setError(e instanceof Error ? e.message : 'Saving failed.') }
-    finally { setSavingPage(null) }
-  }
-
-  async function saveAllPages() {
-    if (savingPage !== null || !wl) return
-    setSavingPage('all')
-    setError(null)
+    commitBusyRef.current = true
+    setSaveState('saving')
     try {
-      const count = wlRef.current?.pages.length ?? 0
-      for (let i = 0; i < count; i++) await doSavePage(i)
-    } catch (e) { setError(e instanceof Error ? e.message : 'Saving failed.') }
-    finally { setSavingPage(null) }
+      const cardRepo = new SupabaseCardRepository()
+      const stateRepo = new SupabaseCardStateRepository()
+      const { retMap, calMap, tracksByPair } = paramsRef.current
+      const tracks = tracksByPair.get(`${entry.sourceLanguage}|${entry.targetLanguage}`)
+      const now = new Date()
+
+      const dontKnow   = chipsItems.filter(it => it.bucket === 'dontknow')
+      const shortLong  = chipsItems.filter(it => it.bucket === 'short' || it.bucket === 'long')
+      const ignored    = chipsItems.filter(it => it.bucket === null)
+      const dkNew      = dontKnow.filter(it => !it.existing)
+      const dkExisting = dontKnow.filter(it => it.existing)
+      const slNew      = shortLong.filter(it => !it.existing)
+      const slExisting = shortLong.filter(it => it.existing)
+
+      // Glosses + display forms: marked items carry theirs from the page; unmarked new cards
+      // gloss here (the display form adds the noun's article when the book's option asks).
+      const nounArticle = (entry.options as { nounArticle?: boolean }).nounArticle === true
+      const needGloss = [...dkNew, ...slNew].filter(it => !it.gloss)
+      const glossMap = needGloss.length > 0
+        ? await fetchGlosses(needGloss.map(it => it.lemma), entry.sourceLanguage, entry.targetLanguage, nounArticle)
+        : new Map<string, { gloss: string; display: string | null }>()
+      const glossOf = (it: UIItem) => it.gloss ?? glossMap.get(it.lemma)?.gloss ?? null
+      const frontOf = (it: UIItem) => it.marked ? it.display : (glossMap.get(it.lemma)?.display ?? it.display)
+      const dkReady = dkNew.filter(it => glossOf(it) != null)
+      const slReady = slNew.filter(it => glossOf(it) != null)
+      const glossSkipped = (dkNew.length - dkReady.length) + (slNew.length - slReady.length)
+
+      const needsDeck = dkReady.length + slReady.length + dkExisting.length + penalties.length > 0
+      let deckId: string | null = null
+      let pipelineId = ''
+      if (needsDeck) ({ deckId, pipelineId } = await ensureDeck(entry))
+      if (!pipelineId && slExisting.length > 0) pipelineId = (await new SupabasePipelineRepository().getDefault()).id
+
+      const toCreate = [...dkReady, ...slReady]
+      const created = toCreate.length > 0 ? await cardRepo.bulkCreate(
+        deckId!, userId, entry.sourceLanguage, entry.targetLanguage,
+        toCreate.map((it, i) => ({ front: frontOf(it), back: glossOf(it)!, position: 1000 + i })),
+      ) : []
+      for (let i = 0; i < created.length; i++) {
+        const it = toCreate[i]!
+        if (it.sentences.length === 0) continue
+        let choices = created[i]!.choices
+        for (const sn of it.sentences.slice(0, 3)) {
+          choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: glossOf(it)! })
+        }
+        await cardRepo.update(created[i]!.id, { choices })
+      }
+      const slCreated = created.slice(dkReady.length)
+
+      if (slCreated.length + slExisting.length > 0) {
+        const deps = {
+          userId, src: entry.sourceLanguage, tgt: entry.targetLanguage, now, tracks,
+          retMap, calMap, stateRepo, pipelineId,
+          load: await seedOnboardLoad(userId, now, 110, stateRepo),
+        }
+        const states: CardState[] = []
+        slCreated.forEach((c, i) => states.push(...seedKnownStates(c.id, slReady[i]!.bucket as 'short' | 'long', undefined, undefined, deps)))
+        for (const it of slExisting) {
+          states.push(...seedKnownStates(it.existing!.id, it.bucket as 'short' | 'long',
+            libraryRef.current.forward.get(it.existing!.id), libraryRef.current.reverse.get(it.existing!.id), deps))
+        }
+        await stateRepo.upsertBatch(states)
+      }
+
+      let linkPos = 100000
+      for (const it of [...dkExisting, ...penalties]) {
+        if (deckId) await cardRepo.addToDeck(deckId, it.existing!.id, linkPos++)
+        if (it.sentences.length > 0) {
+          let choices = it.existing!.choices
+          for (const sn of it.sentences.slice(0, 3)) {
+            choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: it.gloss ?? displayText(it.existing!.back) })
+          }
+          await cardRepo.update(it.existing!.id, { choices })
+        }
+      }
+
+      if (penalties.length > 0) {
+        const deps = { userId, src: entry.sourceLanguage, tgt: entry.targetLanguage, now, tracks, retMap, calMap, stateRepo, pipelineId, load: new Map<number, number>() }
+        for (const it of penalties) {
+          await applyRecognitionPenalty(it.existing!, libraryRef.current.forward.get(it.existing!.id) ?? null, libraryRef.current.reverse.get(it.existing!.id) ?? null, deps)
+        }
+      }
+
+      const ratings = { ...(entryRef.current?.ratings ?? entry.ratings) }
+      for (const it of [...dkReady, ...dkExisting]) ratings[it.key] = 'dontknow'
+      for (const it of [...slReady, ...slExisting]) ratings[it.key] = it.bucket as string
+      for (const it of ignored) ratings[it.key] = 'ignored'
+      for (const it of penalties) ratings[it.key] = 'penalized'
+      for (const it of dismissed) ratings[it.key] = 'dismissed'
+
+      const prevStats = (entryRef.current?.stats ?? entry.stats) as Record<string, unknown>
+      const n = (k: string) => Number(prevStats[k] ?? 0)
+      const remaining = wlNow.pages.reduce((sum, pg) => sum + pg.items.filter(it => ratings[it.key] == null).length, 0)
+      const stats = {
+        ...prevStats,
+        dontKnowAdded: n('dontKnowAdded') + dkReady.length,
+        knownAdded: n('knownAdded') + slReady.length,
+        graduatedExisting: n('graduatedExisting') + slExisting.length,
+        linked: n('linked') + dkExisting.length + penalties.length,
+        penalized: n('penalized') + penalties.length,
+        chipSkipped: n('chipSkipped') + glossSkipped,
+        remaining,
+        ...(deckId ? { deckId } : {}),
+      }
+      const updated = await new SupabaseMediaEntryRepository().update(entry.id, { ratings, stats })
+      entryRef.current = updated
+      setEntries(prev => prev.map(e => e.id === updated.id ? updated : e))
+      const cur = wlRef.current
+      if (cur) setWorklist({
+        ...cur,
+        pages: cur.pages.map(pg => ({
+          ...pg,
+          items: pg.items.filter(it => ratings[it.key] == null),
+          settled: pg.settled + pg.items.filter(it => ratings[it.key] != null && it.cls !== 'credit').length,
+        })),
+      })
+      setSaveState('saved')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Saving failed — your paints are kept, it will retry.')
+      setSaveState('idle')
+    } finally {
+      commitBusyRef.current = false
+    }
   }
+  commitWorkRef.current = commitWork
+
+  /** Chips auto-commit a few seconds after the last interaction (or the worklist loading). */
+  function scheduleAutoSave() {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+    idleTimerRef.current = setTimeout(() => { void commitWorkRef.current?.({ chips: true, penalties: false }) }, 5000)
+  }
+
+  /** Leaving the entry flushes EVERYTHING — including penalties (their commit point). */
+  function flushOnLeave() {
+    if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null }
+    void commitWorkRef.current?.({ chips: true, penalties: true })
+  }
+
+  // Unmount (navigating off /media entirely) counts as leaving the entry.
+  useEffect(() => () => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
+    void commitWorkRef.current?.({ chips: true, penalties: true })
+  }, [])
 
   /** Leave the wizard/detail: back to the owning book's page when there is one, else the shelf. */
   function backToLog(book: MediaBook | null) {
@@ -640,8 +660,6 @@ export default function MediaPage() {
     const cands = detail.candidates as IntakeCandidate[]
     const st = detail.stats as Record<string, number | string | undefined>
     const detailProg = progressMap.get(detail.id)
-    const remainingToRate = typeof st.remaining === 'number' ? st.remaining : null
-    const readyToReview = detail.status === 'done' && st.engine === 'v2' && (remainingToRate == null || remainingToRate > 0)
     return (
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
         <div className="flex items-start justify-between gap-3">
@@ -674,12 +692,6 @@ export default function MediaPage() {
             <p>Processing on the server — {detailProg ? `${detailProg.done} of ${detailProg.total} pages parsed${detailProg.failed > 0 ? `, ${detailProg.failed} failed` : ''}` : 'starting up'}…</p>
             <p className="text-xs text-ink-faint">You can close the app; this page updates on its own.</p>
           </div>
-        )}
-        {readyToReview && (
-          <button className="btn-primary" onClick={() => void openWorklist(detail)}>
-            {remainingToRate != null ? `Continue rating (${remainingToRate} left)` : 'Rate the words'}
-            {typeof st.failedPages === 'number' && st.failedPages > 0 ? ` · ${st.failedPages} page${st.failedPages !== 1 ? 's' : ''} failed to parse` : ''} →
-          </button>
         )}
         {typeof st.deckId === 'string' && (
           <Link href={routes.deck(st.deckId)} className="btn-ghost inline-block text-sm">Open the book&apos;s deck →</Link>
@@ -716,26 +728,35 @@ export default function MediaPage() {
       const cur = wlRef.current
       if (!cur) return
       setWorklist({ ...cur, pages: cur.pages.map(pg => ({ ...pg, items: pg.items.map(it => it.key === key ? fn(it) : it) })) })
+      scheduleAutoSave()
     }
     return (
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
-        <div>
-          <button className="text-sm text-ink-muted hover:text-ink" onClick={() => backToLog(wizardBook)}>← {wizardBook?.title ?? 'Media log'}</button>
-          <h1 className="text-2xl font-semibold text-ink mt-1">{entry ? `${langFlag(entry.sourceLanguage)} ${entry.title}` : 'Rating'}</h1>
-          {wl && entry && (
-            <p className="text-sm text-ink-muted mt-1">
-              {entryDate(entry)} · {remaining} word{remaining !== 1 ? 's' : ''} left to rate
-              {creditedTotal > 0 ? ` · ${creditedTotal} credited automatically` : ''}
-              {wl.quietCount > 0 ? ` · ${wl.quietCount} short-term word${wl.quietCount !== 1 ? 's' : ''} seen (no change)` : ''}
-            </p>
-          )}
-          {wl && entry && wl.detectedLang && wl.detectedLang !== entry.sourceLanguage.toLowerCase() && (
-            <p className="text-sm text-warning mt-2">
-              ⚠ These pages read as {langName(wl.detectedLang)}, but this book is set to {langName(entry.sourceLanguage)}.
-              If the book's language is wrong, fix it with “Change language” on the book's page BEFORE saving anything.
-            </p>
-          )}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <button className="text-sm text-ink-muted hover:text-ink" onClick={() => { flushOnLeave(); backToLog(wizardBook) }}>← {wizardBook?.title ?? 'Media log'}</button>
+            <h1 className="text-2xl font-semibold text-ink mt-1">{entry ? `${langFlag(entry.sourceLanguage)} ${entry.title}` : 'Rating'}</h1>
+            {wl && entry && (
+              <p className="text-sm text-ink-muted mt-1">
+                {entryDate(entry)} · {remaining} word{remaining !== 1 ? 's' : ''} left to rate
+                {creditedTotal > 0 ? ` · ${creditedTotal} credited automatically` : ''}
+                {wl.quietCount > 0 ? ` · ${wl.quietCount} short-term word${wl.quietCount !== 1 ? 's' : ''} seen (no change)` : ''}
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <span className="text-xs text-ink-faint">
+              {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'All changes saved' : ''}
+            </span>
+            {entry && <button className="btn-ghost text-danger text-sm" onClick={() => void deleteEntry(entry)}>Delete</button>}
+          </div>
         </div>
+        {wl && entry && wl.detectedLang && wl.detectedLang !== entry.sourceLanguage.toLowerCase() && (
+          <p className="text-sm text-warning">
+            ⚠ These pages read as {langName(wl.detectedLang)}, but this book is set to {langName(entry.sourceLanguage)}.
+            If the book's language is wrong, fix it with “Change language” on the book's page BEFORE rating anything.
+          </p>
+        )}
         {error && <p className="text-sm text-danger">{error}</p>}
 
         {!wl ? (
@@ -763,7 +784,8 @@ export default function MediaPage() {
             <p className="text-xs text-ink-faint">
               Chips come pre-painted — marked words as “I don't know”, the rest as “Long term”. Pick a
               bucket and tap chips to repaint; tap with the same bucket to clear one (cleared = ignored).
-              Save a page whenever you like; what's unsaved keeps until next time.
+              Everything saves itself moments after you stop — recognition failures commit when you
+              leave, so you have the whole visit to flip an accidental mark.
             </p>
 
             {wl.pages.map((pg, pi) => {
@@ -780,12 +802,7 @@ export default function MediaPage() {
                         {pg.failed ? ' · failed to parse' : ''}
                       </span>
                     </h2>
-                    {pg.items.length > 0 && (
-                      <button className="btn-ghost text-sm shrink-0 disabled:opacity-50" disabled={savingPage !== null}
-                        onClick={() => void savePage(pi)}>
-                        {savingPage === pi ? 'Saving…' : 'Save page'}
-                      </button>
-                    )}
+
                   </div>
 
                   {penaltyItems.map(it => (
@@ -837,12 +854,6 @@ export default function MediaPage() {
               )
             })}
 
-            {remaining > 0 && wl.pages.filter(pg => pg.items.length > 0).length > 1 && (
-              <button className="btn-primary w-full disabled:opacity-50" disabled={savingPage !== null}
-                onClick={() => void saveAllPages()}>
-                {savingPage === 'all' ? 'Saving…' : `Save all pages (${remaining})`}
-              </button>
-            )}
             {remaining === 0 && (
               <div className="panel text-sm text-ink-muted text-center py-6">
                 Everything rated. {entryRef.current && typeof (entryRef.current.stats as Record<string, unknown>).deckId === 'string'
@@ -984,10 +995,16 @@ export default function MediaPage() {
     const st = e.stats as Record<string, number | string | undefined>
     const found = (e.candidates as unknown[]).length
     const prog = progressMap.get(e.id)
-    const readyToReview = e.status === 'done' && st.engine === 'v2' && st.created == null
+    const isV2 = st.engine === 'v2'
+    const remainingToRate = typeof st.remaining === 'number' ? st.remaining : null
+    // A processed entry IS its worklist — the row opens the rating view directly, no detail hop.
+    const open = () => {
+      setError(null)
+      if (e.status === 'done' && isV2) { void openWorklist(e) } else { setDetail(e); setView('detail') }
+    }
     return (
       <button key={e.id} className="panel w-full text-left hover:border-accent/40 transition-colors"
-        onClick={() => { setDetail(e); setView('detail'); setError(null) }}>
+        onClick={open}>
         <div className="flex items-baseline gap-3 flex-wrap">
           <span className="font-medium text-ink">{showTitle ? <>{langFlag(e.sourceLanguage)} {e.title}</> : fmtDay(e.readOn ?? e.createdAt.slice(0, 10))}</span>
           {showTitle && <span className="text-xs text-ink-faint ml-auto">{entryDate(e)}</span>}
@@ -996,13 +1013,22 @@ export default function MediaPage() {
           <p className="text-xs text-accent-soft mt-1">
             Processing — {prog ? `${prog.done} of ${prog.total} pages parsed${prog.failed > 0 ? ` · ${prog.failed} failed` : ''}` : `${e.pages} page${e.pages !== 1 ? 's' : ''}`}…
           </p>
+        ) : isV2 ? (
+          <p className="text-xs text-ink-muted mt-1">
+            {e.pages} page{e.pages !== 1 ? 's' : ''}
+            {remainingToRate == null ? ' · ready to rate' : remainingToRate > 0 ? ` · ${remainingToRate} word${remainingToRate !== 1 ? 's' : ''} left to rate` : ' · ✓ rated'}
+            {typeof st.dontKnowAdded === 'number' && st.dontKnowAdded > 0 ? ` · ${st.dontKnowAdded} to learn` : ''}
+            {typeof st.knownAdded === 'number' && st.knownAdded > 0 ? ` · ${st.knownAdded} known` : ''}
+            {typeof st.penalized === 'number' && st.penalized > 0 ? ` · ${st.penalized} punished` : ''}
+            {typeof st.credited === 'number' && st.credited > 0 ? ` · ${st.credited} credited` : ''}
+          </p>
         ) : (
           <p className="text-xs text-ink-muted mt-1">
-            {e.pages} page{e.pages !== 1 ? 's' : ''}{readyToReview ? '' : ` · ${found} marked`}
+            {e.pages} page{e.pages !== 1 ? 's' : ''} · {found} marked
             {typeof st.created === 'number' && st.created > 0 ? ` · ${st.created} card${st.created !== 1 ? 's' : ''} created` : ''}
             {typeof st.attached === 'number' && st.attached > 0 ? ` · ${st.attached} gained sentences` : ''}
             {typeof st.credited === 'number' && st.credited > 0 ? ` · ${st.credited} credited` : ''}
-            {readyToReview ? ' · ready to review' : st.created == null ? ' · review not saved' : ''}
+            {st.created == null ? ' · review not saved' : ''}
           </p>
         )}
       </button>
