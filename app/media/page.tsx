@@ -54,6 +54,8 @@ const MAX_EDGE = 1568
 interface UIItem extends WorklistItem {
   bucket:   ChipBucket | null
   penalize: boolean
+  /** ×-ed away: hidden immediately, recorded as 'ignored' on the next auto-save. */
+  removed:  boolean
 }
 interface UIPage extends Omit<WorklistPageSection, 'items'> { items: UIItem[] }
 
@@ -376,6 +378,7 @@ export default function MediaPage() {
             // Pre-paints (user decisions): marked → "I don't know", unmarked new → "Long term".
             bucket: it.cls === 'dontknow' ? 'dontknow' as ChipBucket : it.cls === 'rate' ? 'long' as ChipBucket : null,
             penalize: it.cls === 'penalty',
+            removed: false,
           })),
         })),
         quietCount: built.quietCount,
@@ -721,9 +724,9 @@ export default function MediaPage() {
   // ═══ The rating worklist ═══
   if (view === 'rate') {
     const entry = entryRef.current
-    const remaining = wl ? wl.pages.reduce((n2, pg) => n2 + pg.items.length, 0) : 0
+    const remaining = wl ? wl.pages.reduce((n2, pg) => n2 + pg.items.filter(it => !it.removed).length, 0) : 0
     const creditedTotal = wl ? wl.pages.reduce((n2, pg) => n2 + pg.credited, 0) : 0
-    const bucketCount = (k: ChipBucket) => wl ? wl.pages.reduce((n2, pg) => n2 + pg.items.filter(it => it.cls !== 'penalty' && it.bucket === k).length, 0) : 0
+    const bucketCount = (k: ChipBucket) => wl ? wl.pages.reduce((n2, pg) => n2 + pg.items.filter(it => it.cls !== 'penalty' && !it.removed && it.bucket === k).length, 0) : 0
     const setItem = (key: string, fn: (it: UIItem) => UIItem) => {
       const cur = wlRef.current
       if (!cur) return
@@ -790,14 +793,14 @@ export default function MediaPage() {
 
             {wl.pages.map((pg, pi) => {
               const penaltyItems = pg.items.filter(it => it.cls === 'penalty')
-              const chipItems = pg.items.filter(it => it.cls !== 'penalty')
+              const chipItems = pg.items.filter(it => it.cls !== 'penalty' && !it.removed)
               return (
                 <div key={pi} className="space-y-2">
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="text-base font-medium text-ink">
                       {pg.label}
                       <span className="text-xs text-ink-faint font-normal ml-2">
-                        {pg.items.length > 0 ? `${pg.items.length} to rate` : '✓ done'}
+                        {pg.items.filter(it => !it.removed).length > 0 ? `${pg.items.filter(it => !it.removed).length} to rate` : '✓ done'}
                         {pg.credited > 0 ? ` · ${pg.credited} credited` : ''}
                         {pg.failed ? ' · failed to parse' : ''}
                       </span>
@@ -832,10 +835,10 @@ export default function MediaPage() {
                       {chipItems.map(it => {
                         const bucket = BUCKETS.find(b => b.key === it.bucket)
                         return (
-                          <button key={it.key}
+                          <span key={it.key}
                             title={(it.existing ? `In your library unstudied: ${displayText(it.existing.front)} — ${displayText(it.existing.back)}. ` : '') + (it.gloss ? `${it.gloss}` : '')}
                             className={[
-                              'px-2.5 py-1 rounded-full border text-sm transition-colors',
+                              'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-sm transition-colors cursor-pointer select-none',
                               bucket ? bucket.chipClass : 'border-line/20 text-ink-muted hover:text-ink hover:border-line/40',
                             ].join(' ')}
                             onClick={() => setItem(it.key, x => ({
@@ -843,9 +846,13 @@ export default function MediaPage() {
                               bucket: activeBucket === null ? null : (x.bucket === activeBucket ? null : activeBucket),
                             }))}>
                             {it.display}
-                            {it.marked && <span className="ml-1 text-[10px] align-middle text-ink-faint">✏︎</span>}
-                            {it.existing && <span className="ml-1 align-middle inline-block w-1.5 h-1.5 rounded-full bg-ink-faint" />}
-                          </button>
+                            <span
+                              className="text-ink-faint hover:text-danger text-xs leading-none px-0.5 -mr-1"
+                              title="Remove — don't add this word"
+                              onClick={e => { e.stopPropagation(); setItem(it.key, x => ({ ...x, removed: true, bucket: null })) }}>
+                              ×
+                            </span>
+                          </span>
                         )
                       })}
                     </div>
