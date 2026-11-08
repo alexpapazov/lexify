@@ -100,7 +100,12 @@ Current feature files:
   title/pair locked, markers editable and saved back to the book on parse) → entry detail.
   "+ New book" runs the full wizard and creates the book at parse. Book remembers its deck
   after first commit. Photo decode is two-tier (createImageBitmap → <img>) with PER-FILE
-  errors naming the file — an iPhone HEIC in Chrome no longer kills the whole batch. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  errors naming the file — an iPhone HEIC in Chrome no longer kills the whole batch.
+  ORDERING PASS (2026-11-07): photos upload in ANY order — `/api/media/order-pages` (Haiku,
+  ≤8 images/call) reads each printed page number, `orderPages` sorts (unknowns keep upload
+  order, after the numbered ones, badged "p. N"/none on thumbnails), and
+  `windowOrderedPages` REPLACED windowPages: pair windows only for genuinely consecutive
+  numbers (gap ⇒ each page parses alone; unknown gets benefit of the doubt). STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /

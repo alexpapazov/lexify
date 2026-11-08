@@ -28,7 +28,7 @@ import { SupabaseMediaBookRepository } from '@/lib/data/mediaBooks'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { appendStoredCloze } from '@/lib/reviewCloze'
-import { windowPages, collapseOccurrences, compareWithLexicon, unmarkedLemmas, splitUnmarkedLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, DEFAULT_MARKERS, type MarkerConfig, type PageOccurrence, type LexiconMatch, type IntakeCandidate, type ChipBucket } from '@/lib/mediaIntake'
+import { orderPages, windowOrderedPages, collapseOccurrences, compareWithLexicon, unmarkedLemmas, splitUnmarkedLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, DEFAULT_MARKERS, type MarkerConfig, type PageOccurrence, type LexiconMatch, type IntakeCandidate, type ChipBucket } from '@/lib/mediaIntake'
 import { creditCardSighting } from '@/lib/implicitCredit'
 import { buildEnabledTracksMap, buildRetentionMap, buildCalibrationMap, retentionFor, activeProductionTrack, type EnabledTracks } from '@/lib/sessionLimits'
 import { claimSpreadDay, onboardDueIso, seedOnboardLoad } from '@/engine/density'
@@ -135,9 +135,10 @@ export default function MediaPage() {
   const [title, setTitle] = useState('')
   const [readOn, setReadOn] = useState(localToday())
   const [markers, setMarkers] = useState<MarkerConfig>(DEFAULT_MARKERS)
-  const [photos, setPhotos] = useState<{ name: string; dataUrl: string }[]>([])
+  const [photos, setPhotos] = useState<{ name: string; dataUrl: string; pageNumber?: number | null }[]>([])
   const [preparing, setPreparing] = useState(false)
   const [step, setStep] = useState<'setup' | 'parsing' | 'review' | 'committing' | 'done'>('setup')
+  const [parsePhase, setParsePhase] = useState<'ordering' | 'extracting'>('ordering')
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [failedWindows, setFailedWindows] = useState(0)
   const [rows, setRows] = useState<ReviewRow[]>([])
@@ -241,7 +242,38 @@ export default function MediaPage() {
       }
       profileRef.current = { tz: profile?.timezone ?? deviceTimeZone(), turnoverHour: profile?.day_turnover_hour ?? 0 }
 
-      const windows = windowPages(photos)
+      // ── Ordering pass: read each photo's printed page number, sort into reading order.
+      // Upload order is only the fallback — photographing pages in order is fiddly, so the
+      // reader doesn't have to. A failed batch just keeps those photos' upload order.
+      setParsePhase('ordering')
+      const numbers: (number | null)[] = new Array(photos.length).fill(null)
+      if (photos.length > 1) {
+        const photoBatches = chunk(photos.map((photo, i) => ({ photo, i })), 8)
+        await mapLimit(photoBatches, 2, async batch => {
+          try {
+            const res = await fetch(apiUrl('/api/media/order-pages'), {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ images: batch.map(b => b.photo.dataUrl) }),
+            })
+            const data = await res.json() as { ok: boolean; pages?: { index: number; pageNumber: number | null }[] }
+            if (data.ok && Array.isArray(data.pages)) {
+              for (const pg of data.pages) {
+                const b = batch[pg.index]
+                if (b) numbers[b.i] = pg.pageNumber ?? null
+              }
+            }
+          } catch { /* upload order stands for this batch */ }
+          return null
+        })
+      }
+      const ordered = orderPages(photos, numbers)
+      // Reorder the thumbnails + badge them with the detected numbers (visible if you come back).
+      setPhotos(ordered.map(o => ({ ...o.item, pageNumber: o.pageNumber })))
+
+      // ── Extraction: windows over the ORDERED pages — pairs only where genuinely consecutive.
+      setParsePhase('extracting')
+      const windows = windowOrderedPages(ordered)
       setProgress({ done: 0, total: windows.length })
       const all: PageOccurrence[] = []
       const windowLemmas: string[][] = []
@@ -810,8 +842,12 @@ export default function MediaPage() {
   if (view === 'wizard' && step === 'parsing') {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-4">
-        <h1 className="text-xl font-semibold text-ink">Reading your pages…</h1>
-        <p className="text-sm text-ink-muted">{progress.done} of {progress.total} page windows parsed{failedWindows > 0 ? ` · ${failedWindows} failed` : ''}.</p>
+        <h1 className="text-xl font-semibold text-ink">{parsePhase === 'ordering' ? 'Sorting your pages…' : 'Reading your pages…'}</h1>
+        <p className="text-sm text-ink-muted">
+          {parsePhase === 'ordering'
+            ? 'Reading the printed page numbers to put the photos in reading order.'
+            : `${progress.done} of ${progress.total} page windows parsed${failedWindows > 0 ? ` · ${failedWindows} failed` : ''}.`}
+        </p>
         <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden max-w-xs mx-auto">
           <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%` }} />
         </div>
@@ -887,13 +923,16 @@ export default function MediaPage() {
                 <div key={i} className="relative">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={p.dataUrl} alt={`Page ${i + 1}`} className="h-24 rounded border border-line/15" />
+                  {p.pageNumber != null && (
+                    <span className="absolute bottom-1 left-1 px-1.5 rounded bg-surface-deep/90 text-[10px] text-ink-muted border border-line/20">p. {p.pageNumber}</span>
+                  )}
                   <button className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-surface-deep border border-line/20 text-xs text-ink-muted hover:text-danger"
                     onClick={() => setPhotos(prev => prev.filter((_, j) => j !== i))}>×</button>
                 </div>
               ))}
             </div>
           )}
-          <p className="text-xs text-ink-faint">Upload in reading order — consecutive pages are parsed together so sentences crossing a page break stay whole. Photos are parsed, never stored.</p>
+          <p className="text-xs text-ink-faint">Upload in any order — Lexify reads the printed page numbers and sorts the photos first, then parses consecutive pages together so sentences crossing a page break stay whole. Photos are parsed, never stored.</p>
         </div>
 
         <button className="btn-primary w-full disabled:opacity-50"

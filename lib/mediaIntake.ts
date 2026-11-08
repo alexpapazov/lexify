@@ -77,15 +77,62 @@ export function parseOccurrences(raw: unknown): PageOccurrence[] {
   return out
 }
 
-// ─── Stage A: windowing ────────────────────────────────────────────────────────
+// ─── Ordering pass: printed page numbers decide reading order ─────────────────
+// (Superseded the original upload-order windowPages 2026-11-07: pair windows are built from
+// the ORDERED pages by windowOrderedPages below, pairing only genuinely consecutive pages.)
 
-/** Sliding page-pair windows: [0,1], [1,2], … — the second page exists so a sentence that runs
- *  over the break can be completed; extraction happens from BOTH pages (full extraction, stage B
- *  absorbs the overlap). A single page is its own window. */
-export function windowPages<T>(pages: T[]): T[][] {
-  if (pages.length <= 1) return pages.length === 0 ? [] : [[pages[0]!]]
+/** Defensive parse of the order-pages route's `{ pages: [{ index, pageNumber }] }` payload.
+ *  index = position in the REQUEST batch; pageNumber null = no number readable. */
+export function parsePageNumbers(raw: unknown): Map<number, number | null> {
+  const out = new Map<number, number | null>()
+  if (typeof raw !== 'object' || raw === null) return out
+  const list = (raw as { pages?: unknown }).pages
+  if (!Array.isArray(list)) return out
+  for (const p of list) {
+    if (typeof p !== 'object' || p === null) continue
+    const r = p as Record<string, unknown>
+    if (typeof r.index !== 'number' || !Number.isInteger(r.index) || r.index < 0) continue
+    const n = typeof r.pageNumber === 'number' && Number.isFinite(r.pageNumber) && r.pageNumber > 0
+      ? Math.round(r.pageNumber) : null
+    out.set(r.index, n)
+  }
+  return out
+}
+
+export interface OrderedPage<T> {
+  item:       T
+  /** The printed page number, when the ordering pass could read one. */
+  pageNumber: number | null
+}
+
+/** Sorts photos into reading order by printed page number (stable — duplicates keep upload
+ *  order). Pages with NO readable number can't be placed, so they keep their upload order and
+ *  go after the numbered ones; the UI labels them "?" so a misplacement is visible. */
+export function orderPages<T>(items: T[], pageNumbers: (number | null)[]): OrderedPage<T>[] {
+  const entries = items.map((item, i) => ({ item, pageNumber: pageNumbers[i] ?? null, upload: i }))
+  const known = entries.filter(e => e.pageNumber !== null)
+    .sort((a, b) => (a.pageNumber! - b.pageNumber!) || (a.upload - b.upload))
+  const unknown = entries.filter(e => e.pageNumber === null)
+  return [...known, ...unknown].map(({ item, pageNumber }) => ({ item, pageNumber }))
+}
+
+/** Windows over ORDERED pages: a pair window only where the two pages are genuinely
+ *  consecutive (numbers n and n+1, or an unknown number — benefit of the doubt); a page with
+ *  no consecutive neighbor parses alone. Every page lands in at least one window. */
+export function windowOrderedPages<T>(ordered: OrderedPage<T>[]): T[][] {
+  if (ordered.length <= 1) return ordered.length === 0 ? [] : [[ordered[0]!.item]]
+  const canPair = (a: OrderedPage<T>, b: OrderedPage<T>) =>
+    a.pageNumber === null || b.pageNumber === null || b.pageNumber - a.pageNumber === 1
   const windows: T[][] = []
-  for (let i = 0; i < pages.length - 1; i++) windows.push([pages[i]!, pages[i + 1]!])
+  const covered = new Set<number>()
+  for (let i = 0; i < ordered.length - 1; i++) {
+    if (!canPair(ordered[i]!, ordered[i + 1]!)) continue
+    windows.push([ordered[i]!.item, ordered[i + 1]!.item])
+    covered.add(i); covered.add(i + 1)
+  }
+  for (let i = 0; i < ordered.length; i++) {
+    if (!covered.has(i)) windows.push([ordered[i]!.item])
+  }
   return windows
 }
 

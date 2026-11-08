@@ -1,5 +1,5 @@
 import type { Card } from '@/domain'
-import { windowPages, collapseOccurrences, compareWithLexicon, parseOccurrences, parseAllLemmas, unmarkedLemmas, splitUnmarkedLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, type PageOccurrence } from '@/lib/mediaIntake'
+import { collapseOccurrences, compareWithLexicon, parseOccurrences, parseAllLemmas, unmarkedLemmas, splitUnmarkedLemmas, parseGlosses, parsePageNumbers, orderPages, windowOrderedPages, CHIP_WINDOWS, CHIP_SEED_RATING, type PageOccurrence } from '@/lib/mediaIntake'
 import { LONG_TERM_THRESHOLD_DAYS } from '@/engine/implicitCredit'
 
 function occ(over: Partial<PageOccurrence>): PageOccurrence {
@@ -16,11 +16,44 @@ function card(id: string, front: string, back: string, over: Partial<Card> = {})
   }
 }
 
-describe('windowPages', () => {
-  it('slides in pairs so a sentence crossing a page break is always seen whole', () => {
-    expect(windowPages(['a', 'b', 'c', 'd'])).toEqual([['a', 'b'], ['b', 'c'], ['c', 'd']])
-    expect(windowPages(['a'])).toEqual([['a']])
-    expect(windowPages([])).toEqual([])
+describe('ordering pass — printed page numbers decide reading order', () => {
+  it('a run of consecutive pages slides in pairs, single and empty inputs behave', () => {
+    const run = windowOrderedPages([
+      { item: 'a', pageNumber: 10 }, { item: 'b', pageNumber: 11 }, { item: 'c', pageNumber: 12 },
+    ])
+    expect(run).toEqual([['a', 'b'], ['b', 'c']])
+    expect(windowOrderedPages([{ item: 'a', pageNumber: null }])).toEqual([['a']])
+    expect(windowOrderedPages([])).toEqual([])
+  })
+
+  it('orderPages sorts by page number, unknowns keep upload order after the known ones', () => {
+    const ordered = orderPages(['c', 'a', 'x', 'b', 'y'], [44, 42, null, 43, null])
+    expect(ordered.map(o => o.item)).toEqual(['a', 'b', 'c', 'x', 'y'])
+    expect(ordered.map(o => o.pageNumber)).toEqual([42, 43, 44, null, null])
+  })
+
+  it('windowOrderedPages pairs only genuinely consecutive pages; gapped pages parse alone', () => {
+    const w = windowOrderedPages([
+      { item: 'p42', pageNumber: 42 }, { item: 'p43', pageNumber: 43 },
+      { item: 'p50', pageNumber: 50 }, { item: 'p51', pageNumber: 51 },
+    ])
+    expect(w).toEqual([['p42', 'p43'], ['p50', 'p51']])
+
+    const gapped = windowOrderedPages([{ item: 'p42', pageNumber: 42 }, { item: 'p50', pageNumber: 50 }])
+    expect(gapped).toEqual([['p42'], ['p50']])
+  })
+
+  it('an unknown page number gets the benefit of the doubt (paired with its neighbor)', () => {
+    const w = windowOrderedPages([{ item: 'p42', pageNumber: 42 }, { item: 'x', pageNumber: null }])
+    expect(w).toEqual([['p42', 'x']])
+  })
+
+  it('parsePageNumbers keeps valid entries, nulls junk values', () => {
+    const out = parsePageNumbers({ pages: [
+      { index: 0, pageNumber: 42 }, { index: 1, pageNumber: null },
+      { index: 2, pageNumber: -3 }, { index: -1, pageNumber: 5 }, 'junk',
+    ] })
+    expect([...out.entries()]).toEqual([[0, 42], [1, null], [2, null]])
   })
 })
 
