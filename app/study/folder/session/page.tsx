@@ -27,6 +27,7 @@ import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOve
 import type { CardSide } from '@/domain'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { descendantDeckIds } from '@/lib/folderStats'
+import { cardMaturity } from '@/lib/folderStats'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { progressAfterReview, initialCardState, appendHistory } from '@/engine/pipeline'
 import { classifyWrongAnswer, isDifferentWordMistake } from '@/engine/grading'
@@ -99,7 +100,7 @@ function shuffle<T>(arr: T[]): T[] {
 /** Cards-per-elective-batch for folder/all sessions (no per-deck pref available). */
 const FOLDER_ELECTIVE_LIMIT = 20
 
-type StudyCategory = 'graduated' | 'due' | 'dormant' | 'starred'
+type StudyCategory = 'graduated' | 'longterm' | 'shortterm' | 'due' | 'dormant' | 'starred'
 
 export default function FolderSessionPage() {
   return (
@@ -117,7 +118,7 @@ function FolderSessionInner() {
   const categoryParam = searchParams.get('category')
   // This page ONLY reviews graduated cards; learning happens on the folder's ladder/pathway.
   const category: StudyCategory | null =
-    categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
+    categoryParam === 'graduated' || categoryParam === 'longterm' || categoryParam === 'shortterm' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
       ? categoryParam : null
 
   // The legacy step-pipeline learning flow is gone: a bare URL (the old "new + due" folder session)
@@ -383,7 +384,8 @@ function FolderSessionInner() {
           const common = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
           for (const card of cards) {
             const state = stateMap.get(card.id)
-            if (category === 'graduated' && state?.graduated && !state.dormant) {
+            if ((category === 'graduated' || category === 'longterm' || category === 'shortterm') && state?.graduated && !state.dormant
+                && (category === 'graduated' || cardMaturity(state) === (category === 'longterm' ? 'long_term' : 'short_term'))) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'starred' && card.starred && state?.graduated) {
               // GRADUATED starred only. Non-graduated starred cards belong to the ladder/pathway
@@ -1412,7 +1414,7 @@ function FolderSessionInner() {
   const backHref = folder ? routes.library(folder.id) : '/library'
 
   if (done) {
-    const CATEGORY_LABELS: Record<StudyCategory, string> = { graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant', starred: 'Starred' }
+    const CATEGORY_LABELS: Record<StudyCategory, string> = { graduated: 'Graduated', longterm: 'Long Term', shortterm: 'Short Term', due: 'Due Now', dormant: 'Dormant', starred: 'Starred' }
     return (
       <div className="max-w-md mx-auto pt-20 text-center space-y-6">
         <div className="text-5xl">🎉</div>
@@ -1508,7 +1510,7 @@ function FolderSessionInner() {
       </div>
       {electiveSession && category && (
         <p className="text-xs text-accent text-center">
-          {category === 'graduated' ? 'Studying graduated cards.' : category === 'dormant' ? 'Reviewing dormant cards (they stay dormant).' : category === 'starred' ? 'Reviewing your starred graduated cards.' : 'Studying cards due now.'}
+          {category === 'graduated' ? 'Studying graduated cards.' : category === 'longterm' ? 'Studying long-term cards (30d+ intervals).' : category === 'shortterm' ? 'Studying short-term graduated cards.' : category === 'dormant' ? 'Reviewing dormant cards (they stay dormant).' : category === 'starred' ? 'Reviewing your starred graduated cards.' : 'Studying cards due now.'}
         </p>
       )}
       {answerError && (

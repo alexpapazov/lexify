@@ -30,6 +30,7 @@ import { climbInProgress } from '@/lib/climbProgress'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { isCardStateDueNow } from '@/lib/dueStatus'
+import { cardMaturity } from '@/lib/folderStats'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseCardOnboardingRepository } from '@/lib/data/cardOnboarding'
@@ -1231,7 +1232,7 @@ export default function DeckDetailPage() {
     typeof window !== 'undefined' && !!localStorage.getItem(`syn_scan_ignored_${deckId}`)
   )
   const searchParams = useSearchParams()
-  type DeckFilter = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
+  type DeckFilter = 'new' | 'learning' | 'graduated' | 'longterm' | 'shortterm' | 'due' | 'dormant' | 'starred'
   // LOCAL STATE drives the filter, seeded from the URL. Reading it straight off useSearchParams()
   // broke the star toggle: same-route query-param navigation doesn't reliably re-render in
   // Next 16 + React 19 (the "← Library back button" landmine). Toggles set state directly and
@@ -1558,7 +1559,11 @@ export default function DeckDetailPage() {
   }
   const unlearned = cards.filter(c => statusOf(c.id) === 'new').length
   const learning  = cards.filter(c => statusOf(c.id) === 'learning').length
-  const graduated = cards.filter(c => statusOf(c.id) === 'graduated').length
+  const graduatedCards = cards.filter(c => statusOf(c.id) === 'graduated')
+  const graduated = graduatedCards.length
+  // Maturity split (same rule as the implicit-credit engine: long-term = production interval ≥ 30d).
+  const longTerm  = graduatedCards.filter(c => cardMaturity(stateMap.get(c.id)!) === 'long_term').length
+  const shortTerm = graduated - longTerm
   const dormant   = cards.filter(c => statusOf(c.id) === 'dormant').length
   // Due Now via the shared helper (same definition as the dashboard/session): date-level, real
   // per-track columns (smart→typed→due_at, recall_due_at), track-filtered, dormancy + reverse aware.
@@ -1575,6 +1580,8 @@ export default function DeckDetailPage() {
     if (activeFilter === 'new')       return statusOf(card.id) === 'new'
     if (activeFilter === 'learning')  return statusOf(card.id) === 'learning'
     if (activeFilter === 'graduated') return statusOf(card.id) === 'graduated'
+    if (activeFilter === 'longterm')  return statusOf(card.id) === 'graduated' && cardMaturity(stateMap.get(card.id)!) === 'long_term'
+    if (activeFilter === 'shortterm') return statusOf(card.id) === 'graduated' && cardMaturity(stateMap.get(card.id)!) === 'short_term'
     if (activeFilter === 'dormant')   return statusOf(card.id) === 'dormant'
     if (activeFilter === 'starred')   return !!card.starred
     if (activeFilter === 'due')       return dueCardIds.has(card.id)   // forward OR reverse due — matches the count
@@ -1789,13 +1796,14 @@ export default function DeckDetailPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { label: 'Unlearned', value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new',       desc: 'Not yet started'  },
-          { label: 'Learning',  value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  desc: 'In pipeline'      },
-          { label: 'Graduated', value: graduated, color: 'text-success',     border: 'border-success',   filter: 'graduated', desc: 'Long-term review' },
-          { label: 'Due Now',   value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'  },
-          { label: 'Dormant',   value: dormant,   color: 'text-ink',         border: 'border-line/70',  filter: 'dormant',   desc: 'Paused — manual'  },
+          { label: 'Unlearned',  value: unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', filter: 'new',       desc: 'Not yet started'   },
+          { label: 'Learning',   value: learning,  color: 'text-warning',     border: 'border-warning',   filter: 'learning',  desc: 'In pipeline'       },
+          { label: 'Short Term', value: shortTerm, color: 'text-sky-400',     border: 'border-sky-400',   filter: 'shortterm', desc: 'Graduated · < 30d' },
+          { label: 'Long Term',  value: longTerm,  color: 'text-success',     border: 'border-success',   filter: 'longterm',  desc: '30d+ · reading credit' },
+          { label: 'Due Now',    value: dueNow,    color: 'text-accent-soft', border: 'border-accent',    filter: 'due',       desc: 'Ready to review'   },
+          { label: 'Dormant',    value: dormant,   color: 'text-ink',         border: 'border-line/70',  filter: 'dormant',   desc: 'Paused — manual'   },
         ].map(({ label, value, color, border, filter, desc }) => {
           const isActive = activeFilter === filter
           return (
@@ -1858,8 +1866,8 @@ export default function DeckDetailPage() {
               </div>
             )
           }
-          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : activeFilter === 'dormant' ? dormant : dueNow
-          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : activeFilter === 'dormant' ? 'Dormant' : 'Due Now'
+          const filterCount = activeFilter === 'new' ? unlearned : activeFilter === 'learning' ? learning : activeFilter === 'graduated' ? graduated : activeFilter === 'longterm' ? longTerm : activeFilter === 'shortterm' ? shortTerm : activeFilter === 'dormant' ? dormant : dueNow
+          const filterLabel = activeFilter === 'new' ? 'Unlearned' : activeFilter === 'learning' ? 'Learning' : activeFilter === 'graduated' ? 'Graduated' : activeFilter === 'longterm' ? 'Long Term' : activeFilter === 'shortterm' ? 'Short Term' : activeFilter === 'dormant' ? 'Dormant' : 'Due Now'
           // Learning-phase categories climb the ladder; post-graduation ones
           // (graduated / due / dormant) stay on the long-term review flow.
           const isLearningPhase = activeFilter === 'new' || activeFilter === 'learning'
@@ -1922,7 +1930,7 @@ export default function DeckDetailPage() {
             const cl = climb.get(card.id)
             // Every LADDER learning card is on a rung; no climb row yet ⇒ the start (Rung 1). A PATHWAY
             // climb is a RouteState with no rungIndex — "Rung NaN" otherwise — so it reads "Learning".
-            const status = phase === 'graduated' ? 'Graduated' : phase === 'dormant' ? 'Dormant'
+            const status = phase === 'graduated' ? (cardMaturity(stateMap.get(card.id)!) === 'long_term' ? 'Long term' : 'Short term') : phase === 'dormant' ? 'Dormant'
               : phase === 'learning'
                 ? (cl && !cl.graduated && typeof cl.rungIndex !== 'number' ? 'Learning'
                    : `Rung ${(cl && !cl.graduated && typeof cl.rungIndex === 'number' ? cl.rungIndex : 0) + 1}`)

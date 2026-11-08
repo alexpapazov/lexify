@@ -86,8 +86,15 @@ Current feature files:
   2026-11-07: the LIBRARY pair + folder views split the Graduated stat box into Short Term /
   Long Term (`FolderCounts.longTerm/shortTerm`, `cardMaturity(state)` in lib/folderStats =
   maturityPhase on the production-lane interval; FilterKey 'longterm'/'shortterm' replace
-  'graduated' on those two pages; grids now 6 boxes). Deck detail still shows a single
-  Graduated box (its boxes drive ?category= study links — split not requested there). STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  'graduated' on those two pages; grids now 6 boxes). Same split on DECK DETAIL + the
+  LAUNCHERS (2026-11-07): StudyCategory in all 3 session pages gained
+  'longterm'/'shortterm' (graduated-branch + cardMaturity filter; 'graduated' kept for old
+  links), so every "Study Short/Long Term" button works. The STUDY DASHBOARD's global boxes
+  split too (GlobalCounts.longTerm/shortTerm, display-only boxes + the cross-deck filter
+  list). Media entries carry a READING DATE
+  (`read_on`, **migration 129** — wizard date input, today or earlier only, clamped at
+  create; list sorts and displays by read_on ?? created_at; fmtDay avoids the UTC-midnight
+  previous-day bug). STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /

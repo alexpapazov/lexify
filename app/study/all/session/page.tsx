@@ -52,6 +52,7 @@ import { resolveReviewCloze, clozeEligible, type ReviewCloze } from '@/lib/revie
 import { isOfflineActive } from '@/lib/offline/mode'
 import { SupabaseCardConfusionLinkRepository } from '@/lib/data/cardConfusionLinks'
 import { interleaveConfusablePairs } from '@/engine/confusion'
+import { cardMaturity } from '@/lib/folderStats'
 import { CardEditModal } from '@/components/CardEditModal'
 
 const REPEAT_REQUEUE_OFFSET    = 8
@@ -93,7 +94,7 @@ function shuffle<T>(arr: T[]): T[] {
 }
 
 const ALL_ELECTIVE_LIMIT = 20
-type StudyCategory = 'graduated' | 'due' | 'dormant' | 'starred'
+type StudyCategory = 'graduated' | 'longterm' | 'shortterm' | 'due' | 'dormant' | 'starred'
 
 export default function AllDueSessionPage() {
   return (
@@ -110,7 +111,7 @@ function AllDueSessionInner() {
   const categoryParam = searchParams.get('category')
   // This page ONLY reviews graduated cards; learning happens on the pair's ladder/pathway.
   const category: StudyCategory | null =
-    categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
+    categoryParam === 'graduated' || categoryParam === 'longterm' || categoryParam === 'shortterm' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
       ? categoryParam : null
 
   // The legacy step-pipeline learning flow is gone: a bare URL (the old cross-deck "new + due"
@@ -411,7 +412,8 @@ function AllDueSessionInner() {
           const deckCommon = { pipeline, gradingSettings: deck.gradingSettings, deckId: deck.id, deckName: deck.name, deckCards: cards, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage }
           for (const card of cards) {
             const state = stateMap.get(card.id)
-            if (category === 'graduated' && state?.graduated && !state.dormant) {
+            if ((category === 'graduated' || category === 'longterm' || category === 'shortterm') && state?.graduated && !state.dormant
+                && (category === 'graduated' || cardMaturity(state) === (category === 'longterm' ? 'long_term' : 'short_term'))) {
               categoryCards.push({ ...common, card, state, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) })
             } else if (category === 'starred' && card.starred && state?.graduated) {
               // GRADUATED starred only. Non-graduated starred cards belong to the ladder/pathway
@@ -1506,7 +1508,7 @@ function AllDueSessionInner() {
   if (loading) return <div className="text-ink-muted pt-16 text-center">Loading session…</div>
 
   if (done) {
-    const CATEGORY_LABELS: Record<StudyCategory, string> = { graduated: 'Graduated', due: 'Due Now', dormant: 'Dormant', starred: 'Starred' }
+    const CATEGORY_LABELS: Record<StudyCategory, string> = { graduated: 'Graduated', longterm: 'Long Term', shortterm: 'Short Term', due: 'Due Now', dormant: 'Dormant', starred: 'Starred' }
     const pairLabel = sourceLang && targetLang ? `${langName(sourceLang)} / ${langName(targetLang)}` : null
     const backLabel = pairLabel ? `Back to ${pairLabel}` : 'Back to study'
     return (
@@ -1621,7 +1623,7 @@ function AllDueSessionInner() {
       </div>
       {electiveSession && category && (
         <p className="text-xs text-accent text-center">
-          {category === 'graduated' ? 'Studying graduated cards.' : category === 'dormant' ? 'Reviewing dormant cards (they stay dormant).' : category === 'starred' ? 'Reviewing your starred graduated cards.' : 'Studying cards due now.'}
+          {category === 'graduated' ? 'Studying graduated cards.' : category === 'longterm' ? 'Studying long-term cards (30d+ intervals).' : category === 'shortterm' ? 'Studying short-term graduated cards.' : category === 'dormant' ? 'Reviewing dormant cards (they stay dormant).' : category === 'starred' ? 'Reviewing your starred graduated cards.' : 'Studying cards due now.'}
         </p>
       )}
       {answerError && (

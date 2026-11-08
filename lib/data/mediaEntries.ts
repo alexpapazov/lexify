@@ -18,6 +18,7 @@ function rowToEntry(row: Record<string, unknown>): MediaEntry {
     sourceLanguage: row.source_language as string,
     targetLanguage: row.target_language as string,
     pages:          Number(row.pages ?? 0),
+    readOn:         (row.read_on as string | null) ?? null,
     markers:        row.markers ?? null,
     candidates:     (row.candidates as unknown[] | null) ?? [],
     unmarkedLemmas: (row.unmarked_lemmas as string[] | null) ?? [],
@@ -49,6 +50,8 @@ export class SupabaseMediaEntryRepository {
     sourceLanguage: string
     targetLanguage: string
     pages: number
+    /** YYYY-MM-DD; the wizard clamps it to today or earlier. */
+    readOn?: string | null
     markers: unknown
     candidates: unknown[]
     unmarkedLemmas?: string[]
@@ -59,7 +62,8 @@ export class SupabaseMediaEntryRepository {
       .insert({
         user_id: userId, kind: input.kind ?? 'book', title: input.title,
         source_language: input.sourceLanguage, target_language: input.targetLanguage,
-        pages: input.pages, markers: input.markers, candidates: input.candidates,
+        pages: input.pages, read_on: input.readOn ?? null,
+        markers: input.markers, candidates: input.candidates,
         unmarked_lemmas: input.unmarkedLemmas ?? [], stats: input.stats ?? {},
       })
       .select()

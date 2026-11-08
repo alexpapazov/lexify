@@ -87,6 +87,15 @@ function legacyMarkerStore(): Record<string, MarkerConfig> {
 }
 
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+/** A plain YYYY-MM-DD formatted WITHOUT timezone shifting (new Date('YYYY-MM-DD') is UTC midnight,
+ *  which renders as the previous day west of Greenwich). */
+const fmtDay = (day: string) => {
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(y!, m! - 1, d!).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+/** When this entry's reading happened: the chosen read_on day, else the log timestamp. */
+const entryDate = (e: MediaEntry) => e.readOn ? fmtDay(e.readOn) : fmtDate(e.createdAt)
+const localToday = () => new Date().toLocaleDateString('en-CA')
 
 export default function MediaPage() {
   const offline = useOfflineMode()
@@ -101,6 +110,7 @@ export default function MediaPage() {
   // ── Wizard state (the former /create/book page) ──
   const [pairKey, setPairKey] = useState('')
   const [title, setTitle] = useState('')
+  const [readOn, setReadOn] = useState(localToday())
   const [markers, setMarkers] = useState<MarkerConfig>(DEFAULT_MARKERS)
   const [photos, setPhotos] = useState<{ name: string; dataUrl: string }[]>([])
   const [preparing, setPreparing] = useState(false)
@@ -167,7 +177,7 @@ export default function MediaPage() {
   const anyMarker = markers.circled || markers.underlined || markers.lineToMargin || markers.questionMark || markers.highlighted || markers.custom.trim() !== ''
 
   function startWizard() {
-    setTitle(''); setMarkers(DEFAULT_MARKERS); setPhotos([]); setRows([]); setSummary(null); setUnmarkedSummary(null); setError(null)
+    setTitle(''); setReadOn(localToday()); setMarkers(DEFAULT_MARKERS); setPhotos([]); setRows([]); setSummary(null); setUnmarkedSummary(null); setError(null)
     setChips([]); setActiveBucket(null)
     knownGradRef.current = []
     entryRef.current = null
@@ -252,7 +262,10 @@ export default function MediaPage() {
         const entry = await new SupabaseMediaEntryRepository().create(userId, {
           title: title.trim() || 'Untitled book',
           sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
-          pages: photos.length, markers, candidates,
+          pages: photos.length,
+          // Clamp defensively: the input's max already blocks the future, but a typed date must too.
+          readOn: readOn && readOn <= localToday() ? readOn : localToday(),
+          markers, candidates,
           unmarkedLemmas: unmarked,
           stats: { found: candidates.length, failedWindows: failed, unmarked: unmarked.length, unmarkedKnown: split.known.length, unmarkedUnknown: split.unknown.length },
         })
@@ -487,7 +500,7 @@ export default function MediaPage() {
   }
 
   async function deleteEntry(entry: MediaEntry) {
-    if (!window.confirm(`Delete the ${fmtDate(entry.createdAt)} entry for “${entry.title}”? The cards it created stay in your library.`)) return
+    if (!window.confirm(`Delete the ${entryDate(entry)} entry for “${entry.title}”? The cards it created stay in your library.`)) return
     try {
       await new SupabaseMediaEntryRepository().softDelete(entry.id)
       setEntries(prev => prev.filter(e => e.id !== entry.id))
@@ -519,7 +532,7 @@ export default function MediaPage() {
             <button className="text-sm text-ink-muted hover:text-ink" onClick={() => { setView('list'); setDetail(null) }}>← Media log</button>
             <h1 className="text-2xl font-semibold text-ink mt-1">{langFlag(detail.sourceLanguage)} {detail.title}</h1>
             <p className="text-sm text-ink-muted mt-1">
-              {fmtDate(detail.createdAt)} · {detail.pages} page{detail.pages !== 1 ? 's' : ''} · {cands.length} word{cands.length !== 1 ? 's' : ''} marked
+              {entryDate(detail)} · {detail.pages} page{detail.pages !== 1 ? 's' : ''} · {cands.length} word{cands.length !== 1 ? 's' : ''} marked
               {typeof st.created === 'number' && st.created > 0 ? ` · ${st.created} card${st.created !== 1 ? 's' : ''} created` : ''}
               {typeof st.attached === 'number' && st.attached > 0 ? ` · ${st.attached} gained sentences` : ''}
               {typeof st.failedWindows === 'number' && st.failedWindows > 0 ? ` · ${st.failedWindows} window${st.failedWindows !== 1 ? 's' : ''} failed` : ''}
@@ -761,6 +774,12 @@ export default function MediaPage() {
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Book</label>
           <input className="input" placeholder="Book title — becomes the deck name" value={title}
             onChange={e => setTitle(e.target.value)} onBlur={e => hydrateMarkers(e.target.value)} />
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-ink-muted shrink-0">Read on</label>
+            <input type="date" className="input py-1.5 text-sm w-auto" value={readOn} max={localToday()}
+              onChange={e => setReadOn(e.target.value)} />
+            <span className="text-xs text-ink-faint">the day you read these pages — today or earlier</span>
+          </div>
           {pairs.length > 1 && (
             <select className="input" value={pairKey} onChange={e => setPairKey(e.target.value)}>
               {pairs.map(p => (
@@ -843,7 +862,8 @@ export default function MediaPage() {
         </div>
       ) : (
         <div className="space-y-2">
-          {entries.map(e => {
+          {/* Reading order, not logging order: a backfilled entry sorts to its reading day. */}
+          {[...entries].sort((a, b) => (b.readOn ?? b.createdAt.slice(0, 10)).localeCompare(a.readOn ?? a.createdAt.slice(0, 10)) || b.createdAt.localeCompare(a.createdAt)).map(e => {
             const st = e.stats as Record<string, number | undefined>
             const found = (e.candidates as unknown[]).length
             return (
@@ -851,7 +871,7 @@ export default function MediaPage() {
                 onClick={() => { setDetail(e); setView('detail'); setError(null) }}>
                 <div className="flex items-baseline gap-3 flex-wrap">
                   <span className="font-medium text-ink">{langFlag(e.sourceLanguage)} {e.title}</span>
-                  <span className="text-xs text-ink-faint ml-auto">{fmtDate(e.createdAt)}</span>
+                  <span className="text-xs text-ink-faint ml-auto">{entryDate(e)}</span>
                 </div>
                 <p className="text-xs text-ink-muted mt-1">
                   {e.pages} page{e.pages !== 1 ? 's' : ''} · {found} marked

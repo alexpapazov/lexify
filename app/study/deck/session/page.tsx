@@ -53,6 +53,7 @@ import { CardEditModal } from '@/components/CardEditModal'
 import { SupabaseSynonymGroupRepository } from '@/lib/data/synonymGroups'
 import { markSynonymAnswered, unmarkSynonymAnswered, wasSynonymAnswered, purgeStaleSynonymPrefill } from '@/lib/synonymPrefill'
 import { triggerSyncFill } from '@/lib/triggerSyncFill'
+import { cardMaturity } from '@/lib/folderStats'
 
 const REPEAT_REQUEUE_OFFSET    = 8
 const IDONTKNOW_REQUEUE_OFFSET = 4
@@ -79,10 +80,12 @@ interface SessionCard {
 }
 
 /** A single elective study category, chosen either via a deck-stat "Study" button (?category=) or the elective picker. */
-type StudyCategory = 'graduated' | 'due' | 'dormant' | 'starred'
+type StudyCategory = 'graduated' | 'longterm' | 'shortterm' | 'due' | 'dormant' | 'starred'
 
 const CATEGORY_BANNER: Record<StudyCategory, string> = {
   graduated: 'Studying graduated cards for early review.',
+  longterm:  'Studying long-term cards (30d+ intervals) for early review.',
+  shortterm: 'Studying short-term graduated cards for early review.',
   due:       'Studying cards that are due now.',
   dormant:   'Reviewing dormant cards (they stay dormant).',
   starred:   'Reviewing your starred graduated cards.',
@@ -90,6 +93,8 @@ const CATEGORY_BANNER: Record<StudyCategory, string> = {
 
 const CATEGORY_EMPTY_MESSAGE: Record<StudyCategory, string> = {
   graduated: 'You have no graduated cards yet.',
+  longterm:  'No long-term cards yet — they cross over at a 30-day interval.',
+  shortterm: 'No short-term graduated cards.',
   due:       'You have no cards due right now.',
   starred:   'You have no starred graduated cards in this deck.',
   dormant:   'You have no dormant cards.',
@@ -117,7 +122,7 @@ export default function SessionPage() {
   // ladder/pathway (LadderStudy).
   const categoryParam = searchParams.get('category')
   const category: StudyCategory | null =
-    categoryParam === 'graduated' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
+    categoryParam === 'graduated' || categoryParam === 'longterm' || categoryParam === 'shortterm' || categoryParam === 'due' || categoryParam === 'dormant' || categoryParam === 'starred'
       ? categoryParam
       : null
 
@@ -547,8 +552,14 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         let categoryQueue: SessionCard[] = []
         switch (category) {
           case 'graduated':
+          case 'longterm':
+          case 'shortterm':
             categoryQueue = shuffle(
-              cards.filter(c => stateMap.get(c.id)?.graduated && !stateMap.get(c.id)!.dormant)
+              cards.filter(c => {
+                const s = stateMap.get(c.id)
+                if (!s?.graduated || s.dormant) return false
+                return category === 'graduated' || cardMaturity(s) === (category === 'longterm' ? 'long_term' : 'short_term')
+              })
                 .map(card => { const state = stateMap.get(card.id)!; return { card, state, pipeline, productionMode: decideProductionMode(state, now, Math.random, schedulerParams) } })
             )
             break

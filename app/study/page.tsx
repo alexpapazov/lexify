@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useMemo } from 'react'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { climbInProgress } from '@/lib/climbProgress'
+import { cardMaturity } from '@/lib/folderStats'
 import { CardBulkPanel } from '@/components/CardBulkPanel'
 import { loadProfileRow } from '@/lib/offline/profilePrefs'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
@@ -31,7 +32,7 @@ import type { Deck, Card, CardState, LanguagePair } from '@/domain'
 import { fsrsFuzzRange } from '@/engine/fsrs'
 import { fsrsScheduleMix, seedStability, seedDifficulty, measureRatingMix, DEFAULT_RATING_MIX, type RatingMix, type WeightedStep } from '@/lib/forecastFsrs'
 
-type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant'
+type FilterKey = 'new' | 'learning' | 'longterm' | 'shortterm' | 'due' | 'dormant'
 
 interface DeckWithStats {
   deck:          Deck
@@ -51,6 +52,8 @@ interface GlobalCounts {
   unlearned: number
   learning:  number
   graduated: number
+  longTerm:  number
+  shortTerm: number
   dormant:   number
   dueNow:    number
   dueNowTyping:     number
@@ -287,7 +290,7 @@ export default function StudyPage() {
   const [climbAll,     setClimbAll]     = useState<Map<string, unknown>>(new Map())
   /** Selection inside the filtered card list, for the shared bulk-action panel. */
   const [selectedFilterIds, setSelectedFilterIds] = useState<Set<string>>(new Set())
-  const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, dormant: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
+  const [global,       setGlobal]       = useState<GlobalCounts>({ unlearned: 0, learning: 0, graduated: 0, longTerm: 0, shortTerm: 0, dormant: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
   const [forecast,     setForecast]     = useState<ForecastDay[]>([])
   const [enabledTracks, setEnabledTracks] = useState<Map<string, EnabledTracks>>(new Map())
   const [smartThresholds, setSmartThresholds] = useState<Map<string, number>>(new Map())
@@ -520,11 +523,15 @@ export default function StudyPage() {
       const dueNowReverse = pools.reverse.length
       const dueNowTyping = pools.typing.length
       const dueNowForward = pools.typing.length + pools.sgForward.length
+      const graduatedCards = cards.filter(c => statusOf(c.id) === 'graduated')
+      const longTerm = graduatedCards.filter(c => cardMaturity(stateMap.get(c.id)!) === 'long_term').length
       return {
         deck, cards, states,
         unlearned: cards.filter(c => statusOf(c.id) === 'new').length,
         learning:  cards.filter(c => statusOf(c.id) === 'learning').length,
-        graduated: cards.filter(c => statusOf(c.id) === 'graduated').length,
+        graduated: graduatedCards.length,
+        longTerm,
+        shortTerm: graduatedCards.length - longTerm,
         dormant:   cards.filter(c => statusOf(c.id) === 'dormant').length,
         dueNow:        dueNowForward + dueNowReverse,
         dueNowForward,
@@ -539,11 +546,13 @@ export default function StudyPage() {
       unlearned: acc.unlearned + s.unlearned,
       learning:  acc.learning  + s.learning,
       graduated: acc.graduated + s.graduated,
+      longTerm:  acc.longTerm  + s.longTerm,
+      shortTerm: acc.shortTerm + s.shortTerm,
       dormant:   acc.dormant   + s.dormant,
       dueNow:    acc.dueNow    + s.dueNow,
       dueNowTyping:     acc.dueNowTyping     + s.dueNowTyping,
       dueNowSelfGraded: acc.dueNowSelfGraded + s.dueNowSelfGraded,
-    }), { unlearned: 0, learning: 0, graduated: 0, dormant: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
+    }), { unlearned: 0, learning: 0, graduated: 0, longTerm: 0, shortTerm: 0, dormant: 0, dueNow: 0, dueNowTyping: 0, dueNowSelfGraded: 0 })
     setDeckStats(stats)
     setGlobal(globalCounts)
 
@@ -825,13 +834,15 @@ export default function StudyPage() {
         const s = stateMap.get(card.id)
         if (activeFilter === 'new')       return !s && !inProgress(card.id)
         if (activeFilter === 'learning')  return (s && !s.graduated) || (!s && inProgress(card.id))
-        if (activeFilter === 'graduated') return !!s?.graduated
+        if (activeFilter === 'longterm')  return !!s?.graduated && cardMaturity(s) === 'long_term'
+        if (activeFilter === 'shortterm') return !!s?.graduated && cardMaturity(s) === 'short_term'
         if (activeFilter === 'due')       return s?.graduated && s.dueAt && new Date(s.dueAt) <= now
         return false
       })
       .map(card => {
         const s = stateMap.get(card.id)
-        const status = !s ? (inProgress(card.id) ? 'Learning' : 'New') : s.graduated ? 'Graduated' : 'Learning'
+        const status = !s ? (inProgress(card.id) ? 'Learning' : 'New')
+          : s.graduated ? (cardMaturity(s) === 'long_term' ? 'Long term' : 'Short term') : 'Learning'
         return { card, state: s, deckName: deck.name, deckId: deck.id, status, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, reviewDirection: 'forward' }
       })
   }) : []
@@ -1014,7 +1025,8 @@ export default function StudyPage() {
   const COUNTER_CONFIG = [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: global.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started' },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: global.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'     },
-    { key: 'graduated' as FilterKey, label: 'Graduated', value: global.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
+    { key: 'shortterm' as FilterKey, label: 'Short Term', value: global.shortTerm, color: 'text-sky-400',    border: 'border-sky-400',   desc: 'Graduated · < 30d' },
+    { key: 'longterm'  as FilterKey, label: 'Long Term',  value: global.longTerm,  color: 'text-success',     border: 'border-success',   desc: '30d+ · reading credit' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: global.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review' },
     { key: 'dormant'   as FilterKey, label: 'Dormant',   value: global.dormant,   color: 'text-ink',         border: 'border-line/70',   desc: 'Paused — manual' },
   ]
@@ -1036,7 +1048,7 @@ export default function StudyPage() {
       ) : (
         <>
           {/* ── Global counters (display-only; browse due cards via "Coming up") ─ */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => (
               <div
                 key={key}

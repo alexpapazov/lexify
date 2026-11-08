@@ -454,6 +454,9 @@ export interface MediaEntry {
   targetLanguage: string
   /** Photos parsed in this entry. */
   pages:          number
+  /** The day the reading happened (YYYY-MM-DD, chosen in the wizard — today or earlier, never
+   *  future; migration 129). Null = legacy entry, display created_at's day. */
+  readOn:         string | null
   /** MarkerConfig used for the parse (lib/mediaIntake.ts). */
   markers:        unknown
   /** IntakeCandidate[] (lib/mediaIntake.ts) — the marked words with their sentences. */
