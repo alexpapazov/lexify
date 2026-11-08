@@ -12,13 +12,13 @@ import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { interleaveLibrary, planMixedReorder } from '@/lib/libraryOrder'
-import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, cardMaturity, type FolderCounts } from '@/lib/folderStats'
 import { climbInProgress } from '@/lib/climbProgress'
 import { CardBulkPanel } from '@/components/CardBulkPanel'
 import { isCardStateDueNow } from '@/lib/dueStatus'
 import type { EnabledTracks } from '@/lib/sessionLimits'
 
-const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }
+const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, longTerm: 0, shortTerm: 0, dueNow: 0, dormant: 0 }
 import { LanguageCombobox } from '@/components/LanguageCombobox'
 import { langName, langNativeName, langFlag } from '@/lib/languages'
 import { FLAG_OPTIONS } from '@/lib/flagOptions'
@@ -33,7 +33,7 @@ type DragItem = { type: 'folder'; id: string } | { type: 'deck'; id: string }
 type DropPos  = 'before' | 'into' | 'after'
 type DropTarget = { id: string; pos: DropPos } | null
 
-type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
+type FilterKey = 'new' | 'learning' | 'longterm' | 'shortterm' | 'due' | 'dormant' | 'starred'
 
 interface DeckStats {
   deck:   Deck
@@ -1310,7 +1310,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
         const s = stateMap.get(card.id)
         if (activeFilter === 'new')       return !s && !inProgress(card.id)
         if (activeFilter === 'learning')  return (s && !s.graduated && !s.dormant) || (!s && inProgress(card.id))
-        if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
+        if (activeFilter === 'longterm')  return !!s?.graduated && !s.dormant && cardMaturity(s) === 'long_term'
+        if (activeFilter === 'shortterm') return !!s?.graduated && !s.dormant && cardMaturity(s) === 'short_term'
         if (activeFilter === 'dormant')   return !!s?.dormant
         if (activeFilter === 'starred')   return !!card.starred
         if (activeFilter === 'due')       return cardIsDue(card.id)
@@ -1319,7 +1320,9 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       .map(card => {
         const s = stateMap.get(card.id)
         const status = !s ? (inProgress(card.id) ? 'Learning' : 'New')
-          : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : 'Learning'
+          : s.dormant ? 'Dormant'
+          : s.graduated ? (cardMaturity(s) === 'long_term' ? 'Long term' : 'Short term')
+          : 'Learning'
         return { card, state: s, deckName: deck.name, deckId: deck.id, status }
       })
   }) : []
@@ -1340,11 +1343,12 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   })()
 
   const PAIR_COUNTER_CONFIG = [
-    { key: 'new'       as FilterKey, label: 'Unlearned', value: pairCounts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
-    { key: 'learning'  as FilterKey, label: 'Learning',  value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
-    { key: 'graduated' as FilterKey, label: 'Graduated', value: pairCounts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
-    { key: 'due'       as FilterKey, label: 'Due Now',   value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
-    { key: 'dormant'   as FilterKey, label: 'Dormant',   value: pairCounts.dormant,   color: 'text-ink',         border: 'border-line/70',  desc: 'Paused — manual'  },
+    { key: 'new'       as FilterKey, label: 'Unlearned',  value: pairCounts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint',   desc: 'Not yet started'   },
+    { key: 'learning'  as FilterKey, label: 'Learning',   value: pairCounts.learning,  color: 'text-warning',     border: 'border-warning',     desc: 'In pipeline'       },
+    { key: 'shortterm' as FilterKey, label: 'Short Term', value: pairCounts.shortTerm, color: 'text-sky-400',     border: 'border-sky-400',     desc: 'Graduated · < 30d' },
+    { key: 'longterm'  as FilterKey, label: 'Long Term',  value: pairCounts.longTerm,  color: 'text-success',     border: 'border-success',     desc: '30d+ · reading credit' },
+    { key: 'due'       as FilterKey, label: 'Due Now',    value: pairCounts.dueNow,    color: 'text-accent-soft', border: 'border-accent',      desc: 'Ready to review'   },
+    { key: 'dormant'   as FilterKey, label: 'Dormant',    value: pairCounts.dormant,   color: 'text-ink',         border: 'border-line/70',     desc: 'Paused — manual'   },
   ]
 
   return (
@@ -1392,7 +1396,7 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       </div>
 
       {/* Pairing-wide stat counters */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3" data-tour="library-counter">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3" data-tour="library-counter">
         {PAIR_COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
           const isActive = activeFilter === key
           return (

@@ -6,18 +6,30 @@ import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { isCardStateDueNow } from '@/lib/dueStatus'
+import { maturityPhase, type MaturityPhase } from '@/engine/implicitCredit'
 import { getToday } from '@/lib/dates'
 import { createClient } from '@/lib/supabase/client'
+
+/** A graduated forward row's maturity, classified on the PRODUCTION lane's interval — the same
+ *  rule the implicit-credit engine applies (long-term = interval ≥ 30d). */
+export function cardMaturity(state: CardState): MaturityPhase {
+  return maturityPhase(state.smartIntervalDays ?? state.typedIntervalDays ?? state.intervalDays)
+}
 
 export interface FolderCounts {
   unlearned: number
   learning:  number
+  /** All graduated (awake) cards — always longTerm + shortTerm. */
   graduated: number
+  /** Graduated with a production interval ≥ LONG_TERM_THRESHOLD_DAYS (earns reading credit). */
+  longTerm:  number
+  /** Graduated but still under the threshold. */
+  shortTerm: number
   dueNow:    number
   dormant:   number
 }
 
-const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }
+const EMPTY_COUNTS: FolderCounts = { unlearned: 0, learning: 0, graduated: 0, longTerm: 0, shortTerm: 0, dueNow: 0, dormant: 0 }
 
 /**
  * IDs of every deck that lives directly inside `folderId` or any of its
@@ -161,10 +173,14 @@ export async function computeDeckCounts(
       if (climbInProgress(climb.get(cardId)) || (s && !s.graduated)) return 'learning'
       return 'new'
     }
+    const graduatedCards = cards.filter(c => statusOf(c.id) === 'graduated')
+    const longTerm = graduatedCards.filter(c => cardMaturity(stateMap.get(c.id)!) === 'long_term').length
     return {
       unlearned: cards.filter(c => statusOf(c.id) === 'new').length,
       learning:  cards.filter(c => statusOf(c.id) === 'learning').length,
-      graduated: cards.filter(c => statusOf(c.id) === 'graduated').length,
+      graduated: graduatedCards.length,
+      longTerm,
+      shortTerm: graduatedCards.length - longTerm,
       dormant:   cards.filter(c => statusOf(c.id) === 'dormant').length,
       dueNow:    today === '' ? 0 : states.filter(s =>
         activeCardIds.has(s.cardId) &&
@@ -177,6 +193,8 @@ export async function computeDeckCounts(
     unlearned: acc.unlearned + s.unlearned,
     learning:  acc.learning  + s.learning,
     graduated: acc.graduated + s.graduated,
+    longTerm:  acc.longTerm  + s.longTerm,
+    shortTerm: acc.shortTerm + s.shortTerm,
     dueNow:    acc.dueNow    + s.dueNow,
     dormant:   acc.dormant   + s.dormant,
   }), { ...EMPTY_COUNTS })

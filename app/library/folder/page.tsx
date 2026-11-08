@@ -12,7 +12,7 @@ import { SupabaseDeckRepository }   from '@/lib/data/decks'
 import { SupabaseCardRepository }      from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseCardOnboardingRepository } from '@/lib/data/cardOnboarding'
-import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, type FolderCounts } from '@/lib/folderStats'
+import { descendantDeckIds, loadLibraryBulk, computeDeckCounts, folderMatchesPair, cardMaturity, type FolderCounts } from '@/lib/folderStats'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { climbInProgress } from '@/lib/climbProgress'
 import { LibraryGearMenu } from '@/components/library/LibraryGearMenu'
@@ -25,7 +25,7 @@ import { StarFilterButton } from '@/components/StarFilterButton'
 import { CardBulkPanel } from '@/components/CardBulkPanel'
 import type { Folder, Deck, Card, CardState } from '@/domain'
 
-type FilterKey = 'new' | 'learning' | 'graduated' | 'due' | 'dormant' | 'starred'
+type FilterKey = 'new' | 'learning' | 'longterm' | 'shortterm' | 'due' | 'dormant' | 'starred'
 
 interface DeckWithCards {
   deck:   Deck
@@ -263,10 +263,14 @@ function FolderPageInner() {
         if (climbInProgress(climb.get(cardId)) || (st && !st.graduated)) return 'learning'
         return 'new'
       }
+      const graduatedCards = cards.filter(cd => statusOf(cd.id) === 'graduated')
+      const longTerm = graduatedCards.filter(cd => cardMaturity(fwdMap.get(cd.id)!) === 'long_term').length
       return {
         unlearned: cards.filter(cd => statusOf(cd.id) === 'new').length,
         learning:  cards.filter(cd => statusOf(cd.id) === 'learning').length,
-        graduated: cards.filter(cd => statusOf(cd.id) === 'graduated').length,
+        graduated: graduatedCards.length,
+        longTerm,
+        shortTerm: graduatedCards.length - longTerm,
         dormant:   cards.filter(cd => statusOf(cd.id) === 'dormant').length,
         dueNow:    states.filter(s =>
           activeCardIds.has(s.cardId) &&
@@ -281,10 +285,12 @@ function FolderPageInner() {
         unlearned: acc.unlearned + c.unlearned,
         learning:  acc.learning  + c.learning,
         graduated: acc.graduated + c.graduated,
+        longTerm:  acc.longTerm  + c.longTerm,
+        shortTerm: acc.shortTerm + c.shortTerm,
         dormant:   acc.dormant   + c.dormant,
         dueNow:    acc.dueNow    + c.dueNow,
       }
-    }, { unlearned: 0, learning: 0, graduated: 0, dueNow: 0, dormant: 0 }))
+    }, { unlearned: 0, learning: 0, graduated: 0, longTerm: 0, shortTerm: 0, dueNow: 0, dormant: 0 }))
 
     // Per-deck counts for the deck row summaries (derived from the states we just loaded).
     setDeckCounts(Object.fromEntries(stats.map(({ deck, cards, states }) =>
@@ -338,7 +344,8 @@ function FolderPageInner() {
         const s = stateMap.get(card.id)
         if (activeFilter === 'new')       return !s && !inProgress(card.id)
         if (activeFilter === 'learning')  return (s && !s.graduated && !s.dormant) || (!s && inProgress(card.id))
-        if (activeFilter === 'graduated') return !!s?.graduated && !s.dormant
+        if (activeFilter === 'longterm')  return !!s?.graduated && !s.dormant && cardMaturity(s) === 'long_term'
+        if (activeFilter === 'shortterm') return !!s?.graduated && !s.dormant && cardMaturity(s) === 'short_term'
         if (activeFilter === 'dormant')   return !!s?.dormant
         if (activeFilter === 'due')       return cardIsDue(card.id)
         if (activeFilter === 'starred')   return !!card.starred
@@ -347,7 +354,9 @@ function FolderPageInner() {
       .map(card => {
         const s = stateMap.get(card.id)
         const status = !s ? (inProgress(card.id) ? 'Learning' : 'New')
-          : s.dormant ? 'Dormant' : s.graduated ? 'Graduated' : 'Learning'
+          : s.dormant ? 'Dormant'
+          : s.graduated ? (cardMaturity(s) === 'long_term' ? 'Long term' : 'Short term')
+          : 'Learning'
         return { card, state: s, deckName: deck.name, deckId: deck.id, status }
       })
   }) : []
@@ -355,7 +364,8 @@ function FolderPageInner() {
   const COUNTER_CONFIG = counts ? [
     { key: 'new'       as FilterKey, label: 'Unlearned', value: counts.unlearned, color: 'text-ink-muted',   border: 'border-ink-faint', desc: 'Not yet started'  },
     { key: 'learning'  as FilterKey, label: 'Learning',  value: counts.learning,  color: 'text-warning',     border: 'border-warning',   desc: 'In pipeline'      },
-    { key: 'graduated' as FilterKey, label: 'Graduated', value: counts.graduated, color: 'text-success',     border: 'border-success',   desc: 'Long-term review' },
+    { key: 'shortterm' as FilterKey, label: 'Short Term', value: counts.shortTerm, color: 'text-sky-400',    border: 'border-sky-400',   desc: 'Graduated · < 30d' },
+    { key: 'longterm'  as FilterKey, label: 'Long Term',  value: counts.longTerm,  color: 'text-success',     border: 'border-success',   desc: '30d+ · reading credit' },
     { key: 'due'       as FilterKey, label: 'Due Now',   value: counts.dueNow,    color: 'text-accent-soft', border: 'border-accent',    desc: 'Ready to review'  },
     { key: 'dormant'   as FilterKey, label: 'Dormant',   value: counts.dormant,   color: 'text-ink',         border: 'border-line/70',  desc: 'Paused — manual'  },
   ] : []
@@ -733,7 +743,7 @@ function FolderPageInner() {
       {/* Stats + Study button for this folder (including subfolders) */}
       {counts && (counts.unlearned + counts.learning + counts.graduated) > 0 && (
         <div className="space-y-3">
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {COUNTER_CONFIG.map(({ key, label, value, color, border, desc }) => {
               const isActive = activeFilter === key
               return (

@@ -82,7 +82,12 @@ Current feature files:
   onboarding buildStates with bulk_known), `/api/media/gloss` (Haiku) for new chips (no gloss
   → chip skipped, never an empty back), painting an existing non-graduated card graduates IT,
   implicit credit via creditCardSighting on Save for unmarked+graduated matches, Link action
-  (addToDeck shared card). Read the Stage E section of the proposal before touching. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  (addToDeck shared card). Read the Stage E section of the proposal before touching.
+  2026-11-07: the LIBRARY pair + folder views split the Graduated stat box into Short Term /
+  Long Term (`FolderCounts.longTerm/shortTerm`, `cardMaturity(state)` in lib/folderStats =
+  maturityPhase on the production-lane interval; FilterKey 'longterm'/'shortterm' replace
+  'graduated' on those two pages; grids now 6 boxes). Deck detail still shows a single
+  Graduated box (its boxes drive ?category= study links — split not requested there). STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /
