@@ -489,6 +489,9 @@ export interface MediaEntry {
   status:         'uploading' | 'processing' | 'done'
   /** Prompt-composition snapshot taken at upload: { circled, underlined, sentences, nounArticle }. */
   options:        Record<string, unknown>
+  /** Per-item rating state (migration 132): normalized lemma → 'dontknow' | 'short' | 'long' |
+   *  'ignored' | 'penalized' | 'dismissed' | 'credited'. Rated items leave the worklist. */
+  ratings:        Record<string, string>
   createdAt:      string
   updatedAt:      string
   deletedAt:      string | null

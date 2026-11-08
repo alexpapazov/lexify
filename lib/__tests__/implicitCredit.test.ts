@@ -65,7 +65,9 @@ describe('creditCardSighting', () => {
     expect(new Date(s.smartDueAt!).getTime()).toBeGreaterThan(new Date(forward.smartDueAt!).getTime())
     expect(s.dueAt).toBe(s.smartDueAt)                              // smart lane syncs dueAt
     expect(s.lastImplicitAt).toBe(NOW.toISOString())
-    expect(s.lastReviewedAt).toBe(NOW.toISOString())                // elapsed time was consumed
+    expect(s.lastReviewedAt).toBe(forward.lastReviewedAt)           // a flat stretch consumes no elapsed time
+    expect(s.stability!).toBeCloseTo(90 * 1.3, 5)                   // the modest ×1.3, nothing more
+    expect(s.difficulty).toBe(5)                                    // difficulty untouched — not a graded recall
     expect(s.reps).toBe(7)                                          // NOT a review: reps untouched
     expect(s.lastRating).toBe('good')                               // rating untouched
     expect(upserts).toHaveLength(1)

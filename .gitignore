@@ -8,3 +8,7 @@ out/
 *.pem
 npm-debug.log*
 tsconfig.tsbuildinfo
+
+# Word lock files
+~$*
+**/~$*

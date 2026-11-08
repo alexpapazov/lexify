@@ -127,8 +127,23 @@ Current feature files:
   review/commit screen from stored page results (ReviewRow.text defaults to
   candidate.display — the flashcard form). parse-page + order-pages routes DELETED (gloss
   stays); MarkerConfig → IntakeOptions {circled,underlined,sentences,nounArticle} on
-  book.markers + entry.options; PageOccurrence/IntakeCandidate gained `display`. Stages B
-  (per-page worklist, partial saves) + C (penalty+auto-link, ×1.3 credit) remain.
+  book.markers + entry.options; PageOccurrence/IntakeCandidate gained `display`.
+  STAGES B+C BUILT 2026-11-08 (the complete rating experience; the one-shot review/commit
+  screen is GONE): **migration 132** (`media_entries.ratings` jsonb — normalized lemma →
+  dontknow|short|long|ignored|penalized|dismissed|credited). `lib/mediaWorklist.ts`
+  (buildWorklist, pure+tested): per-page sections in reading order, dedupe at earliest page
+  with mark-state OR, classification (marked+grad→penalty; marked else→dontknow prepaint;
+  unmarked new or never-studied→rate prepainted LONG; unmarked grad long-term→credit;
+  short-term/mid-pipeline→quiet). `lib/mediaRate.ts`: fetchGlosses, seedKnownStates
+  (onboard-mirror), applyRecognitionPenalty (REAL FSRS Again per graduated row, due NOW,
+  lapse+1, relearn armed; sendToLadder ignored; pipeline cards never punished).
+  `lib/implicitCredit.ts` now applies **stability ×1.3** (SIGHTING_STABILITY_FACTOR — NOT a
+  full Good; lastReviewedAt untouched). /media view 'rate': bucket painting w/ pre-paints,
+  penalty rows (Didn't recognize ↔ Accidental mark), per-page Save + Save all (wlRef mirror —
+  sequential saves must never read stale state), credits auto-apply on open, gloss-failed
+  items stay unrated and reappear, stats.remaining drives "Continue rating (N left)".
+  Saving links marked existing cards into the book's deck (addToDeck) + attaches sentences.
+  collapseOccurrences/unmarkedLemmas/splitUnmarkedLemmas DELETED (worklist supersedes).
   OLD STAGE 1 (superseded): /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →

@@ -1,10 +1,6 @@
 import type { Card } from '@/domain'
-import { collapseOccurrences, compareWithLexicon, parseOccurrences, parseAllLemmas, unmarkedLemmas, splitUnmarkedLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, type PageOccurrence } from '@/lib/mediaIntake'
+import { compareWithLexicon, parseOccurrences, parseAllLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, type IntakeCandidate } from '@/lib/mediaIntake'
 import { LONG_TERM_THRESHOLD_DAYS } from '@/engine/implicitCredit'
-
-function occ(over: Partial<PageOccurrence>): PageOccurrence {
-  return { text: 'sentier', lemma: 'sentier', kind: 'word', gloss: 'path', sentence: 'Le sentier est fermé.', marker: 'underlined', ...over }
-}
 
 function card(id: string, front: string, back: string, over: Partial<Card> = {}): Card {
   return {
@@ -16,28 +12,6 @@ function card(id: string, front: string, back: string, over: Partial<Card> = {})
   }
 }
 
-describe('collapseOccurrences — stage B', () => {
-  it('drops the same occurrence seen by two overlapping windows, keeps true re-marks with a count', () => {
-    const out = collapseOccurrences([
-      occ({}),                                                        // window 1+2
-      occ({}),                                                        // window 2+3 sees the same marking
-      occ({ text: 'sentiers', sentence: 'Les sentiers montent.' }),   // genuinely re-marked later
-      occ({ lemma: 'Sentier', sentence: 'Le sentier est fermé.' }),   // case difference, same sentence
-    ])
-    expect(out).toHaveLength(1)
-    expect(out[0]!.count).toBe(2)
-    expect(out[0]!.sentences).toEqual([
-      { sentence: 'Le sentier est fermé.', answer: 'sentier' },
-      { sentence: 'Les sentiers montent.', answer: 'sentiers' },
-    ])
-  })
-
-  it('keeps different lemmas apart and preserves reading order', () => {
-    const out = collapseOccurrences([occ({}), occ({ text: 'fourré', lemma: 'fourré', gloss: 'thicket', sentence: 'Dans le fourré.' })])
-    expect(out.map(c => c.lemma)).toEqual(['sentier', 'fourré'])
-  })
-})
-
 describe('compareWithLexicon — stage C', () => {
   const cards = [
     card('a', 'le sentier', 'path'),
@@ -48,13 +22,12 @@ describe('compareWithLexicon — stage C', () => {
     card('d', 'sentier', 'path', { sourceLanguage: 'es' }),
   ]
 
+  const cand = (text: string, lemma: string): IntakeCandidate =>
+    ({ text, lemma, kind: 'word', gloss: 'g', sentences: [], count: 1, markers: [] })
+
   it('matches by lemma, falls back to the bare front for unlabeled cards, scopes to the pair', () => {
     const [sentier, clairiere, torrent] = compareWithLexicon(
-      collapseOccurrences([
-        occ({}),
-        occ({ text: 'clairière', lemma: 'clairière', gloss: 'clearing', sentence: 'Une clairière.' }),
-        occ({ text: 'torrent', lemma: 'torrent', gloss: 'torrent', sentence: 'Le torrent.' }),
-      ]),
+      [cand('sentier', 'sentier'), cand('clairière', 'clairière'), cand('torrent', 'torrent')],
       cards, 'fr', 'en',
     )
     expect(sentier!.existing?.id).toBe('a')      // lemma vs bare front of "le sentier"
@@ -71,25 +44,6 @@ describe('stage D — unmarked lemmas', () => {
     expect(parseAllLemmas(null)).toEqual([])
   })
 
-  it('unmarkedLemmas merges overlapping windows and subtracts the marked candidates', () => {
-    const candidates = collapseOccurrences([occ({})])   // "sentier" was marked
-    const out = unmarkedLemmas([
-      ['sentier', 'berge', 'mousse'],      // window 1+2
-      ['Mousse', 'torrent'],               // window 2+3 re-sees mousse
-    ], candidates)
-    expect(out).toEqual(['berge', 'mousse', 'torrent'])
-  })
-
-  it('splitUnmarkedLemmas uses the same lemma/bare-front matching, pair-scoped', () => {
-    const cards = [
-      card('a', 'le sentier', 'path'),
-      card('c', 'la clairière', 'clearing', { pos: null, lemma: null }),   // legacy unlabeled
-      card('d', 'berge', 'bank', { sourceLanguage: 'es' }),                // other pair
-    ]
-    const { known, unknown } = splitUnmarkedLemmas(['sentier', 'clairière', 'berge'], cards, 'fr', 'en')
-    expect(known.map(k => [k.lemma, k.card.id])).toEqual([['sentier', 'a'], ['clairière', 'c']])
-    expect(unknown).toEqual(['berge'])
-  })
 })
 
 describe('stage E — chip constants + gloss parsing', () => {

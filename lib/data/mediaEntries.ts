@@ -26,6 +26,7 @@ function rowToEntry(row: Record<string, unknown>): MediaEntry {
     stats:          (row.stats as Record<string, unknown> | null) ?? {},
     status:         (row.status as MediaEntry['status']) ?? 'done',
     options:        (row.options as Record<string, unknown> | null) ?? {},
+    ratings:        (row.ratings as Record<string, string> | null) ?? {},
     createdAt:      row.created_at as string,
     updatedAt:      row.updated_at as string,
     deletedAt:      (row.deleted_at as string | null) ?? null,
@@ -80,7 +81,7 @@ export class SupabaseMediaEntryRepository {
   }
 
   /** Stats/candidates updates after actions run on an entry (commit, Stage E credit/known). */
-  async update(id: string, patch: Partial<Pick<MediaEntry, 'candidates' | 'unmarkedLemmas' | 'stats' | 'markers' | 'status' | 'pages'>>): Promise<MediaEntry> {
+  async update(id: string, patch: Partial<Pick<MediaEntry, 'candidates' | 'unmarkedLemmas' | 'stats' | 'markers' | 'status' | 'pages' | 'ratings'>>): Promise<MediaEntry> {
     const dbPatch: Record<string, unknown> = { updated_at: new Date().toISOString() }
     if (patch.candidates     !== undefined) dbPatch.candidates      = patch.candidates
     if (patch.unmarkedLemmas !== undefined) dbPatch.unmarked_lemmas = patch.unmarkedLemmas
@@ -88,6 +89,7 @@ export class SupabaseMediaEntryRepository {
     if (patch.markers        !== undefined) dbPatch.markers         = patch.markers
     if (patch.status         !== undefined) dbPatch.status          = patch.status
     if (patch.pages          !== undefined) dbPatch.pages           = patch.pages
+    if (patch.ratings        !== undefined) dbPatch.ratings         = patch.ratings
     const { data, error } = await this.db
       .from('media_entries')
       .update(dbPatch)

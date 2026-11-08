@@ -85,7 +85,7 @@ export function parseOccurrences(raw: unknown): PageOccurrence[] {
   return out
 }
 
-// ─── Stage B: collapse ─────────────────────────────────────────────────────────
+// ─── Candidates & normalization ───────────────────────────────────────────────
 
 export interface IntakeCandidate {
   /** The most common printed form among its occurrences. */
@@ -98,42 +98,12 @@ export interface IntakeCandidate {
   /** Distinct sentences it was marked in, in reading order — each keeping the surface form THAT
    *  sentence used (inflections differ between markings; a stored cloze anchors on its answer). */
   sentences: { sentence: string; answer: string }[]
-  /** How many DISTINCT markings (same-sentence re-sightings from window overlap don't count). */
+  /** How many DISTINCT markings. */
   count:     number
   markers:   string[]
 }
 
 const normLemma = (s: string) => s.trim().toLowerCase()
-/** Sentence identity for overlap-dropping: whitespace-collapsed, case-folded. */
-const normSentence = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase()
-
-/** Stage B exactly as designed: window-overlap re-sightings vanish; true re-marks merge into one
- *  candidate with all its sentences and a count. Order = first appearance (reading order). */
-export function collapseOccurrences(occurrences: PageOccurrence[]): IntakeCandidate[] {
-  const byLemma = new Map<string, IntakeCandidate & { seenSentences: Set<string> }>()
-  for (const o of occurrences) {
-    const key = normLemma(o.lemma)
-    const existing = byLemma.get(key)
-    if (!existing) {
-      byLemma.set(key, {
-        text: o.text, lemma: o.lemma, kind: o.kind, gloss: o.gloss,
-        ...(o.display ? { display: o.display } : {}),
-        sentences: o.sentence ? [{ sentence: o.sentence, answer: o.text }] : [], count: 1,
-        markers: o.marker ? [o.marker] : [],
-        seenSentences: new Set(o.sentence ? [normSentence(o.sentence)] : []),
-      })
-      continue
-    }
-    const sKey = o.sentence ? normSentence(o.sentence) : ''
-    if (sKey && existing.seenSentences.has(sKey)) continue   // the same occurrence, seen by two windows
-    if (sKey) { existing.seenSentences.add(sKey); existing.sentences.push({ sentence: o.sentence, answer: o.text }) }
-    existing.count += 1
-    if (o.marker && !existing.markers.includes(o.marker)) existing.markers.push(o.marker)
-    if (!existing.gloss && o.gloss) existing.gloss = o.gloss
-    if (!existing.display && o.display) existing.display = o.display
-  }
-  return [...byLemma.values()].map(({ seenSentences: _s, ...c }) => c)
-}
 
 // ─── Stage C: compare against the lexicon ──────────────────────────────────────
 
@@ -199,23 +169,6 @@ export function parseAllLemmas(raw: unknown): string[] {
     if (!t || seen.has(normLemma(t))) continue
     seen.add(normLemma(t))
     out.push(t)
-  }
-  return out
-}
-
-/** Merge per-window lemma lists (windows overlap pages, so re-sightings are expected),
- *  then drop every MARKED lemma — what remains is the page's passive-knowledge evidence. */
-export function unmarkedLemmas(windowLemmas: string[][], candidates: IntakeCandidate[]): string[] {
-  const marked = new Set(candidates.map(c => normLemma(c.lemma)))
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const window of windowLemmas) {
-    for (const l of window) {
-      const key = normLemma(l)
-      if (!key || marked.has(key) || seen.has(key)) continue
-      seen.add(key)
-      out.push(l)
-    }
   }
   return out
 }

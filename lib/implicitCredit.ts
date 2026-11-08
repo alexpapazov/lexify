@@ -3,28 +3,24 @@
  * Stage B; eligibility rules live in engine/implicitCredit.ts).
  *
  * A SIGHTING = the user logged a media page containing this card's lemma and did NOT mark it.
- * On every eligible row it is applied as a passive Good: one FSRS advance per ROW (difficulty/
- * stability are shared by all of a row's lanes, so one sighting must never compound them), then
- * each eligible LANE's interval is recomputed from the new stability with that lane's own
- * target retention + calibration — exactly how the live scheduler turns stability into days.
+ * It applies a MODEST ×1.3 stretch (user decision 2026-11-08 — not a full passive Good):
+ * stability ×1.3 once per ROW (lanes share D/S, so one sighting never compounds), then each
+ * eligible LANE's interval is recomputed from the new stability with its own target retention
+ * + calibration — exactly how the live scheduler turns stability into days.
  *
  * What a sighting deliberately does NOT do:
  *  - write a review_events row (not a recall: keeping it out keeps measured retention,
  *    calibration, and analytics honest — the media entry log is the audit trail);
- *  - bump reps or lastRating (dormancy thresholds and rating analytics count real reviews);
+ *  - bump reps, lastRating, or lastReviewedAt (a flat stretch consumes no elapsed time, so
+ *    the next real review's retrievability math is untouched);
  *  - touch an overdue, short-term, relearning, dormant, or disabled-track schedule;
- *  - ever SHORTEN an interval (a passive Good from a long elapsed fraction only grows it).
- *
- * It DOES set lastReviewedAt = now on a credited row: the FSRS advance consumed the elapsed
- * time, so the next real review must measure from the sighting — otherwise the same elapsed
- * days would grow stability twice.
+ *  - ever SHORTEN an interval.
  */
 
 import type { Card, CardState } from '@/domain'
 import type { CardStateRepository } from '@/lib/data/interfaces'
 import { laneSightingEligible, rowSightingEligible } from '@/engine/implicitCredit'
-import { scheduleGraduatedFsrs } from '@/engine/dueNow'
-import { DEFAULT_FSRS_CONFIG, fsrsFuzzRange, intervalForRetention } from '@/engine/fsrs'
+import { fsrsFuzzRange, intervalForRetention } from '@/engine/fsrs'
 import { smoothDueDate } from '@/engine/density'
 import { snapDueAtToStartOfDay } from '@/lib/dates'
 import { activeProductionTrack, calibrationFor, retentionFor, type EnabledTracks } from '@/lib/sessionLimits'
@@ -43,6 +39,9 @@ export interface SightingOutcome {
   /** Updated reverse row. Absent = row untouched. */
   reverse?: CardState
 }
+
+/** The modest per-sighting stretch (user decision 2026-11-08): stability ×1.3, intervals follow. */
+export const SIGHTING_STABILITY_FACTOR = 1.3
 
 export interface SightingContext {
   userId:       string
@@ -94,35 +93,18 @@ export async function creditCardSighting(target: SightingTarget, ctx: SightingCo
 
     if (lanes.length > 0) {
       const prodField = prodTrack === 'smart' ? 'forward_smart' : 'forward_typed'
-      const primaryField = lanes[0] === 'production' ? prodField : 'forward_recall'
-      const elapsedDays = forward.lastReviewedAt
-        ? Math.max(0, (ctx.now.getTime() - new Date(forward.lastReviewedAt).getTime()) / dayMs)
-        : prodInterval
-      const fsrs = scheduleGraduatedFsrs({
-        difficulty:   forward.difficulty,
-        stability:    forward.stability,
-        intervalDays: lanes[0] === 'production' ? prodInterval : (forward.recallIntervalDays ?? forward.intervalDays),
-        lapses:       forward.lapses,
-        relearning:   false,
-        goodStreak:   forward.goodStreak,
-        againStreak:  forward.againStreak,
-        elapsedDays,
-      }, 'good', {
-        ...DEFAULT_FSRS_CONFIG,
-        requestRetention:     retentionFor(ctx.retMap, pair.src, pair.tgt, primaryField),
-        retentionCalibration: calibrationFor(ctx.calMap, pair.src, pair.tgt, primaryField),
-      }, {})
+      // The modest stretch: stability ×1.3 (seeded from the lane interval for pre-FSRS rows);
+      // difficulty untouched — a sighting is evidence, not a graded recall.
+      const newStability = Math.max(0.5, (forward.stability ?? prodInterval ?? 1)) * SIGHTING_STABILITY_FACTOR
 
       const newState: CardState = {
         ...forward,
-        difficulty:     fsrs.difficulty,
-        stability:      fsrs.stability,
-        lastReviewedAt: ctx.now.toISOString(),
+        stability:      newStability,
         lastImplicitAt: ctx.now.toISOString(),
       }
 
       if (lanes.includes('production')) {
-        const days = Math.max(prodInterval, laneIntervalDays(fsrs.stability,
+        const days = Math.max(prodInterval, laneIntervalDays(newStability,
           retentionFor(ctx.retMap, pair.src, pair.tgt, prodField),
           calibrationFor(ctx.calMap, pair.src, pair.tgt, prodField)))
         const due = await laneDueAt(days, ctx)
@@ -133,7 +115,7 @@ export async function creditCardSighting(target: SightingTarget, ctx: SightingCo
         newState.dueAt                 = due
       }
       if (lanes.includes('recall')) {
-        const days = Math.max(forward.recallIntervalDays ?? 0, laneIntervalDays(fsrs.stability,
+        const days = Math.max(forward.recallIntervalDays ?? 0, laneIntervalDays(newStability,
           retentionFor(ctx.retMap, pair.src, pair.tgt, 'forward_recall'),
           calibrationFor(ctx.calMap, pair.src, pair.tgt, 'forward_recall')))
         newState.recallIntervalDays = days
@@ -152,31 +134,14 @@ export async function creditCardSighting(target: SightingTarget, ctx: SightingCo
       && forward?.graduated === true
       && laneSightingEligible({ intervalDays: reverse.recallIntervalDays ?? reverse.intervalDays, dueAt: reverse.recallDueAt ?? reverse.dueAt }, ctx.now)) {
     const interval = reverse.recallIntervalDays ?? reverse.intervalDays
-    const elapsedDays = reverse.lastReviewedAt
-      ? Math.max(0, (ctx.now.getTime() - new Date(reverse.lastReviewedAt).getTime()) / dayMs)
-      : interval
-    const fsrs = scheduleGraduatedFsrs({
-      difficulty:   reverse.difficulty,
-      stability:    reverse.stability,
-      intervalDays: interval,
-      lapses:       reverse.lapses,
-      relearning:   false,
-      goodStreak:   reverse.goodStreak,
-      againStreak:  reverse.againStreak,
-      elapsedDays,
-    }, 'good', {
-      ...DEFAULT_FSRS_CONFIG,
-      requestRetention:     retentionFor(ctx.retMap, pair.src, pair.tgt, 'reverse_recall'),
-      retentionCalibration: calibrationFor(ctx.calMap, pair.src, pair.tgt, 'reverse_recall'),
-    }, {})
-
-    const days = Math.max(interval, fsrs.intervalDays ?? interval)
+    const newStability = Math.max(0.5, (reverse.stability ?? interval ?? 1)) * SIGHTING_STABILITY_FACTOR
+    const days = Math.max(interval, laneIntervalDays(newStability,
+      retentionFor(ctx.retMap, pair.src, pair.tgt, 'reverse_recall'),
+      calibrationFor(ctx.calMap, pair.src, pair.tgt, 'reverse_recall')))
     const due = await laneDueAt(days, ctx)
     const newState: CardState = {
       ...reverse,
-      difficulty:         fsrs.difficulty,
-      stability:          fsrs.stability,
-      lastReviewedAt:     ctx.now.toISOString(),
+      stability:          newStability,
       lastImplicitAt:     ctx.now.toISOString(),
       recallIntervalDays: days,
       recallDueAt:        due,

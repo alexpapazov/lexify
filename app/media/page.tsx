@@ -29,15 +29,14 @@ import { SupabaseMediaPageRepository } from '@/lib/data/mediaPages'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { appendStoredCloze } from '@/lib/reviewCloze'
-import { collapseOccurrences, compareWithLexicon, unmarkedLemmas, splitUnmarkedLemmas, parseOccurrences, parseAllLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, DEFAULT_OPTIONS, ARTICLE_LANGS, type IntakeOptions, type PageOccurrence, type LexiconMatch, type IntakeCandidate, type ChipBucket } from '@/lib/mediaIntake'
+import { DEFAULT_OPTIONS, ARTICLE_LANGS, type IntakeOptions, type IntakeCandidate, type ChipBucket } from '@/lib/mediaIntake'
+import { buildWorklist, type WorklistItem, type WorklistPageSection } from '@/lib/mediaWorklist'
+import { fetchGlosses, seedKnownStates, applyRecognitionPenalty } from '@/lib/mediaRate'
 import { creditCardSighting } from '@/lib/implicitCredit'
-import { buildEnabledTracksMap, buildRetentionMap, buildCalibrationMap, retentionFor, activeProductionTrack, type EnabledTracks } from '@/lib/sessionLimits'
-import { claimSpreadDay, onboardDueIso, seedOnboardLoad } from '@/engine/density'
-import { initialDifficulty, stabilityForInterval } from '@/engine/fsrs'
-import { initialCardState } from '@/engine/pipeline'
+import { buildEnabledTracksMap, buildRetentionMap, buildCalibrationMap, type EnabledTracks } from '@/lib/sessionLimits'
+import { seedOnboardLoad } from '@/engine/density'
 import { deviceTimeZone } from '@/lib/offline/profilePrefs'
-import { mapLimit, chunk } from '@/lib/mapLimit'
-import { apiUrl } from '@/lib/apiBase'
+import { mapLimit } from '@/lib/mapLimit'
 import { routes } from '@/lib/routes'
 import { langFlag, langName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
@@ -51,21 +50,12 @@ const WORKER_KICKS = 3
 /** Long edge for the client downscale — plenty for marked print, keeps requests small. */
 const MAX_EDGE = 1568
 
-type RowAction = 'skip' | 'attach' | 'link' | 'add' | 'replace'
-interface ReviewRow extends LexiconMatch {
-  included: boolean          // new candidates only
-  action:   RowAction        // matched candidates only
-  gloss:    string           // editable back
-  text:     string           // editable front
-}
-
-/** One unmarked word on the chip board: paint it into a bucket or leave it ignored. */
-interface Chip {
-  lemma:    string
-  /** Existing NON-graduated card with this lemma — painting short/long graduates IT, no new card. */
-  existing: Card | null
+/** A worklist item with its live UI state: the painted bucket, or the penalty toggle. */
+interface UIItem extends WorklistItem {
   bucket:   ChipBucket | null
+  penalize: boolean
 }
+interface UIPage extends Omit<WorklistPageSection, 'items'> { items: UIItem[] }
 
 const BUCKETS: { key: ChipBucket; label: string; hint: string; chipClass: string; dotClass: string }[] = [
   { key: 'short',    label: 'Short term',     hint: 'known — verify over ~2 weeks',   chipClass: 'border-sky-400/70 bg-sky-400/10 text-ink',     dotClass: 'bg-sky-400' },
@@ -122,13 +112,11 @@ export default function MediaPage() {
   const [books, setBooks] = useState<MediaBook[]>([])
   const [loading, setLoading] = useState(true)
 
-  const [view, setView] = useState<'books' | 'book' | 'detail' | 'wizard'>('books')
+  const [view, setView] = useState<'books' | 'book' | 'detail' | 'wizard' | 'rate'>('books')
   const [activeBook, setActiveBook] = useState<MediaBook | null>(null)
   const [changingLang, setChangingLang] = useState(false)
   const [movePairKey, setMovePairKey] = useState('')
   const [moving, setMoving] = useState(false)
-  /** Set when the parsed pages' detected language disagrees with the book's pair. */
-  const [langWarning, setLangWarning] = useState<string | null>(null)
   const [detail, setDetail] = useState<MediaEntry | null>(null)
   /** The book this wizard run logs to — preset when launched from a book, created at parse otherwise. */
   const [wizardBook, setWizardBook] = useState<MediaBook | null>(null)
@@ -142,19 +130,21 @@ export default function MediaPage() {
   const [nounArticle, setNounArticle] = useState(false)
   const [photos, setPhotos] = useState<{ name: string; dataUrl: string }[]>([])
   const [preparing, setPreparing] = useState(false)
-  const [step, setStep] = useState<'setup' | 'uploading' | 'loading' | 'review' | 'committing' | 'done'>('setup')
+  const [step, setStep] = useState<'setup' | 'uploading'>('setup')
   const [progress, setProgress] = useState({ done: 0, total: 0 })
-  const [failedWindows, setFailedWindows] = useState(0)
-  const [rows, setRows] = useState<ReviewRow[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [summary, setSummary] = useState<{ created: number; attached: number; replaced: number; skipped: number; deckId: string | null; knownAdded: number; graduatedExisting: number; dontKnowAdded: number; credited: number; chipSkipped: number } | null>(null)
-  const [unmarkedSummary, setUnmarkedSummary] = useState<{ total: number; known: number; unknown: number } | null>(null)
-  const [chips, setChips] = useState<Chip[]>([])
   const [activeBucket, setActiveBucket] = useState<ChipBucket | null>(null)
+  /** The rating worklist for the entry being rated (view 'rate'); null while it loads. */
+  const [wl, setWl] = useState<{ pages: UIPage[]; quietCount: number; detectedLang: string | null } | null>(null)
+  /** Mirror of `wl` for the save engine — sequential saves must never read stale state. */
+  const wlRef = useRef<{ pages: UIPage[]; quietCount: number; detectedLang: string | null } | null>(null)
+  const setWorklist = (next: { pages: UIPage[]; quietCount: number; detectedLang: string | null } | null) => {
+    wlRef.current = next
+    setWl(next)
+  }
+  const [savingPage, setSavingPage] = useState<number | 'all' | null>(null)
 
   const libraryRef = useRef<{ cards: Card[]; forward: Map<string, CardState>; reverse: Map<string, CardState> }>({ cards: [], forward: new Map(), reverse: new Map() })
-  /** Unmarked lemmas whose card is already GRADUATED — the implicit-credit targets on save. */
-  const knownGradRef = useRef<{ lemma: string; card: Card }[]>([])
   /** Scheduler config loaded at parse time: track flags + per-track retention/calibration. */
   const paramsRef = useRef<{ tracksByPair: Map<string, EnabledTracks>; retMap: Map<string, number>; calMap: Map<string, number> }>({ tracksByPair: new Map(), retMap: new Map(), calMap: new Map() })
   const profileRef = useRef<{ tz: string; turnoverHour: number }>({ tz: 'UTC', turnoverHour: 0 })
@@ -251,9 +241,8 @@ export default function MediaPage() {
     setTitle(book?.title ?? '')
     if (book) setPairKey(`${book.sourceLanguage}|${book.targetLanguage}`)
     applyOptions(book?.markers ?? DEFAULT_OPTIONS, book?.sourceLanguage ?? pair?.sourceLanguage ?? '')
-    setReadOn(localToday()); setPhotos([]); setRows([]); setSummary(null); setUnmarkedSummary(null); setError(null)
-    setChips([]); setActiveBucket(null)
-    knownGradRef.current = []
+    setReadOn(localToday()); setPhotos([]); setError(null)
+    setActiveBucket(null)
     entryRef.current = null
     setStep('setup')
     setView('wizard')
@@ -277,45 +266,6 @@ export default function MediaPage() {
       calMap:       buildCalibrationMap(paramRows),
     }
     profileRef.current = { tz: profile?.timezone ?? deviceTimeZone(), turnoverHour: profile?.day_turnover_hour ?? 0 }
-  }
-
-  /** Turns stored page results into the review screen's rows/chips (needs loadContext first). */
-  function buildReview(all: PageOccurrence[], windowLemmas: string[][], detectedLangs: string[], src: string, tgt: string) {
-    // Language guard: majority detected language vs the book's pair — warn before anything saves.
-    const langTally = new Map<string, number>()
-    for (const l of detectedLangs) langTally.set(l, (langTally.get(l) ?? 0) + 1)
-    const detected = [...langTally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
-    setLangWarning(detected && detected !== src.toLowerCase() ? detected : null)
-
-    const candidates = collapseOccurrences(all).sort((a, b) => b.count - a.count)
-    const unmarked = unmarkedLemmas(windowLemmas, candidates)
-    const split = splitUnmarkedLemmas(unmarked, libraryRef.current.cards, src, tgt)
-    setUnmarkedSummary({ total: unmarked.length, known: split.known.length, unknown: split.unknown.length })
-
-    // Graduated matches earn implicit credit on save; everything else goes on the chip board —
-    // existing-but-unstudied cards (painting graduates THEM) and brand-new words.
-    const knownGrad: { lemma: string; card: Card }[] = []
-    const chipRows: Chip[] = []
-    for (const k of split.known) {
-      if (libraryRef.current.forward.get(k.card.id)?.graduated) knownGrad.push(k)
-      else chipRows.push({ lemma: k.lemma, existing: k.card, bucket: null })
-    }
-    for (const l of split.unknown) chipRows.push({ lemma: l, existing: null, bucket: null })
-    knownGradRef.current = knownGrad
-    setChips(chipRows)
-    setActiveBucket(null)
-
-    const matches = compareWithLexicon(candidates, libraryRef.current.cards, src, tgt)
-    setRows(matches.map(m => {
-      let action: RowAction = 'attach'
-      if (m.existing) {
-        const st = libraryRef.current.forward.get(m.existing.id)
-        action = st?.graduated ? 'skip' : (st && (st.reps > 0 || st.currentStepOrder > 0)) ? 'attach' : 'replace'
-      }
-      // The card front defaults to the DISPLAY form (noun with article, infinitive, masc. sg.).
-      return { ...m, included: true, action, gloss: m.candidate.gloss, text: m.candidate.display ?? m.candidate.text }
-    }))
-    return { candidates, unmarked, split }
   }
 
   /**
@@ -395,263 +345,249 @@ export default function MediaPage() {
     }
   }
 
-  /** Opens the review for a PROCESSED entry, fed from the stored per-page results. */
-  async function openReview(entry: MediaEntry) {
+  /**
+   * Opens the RATING WORKLIST for a processed entry: pages in reading order, each showing only
+   * the items that still need something — don't-know chips (marked words), long-term-prepainted
+   * chips (unmarked new words), and recognition failures. Credits apply automatically.
+   */
+  async function openWorklist(entry: MediaEntry) {
     setError(null)
     const book = books.find(b => b.id === entry.bookId) ?? null
     setWizardBook(book)
-    setTitle(entry.title)
-    setPairKey(`${entry.sourceLanguage}|${entry.targetLanguage}`)
-    setReadOn(entry.readOn ?? localToday())
-    setSummary(null)
     entryRef.current = entry
-    setView('wizard')
-    setStep('loading')
+    setWorklist(null)
+    setActiveBucket(null)
+    setView('rate')
     try {
       const [pages] = await Promise.all([
         new SupabaseMediaPageRepository().listForEntry(entry.id),
         loadContext(),
       ])
-      const all: PageOccurrence[] = []
-      const windowLemmas: string[][] = []
-      const detectedLangs: string[] = []
-      let failed = 0
-      for (const pg of pages) {
-        if (pg.status === 'failed') { failed++; continue }
-        if (!pg.result) continue
-        all.push(...parseOccurrences(pg.result))
-        const lemmas = parseAllLemmas(pg.result)
-        if (lemmas.length > 0) windowLemmas.push(lemmas)
-        const pl = (pg.result as { pageLanguage?: unknown }).pageLanguage
-        if (typeof pl === 'string' && pl) detectedLangs.push(pl.toLowerCase())
-      }
-      setFailedWindows(failed)
-      const { candidates, unmarked, split } = buildReview(all, windowLemmas, detectedLangs, entry.sourceLanguage, entry.targetLanguage)
-      // Persist the extraction onto the entry so its detail view works without the pages.
-      void new SupabaseMediaEntryRepository().update(entry.id, {
-        candidates, unmarkedLemmas: unmarked,
-        stats: { ...entry.stats, found: candidates.length, unmarked: unmarked.length, unmarkedKnown: split.known.length, unmarkedUnknown: split.unknown.length },
-      }).then(u => { entryRef.current = u; setEntries(prev => prev.map(e => e.id === u.id ? u : e)) }).catch(() => {})
-      setStep('review')
+      const built = buildWorklist(pages, entry.ratings, libraryRef.current.cards, libraryRef.current.forward, entry.sourceLanguage, entry.targetLanguage)
+      setWorklist({
+        pages: built.pages.map(pg => ({
+          ...pg,
+          items: pg.items.map(it => ({
+            ...it,
+            // Pre-paints (user decisions): marked → "I don't know", unmarked new → "Long term".
+            bucket: it.cls === 'dontknow' ? 'dontknow' as ChipBucket : it.cls === 'rate' ? 'long' as ChipBucket : null,
+            penalize: it.cls === 'penalty',
+          })),
+        })),
+        quietCount: built.quietCount,
+        detectedLang: built.detectedLang,
+      })
+      if (built.creditTargets.length > 0) void applyCredits(entry, built.creditTargets)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load the results.')
       backToLog(book)
     }
   }
 
-  async function commit() {
-    if (!pair || step !== 'review') return
-    setStep('committing')
+  /** Implicit credit is automatic — ×1.3 for every unrated unmarked long-term word, recorded
+   *  as 'credited' so it never re-applies (the ≥20h per-row cap guards double-uploads too). */
+  async function applyCredits(entry: MediaEntry, targets: WorklistItem[]) {
+    const { retMap, calMap, tracksByPair } = paramsRef.current
+    const ctx = {
+      userId, now: new Date(), tz: profileRef.current.tz, turnoverHour: profileRef.current.turnoverHour,
+      retMap, calMap, tracks: tracksByPair.get(`${entry.sourceLanguage}|${entry.targetLanguage}`),
+      stateRepo: new SupabaseCardStateRepository(),
+    }
+    let credited = 0
+    await mapLimit(targets, 4, async t => {
+      try {
+        const out = await creditCardSighting({
+          card: t.existing!,
+          forward: libraryRef.current.forward.get(t.existing!.id) ?? null,
+          reverse: libraryRef.current.reverse.get(t.existing!.id) ?? null,
+        }, ctx)
+        if (out) credited++
+      } catch { /* best-effort per card */ }
+      return null
+    })
+    try {
+      const cur = entryRef.current ?? entry
+      const ratings = { ...cur.ratings }
+      for (const t of targets) ratings[t.key] = 'credited'
+      const updated = await new SupabaseMediaEntryRepository().update(entry.id, {
+        ratings,
+        stats: { ...cur.stats, credited: Number((cur.stats as Record<string, unknown>).credited ?? 0) + credited },
+      })
+      entryRef.current = updated
+      setEntries(prev => prev.map(e => e.id === updated.id ? updated : e))
+      const cur2 = wlRef.current
+      if (cur2) setWorklist({
+        ...cur2,
+        pages: cur2.pages.map((pg, i) => ({ ...pg, credited: pg.credited + targets.filter(t => t.pageIdx === i).length })),
+      })
+    } catch { /* the credit writes landed; the bookkeeping retries next open */ }
+  }
+
+  /** The book's deck — remembered on the book, found by name, or created. */
+  async function ensureDeck(entry: MediaEntry): Promise<{ deckId: string; pipelineId: string }> {
+    const deckRepo = new SupabaseDeckRepository()
+    const defaultPipeline = await new SupabasePipelineRepository().getDefault()
+    const decks = await deckRepo.list(userId)
+    let deck = (wizardBook?.deckId ? decks.find(d => d.id === wizardBook.deckId) : undefined)
+      ?? decks.find(d => d.name === entry.title && d.sourceLanguage === entry.sourceLanguage && d.targetLanguage === entry.targetLanguage)
+      ?? null
+    if (!deck) {
+      deck = await deckRepo.create(userId, { name: entry.title || 'Book intake', sourceLanguage: entry.sourceLanguage, targetLanguage: entry.targetLanguage, pipelineId: defaultPipeline.id })
+    }
+    if (wizardBook && wizardBook.deckId !== deck.id) {
+      void new SupabaseMediaBookRepository().update(wizardBook.id, { deckId: deck.id })
+        .then(b => { setWizardBook(b); setBooks(prev => prev.map(x => x.id === b.id ? b : x)) }).catch(() => {})
+    }
+    return { deckId: deck.id, pipelineId: defaultPipeline.id }
+  }
+
+  /** Saves ONE page's items exactly as painted. Items whose gloss fails stay unrated. */
+  async function doSavePage(pageIdx: number) {
+    const entry = entryRef.current
+    const wlNow = wlRef.current
+    if (!wlNow || !entry) return
+    const items = wlNow.pages[pageIdx]?.items ?? []
+    if (items.length === 0) return
+
+    const cardRepo = new SupabaseCardRepository()
+    const stateRepo = new SupabaseCardStateRepository()
+    const { retMap, calMap, tracksByPair } = paramsRef.current
+    const tracks = tracksByPair.get(`${entry.sourceLanguage}|${entry.targetLanguage}`)
+    const now = new Date()
+
+    const penalties  = items.filter(it => it.cls === 'penalty' && it.penalize)
+    const dismissed  = items.filter(it => it.cls === 'penalty' && !it.penalize)
+    const chipsItems = items.filter(it => it.cls !== 'penalty')
+    const dontKnow   = chipsItems.filter(it => it.bucket === 'dontknow')
+    const shortLong  = chipsItems.filter(it => it.bucket === 'short' || it.bucket === 'long')
+    const ignored    = chipsItems.filter(it => it.bucket === null)
+    const dkNew      = dontKnow.filter(it => !it.existing)
+    const dkExisting = dontKnow.filter(it => it.existing)
+    const slNew      = shortLong.filter(it => !it.existing)
+    const slExisting = shortLong.filter(it => it.existing)
+
+    // Glosses: marked items carry theirs from the page; unmarked new cards gloss now.
+    const needGloss = [...dkNew, ...slNew].filter(it => !it.gloss)
+    const glossMap = needGloss.length > 0 ? await fetchGlosses(needGloss.map(it => it.lemma), entry.sourceLanguage, entry.targetLanguage) : new Map<string, string>()
+    const glossOf = (it: UIItem) => it.gloss ?? glossMap.get(it.lemma) ?? null
+    const dkReady = dkNew.filter(it => glossOf(it) != null)
+    const slReady = slNew.filter(it => glossOf(it) != null)
+    const glossSkipped = (dkNew.length - dkReady.length) + (slNew.length - slReady.length)
+
+    const needsDeck = dkReady.length + slReady.length + dkExisting.length + penalties.length > 0
+    let deckId: string | null = null
+    let pipelineId = ''
+    if (needsDeck) ({ deckId, pipelineId } = await ensureDeck(entry))
+    // Graduating an existing never-studied card needs a pipeline id even when no deck is touched.
+    if (!pipelineId && slExisting.length > 0) pipelineId = (await new SupabasePipelineRepository().getDefault()).id
+
+    // New cards: don't-know = learning; short/long = born graduated. Fronts use the DISPLAY form.
+    const toCreate = [...dkReady, ...slReady]
+    const created = toCreate.length > 0 ? await cardRepo.bulkCreate(
+      deckId!, userId, entry.sourceLanguage, entry.targetLanguage,
+      toCreate.map((it, i) => ({ front: it.display, back: glossOf(it)!, position: 1000 + i })),
+    ) : []
+    for (let i = 0; i < created.length; i++) {
+      const it = toCreate[i]!
+      if (it.sentences.length === 0) continue
+      let choices = created[i]!.choices
+      for (const sn of it.sentences.slice(0, 3)) {
+        choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: glossOf(it)! })
+      }
+      await cardRepo.update(created[i]!.id, { choices })
+    }
+    const slCreated = created.slice(dkReady.length)
+
+    // Graduated seeding — new known cards + existing never-studied cards painted short/long.
+    if (slCreated.length + slExisting.length > 0) {
+      const deps = {
+        userId, src: entry.sourceLanguage, tgt: entry.targetLanguage, now, tracks,
+        retMap, calMap, stateRepo, pipelineId,
+        load: await seedOnboardLoad(userId, now, 110, stateRepo),
+      }
+      const states: CardState[] = []
+      slCreated.forEach((c, i) => states.push(...seedKnownStates(c.id, slReady[i]!.bucket as 'short' | 'long', undefined, undefined, deps)))
+      for (const it of slExisting) {
+        states.push(...seedKnownStates(it.existing!.id, it.bucket as 'short' | 'long',
+          libraryRef.current.forward.get(it.existing!.id), libraryRef.current.reverse.get(it.existing!.id), deps))
+      }
+      await stateRepo.upsertBatch(states)
+    }
+
+    // Marked words whose card exists: link into the book's deck + attach the sentences.
+    let linkPos = 100000
+    for (const it of [...dkExisting, ...penalties]) {
+      if (deckId) await cardRepo.addToDeck(deckId, it.existing!.id, linkPos++)
+      if (it.sentences.length > 0) {
+        let choices = it.existing!.choices
+        for (const sn of it.sentences.slice(0, 3)) {
+          choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: it.gloss ?? displayText(it.existing!.back) })
+        }
+        await cardRepo.update(it.existing!.id, { choices })
+      }
+    }
+
+    // Recognition failures: the real FSRS Again, due today, on every graduated row.
+    if (penalties.length > 0) {
+      const deps = { userId, src: entry.sourceLanguage, tgt: entry.targetLanguage, now, tracks, retMap, calMap, stateRepo, pipelineId, load: new Map<number, number>() }
+      for (const it of penalties) {
+        await applyRecognitionPenalty(it.existing!, libraryRef.current.forward.get(it.existing!.id) ?? null, libraryRef.current.reverse.get(it.existing!.id) ?? null, deps)
+      }
+    }
+
+    // Ratings + stats — items that failed to gloss get NO rating and reappear next time.
+    const ratings = { ...(entryRef.current?.ratings ?? entry.ratings) }
+    for (const it of [...dkReady, ...dkExisting]) ratings[it.key] = 'dontknow'
+    for (const it of [...slReady, ...slExisting]) ratings[it.key] = it.bucket as string
+    for (const it of ignored) ratings[it.key] = 'ignored'
+    for (const it of penalties) ratings[it.key] = 'penalized'
+    for (const it of dismissed) ratings[it.key] = 'dismissed'
+
+    const prevStats = (entryRef.current?.stats ?? entry.stats) as Record<string, unknown>
+    const n = (k: string) => Number(prevStats[k] ?? 0)
+    const remaining = wlNow.pages.reduce((sum, pg, i) =>
+      sum + (i === pageIdx ? pg.items.filter(it => ratings[it.key] == null).length : pg.items.length), 0)
+    const stats = {
+      ...prevStats,
+      dontKnowAdded: n('dontKnowAdded') + dkReady.length,
+      knownAdded: n('knownAdded') + slReady.length,
+      graduatedExisting: n('graduatedExisting') + slExisting.length,
+      linked: n('linked') + dkExisting.length + penalties.length,
+      penalized: n('penalized') + penalties.length,
+      chipSkipped: n('chipSkipped') + glossSkipped,
+      remaining,
+      ...(deckId ? { deckId } : {}),
+    }
+    const updated = await new SupabaseMediaEntryRepository().update(entry.id, { ratings, stats })
+    entryRef.current = updated
+    setEntries(prev => prev.map(e => e.id === updated.id ? updated : e))
+    const cur = wlRef.current
+    if (cur) setWorklist({
+      ...cur,
+      pages: cur.pages.map((pg, i) => i === pageIdx
+        ? { ...pg, items: pg.items.filter(it => ratings[it.key] == null), settled: pg.settled + items.filter(it => ratings[it.key] != null).length }
+        : pg),
+    })
+    if (glossSkipped > 0) setError(`${glossSkipped} word${glossSkipped !== 1 ? 's' : ''} got no translation — they stayed on the list, try saving again.`)
+  }
+
+  async function savePage(pageIdx: number) {
+    if (savingPage !== null) return
+    setSavingPage(pageIdx)
+    setError(null)
+    try { await doSavePage(pageIdx) } catch (e) { setError(e instanceof Error ? e.message : 'Saving failed.') }
+    finally { setSavingPage(null) }
+  }
+
+  async function saveAllPages() {
+    if (savingPage !== null || !wl) return
+    setSavingPage('all')
     setError(null)
     try {
-      const cardRepo = new SupabaseCardRepository()
-      const deckRepo = new SupabaseDeckRepository()
-      const stateRepo = new SupabaseCardStateRepository()
-      const { tracksByPair, retMap, calMap } = paramsRef.current
-      const pairTracks = tracksByPair.get(`${pair.sourceLanguage}|${pair.targetLanguage}`)
-      const now = new Date()
-      const nowIso = now.toISOString()
-
-      const newRows = rows.filter(r => !r.existing && r.included && r.text.trim() && r.gloss.trim())
-      const addRows = rows.filter(r => r.existing && r.action === 'add')
-      const replaceRows = rows.filter(r => r.existing && r.action === 'replace')
-      const attachRows = rows.filter(r => r.existing && r.action === 'attach')
-      const linkRows = rows.filter(r => r.existing && r.action === 'link')
-      const skipped = rows.length - newRows.length - addRows.length - replaceRows.length - attachRows.length - linkRows.length
-
-      // ── Chips: paint → cards. New chips need a gloss first (the parse never extracted one —
-      // the reader KNOWS these words); chips the gloss call misses are skipped, never created
-      // with an empty back.
-      const painted = chips.filter(c => c.bucket !== null)
-      const dontKnowNew   = painted.filter(c => c.bucket === 'dontknow' && !c.existing)
-      const knownNew      = painted.filter(c => c.bucket !== 'dontknow' && !c.existing)
-      const knownExisting = painted.filter(c => c.bucket !== 'dontknow' && c.existing)
-
-      const glossChips = [...dontKnowNew, ...knownNew]
-      const glossByLemma = new Map<string, string>()
-      if (glossChips.length > 0) {
-        const batches = chunk(glossChips.map(c => c.lemma), 100)
-        await mapLimit(batches, 2, async lemmas => {
-          try {
-            const res = await fetch(apiUrl('/api/media/gloss'), {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ lemmas, sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage }),
-            })
-            const data = await res.json() as { ok: boolean; glosses?: { index: number; gloss: string }[] }
-            if (data.ok && Array.isArray(data.glosses)) {
-              for (const g of data.glosses) {
-                const lemma = lemmas[g.index]
-                if (lemma && typeof g.gloss === 'string' && g.gloss.trim()) glossByLemma.set(lemma, g.gloss.trim())
-              }
-            }
-          } catch { /* chips without a gloss are skipped below */ }
-          return null
-        })
-      }
-      const glossedDontKnow = dontKnowNew.filter(c => glossByLemma.has(c.lemma))
-      const glossedKnownNew = knownNew.filter(c => glossByLemma.has(c.lemma))
-      const chipSkipped = glossChips.length - glossedDontKnow.length - glossedKnownNew.length
-
-      // ── The book's deck — found or created, and only when something will live in it.
-      const defaultPipeline = await new SupabasePipelineRepository().getDefault()
-      const needsDeck = newRows.length + addRows.length + replaceRows.length + linkRows.length
-        + glossedDontKnow.length + glossedKnownNew.length > 0
-      let deck = null as Awaited<ReturnType<typeof deckRepo.list>>[number] | null
-      if (needsDeck) {
-        const decks = await deckRepo.list(userId)
-        deck = decks.find(d => d.name === title.trim() && d.sourceLanguage === pair.sourceLanguage && d.targetLanguage === pair.targetLanguage) ?? null
-        if (!deck) {
-          deck = await deckRepo.create(userId, { name: title.trim() || 'Book intake', sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage, pipelineId: defaultPipeline.id })
-        }
-      }
-
-      // ── Marked words (unchanged flow, plus Link).
-      // Replace = soft-delete the stale card, then create fresh from the book.
-      for (const r of replaceRows) await cardRepo.softDelete(r.existing!.id)
-
-      const toCreate = [...newRows, ...replaceRows, ...addRows]
-      const created = toCreate.length > 0 ? await cardRepo.bulkCreate(
-        deck!.id, userId, pair.sourceLanguage, pair.targetLanguage,
-        toCreate.map((r, i) => ({ front: r.text.trim(), back: r.gloss.trim(), position: i })),
-      ) : []
-      // Book sentences become the card's stored cloze set (translation stays empty — the cloze
-      // prompt hides an empty translation line; the sentence itself is the authentic context).
-      for (let i = 0; i < created.length; i++) {
-        const r = toCreate[i]!
-        if (r.candidate.sentences.length === 0) continue
-        let choices = created[i]!.choices
-        for (const s of r.candidate.sentences.slice(0, 3)) {
-          choices = appendStoredCloze(choices, { sentence: s.sentence, answer: s.answer, translation: '', gloss: r.gloss.trim() })
-        }
-        await cardRepo.update(created[i]!.id, { choices })
-      }
-      // Link = the SAME card joins the book's deck (shared card, not a duplicate); it also gains
-      // the book sentences, like Attach.
-      for (let i = 0; i < linkRows.length; i++) {
-        await cardRepo.addToDeck(deck!.id, linkRows[i]!.existing!.id, 100000 + i)
-      }
-      // Attach/Link = the existing card gains the book sentences, nothing else changes.
-      for (const r of [...attachRows, ...linkRows]) {
-        if (r.candidate.sentences.length === 0) continue
-        let choices = r.existing!.choices
-        for (const s of r.candidate.sentences.slice(0, 3)) {
-          choices = appendStoredCloze(choices, { sentence: s.sentence, answer: s.answer, translation: '', gloss: r.gloss.trim() || displayText(r.existing!.back) })
-        }
-        await cardRepo.update(r.existing!.id, { choices })
-      }
-
-      // ── Chip cards: don't-know = plain unlearned (the ladder picks them up); short/long = new
-      // cards born graduated.
-      let knownCreated: Card[] = []
-      if (glossedDontKnow.length + glossedKnownNew.length > 0) {
-        const chipInputs = [...glossedDontKnow, ...glossedKnownNew]
-        const createdChips = await cardRepo.bulkCreate(
-          deck!.id, userId, pair.sourceLanguage, pair.targetLanguage,
-          chipInputs.map((c, i) => ({ front: c.lemma, back: glossByLemma.get(c.lemma)!, position: 1000 + i })),
-        )
-        knownCreated = createdChips.slice(glossedDontKnow.length)
-      }
-
-      // ── Auto-graduation: new known cards AND existing never-studied/mid-pipeline cards painted
-      // short/long graduate NOW with the bucket's seeding (mirrors onboarding's buildStates:
-      // spread due days, band-style difficulty, stability from the landed day, bulk_known so
-      // daily goals never count a self-assessment).
-      const toGraduate: { cardId: string; bucket: 'short' | 'long'; fwd?: CardState; rev?: CardState }[] = [
-        ...knownCreated.map((c, i) => ({ cardId: c.id, bucket: glossedKnownNew[i]!.bucket as 'short' | 'long' })),
-        ...knownExisting.map(c => ({
-          cardId: c.existing!.id, bucket: c.bucket as 'short' | 'long',
-          fwd: libraryRef.current.forward.get(c.existing!.id), rev: libraryRef.current.reverse.get(c.existing!.id),
-        })),
-      ]
-      if (toGraduate.length > 0) {
-        const load = await seedOnboardLoad(userId, now, 110, stateRepo)
-        const prodTrack = activeProductionTrack(pairTracks) ?? 'typed'
-        const states: CardState[] = []
-        for (const g of toGraduate) {
-          const window = CHIP_WINDOWS[g.bucket]
-          const make = (direction: 'forward' | 'reverse'): CardState => {
-            const offset = claimSpreadDay(load, window)
-            const dueAt  = onboardDueIso(now, offset)
-            const field  = direction === 'forward' ? (prodTrack === 'smart' ? 'forward_smart' : 'forward_typed') : 'reverse_recall'
-            const base   = (direction === 'forward' ? g.fwd : g.rev)
-              ?? { ...initialCardState(userId, g.cardId, g.fwd?.pipelineId ?? defaultPipeline.id), reviewDirection: direction }
-            return {
-              ...base,
-              reviewDirection: direction,
-              graduated: true, graduatedAt: nowIso,
-              relearning: false, relearningStep: 0, goodStreak: 0, againStreak: 0,
-              difficulty: initialDifficulty([CHIP_SEED_RATING[g.bucket]]),
-              stability:  stabilityForInterval(offset, retentionFor(retMap, pair.sourceLanguage, pair.targetLanguage, field)),
-              intervalDays: offset, scheduledIntervalDays: offset, dueAt,
-              ...(direction === 'forward'
-                ? (prodTrack === 'smart'
-                    ? { smartIntervalDays: offset, smartDueAt: dueAt }
-                    : { typedIntervalDays: offset, typedDueAt: dueAt })
-                : { recallIntervalDays: offset, recallDueAt: dueAt }),
-              acceleratedMode: 'bulk_known' as const,
-            }
-          }
-          states.push(make('forward'), make('reverse'))
-        }
-        await stateRepo.upsertBatch(states)
-      }
-
-      // ── Implicit credit: every unmarked word whose card is already graduated is a verified
-      // sighting — you read it and didn't need to mark it. Eligibility (long-term phase, not
-      // overdue, daily cap, enabled tracks) is checked per row inside creditCardSighting.
-      let credited = 0
-      if (knownGradRef.current.length > 0) {
-        const ctx = {
-          userId, now, tz: profileRef.current.tz, turnoverHour: profileRef.current.turnoverHour,
-          retMap, calMap, tracks: pairTracks, stateRepo,
-        }
-        await mapLimit(knownGradRef.current, 4, async k => {
-          try {
-            const out = await creditCardSighting({
-              card: k.card,
-              forward: libraryRef.current.forward.get(k.card.id) ?? null,
-              reverse: libraryRef.current.reverse.get(k.card.id) ?? null,
-            }, ctx)
-            if (out) credited++
-          } catch { /* best-effort per card — a failed credit just stays uncredited */ }
-          return null
-        })
-      }
-
-      // The book remembers its deck after the first commit creates/finds it.
-      if (deck && wizardBook && wizardBook.deckId !== deck.id) {
-        void new SupabaseMediaBookRepository().update(wizardBook.id, { deckId: deck.id })
-          .then(b => { setWizardBook(b); setBooks(prev => prev.map(x => x.id === b.id ? b : x)) })
-          .catch(() => {})
-      }
-
-      const stats = {
-        ...(entryRef.current?.stats ?? {}),
-        created: toCreate.length,
-        attached: attachRows.length, replaced: replaceRows.length, skipped, linked: linkRows.length,
-        knownAdded: glossedKnownNew.length, graduatedExisting: knownExisting.length,
-        dontKnowAdded: glossedDontKnow.length, credited, chipSkipped,
-        ...(deck ? { deckId: deck.id } : {}),
-      }
-      if (entryRef.current) {
-        try {
-          const updated = await new SupabaseMediaEntryRepository().update(entryRef.current.id, { stats })
-          setEntries(prev => prev.map(e => e.id === updated.id ? updated : e))
-        } catch { /* best-effort */ }
-      }
-
-      setSummary({
-        created: toCreate.length, attached: attachRows.length, replaced: replaceRows.length, skipped,
-        deckId: deck?.id ?? null,
-        knownAdded: glossedKnownNew.length, graduatedExisting: knownExisting.length,
-        dontKnowAdded: glossedDontKnow.length, credited, chipSkipped,
-      })
-      setStep('done')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Saving failed.')
-      setStep('review')
-    }
+      const count = wlRef.current?.pages.length ?? 0
+      for (let i = 0; i < count; i++) await doSavePage(i)
+    } catch (e) { setError(e instanceof Error ? e.message : 'Saving failed.') }
+    finally { setSavingPage(null) }
   }
 
   /** Leave the wizard/detail: back to the owning book's page when there is one, else the shelf. */
@@ -699,21 +635,13 @@ export default function MediaPage() {
 
   if (offline) return <OfflineUnavailable feature="Media log" />
 
-  const statusOf = (c: Card): string => {
-    const st = libraryRef.current.forward.get(c.id)
-    if (!st) return 'never studied'
-    if (st.dormant) return 'dormant'
-    if (st.graduated) return `graduated · ${st.typedIntervalDays || st.intervalDays}d interval`
-    if (st.reps > 0 || st.currentStepOrder > 0) return 'learning'
-    return 'never studied'
-  }
-
   // ═══ Entry detail ═══
   if (view === 'detail' && detail) {
     const cands = detail.candidates as IntakeCandidate[]
     const st = detail.stats as Record<string, number | string | undefined>
     const detailProg = progressMap.get(detail.id)
-    const readyToReview = detail.status === 'done' && st.engine === 'v2' && st.created == null
+    const remainingToRate = typeof st.remaining === 'number' ? st.remaining : null
+    const readyToReview = detail.status === 'done' && st.engine === 'v2' && (remainingToRate == null || remainingToRate > 0)
     return (
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
         <div className="flex items-start justify-between gap-3">
@@ -748,8 +676,9 @@ export default function MediaPage() {
           </div>
         )}
         {readyToReview && (
-          <button className="btn-primary" onClick={() => void openReview(detail)}>
-            Review &amp; save{typeof st.failedPages === 'number' && st.failedPages > 0 ? ` (${st.failedPages} page${st.failedPages !== 1 ? 's' : ''} failed to parse)` : ''} →
+          <button className="btn-primary" onClick={() => void openWorklist(detail)}>
+            {remainingToRate != null ? `Continue rating (${remainingToRate} left)` : 'Rate the words'}
+            {typeof st.failedPages === 'number' && st.failedPages > 0 ? ` · ${st.failedPages} page${st.failedPages !== 1 ? 's' : ''} failed to parse` : ''} →
           </button>
         )}
         {typeof st.deckId === 'string' && (
@@ -777,174 +706,152 @@ export default function MediaPage() {
     )
   }
 
-  // ═══ Wizard: done ═══
-  if (view === 'wizard' && step === 'done' && summary) {
-    return (
-      <div className="max-w-md mx-auto pt-16 text-center space-y-4">
-        <h1 className="text-xl font-semibold text-ink">Pages logged</h1>
-        <p className="text-sm text-ink-muted">
-          {summary.created} card{summary.created !== 1 ? 's' : ''} created with their book sentences
-          {summary.attached > 0 && `, ${summary.attached} existing card${summary.attached !== 1 ? 's' : ''} gained sentences`}
-          {summary.replaced > 0 && `, ${summary.replaced} replaced`}
-          {summary.skipped > 0 && `, ${summary.skipped} skipped`}.
-        </p>
-        {(summary.knownAdded + summary.graduatedExisting + summary.dontKnowAdded + summary.credited > 0 || summary.chipSkipped > 0) && (
-          <p className="text-sm text-ink-muted">
-            {summary.knownAdded > 0 && `${summary.knownAdded} word${summary.knownAdded !== 1 ? 's' : ''} added as known. `}
-            {summary.graduatedExisting > 0 && `${summary.graduatedExisting} existing card${summary.graduatedExisting !== 1 ? 's' : ''} auto-graduated. `}
-            {summary.dontKnowAdded > 0 && `${summary.dontKnowAdded} added to learn. `}
-            {summary.credited > 0 && `${summary.credited} long-term word${summary.credited !== 1 ? 's' : ''} earned reading credit. `}
-            {summary.chipSkipped > 0 && `${summary.chipSkipped} chip${summary.chipSkipped !== 1 ? 's' : ''} skipped (no translation came back — paint them again next time).`}
-          </p>
-        )}
-        <div className="flex justify-center gap-3">
-          {summary.deckId && <Link href={routes.deck(summary.deckId)} className="btn-primary">Open the deck</Link>}
-          <button className="btn-ghost" onClick={() => startWizard(wizardBook)}>More pages</button>
-          <button className="btn-ghost" onClick={() => backToLog(wizardBook)}>Back to log</button>
-        </div>
-      </div>
-    )
-  }
-
-  // ═══ Wizard: review ═══
-  if (view === 'wizard' && (step === 'review' || step === 'committing')) {
-    const newRows = rows.filter(r => !r.existing)
-    const matchedRows = rows.filter(r => r.existing)
+  // ═══ The rating worklist ═══
+  if (view === 'rate') {
+    const entry = entryRef.current
+    const remaining = wl ? wl.pages.reduce((n2, pg) => n2 + pg.items.length, 0) : 0
+    const creditedTotal = wl ? wl.pages.reduce((n2, pg) => n2 + pg.credited, 0) : 0
+    const bucketCount = (k: ChipBucket) => wl ? wl.pages.reduce((n2, pg) => n2 + pg.items.filter(it => it.cls !== 'penalty' && it.bucket === k).length, 0) : 0
+    const setItem = (key: string, fn: (it: UIItem) => UIItem) => {
+      const cur = wlRef.current
+      if (!cur) return
+      setWorklist({ ...cur, pages: cur.pages.map(pg => ({ ...pg, items: pg.items.map(it => it.key === key ? fn(it) : it) })) })
+    }
     return (
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
         <div>
-          <h1 className="text-2xl font-semibold text-ink">{title.trim() || 'Book intake'} — review</h1>
-          <p className="text-sm text-ink-muted mt-1">
-            {rows.length} word{rows.length !== 1 ? 's' : ''} found{failedWindows > 0 ? ` · ${failedWindows} window${failedWindows !== 1 ? 's' : ''} failed to parse (re-run those pages later)` : ''}. The entry is logged; no cards are saved until you confirm.
-          </p>
-          {langWarning && pair && (
-            <p className="text-sm text-warning mt-2">
-              ⚠ These pages read as {langName(langWarning)}, but this book is set to {langName(pair.sourceLanguage)}.
-              If the book's language is wrong, go back WITHOUT saving and use “Change language” on the book's page first.
+          <button className="text-sm text-ink-muted hover:text-ink" onClick={() => backToLog(wizardBook)}>← {wizardBook?.title ?? 'Media log'}</button>
+          <h1 className="text-2xl font-semibold text-ink mt-1">{entry ? `${langFlag(entry.sourceLanguage)} ${entry.title}` : 'Rating'}</h1>
+          {wl && entry && (
+            <p className="text-sm text-ink-muted mt-1">
+              {entryDate(entry)} · {remaining} word{remaining !== 1 ? 's' : ''} left to rate
+              {creditedTotal > 0 ? ` · ${creditedTotal} credited automatically` : ''}
+              {wl.quietCount > 0 ? ` · ${wl.quietCount} short-term word${wl.quietCount !== 1 ? 's' : ''} seen (no change)` : ''}
             </p>
           )}
-          {unmarkedSummary && unmarkedSummary.total > 0 && (
-            <p className="text-xs text-ink-faint mt-1">
-              You also read {unmarkedSummary.total} unmarked word{unmarkedSummary.total !== 1 ? 's' : ''} — {unmarkedSummary.known} in your library, {unmarkedSummary.unknown} not yet.
+          {wl && entry && wl.detectedLang && wl.detectedLang !== entry.sourceLanguage.toLowerCase() && (
+            <p className="text-sm text-warning mt-2">
+              ⚠ These pages read as {langName(wl.detectedLang)}, but this book is set to {langName(entry.sourceLanguage)}.
+              If the book's language is wrong, fix it with “Change language” on the book's page BEFORE saving anything.
             </p>
           )}
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
 
-        {newRows.length > 0 && (
-          <div className="space-y-2">
-            <h2 className="text-base font-medium text-ink">New words ({newRows.filter(r => r.included).length} selected)</h2>
-            {newRows.map((r, idx) => (
-              <div key={`n${idx}`} className="panel space-y-2">
-                <div className="flex items-center gap-3">
-                  <input type="checkbox" className="accent-accent w-4 h-4 shrink-0" checked={r.included}
-                    onChange={e => setRows(prev => prev.map(x => x === r ? { ...x, included: e.target.checked } : x))} />
-                  <input className="input py-1 w-44 font-medium" value={r.text}
-                    onChange={e => setRows(prev => prev.map(x => x === r ? { ...x, text: e.target.value } : x))} />
-                  <input className="input py-1 flex-1" value={r.gloss}
-                    onChange={e => setRows(prev => prev.map(x => x === r ? { ...x, gloss: e.target.value } : x))} />
-                  <span className="text-xs text-ink-faint shrink-0">{r.candidate.kind === 'phrase' ? 'phrase · ' : ''}{r.candidate.count > 1 ? `marked ${r.candidate.count}×` : r.candidate.markers[0] ?? ''}</span>
-                </div>
-                {r.candidate.sentences[0] && <p className="text-xs text-ink-muted italic pl-7">{r.candidate.sentences[0].sentence}</p>}
-              </div>
-            ))}
-          </div>
-        )}
+        {!wl ? (
+          <div className="panel text-sm text-ink-muted text-center py-10">Matching the extracted words against your lexicon…</div>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-2">
+              {BUCKETS.map(b => {
+                const active = activeBucket === b.key
+                const count = bucketCount(b.key)
+                return (
+                  <button key={b.key}
+                    className={[
+                      'px-3 py-1.5 rounded-lg border text-sm transition-colors',
+                      active ? b.chipClass + ' font-medium' : 'border-line/20 text-ink-muted hover:text-ink',
+                    ].join(' ')}
+                    onClick={() => setActiveBucket(prev => prev === b.key ? null : b.key)}>
+                    <span className={`inline-block w-2 h-2 rounded-full mr-2 align-middle ${b.dotClass}`} />
+                    {b.label}{count > 0 ? ` (${count})` : ''}
+                    <span className="text-xs text-ink-faint ml-2">{b.hint}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-xs text-ink-faint">
+              Chips come pre-painted — marked words as “I don't know”, the rest as “Long term”. Pick a
+              bucket and tap chips to repaint; tap with the same bucket to clear one (cleared = ignored).
+              Save a page whenever you like; what's unsaved keeps until next time.
+            </p>
 
-        {matchedRows.length > 0 && (
-          <div className="space-y-2">
-            <h2 className="text-base font-medium text-ink">Already in your lexicon ({matchedRows.length})</h2>
-            {matchedRows.map((r, idx) => (
-              <div key={`m${idx}`} className="panel space-y-2">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <span className="font-medium text-ink">{r.candidate.text}</span>
-                  <span className="text-xs text-ink-faint">
-                    matches {displayText(r.existing!.front)} — {displayText(r.existing!.back)} · {statusOf(r.existing!)}
-                    {r.candidate.count > 1 ? ` · marked ${r.candidate.count}×` : ''}
-                  </span>
-                  <select className="input py-1 text-xs w-auto ml-auto" value={r.action}
-                    onChange={e => setRows(prev => prev.map(x => x === r ? { ...x, action: e.target.value as RowAction } : x))}>
-                    <option value="skip">Skip — already known</option>
-                    <option value="attach">Attach book sentences to it</option>
-                    <option value="link">Link the same card into this book&apos;s set</option>
-                    <option value="add">Add anyway as its own card</option>
-                    <option value="replace">Replace the old card</option>
-                  </select>
-                </div>
-                {r.candidate.sentences[0] && <p className="text-xs text-ink-muted italic">{r.candidate.sentences[0].sentence}</p>}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {rows.length === 0 && <div className="panel text-sm text-ink-muted text-center py-8">No marked words found on these pages — logged as a clean read.</div>}
-
-        {/* Stage E: the unmarked words. Graduated matches credit silently; the rest are chips. */}
-        {(chips.length > 0 || knownGradRef.current.length > 0) && (
-          <div className="space-y-3">
-            <h2 className="text-base font-medium text-ink">Words you read without marking</h2>
-            {knownGradRef.current.length > 0 && (
-              <p className="text-xs text-ink-muted">
-                ✓ {knownGradRef.current.length} already-graduated word{knownGradRef.current.length !== 1 ? 's' : ''} will quietly earn reading
-                credit when you save (long-term cards only — their next review moves out).
-              </p>
-            )}
-            {chips.length > 0 && (
-              <>
-                <p className="text-xs text-ink-faint">
-                  Pick a bucket, then tap the words that belong in it. Unpainted words are ignored.
-                  A word with a dot is already in your library unstudied — painting it short/long-term
-                  graduates that card instead of creating a new one.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {BUCKETS.map(b => {
-                    const count = chips.filter(c => c.bucket === b.key).length
-                    const active = activeBucket === b.key
-                    return (
-                      <button key={b.key}
-                        className={[
-                          'px-3 py-1.5 rounded-lg border text-sm transition-colors',
-                          active ? b.chipClass + ' font-medium' : 'border-line/20 text-ink-muted hover:text-ink',
-                        ].join(' ')}
-                        onClick={() => setActiveBucket(prev => prev === b.key ? null : b.key)}>
-                        <span className={`inline-block w-2 h-2 rounded-full mr-2 align-middle ${b.dotClass}`} />
-                        {b.label}{count > 0 ? ` (${count})` : ''}
-                        <span className="text-xs text-ink-faint ml-2">{b.hint}</span>
+            {wl.pages.map((pg, pi) => {
+              const penaltyItems = pg.items.filter(it => it.cls === 'penalty')
+              const chipItems = pg.items.filter(it => it.cls !== 'penalty')
+              return (
+                <div key={pi} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-base font-medium text-ink">
+                      {pg.label}
+                      <span className="text-xs text-ink-faint font-normal ml-2">
+                        {pg.items.length > 0 ? `${pg.items.length} to rate` : '✓ done'}
+                        {pg.credited > 0 ? ` · ${pg.credited} credited` : ''}
+                        {pg.failed ? ' · failed to parse' : ''}
+                      </span>
+                    </h2>
+                    {pg.items.length > 0 && (
+                      <button className="btn-ghost text-sm shrink-0 disabled:opacity-50" disabled={savingPage !== null}
+                        onClick={() => void savePage(pi)}>
+                        {savingPage === pi ? 'Saving…' : 'Save page'}
                       </button>
-                    )
-                  })}
-                </div>
-                <div className="panel flex flex-wrap gap-1.5">
-                  {chips.map((c, i) => {
-                    const bucket = BUCKETS.find(b => b.key === c.bucket)
-                    return (
-                      <button key={i}
-                        title={c.existing ? `In your library unstudied: ${displayText(c.existing.front)} — ${displayText(c.existing.back)}` : undefined}
-                        className={[
-                          'px-2.5 py-1 rounded-full border text-sm transition-colors',
-                          bucket ? bucket.chipClass : 'border-line/20 text-ink-muted hover:text-ink hover:border-line/40',
-                        ].join(' ')}
-                        onClick={() => setChips(prev => prev.map((x, j) => j === i
-                          ? { ...x, bucket: activeBucket === null ? null : (x.bucket === activeBucket ? null : activeBucket) }
-                          : x))}>
-                        {c.lemma}{c.existing && <span className="ml-1 align-middle inline-block w-1.5 h-1.5 rounded-full bg-ink-faint" />}
-                      </button>
-                    )
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        )}
+                    )}
+                  </div>
 
-        <div className="flex gap-3">
-          <button className="btn-primary px-6 disabled:opacity-50"
-            disabled={step === 'committing' || (rows.length === 0 && chips.every(c => c.bucket === null) && knownGradRef.current.length === 0)}
-            onClick={() => void commit()}>
-            {step === 'committing' ? 'Saving…' : 'Save to Lexify'}
-          </button>
-          <button className="btn-ghost" disabled={step === 'committing'} onClick={() => backToLog(wizardBook)}>Done</button>
-        </div>
+                  {penaltyItems.map(it => (
+                    <div key={it.key} className="panel space-y-1">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <span className="font-medium text-ink">{it.display}</span>
+                        <span className="text-xs text-ink-faint">
+                          in your lexicon: {displayText(it.existing!.front)} — {displayText(it.existing!.back)} · you marked it anyway
+                        </span>
+                        <div className="ml-auto flex gap-1">
+                          <button className={`px-2.5 py-1 rounded-lg border text-xs transition-colors ${it.penalize ? 'border-danger/70 bg-danger/10 text-ink font-medium' : 'border-line/20 text-ink-muted hover:text-ink'}`}
+                            onClick={() => setItem(it.key, x => ({ ...x, penalize: true }))}>
+                            Didn't recognize it — due today
+                          </button>
+                          <button className={`px-2.5 py-1 rounded-lg border text-xs transition-colors ${!it.penalize ? 'border-line/60 bg-surface-raised text-ink font-medium' : 'border-line/20 text-ink-muted hover:text-ink'}`}
+                            onClick={() => setItem(it.key, x => ({ ...x, penalize: false }))}>
+                            Accidental mark
+                          </button>
+                        </div>
+                      </div>
+                      {it.sentences[0] && <p className="text-xs text-ink-muted italic">{it.sentences[0].sentence}</p>}
+                    </div>
+                  ))}
+
+                  {chipItems.length > 0 && (
+                    <div className="panel flex flex-wrap gap-1.5">
+                      {chipItems.map(it => {
+                        const bucket = BUCKETS.find(b => b.key === it.bucket)
+                        return (
+                          <button key={it.key}
+                            title={(it.existing ? `In your library unstudied: ${displayText(it.existing.front)} — ${displayText(it.existing.back)}. ` : '') + (it.gloss ? `${it.gloss}` : '')}
+                            className={[
+                              'px-2.5 py-1 rounded-full border text-sm transition-colors',
+                              bucket ? bucket.chipClass : 'border-line/20 text-ink-muted hover:text-ink hover:border-line/40',
+                            ].join(' ')}
+                            onClick={() => setItem(it.key, x => ({
+                              ...x,
+                              bucket: activeBucket === null ? null : (x.bucket === activeBucket ? null : activeBucket),
+                            }))}>
+                            {it.display}
+                            {it.marked && <span className="ml-1 text-[10px] align-middle text-ink-faint">✏︎</span>}
+                            {it.existing && <span className="ml-1 align-middle inline-block w-1.5 h-1.5 rounded-full bg-ink-faint" />}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+
+            {remaining > 0 && wl.pages.filter(pg => pg.items.length > 0).length > 1 && (
+              <button className="btn-primary w-full disabled:opacity-50" disabled={savingPage !== null}
+                onClick={() => void saveAllPages()}>
+                {savingPage === 'all' ? 'Saving…' : `Save all pages (${remaining})`}
+              </button>
+            )}
+            {remaining === 0 && (
+              <div className="panel text-sm text-ink-muted text-center py-6">
+                Everything rated. {entryRef.current && typeof (entryRef.current.stats as Record<string, unknown>).deckId === 'string'
+                  ? <Link href={routes.deck((entryRef.current.stats as Record<string, string>).deckId!)} className="text-accent hover:text-accent-soft"> Open the book's deck →</Link>
+                  : null}
+              </div>
+            )}
+          </>
+        )}
       </div>
     )
   }
@@ -958,16 +865,6 @@ export default function MediaPage() {
         <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden max-w-xs mx-auto">
           <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%` }} />
         </div>
-      </div>
-    )
-  }
-
-  // ═══ Wizard: loading stored results for review ═══
-  if (view === 'wizard' && step === 'loading') {
-    return (
-      <div className="max-w-md mx-auto pt-16 text-center space-y-4">
-        <h1 className="text-xl font-semibold text-ink">Loading the results…</h1>
-        <p className="text-sm text-ink-muted">Matching the extracted words against your lexicon.</p>
       </div>
     )
   }

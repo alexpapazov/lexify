@@ -1,8 +1,13 @@
-# Media Extraction Engine — design draft, round 1 (rev. 2026-11-08)
+# Media Extraction Engine — design (CONCLUDED + BUILT 2026-11-08)
 
-> Edit this file directly (notes in red / CAPS / whatever you like) and hand it back.
-> ❓-marked items are my open questions. Nothing here is built yet; this REPLACES the current
-> wizard flow once agreed.
+> **Status: all rounds concluded; Stages A (server-side processing) and B+C (rating worklist,
+> penalty, ×1.3 credit) are BUILT.** Decisions resolved in the user's annotations + chat:
+> sentences per entry · server-side via Supabase Storage + media-worker Edge Function ·
+> language mismatch warns-but-allows · nouns nominative singular (naturally-plural stays
+> plural) with per-book article option · markers = circled/underlined ONLY, no free text ·
+> unmarked-new chips pre-paint LONG TERM · penalty = the real FSRS Again at page-save, plus
+> the card auto-links into the book's deck · credit = stability ×1.3 · chips gloss word-alone
+> (single translation ~90%) · phrases kept verbatim, no lemma rules.
 
 ## 0. The experience, end to end
 
