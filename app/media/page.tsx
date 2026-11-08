@@ -146,7 +146,6 @@ export default function MediaPage() {
   }
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
   const commitBusyRef = useRef(false)
-  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Latest commitWork, so the unmount flush never runs a stale closure. */
   const commitWorkRef = useRef<((opts: { chips: boolean; penalties: boolean }) => Promise<void>) | null>(null)
 
@@ -375,8 +374,10 @@ export default function MediaPage() {
           ...pg,
           items: pg.items.map(it => ({
             ...it,
-            // Pre-paints (user decisions): marked → "I don't know", unmarked new → "Long term".
-            bucket: it.cls === 'dontknow' ? 'dontknow' as ChipBucket : it.cls === 'rate' ? 'long' as ChipBucket : null,
+            // Only MARKED words auto-fill ("I don't know"); everything else starts blank —
+            // unpainted means undecided, and undecided words simply wait for a later visit
+            // (user decision 2026-11-08: never silently file a word as known).
+            bucket: it.cls === 'dontknow' ? 'dontknow' as ChipBucket : null,
             penalize: it.cls === 'penalty',
             removed: false,
           })),
@@ -386,7 +387,6 @@ export default function MediaPage() {
       })
       if (built.creditTargets.length > 0) void applyCredits(entry, built.creditTargets)
       setSaveState('idle')
-      scheduleAutoSave()   // untouched pre-paints commit hands-off after a short idle
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load the results.')
       backToLog(book)
@@ -475,9 +475,10 @@ export default function MediaPage() {
       const tracks = tracksByPair.get(`${entry.sourceLanguage}|${entry.targetLanguage}`)
       const now = new Date()
 
-      const dontKnow   = chipsItems.filter(it => it.bucket === 'dontknow')
-      const shortLong  = chipsItems.filter(it => it.bucket === 'short' || it.bucket === 'long')
-      const ignored    = chipsItems.filter(it => it.bucket === null)
+      const dontKnow   = chipsItems.filter(it => !it.removed && it.bucket === 'dontknow')
+      const shortLong  = chipsItems.filter(it => !it.removed && (it.bucket === 'short' || it.bucket === 'long'))
+      // Only an explicit × is "ignored"; an unpainted chip is UNDECIDED and waits for you.
+      const ignored    = chipsItems.filter(it => it.removed)
       const dkNew      = dontKnow.filter(it => !it.existing)
       const dkExisting = dontKnow.filter(it => it.existing)
       const slNew      = shortLong.filter(it => !it.existing)
@@ -595,21 +596,14 @@ export default function MediaPage() {
   }
   commitWorkRef.current = commitWork
 
-  /** Chips auto-commit a few seconds after the last interaction (or the worklist loading). */
-  function scheduleAutoSave() {
-    if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
-    idleTimerRef.current = setTimeout(() => { void commitWorkRef.current?.({ chips: true, penalties: false }) }, 5000)
-  }
-
-  /** Leaving the entry flushes EVERYTHING — including penalties (their commit point). */
+  /** THE save point (user decision 2026-11-08): everything commits when you leave the entry —
+   *  painted chips, × removals, penalty decisions. Nothing saves while you're looking. */
   function flushOnLeave() {
-    if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null }
     void commitWorkRef.current?.({ chips: true, penalties: true })
   }
 
   // Unmount (navigating off /media entirely) counts as leaving the entry.
   useEffect(() => () => {
-    if (idleTimerRef.current) clearTimeout(idleTimerRef.current)
     void commitWorkRef.current?.({ chips: true, penalties: true })
   }, [])
 
@@ -731,7 +725,6 @@ export default function MediaPage() {
       const cur = wlRef.current
       if (!cur) return
       setWorklist({ ...cur, pages: cur.pages.map(pg => ({ ...pg, items: pg.items.map(it => it.key === key ? fn(it) : it) })) })
-      scheduleAutoSave()
     }
     return (
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
@@ -785,10 +778,9 @@ export default function MediaPage() {
               })}
             </div>
             <p className="text-xs text-ink-faint">
-              Chips come pre-painted — marked words as “I don't know”, the rest as “Long term”. Pick a
-              bucket and tap chips to repaint; tap with the same bucket to clear one (cleared = ignored).
-              Everything saves itself moments after you stop — recognition failures commit when you
-              leave, so you have the whole visit to flip an accidental mark.
+              Marked words come pre-painted “I don't know”; everything else starts blank. Pick a bucket,
+              tap the words that belong in it — unpainted words stay undecided and keep for a later
+              visit. × throws a word out for good. Everything saves when you leave the entry.
             </p>
 
             {wl.pages.map((pg, pi) => {
