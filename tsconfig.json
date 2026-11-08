@@ -38,6 +38,7 @@
   ],
   "exclude": [
     "node_modules",
-    "lib/agents/mcp"
+    "lib/agents/mcp",
+    "supabase/functions"
   ]
 }

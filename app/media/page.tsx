@@ -1,18 +1,18 @@
 'use client'
 
 /**
- * /media — the media LOG (Media Intake Stage C, 2026-11-06).
+ * /media — the media LOG (Extraction Engine Stage A, 2026-11-08: server-side processing).
  *
- * A log of the media you consume: each entry = "I read these pages of this book." Adding an
- * entry runs the book-page wizard (photos → sliding-window Sonnet vision parse → review →
- * commit), and the ENTRY persists the extraction — candidates with their book sentences, the
- * marker config, an action summary — never the images. The log is the audit trail the later
- * stages build on (unmarked-lemma credit, add-as-known chips act ON an entry).
+ * A log of what you read, one book at a time. Submitting pages now UPLOADS them (private
+ * storage bucket) and returns immediately — the `media-worker` Edge Function parses in the
+ * background (numbering pass when sentences are on, then window extraction) and deletes every
+ * image on completion. The entry row shows per-page progress while you use the rest of
+ * Lexify; when it finishes, "Review & save" opens the review fed from the STORED results.
+ * The Media tab's poll both refreshes progress and re-kicks a chain that died mid-flight.
  *
- * Entry rows save as soon as parsing finishes (review-first still holds for the LIBRARY: no
- * card is written until the commit button — but the log records what was read even if you
- * walk away from the review). Marker configs are recalled from the book's latest entry, with
- * the old localStorage store as a legacy fallback.
+ * Review-first still holds: no card is written until the review's save. Prompt options
+ * (circled/underlined, sentences, noun article) are structured only — no free text —
+ * snapshotted onto the entry and remembered on the book.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -25,10 +25,11 @@ import { SupabasePipelineRepository } from '@/lib/data/pipelines'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseMediaEntryRepository } from '@/lib/data/mediaEntries'
 import { SupabaseMediaBookRepository } from '@/lib/data/mediaBooks'
+import { SupabaseMediaPageRepository } from '@/lib/data/mediaPages'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { appendStoredCloze } from '@/lib/reviewCloze'
-import { orderPages, windowOrderedPages, collapseOccurrences, compareWithLexicon, unmarkedLemmas, splitUnmarkedLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, DEFAULT_MARKERS, type MarkerConfig, type PageOccurrence, type LexiconMatch, type IntakeCandidate, type ChipBucket } from '@/lib/mediaIntake'
+import { collapseOccurrences, compareWithLexicon, unmarkedLemmas, splitUnmarkedLemmas, parseOccurrences, parseAllLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, DEFAULT_OPTIONS, ARTICLE_LANGS, type IntakeOptions, type PageOccurrence, type LexiconMatch, type IntakeCandidate, type ChipBucket } from '@/lib/mediaIntake'
 import { creditCardSighting } from '@/lib/implicitCredit'
 import { buildEnabledTracksMap, buildRetentionMap, buildCalibrationMap, retentionFor, activeProductionTrack, type EnabledTracks } from '@/lib/sessionLimits'
 import { claimSpreadDay, onboardDueIso, seedOnboardLoad } from '@/engine/density'
@@ -42,10 +43,11 @@ import { langFlag, langName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
-import type { Card, CardState, LanguagePair, MediaBook, MediaEntry } from '@/domain'
+import type { Card, CardState, LanguagePair, MediaBook, MediaEntry, MediaPage } from '@/domain'
 
-const MARKERS_KEY = 'lexify-book-markers'   // legacy fallback only — configs now live on entries
-const PARSE_CONCURRENCY = 2
+const UPLOAD_CONCURRENCY = 3
+/** How many worker chains to start per submission (each claims one unit at a time). */
+const WORKER_KICKS = 3
 /** Long edge for the client downscale — plenty for marked print, keeps requests small. */
 const MAX_EDGE = 1568
 
@@ -101,10 +103,6 @@ async function fileToDataUrl(file: File): Promise<string> {
   }
 }
 
-function legacyMarkerStore(): Record<string, MarkerConfig> {
-  try { return JSON.parse(localStorage.getItem(MARKERS_KEY) ?? '{}') as Record<string, MarkerConfig> } catch { return {} }
-}
-
 const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 /** A plain YYYY-MM-DD formatted WITHOUT timezone shifting (new Date('YYYY-MM-DD') is UTC midnight,
  *  which renders as the previous day west of Greenwich). */
@@ -139,11 +137,12 @@ export default function MediaPage() {
   const [pairKey, setPairKey] = useState('')
   const [title, setTitle] = useState('')
   const [readOn, setReadOn] = useState(localToday())
-  const [markers, setMarkers] = useState<MarkerConfig>(DEFAULT_MARKERS)
-  const [photos, setPhotos] = useState<{ name: string; dataUrl: string; pageNumber?: number | null }[]>([])
+  const [markers, setMarkers] = useState<{ circled: boolean; underlined: boolean }>({ circled: true, underlined: true })
+  const [sentences, setSentences] = useState(true)
+  const [nounArticle, setNounArticle] = useState(false)
+  const [photos, setPhotos] = useState<{ name: string; dataUrl: string }[]>([])
   const [preparing, setPreparing] = useState(false)
-  const [step, setStep] = useState<'setup' | 'parsing' | 'review' | 'committing' | 'done'>('setup')
-  const [parsePhase, setParsePhase] = useState<'ordering' | 'extracting'>('ordering')
+  const [step, setStep] = useState<'setup' | 'uploading' | 'loading' | 'review' | 'committing' | 'done'>('setup')
   const [progress, setProgress] = useState({ done: 0, total: 0 })
   const [failedWindows, setFailedWindows] = useState(0)
   const [rows, setRows] = useState<ReviewRow[]>([])
@@ -159,8 +158,10 @@ export default function MediaPage() {
   /** Scheduler config loaded at parse time: track flags + per-track retention/calibration. */
   const paramsRef = useRef<{ tracksByPair: Map<string, EnabledTracks>; retMap: Map<string, number>; calMap: Map<string, number> }>({ tracksByPair: new Map(), retMap: new Map(), calMap: new Map() })
   const profileRef = useRef<{ tz: string; turnoverHour: number }>({ tz: 'UTC', turnoverHour: 0 })
-  /** The log row for the wizard run in progress — created when parsing finishes. */
+  /** The log row for the wizard run in progress / under review. */
   const entryRef = useRef<MediaEntry | null>(null)
+  /** Per-entry processing progress for the rows (polled while anything is processing). */
+  const [progressMap, setProgressMap] = useState<Map<string, { done: number; failed: number; total: number }>>(new Map())
 
   useEffect(() => {
     if (offline) return
@@ -181,14 +182,44 @@ export default function MediaPage() {
     })()
   }, [offline])
 
-  /** A known book title recalls its marker config — latest entry first, legacy localStorage second. */
+  // While any entry is processing: poll progress, refresh entry rows, and re-kick the worker
+  // (idempotent — an invocation that finds nothing claimable just returns, so this doubles as
+  // the revival path for a chain that died mid-flight).
+  const processingKey = entries.filter(e => e.status !== 'done').map(e => `${e.id}:${e.status}`).join(',')
+  useEffect(() => {
+    if (offline || !userId || processingKey === '') return
+    const supabase = createClient()
+    let cancelled = false
+    const tick = async () => {
+      const ids = entries.filter(e => e.status !== 'done').map(e => e.id)
+      if (ids.length === 0) return
+      const prog = await new SupabaseMediaPageRepository().progressForEntries(ids).catch(() => new Map<string, { done: number; failed: number; total: number }>())
+      if (cancelled) return
+      setProgressMap(prog)
+      for (const id of ids) void supabase.functions.invoke('media-worker', { body: { entry_id: id } }).catch(() => {})
+      const es = await new SupabaseMediaEntryRepository().list(userId).catch(() => null)
+      if (es && !cancelled) setEntries(es)
+    }
+    void tick()
+    const h = setInterval(() => { void tick() }, 6000)
+    return () => { cancelled = true; clearInterval(h) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [processingKey, offline, userId])
+
+  /** Applies a stored options object (a book's `markers` or an old entry's) to the form. */
+  function applyOptions(raw: unknown, srcLang: string) {
+    const o = (raw ?? {}) as Partial<IntakeOptions>
+    setMarkers({ circled: o.circled ?? true, underlined: o.underlined ?? true })
+    setSentences(o.sentences ?? true)
+    setNounArticle(o.nounArticle ?? ARTICLE_LANGS.has(srcLang))
+  }
+
+  /** A known book title (new-book mode) recalls its options from its latest entry. */
   function hydrateMarkers(forTitle: string) {
     const t = forTitle.trim().toLowerCase()
-    if (!t) return
+    if (!t || !pair) return
     const prior = entries.find(e => e.title.trim().toLowerCase() === t && e.markers != null)
-    if (prior) { setMarkers({ ...DEFAULT_MARKERS, ...(prior.markers as MarkerConfig) }); return }
-    const stored = legacyMarkerStore()[forTitle.trim()]
-    if (stored) setMarkers({ ...DEFAULT_MARKERS, ...stored })
+    if (prior) applyOptions(prior.markers, pair.sourceLanguage)
   }
 
   async function addFiles(files: FileList | null) {
@@ -207,14 +238,19 @@ export default function MediaPage() {
   }
 
   const pair = pairs.find(p => `${p.sourceLanguage}|${p.targetLanguage}` === pairKey) ?? null
-  const anyMarker = markers.circled || markers.underlined || markers.lineToMargin || markers.questionMark || markers.highlighted || markers.custom.trim() !== ''
+  const anyMarker = markers.circled || markers.underlined
+  const articleLang = pair ? ARTICLE_LANGS.has(pair.sourceLanguage) : false
+  const currentOptions = (): IntakeOptions => ({
+    circled: markers.circled, underlined: markers.underlined,
+    sentences, nounArticle: articleLang ? nounArticle : false,
+  })
 
   /** Opens the wizard — logging to an existing book (fields prefilled + locked) or creating one. */
   function startWizard(book: MediaBook | null) {
     setWizardBook(book)
     setTitle(book?.title ?? '')
     if (book) setPairKey(`${book.sourceLanguage}|${book.targetLanguage}`)
-    setMarkers(book?.markers ? { ...DEFAULT_MARKERS, ...(book.markers as MarkerConfig) } : DEFAULT_MARKERS)
+    applyOptions(book?.markers ?? DEFAULT_OPTIONS, book?.sourceLanguage ?? pair?.sourceLanguage ?? '')
     setReadOn(localToday()); setPhotos([]); setRows([]); setSummary(null); setUnmarkedSummary(null); setError(null)
     setChips([]); setActiveBucket(null)
     knownGradRef.current = []
@@ -223,168 +259,183 @@ export default function MediaPage() {
     setView('wizard')
   }
 
-  async function parse() {
+  /** Library + scheduler config + profile into the refs the review and commit need. */
+  async function loadContext() {
+    const supabase = createClient()
+    const [cards, states, paramRows, profile] = await Promise.all([
+      new SupabaseCardRepository().listAllForUser(userId),
+      new SupabaseCardStateRepository().listAllForUser(userId),
+      new SupabaseUserSchedulerParamsRepository().listForUser(userId).catch(() => []),
+      supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', userId).single()
+        .then(r => r.data as { timezone: string | null; day_turnover_hour: number | null } | null, () => null),
+    ])
+    const reverse = new Map(states.filter(s => s.reviewDirection === 'reverse').map(s => [s.cardId, s]))
+    libraryRef.current = { cards, forward: forwardStateMap(states.filter(s => s.reviewDirection !== 'reverse')), reverse }
+    paramsRef.current = {
+      tracksByPair: buildEnabledTracksMap(paramRows),
+      retMap:       buildRetentionMap(paramRows),
+      calMap:       buildCalibrationMap(paramRows),
+    }
+    profileRef.current = { tz: profile?.timezone ?? deviceTimeZone(), turnoverHour: profile?.day_turnover_hour ?? 0 }
+  }
+
+  /** Turns stored page results into the review screen's rows/chips (needs loadContext first). */
+  function buildReview(all: PageOccurrence[], windowLemmas: string[][], detectedLangs: string[], src: string, tgt: string) {
+    // Language guard: majority detected language vs the book's pair — warn before anything saves.
+    const langTally = new Map<string, number>()
+    for (const l of detectedLangs) langTally.set(l, (langTally.get(l) ?? 0) + 1)
+    const detected = [...langTally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+    setLangWarning(detected && detected !== src.toLowerCase() ? detected : null)
+
+    const candidates = collapseOccurrences(all).sort((a, b) => b.count - a.count)
+    const unmarked = unmarkedLemmas(windowLemmas, candidates)
+    const split = splitUnmarkedLemmas(unmarked, libraryRef.current.cards, src, tgt)
+    setUnmarkedSummary({ total: unmarked.length, known: split.known.length, unknown: split.unknown.length })
+
+    // Graduated matches earn implicit credit on save; everything else goes on the chip board —
+    // existing-but-unstudied cards (painting graduates THEM) and brand-new words.
+    const knownGrad: { lemma: string; card: Card }[] = []
+    const chipRows: Chip[] = []
+    for (const k of split.known) {
+      if (libraryRef.current.forward.get(k.card.id)?.graduated) knownGrad.push(k)
+      else chipRows.push({ lemma: k.lemma, existing: k.card, bucket: null })
+    }
+    for (const l of split.unknown) chipRows.push({ lemma: l, existing: null, bucket: null })
+    knownGradRef.current = knownGrad
+    setChips(chipRows)
+    setActiveBucket(null)
+
+    const matches = compareWithLexicon(candidates, libraryRef.current.cards, src, tgt)
+    setRows(matches.map(m => {
+      let action: RowAction = 'attach'
+      if (m.existing) {
+        const st = libraryRef.current.forward.get(m.existing.id)
+        action = st?.graduated ? 'skip' : (st && (st.reps > 0 || st.currentStepOrder > 0)) ? 'attach' : 'replace'
+      }
+      // The card front defaults to the DISPLAY form (noun with article, infinitive, masc. sg.).
+      return { ...m, included: true, action, gloss: m.candidate.gloss, text: m.candidate.display ?? m.candidate.text }
+    }))
+    return { candidates, unmarked, split }
+  }
+
+  /**
+   * Submits the pages: creates the entry, uploads the photos to the private bucket, inserts
+   * the page rows, flips the entry to 'processing', and kicks the Edge Function worker —
+   * then returns to the book page. Parsing continues server-side even if the app closes.
+   */
+  async function submitPages() {
     if (!pair || photos.length === 0 || !anyMarker) return
     setError(null)
-    setStep('parsing')
-    setFailedWindows(0)
+    setStep('uploading')
+    setProgress({ done: 0, total: photos.length })
     try {
-      // The library loads alongside the first window — stage C needs it the moment parsing ends.
       const supabase = createClient()
-      const [cards, states, paramRows, profile] = await Promise.all([
-        new SupabaseCardRepository().listAllForUser(userId),
-        new SupabaseCardStateRepository().listAllForUser(userId),
-        new SupabaseUserSchedulerParamsRepository().listForUser(userId).catch(() => []),
-        supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', userId).single()
-          .then(r => r.data as { timezone: string | null; day_turnover_hour: number | null } | null, () => null),
-      ])
-      const reverse = new Map(states.filter(s => s.reviewDirection === 'reverse').map(s => [s.cardId, s]))
-      libraryRef.current = { cards, forward: forwardStateMap(states.filter(s => s.reviewDirection !== 'reverse')), reverse }
-      paramsRef.current = {
-        tracksByPair: buildEnabledTracksMap(paramRows),
-        retMap:       buildRetentionMap(paramRows),
-        calMap:       buildCalibrationMap(paramRows),
-      }
-      profileRef.current = { tz: profile?.timezone ?? deviceTimeZone(), turnoverHour: profile?.day_turnover_hour ?? 0 }
+      const options = currentOptions()
 
-      // ── Ordering pass: read each photo's printed page number, sort into reading order.
-      // Upload order is only the fallback — photographing pages in order is fiddly, so the
-      // reader doesn't have to. A failed batch just keeps those photos' upload order.
-      setParsePhase('ordering')
-      const numbers: (number | null)[] = new Array(photos.length).fill(null)
-      if (photos.length > 1) {
-        const photoBatches = chunk(photos.map((photo, i) => ({ photo, i })), 8)
-        await mapLimit(photoBatches, 2, async batch => {
-          try {
-            const res = await fetch(apiUrl('/api/media/order-pages'), {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ images: batch.map(b => b.photo.dataUrl) }),
-            })
-            const data = await res.json() as { ok: boolean; pages?: { index: number; pageNumber: number | null }[] }
-            if (data.ok && Array.isArray(data.pages)) {
-              for (const pg of data.pages) {
-                const b = batch[pg.index]
-                if (b) numbers[b.i] = pg.pageNumber ?? null
-              }
-            }
-          } catch { /* upload order stands for this batch */ }
-          return null
+      // The book: preset keeps this run's options; a fresh title becomes a new book.
+      let book = wizardBook
+      if (book) {
+        void new SupabaseMediaBookRepository().update(book.id, { markers: options })
+          .then(b => setBooks(prev => prev.map(x => x.id === b.id ? b : x))).catch(() => {})
+      } else {
+        book = await new SupabaseMediaBookRepository().create(userId, {
+          title: title.trim() || 'Untitled book',
+          sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage, markers: options,
         })
+        setBooks(prev => [book!, ...prev])
+        setWizardBook(book)
       }
-      const ordered = orderPages(photos, numbers)
-      // Reorder the thumbnails + badge them with the detected numbers (visible if you come back).
-      setPhotos(ordered.map(o => ({ ...o.item, pageNumber: o.pageNumber })))
 
-      // ── Extraction: windows over the ORDERED pages — pairs only where genuinely consecutive.
-      setParsePhase('extracting')
-      const windows = windowOrderedPages(ordered)
-      setProgress({ done: 0, total: windows.length })
+      // The entry first — its id names the storage folder.
+      const entry = await new SupabaseMediaEntryRepository().create(userId, {
+        bookId: book?.id ?? null,
+        title: book?.title ?? (title.trim() || 'Untitled book'),
+        sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
+        pages: photos.length,
+        readOn: readOn && readOn <= localToday() ? readOn : localToday(),
+        markers: options, candidates: [], stats: {},
+        status: 'uploading', options: options as unknown as Record<string, unknown>,
+      })
+      entryRef.current = entry
+
+      const uploaded: { pageIndex: number; storagePath: string }[] = []
+      let failedUploads = 0
+      await mapLimit(photos.map((photo, i) => ({ photo, i })), UPLOAD_CONCURRENCY, async ({ photo, i }) => {
+        try {
+          const blob = await (await fetch(photo.dataUrl)).blob()
+          const path = `${userId}/${entry.id}/${i}.jpg`
+          const { error: upErr } = await supabase.storage.from('media-pages').upload(path, blob, { contentType: 'image/jpeg', upsert: true })
+          if (upErr) throw upErr
+          uploaded.push({ pageIndex: i, storagePath: path })
+        } catch {
+          failedUploads++
+        } finally {
+          setProgress(pr => ({ ...pr, done: pr.done + 1 }))
+        }
+        return null
+      })
+      if (uploaded.length === 0) throw new Error('No photos could be uploaded — check your connection and try again.')
+
+      await new SupabaseMediaPageRepository().createBatch(userId, entry.id, uploaded.sort((a, b) => a.pageIndex - b.pageIndex))
+      const live = await new SupabaseMediaEntryRepository().update(entry.id, {
+        status: 'processing', pages: uploaded.length,
+        ...(failedUploads > 0 ? { stats: { uploadFailed: failedUploads } } : {}),
+      })
+      setEntries(prev => [live, ...prev])
+
+      // Kick a few worker chains; the Media tab's poll revives them if one dies.
+      for (let k = 0; k < Math.min(WORKER_KICKS, uploaded.length); k++) {
+        void supabase.functions.invoke('media-worker', { body: { entry_id: entry.id } }).catch(() => {})
+      }
+
+      backToLog(book)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Upload failed.')
+      setStep('setup')
+    }
+  }
+
+  /** Opens the review for a PROCESSED entry, fed from the stored per-page results. */
+  async function openReview(entry: MediaEntry) {
+    setError(null)
+    const book = books.find(b => b.id === entry.bookId) ?? null
+    setWizardBook(book)
+    setTitle(entry.title)
+    setPairKey(`${entry.sourceLanguage}|${entry.targetLanguage}`)
+    setReadOn(entry.readOn ?? localToday())
+    setSummary(null)
+    entryRef.current = entry
+    setView('wizard')
+    setStep('loading')
+    try {
+      const [pages] = await Promise.all([
+        new SupabaseMediaPageRepository().listForEntry(entry.id),
+        loadContext(),
+      ])
       const all: PageOccurrence[] = []
       const windowLemmas: string[][] = []
       const detectedLangs: string[] = []
       let failed = 0
-      await mapLimit(windows, PARSE_CONCURRENCY, async w => {
-        try {
-          const res = await fetch(apiUrl('/api/media/parse-page'), {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              images: w.map(p => p.dataUrl), markers,
-              sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
-            }),
-          })
-          const data = await res.json() as { ok: boolean; occurrences?: PageOccurrence[]; allLemmas?: string[]; pageLanguage?: string }
-          if (!data.ok || !Array.isArray(data.occurrences)) throw new Error('window-failed')
-          all.push(...data.occurrences)
-          if (Array.isArray(data.allLemmas)) windowLemmas.push(data.allLemmas)
-          if (typeof data.pageLanguage === 'string' && data.pageLanguage) detectedLangs.push(data.pageLanguage.toLowerCase())
-        } catch {
-          failed++
-          setFailedWindows(failed)
-        } finally {
-          setProgress(p => ({ ...p, done: p.done + 1 }))
-        }
-        return null
-      })
-
-      // Language guard: the pages' actual language vs the book's pair. A French book filed
-      // under Bulgarian poisons everything downstream (labels, glosses, the lexicon match), so
-      // disagree loudly before anything is saved to the library.
-      const langTally = new Map<string, number>()
-      for (const l of detectedLangs) langTally.set(l, (langTally.get(l) ?? 0) + 1)
-      const detected = [...langTally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
-      setLangWarning(detected && detected !== pair.sourceLanguage.toLowerCase() ? detected : null)
-
-      const candidates = collapseOccurrences(all).sort((a, b) => b.count - a.count)
-      // Stage D: everything you read and did NOT mark is evidence too. Split against the lexicon
-      // for the summary; the lemma list itself is stored as fact on the entry (Stage E acts on it).
-      // Resolve the book record: a preset book remembers this run's markers; a fresh title
-      // becomes a new book. Best-effort — the entry still logs (with its title) if this fails.
-      let book = wizardBook
-      try {
-        if (book) {
-          void new SupabaseMediaBookRepository().update(book.id, { markers })
-            .then(b => setBooks(prev => prev.map(x => x.id === b.id ? b : x))).catch(() => {})
-        } else {
-          book = await new SupabaseMediaBookRepository().create(userId, {
-            title: title.trim() || 'Untitled book',
-            sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage, markers,
-          })
-          setBooks(prev => [book!, ...prev])
-          setWizardBook(book)
-        }
-      } catch { /* keep going — the entry row below is the important write */ }
-
-      const unmarked = unmarkedLemmas(windowLemmas, candidates)
-      const split = splitUnmarkedLemmas(unmarked, libraryRef.current.cards, pair.sourceLanguage, pair.targetLanguage)
-      setUnmarkedSummary({ total: unmarked.length, known: split.known.length, unknown: split.unknown.length })
-
-      // Stage E: graduated matches earn implicit credit on save; everything else goes on the
-      // chip board — existing-but-unstudied cards (painting graduates THEM) and brand-new words.
-      const knownGrad: { lemma: string; card: Card }[] = []
-      const chipRows: Chip[] = []
-      for (const k of split.known) {
-        if (libraryRef.current.forward.get(k.card.id)?.graduated) knownGrad.push(k)
-        else chipRows.push({ lemma: k.lemma, existing: k.card, bucket: null })
+      for (const pg of pages) {
+        if (pg.status === 'failed') { failed++; continue }
+        if (!pg.result) continue
+        all.push(...parseOccurrences(pg.result))
+        const lemmas = parseAllLemmas(pg.result)
+        if (lemmas.length > 0) windowLemmas.push(lemmas)
+        const pl = (pg.result as { pageLanguage?: unknown }).pageLanguage
+        if (typeof pl === 'string' && pl) detectedLangs.push(pl.toLowerCase())
       }
-      for (const l of split.unknown) chipRows.push({ lemma: l, existing: null, bucket: null })
-      knownGradRef.current = knownGrad
-      setChips(chipRows)
-      setActiveBucket(null)
-
-      // The log row saves NOW — what you read is recorded even if you abandon the review.
-      try {
-        const entry = await new SupabaseMediaEntryRepository().create(userId, {
-          bookId: book?.id ?? null,
-          title: book?.title ?? (title.trim() || 'Untitled book'),
-          sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
-          pages: photos.length,
-          // Clamp defensively: the input's max already blocks the future, but a typed date must too.
-          readOn: readOn && readOn <= localToday() ? readOn : localToday(),
-          markers, candidates,
-          unmarkedLemmas: unmarked,
-          stats: { found: candidates.length, failedWindows: failed, unmarked: unmarked.length, unmarkedKnown: split.known.length, unmarkedUnknown: split.unknown.length },
-        })
-        entryRef.current = entry
-        setEntries(prev => [entry, ...prev])
-      } catch { /* the log is best-effort — the review must not die on a logging failure */ }
-
-      const matches = compareWithLexicon(candidates, libraryRef.current.cards, pair.sourceLanguage, pair.targetLanguage)
-      setRows(matches.map(m => {
-        // Suggested actions follow the proposal: graduated → skip, mid-learning → attach the book
-        // sentences, never-studied → replace with the fresh book version. Every row is editable.
-        let action: RowAction = 'attach'
-        if (m.existing) {
-          const st = libraryRef.current.forward.get(m.existing.id)
-          action = st?.graduated ? 'skip' : (st && (st.reps > 0 || st.currentStepOrder > 0)) ? 'attach' : 'replace'
-        }
-        return { ...m, included: true, action, gloss: m.candidate.gloss, text: m.candidate.text }
-      }))
+      setFailedWindows(failed)
+      const { candidates, unmarked, split } = buildReview(all, windowLemmas, detectedLangs, entry.sourceLanguage, entry.targetLanguage)
+      // Persist the extraction onto the entry so its detail view works without the pages.
+      void new SupabaseMediaEntryRepository().update(entry.id, {
+        candidates, unmarkedLemmas: unmarked,
+        stats: { ...entry.stats, found: candidates.length, unmarked: unmarked.length, unmarkedKnown: split.known.length, unmarkedUnknown: split.unknown.length },
+      }).then(u => { entryRef.current = u; setEntries(prev => prev.map(e => e.id === u.id ? u : e)) }).catch(() => {})
       setStep('review')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Parsing failed.')
-      setStep('setup')
+      setError(e instanceof Error ? e.message : 'Could not load the results.')
+      backToLog(book)
     }
   }
 
@@ -661,6 +712,8 @@ export default function MediaPage() {
   if (view === 'detail' && detail) {
     const cands = detail.candidates as IntakeCandidate[]
     const st = detail.stats as Record<string, number | string | undefined>
+    const detailProg = progressMap.get(detail.id)
+    const readyToReview = detail.status === 'done' && st.engine === 'v2' && st.created == null
     return (
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
         <div className="flex items-start justify-between gap-3">
@@ -688,11 +741,22 @@ export default function MediaPage() {
         </div>
         {error && <p className="text-sm text-danger">{error}</p>}
 
+        {detail.status !== 'done' && (
+          <div className="panel text-sm text-ink-muted text-center py-8 space-y-2">
+            <p>Processing on the server — {detailProg ? `${detailProg.done} of ${detailProg.total} pages parsed${detailProg.failed > 0 ? `, ${detailProg.failed} failed` : ''}` : 'starting up'}…</p>
+            <p className="text-xs text-ink-faint">You can close the app; this page updates on its own.</p>
+          </div>
+        )}
+        {readyToReview && (
+          <button className="btn-primary" onClick={() => void openReview(detail)}>
+            Review &amp; save{typeof st.failedPages === 'number' && st.failedPages > 0 ? ` (${st.failedPages} page${st.failedPages !== 1 ? 's' : ''} failed to parse)` : ''} →
+          </button>
+        )}
         {typeof st.deckId === 'string' && (
           <Link href={routes.deck(st.deckId)} className="btn-ghost inline-block text-sm">Open the book&apos;s deck →</Link>
         )}
 
-        {cands.length > 0 ? (
+        {detail.status !== 'done' ? null : cands.length > 0 ? (
           <div className="space-y-2">
             <h2 className="text-base font-medium text-ink">Marked words</h2>
             {cands.map((c, i) => (
@@ -885,19 +949,25 @@ export default function MediaPage() {
     )
   }
 
-  // ═══ Wizard: parsing ═══
-  if (view === 'wizard' && step === 'parsing') {
+  // ═══ Wizard: uploading ═══
+  if (view === 'wizard' && step === 'uploading') {
     return (
       <div className="max-w-md mx-auto pt-16 text-center space-y-4">
-        <h1 className="text-xl font-semibold text-ink">{parsePhase === 'ordering' ? 'Sorting your pages…' : 'Reading your pages…'}</h1>
-        <p className="text-sm text-ink-muted">
-          {parsePhase === 'ordering'
-            ? 'Reading the printed page numbers to put the photos in reading order.'
-            : `${progress.done} of ${progress.total} page windows parsed${failedWindows > 0 ? ` · ${failedWindows} failed` : ''}.`}
-        </p>
+        <h1 className="text-xl font-semibold text-ink">Sending your pages…</h1>
+        <p className="text-sm text-ink-muted">{progress.done} of {progress.total} uploaded. Once they're sent, parsing runs on the server — you can close the app.</p>
         <div className="h-1.5 bg-surface-raised rounded-full overflow-hidden max-w-xs mx-auto">
           <div className="h-full bg-accent rounded-full transition-all" style={{ width: `${progress.total > 0 ? (progress.done / progress.total) * 100 : 0}%` }} />
         </div>
+      </div>
+    )
+  }
+
+  // ═══ Wizard: loading stored results for review ═══
+  if (view === 'wizard' && step === 'loading') {
+    return (
+      <div className="max-w-md mx-auto pt-16 text-center space-y-4">
+        <h1 className="text-xl font-semibold text-ink">Loading the results…</h1>
+        <p className="text-sm text-ink-muted">Matching the extracted words against your lexicon.</p>
       </div>
     )
   }
@@ -947,7 +1017,7 @@ export default function MediaPage() {
         <div className="panel space-y-3">
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">How do you mark words?</label>
           <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
-            {([['circled', 'Circled'], ['underlined', 'Underlined'], ['lineToMargin', 'Line to margin'], ['questionMark', 'Question mark'], ['highlighted', 'Highlighted']] as const).map(([k, label]) => (
+            {([['circled', 'Circled'], ['underlined', 'Underlined']] as const).map(([k, label]) => (
               <label key={k} className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" className="accent-accent" checked={markers[k]}
                   onChange={e => setMarkers(m => ({ ...m, [k]: e.target.checked }))} />
@@ -955,9 +1025,27 @@ export default function MediaPage() {
               </label>
             ))}
           </div>
-          <input className="input text-sm" placeholder="Other marks — describe them (optional)" value={markers.custom}
-            onChange={e => setMarkers(m => ({ ...m, custom: e.target.value }))} />
-          <p className="text-xs text-ink-faint">Remembered per book — set it once.</p>
+          <p className="text-xs text-ink-faint">Circling and underlining are the two marks Lexify reads. Remembered per book.</p>
+        </div>
+
+        <div className="panel space-y-3">
+          <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Extraction</label>
+          <label className="flex items-center gap-2 cursor-pointer text-sm">
+            <input type="checkbox" className="accent-accent" checked={sentences} onChange={e => setSentences(e.target.checked)} />
+            <span className="text-ink">Extract sentences</span>
+            <span className="text-xs text-ink-faint">marked words keep the exact sentence they appeared in (pages are page-number-ordered first)</span>
+          </label>
+          {articleLang && (
+            <label className="flex items-center gap-2 cursor-pointer text-sm">
+              <input type="checkbox" className="accent-accent" checked={nounArticle} onChange={e => setNounArticle(e.target.checked)} />
+              <span className="text-ink">Nouns with definite article</span>
+              <span className="text-xs text-ink-faint">le sentier, la berge — the way you card gender</span>
+            </label>
+          )}
+          <p className="text-xs text-ink-faint">
+            Nouns: nominative singular (naturally-plural words stay plural) · Verbs: infinitive ·
+            Adjectives: masculine singular · Phrases and idioms: kept exactly as printed.
+          </p>
         </div>
 
         <div className="panel space-y-3">
@@ -970,25 +1058,22 @@ export default function MediaPage() {
                 <div key={i} className="relative">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={p.dataUrl} alt={`Page ${i + 1}`} className="h-24 rounded border border-line/15" />
-                  {p.pageNumber != null && (
-                    <span className="absolute bottom-1 left-1 px-1.5 rounded bg-surface-deep/90 text-[10px] text-ink-muted border border-line/20">p. {p.pageNumber}</span>
-                  )}
                   <button className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-surface-deep border border-line/20 text-xs text-ink-muted hover:text-danger"
                     onClick={() => setPhotos(prev => prev.filter((_, j) => j !== i))}>×</button>
                 </div>
               ))}
             </div>
           )}
-          <p className="text-xs text-ink-faint">Upload in any order — Lexify reads the printed page numbers and sorts the photos first, then parses consecutive pages together so sentences crossing a page break stay whole. Photos are parsed, never stored.</p>
+          <p className="text-xs text-ink-faint">Upload in any order. Parsing runs on the server — send the pages and close the app; results appear in the log when they're ready. Photos are deleted the moment parsing finishes.</p>
         </div>
 
         <button className="btn-primary w-full disabled:opacity-50"
           disabled={preparing || photos.length === 0 || !pair || !anyMarker}
-          onClick={() => void parse()}>
+          onClick={() => void submitPages()}>
           {preparing ? 'Preparing photos…'
             : photos.length === 0 ? 'Add page photos'
-            : !anyMarker ? 'Pick at least one marker type'
-            : `Parse ${photos.length} page${photos.length !== 1 ? 's' : ''}`}
+            : !anyMarker ? 'Pick circled, underlined, or both'
+            : `Send ${photos.length} page${photos.length !== 1 ? 's' : ''}`}
         </button>
       </div>
     )
@@ -999,8 +1084,10 @@ export default function MediaPage() {
     (b.readOn ?? b.createdAt.slice(0, 10)).localeCompare(a.readOn ?? a.createdAt.slice(0, 10)) || b.createdAt.localeCompare(a.createdAt))
 
   const entryRow = (e: MediaEntry, showTitle: boolean) => {
-    const st = e.stats as Record<string, number | undefined>
+    const st = e.stats as Record<string, number | string | undefined>
     const found = (e.candidates as unknown[]).length
+    const prog = progressMap.get(e.id)
+    const readyToReview = e.status === 'done' && st.engine === 'v2' && st.created == null
     return (
       <button key={e.id} className="panel w-full text-left hover:border-accent/40 transition-colors"
         onClick={() => { setDetail(e); setView('detail'); setError(null) }}>
@@ -1008,13 +1095,19 @@ export default function MediaPage() {
           <span className="font-medium text-ink">{showTitle ? <>{langFlag(e.sourceLanguage)} {e.title}</> : fmtDay(e.readOn ?? e.createdAt.slice(0, 10))}</span>
           {showTitle && <span className="text-xs text-ink-faint ml-auto">{entryDate(e)}</span>}
         </div>
-        <p className="text-xs text-ink-muted mt-1">
-          {e.pages} page{e.pages !== 1 ? 's' : ''} · {found} marked
-          {typeof st.created === 'number' && st.created > 0 ? ` · ${st.created} card${st.created !== 1 ? 's' : ''} created` : ''}
-          {typeof st.attached === 'number' && st.attached > 0 ? ` · ${st.attached} gained sentences` : ''}
-          {typeof st.credited === 'number' && st.credited > 0 ? ` · ${st.credited} credited` : ''}
-          {st.created == null ? ' · review not saved' : ''}
-        </p>
+        {e.status !== 'done' ? (
+          <p className="text-xs text-accent-soft mt-1">
+            Processing — {prog ? `${prog.done} of ${prog.total} pages parsed${prog.failed > 0 ? ` · ${prog.failed} failed` : ''}` : `${e.pages} page${e.pages !== 1 ? 's' : ''}`}…
+          </p>
+        ) : (
+          <p className="text-xs text-ink-muted mt-1">
+            {e.pages} page{e.pages !== 1 ? 's' : ''}{readyToReview ? '' : ` · ${found} marked`}
+            {typeof st.created === 'number' && st.created > 0 ? ` · ${st.created} card${st.created !== 1 ? 's' : ''} created` : ''}
+            {typeof st.attached === 'number' && st.attached > 0 ? ` · ${st.attached} gained sentences` : ''}
+            {typeof st.credited === 'number' && st.credited > 0 ? ` · ${st.credited} credited` : ''}
+            {readyToReview ? ' · ready to review' : st.created == null ? ' · review not saved' : ''}
+          </p>
+        )}
       </button>
     )
   }

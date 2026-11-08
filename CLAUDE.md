@@ -111,7 +111,25 @@ Current feature files:
   page's "Change language" moves book + entries + deck + ALL deck cards to another pair
   (`cardRepo.moveToPair` clears pos/lemma/choices/ipa/audio in the same write and relabels;
   schedules untouched). ENGINE OVERHAUL DESIGN in `features/Media Extraction Engine (design
-  draft).md` — user is annotating; do NOT build it until the rounds conclude. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  draft).md` — rounds CONCLUDED 2026-11-08 (decisions in doc + chat). ENGINE STAGE A BUILT
+  2026-11-08: server-side processing. **Migration 131** (media_pages + entries.status/options
+  + PRIVATE `media-pages` storage bucket w/ owner policies) + **Edge Function
+  `supabase/functions/media-worker/index.ts`** (user pastes into the Supabase dashboard;
+  secret ANTHROPIC_API_KEY; tsconfig EXCLUDES supabase/functions — it's Deno). Worker: one
+  unit per invocation (optimistic status-flip claim, 3-min stuck reclaim), numbering pass
+  (Haiku, sentences mode only) → window extraction (Sonnet; composed prompts:
+  circled/underlined ONLY, display forms incl. noun-article option, phrases verbatim,
+  single-gloss rule, sentence field only when sentences on, pageLanguage always) →
+  self-chains via fetch to its own URL; completion deletes ALL images + sets entry
+  status='done', stats.engine='v2'. NO webhook: the client kicks invoke×3 after upload and
+  the Media tab's 6s poll re-kicks (revives dead chains) + refreshes progress. Client:
+  submitPages uploads → media_pages rows → 'processing'; openReview feeds the SAME
+  review/commit screen from stored page results (ReviewRow.text defaults to
+  candidate.display — the flashcard form). parse-page + order-pages routes DELETED (gloss
+  stays); MarkerConfig → IntakeOptions {circled,underlined,sentences,nounArticle} on
+  book.markers + entry.options; PageOccurrence/IntakeCandidate gained `display`. Stages B
+  (per-page worklist, partial saves) + C (penalty+auto-link, ×1.3 credit) remain.
+  OLD STAGE 1 (superseded): /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /

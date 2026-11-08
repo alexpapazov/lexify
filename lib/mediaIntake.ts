@@ -22,20 +22,23 @@ import type { Card, Rating } from '@/domain'
 import { displayText } from '@/lib/cardText'
 import { stripGrammaticalTags, stripLeadingArticle } from '@/engine/grading'
 
-/** Marker presets — each maps to a battle-tested prompt fragment in the route. */
-export interface MarkerConfig {
-  circled:      boolean
-  underlined:   boolean
-  lineToMargin: boolean
-  questionMark: boolean
-  highlighted:  boolean
-  /** The escape hatch for idiosyncratic systems — appended to the prompt verbatim. */
-  custom:       string
+/** The prompt-composition options snapshotted onto an entry at upload (Extraction Engine,
+ *  2026-11-08). Circled/underlined are the ONLY marks (user decision) and everything is
+ *  structured — no free text ever reaches a prompt. */
+export interface IntakeOptions {
+  circled:     boolean
+  underlined:  boolean
+  /** Capture marked words' sentences (requires the page-numbering pass, done server-side). */
+  sentences:   boolean
+  /** Nouns display with their definite article (French-style gender carding). */
+  nounArticle: boolean
 }
 
-export const DEFAULT_MARKERS: MarkerConfig = {
-  circled: true, underlined: true, lineToMargin: false, questionMark: false, highlighted: false, custom: '',
-}
+export const DEFAULT_OPTIONS: IntakeOptions = { circled: true, underlined: true, sentences: true, nounArticle: false }
+
+/** Languages whose nouns are carded with a PRECEDING definite article — gates the
+ *  "definite article" option in the upload form (Bulgarian's suffixed article doesn't count). */
+export const ARTICLE_LANGS = new Set(['fr', 'es', 'it', 'pt', 'de', 'el', 'nl', 'en', 'ca', 'ro'])
 
 /** One marked word/phrase as the vision model reports it, per window. */
 export interface PageOccurrence {
@@ -46,9 +49,13 @@ export interface PageOccurrence {
   kind:     'word' | 'phrase'
   /** Native meaning AS USED in this sentence — becomes the card's back. */
   gloss:    string
-  /** The complete sentence it appears in (finished on the next page when it runs over). */
+  /** The complete sentence it appears in (finished on the next page when it runs over).
+   *  Empty when the entry was parsed with sentences off. */
   sentence: string
   marker:   string
+  /** The flashcard form (noun with article when the option is on, infinitive, masc. sg.;
+   *  phrases verbatim). Falls back to `text` for results parsed before this existed. */
+  display?: string
 }
 
 /** Defensive parse of one window's `{ occurrences: [...] }` payload. Malformed entries drop
@@ -72,68 +79,10 @@ export function parseOccurrences(raw: unknown): PageOccurrence[] {
       gloss,
       sentence,
       marker: typeof r.marker === 'string' ? r.marker.trim() : '',
+      ...(typeof r.display === 'string' && r.display.trim() ? { display: r.display.trim() } : {}),
     })
   }
   return out
-}
-
-// ─── Ordering pass: printed page numbers decide reading order ─────────────────
-// (Superseded the original upload-order windowPages 2026-11-07: pair windows are built from
-// the ORDERED pages by windowOrderedPages below, pairing only genuinely consecutive pages.)
-
-/** Defensive parse of the order-pages route's `{ pages: [{ index, pageNumber }] }` payload.
- *  index = position in the REQUEST batch; pageNumber null = no number readable. */
-export function parsePageNumbers(raw: unknown): Map<number, number | null> {
-  const out = new Map<number, number | null>()
-  if (typeof raw !== 'object' || raw === null) return out
-  const list = (raw as { pages?: unknown }).pages
-  if (!Array.isArray(list)) return out
-  for (const p of list) {
-    if (typeof p !== 'object' || p === null) continue
-    const r = p as Record<string, unknown>
-    if (typeof r.index !== 'number' || !Number.isInteger(r.index) || r.index < 0) continue
-    const n = typeof r.pageNumber === 'number' && Number.isFinite(r.pageNumber) && r.pageNumber > 0
-      ? Math.round(r.pageNumber) : null
-    out.set(r.index, n)
-  }
-  return out
-}
-
-export interface OrderedPage<T> {
-  item:       T
-  /** The printed page number, when the ordering pass could read one. */
-  pageNumber: number | null
-}
-
-/** Sorts photos into reading order by printed page number (stable — duplicates keep upload
- *  order). Pages with NO readable number can't be placed, so they keep their upload order and
- *  go after the numbered ones; the UI labels them "?" so a misplacement is visible. */
-export function orderPages<T>(items: T[], pageNumbers: (number | null)[]): OrderedPage<T>[] {
-  const entries = items.map((item, i) => ({ item, pageNumber: pageNumbers[i] ?? null, upload: i }))
-  const known = entries.filter(e => e.pageNumber !== null)
-    .sort((a, b) => (a.pageNumber! - b.pageNumber!) || (a.upload - b.upload))
-  const unknown = entries.filter(e => e.pageNumber === null)
-  return [...known, ...unknown].map(({ item, pageNumber }) => ({ item, pageNumber }))
-}
-
-/** Windows over ORDERED pages: a pair window only where the two pages are genuinely
- *  consecutive (numbers n and n+1, or an unknown number — benefit of the doubt); a page with
- *  no consecutive neighbor parses alone. Every page lands in at least one window. */
-export function windowOrderedPages<T>(ordered: OrderedPage<T>[]): T[][] {
-  if (ordered.length <= 1) return ordered.length === 0 ? [] : [[ordered[0]!.item]]
-  const canPair = (a: OrderedPage<T>, b: OrderedPage<T>) =>
-    a.pageNumber === null || b.pageNumber === null || b.pageNumber - a.pageNumber === 1
-  const windows: T[][] = []
-  const covered = new Set<number>()
-  for (let i = 0; i < ordered.length - 1; i++) {
-    if (!canPair(ordered[i]!, ordered[i + 1]!)) continue
-    windows.push([ordered[i]!.item, ordered[i + 1]!.item])
-    covered.add(i); covered.add(i + 1)
-  }
-  for (let i = 0; i < ordered.length; i++) {
-    if (!covered.has(i)) windows.push([ordered[i]!.item])
-  }
-  return windows
 }
 
 // ─── Stage B: collapse ─────────────────────────────────────────────────────────
@@ -141,6 +90,8 @@ export function windowOrderedPages<T>(ordered: OrderedPage<T>[]): T[][] {
 export interface IntakeCandidate {
   /** The most common printed form among its occurrences. */
   text:      string
+  /** The flashcard form (see PageOccurrence.display) — what a created card's front should be. */
+  display?:  string
   lemma:     string
   kind:      'word' | 'phrase'
   gloss:     string
@@ -166,6 +117,7 @@ export function collapseOccurrences(occurrences: PageOccurrence[]): IntakeCandid
     if (!existing) {
       byLemma.set(key, {
         text: o.text, lemma: o.lemma, kind: o.kind, gloss: o.gloss,
+        ...(o.display ? { display: o.display } : {}),
         sentences: o.sentence ? [{ sentence: o.sentence, answer: o.text }] : [], count: 1,
         markers: o.marker ? [o.marker] : [],
         seenSentences: new Set(o.sentence ? [normSentence(o.sentence)] : []),
@@ -178,6 +130,7 @@ export function collapseOccurrences(occurrences: PageOccurrence[]): IntakeCandid
     existing.count += 1
     if (o.marker && !existing.markers.includes(o.marker)) existing.markers.push(o.marker)
     if (!existing.gloss && o.gloss) existing.gloss = o.gloss
+    if (!existing.display && o.display) existing.display = o.display
   }
   return [...byLemma.values()].map(({ seenSentences: _s, ...c }) => c)
 }

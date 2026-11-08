@@ -24,6 +24,8 @@ function rowToEntry(row: Record<string, unknown>): MediaEntry {
     candidates:     (row.candidates as unknown[] | null) ?? [],
     unmarkedLemmas: (row.unmarked_lemmas as string[] | null) ?? [],
     stats:          (row.stats as Record<string, unknown> | null) ?? {},
+    status:         (row.status as MediaEntry['status']) ?? 'done',
+    options:        (row.options as Record<string, unknown> | null) ?? {},
     createdAt:      row.created_at as string,
     updatedAt:      row.updated_at as string,
     deletedAt:      (row.deleted_at as string | null) ?? null,
@@ -58,6 +60,8 @@ export class SupabaseMediaEntryRepository {
     candidates: unknown[]
     unmarkedLemmas?: string[]
     stats?: Record<string, unknown>
+    status?: MediaEntry['status']
+    options?: Record<string, unknown>
   }): Promise<MediaEntry> {
     const { data, error } = await this.db
       .from('media_entries')
@@ -67,6 +71,7 @@ export class SupabaseMediaEntryRepository {
         pages: input.pages, read_on: input.readOn ?? null,
         markers: input.markers, candidates: input.candidates,
         unmarked_lemmas: input.unmarkedLemmas ?? [], stats: input.stats ?? {},
+        status: input.status ?? 'done', options: input.options ?? {},
       })
       .select()
       .single()
@@ -75,12 +80,14 @@ export class SupabaseMediaEntryRepository {
   }
 
   /** Stats/candidates updates after actions run on an entry (commit, Stage E credit/known). */
-  async update(id: string, patch: Partial<Pick<MediaEntry, 'candidates' | 'unmarkedLemmas' | 'stats' | 'markers'>>): Promise<MediaEntry> {
+  async update(id: string, patch: Partial<Pick<MediaEntry, 'candidates' | 'unmarkedLemmas' | 'stats' | 'markers' | 'status' | 'pages'>>): Promise<MediaEntry> {
     const dbPatch: Record<string, unknown> = { updated_at: new Date().toISOString() }
     if (patch.candidates     !== undefined) dbPatch.candidates      = patch.candidates
     if (patch.unmarkedLemmas !== undefined) dbPatch.unmarked_lemmas = patch.unmarkedLemmas
     if (patch.stats          !== undefined) dbPatch.stats           = patch.stats
     if (patch.markers        !== undefined) dbPatch.markers         = patch.markers
+    if (patch.status         !== undefined) dbPatch.status          = patch.status
+    if (patch.pages          !== undefined) dbPatch.pages           = patch.pages
     const { data, error } = await this.db
       .from('media_entries')
       .update(dbPatch)

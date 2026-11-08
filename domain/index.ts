@@ -484,9 +484,30 @@ export interface MediaEntry {
   unmarkedLemmas: string[]
   /** Loose action summary: found/created/attached/replaced/skipped/failedWindows/deckId/… */
   stats:          Record<string, unknown>
+  /** Server-side pipeline state (migration 131): 'uploading' → 'processing' → 'done'.
+   *  Legacy entries default to 'done'. */
+  status:         'uploading' | 'processing' | 'done'
+  /** Prompt-composition snapshot taken at upload: { circled, underlined, sentences, nounArticle }. */
+  options:        Record<string, unknown>
   createdAt:      string
   updatedAt:      string
   deletedAt:      string | null
+}
+
+/** One photographed page of a media entry (migration 131). The image lives in storage only
+ *  between upload and parse; `result` is what the worker extracted. A `covered` page's
+ *  occurrences live on the window-key page before it. */
+export interface MediaPage {
+  id:          string
+  userId:      UserId
+  entryId:     string
+  pageIndex:   number
+  pageNumber:  number | null
+  status:      'pending' | 'working' | 'done' | 'failed'
+  covered:     boolean
+  /** { occurrences, allLemmas, pageLanguage } — shapes from lib/mediaIntake.ts. */
+  result:      Record<string, unknown> | null
+  error:       string | null
 }
 
 // ─── Scheduler params ─────────────────────────────────────────────────────────
