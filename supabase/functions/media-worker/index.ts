@@ -250,12 +250,24 @@ async function step(entryId: string): Promise<boolean> {
 
 // ─── HTTP entry point ────────────────────────────────────────────────────────
 
+// The browser invokes this (supabase.functions.invoke), which means a CORS preflight —
+// without these headers every kick is silently blocked and nothing ever processes.
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (payload: unknown) =>
+  new Response(JSON.stringify(payload), { headers: { ...CORS, "content-type": "application/json" } });
+
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body is fine */ }
   const entryId = body?.entry_id ?? body?.record?.entry_id;
   if (!entryId || typeof entryId !== "string") {
-    return new Response(JSON.stringify({ ok: false, reason: "no-entry" }), { headers: { "content-type": "application/json" } });
+    return json({ ok: false, reason: "no-entry" });
   }
 
   let didWork = false;
@@ -277,5 +289,5 @@ Deno.serve(async (req) => {
     else await chain;
   }
 
-  return new Response(JSON.stringify({ ok: true, didWork }), { headers: { "content-type": "application/json" } });
+  return json({ ok: true, didWork });
 });
