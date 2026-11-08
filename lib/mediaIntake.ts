@@ -18,7 +18,7 @@
  * discarded — nothing is stored but the extraction (v1 decision; no migration).
  */
 
-import type { Card } from '@/domain'
+import type { Card, Rating } from '@/domain'
 import { displayText } from '@/lib/cardText'
 import { stripGrammaticalTags, stripLeadingArticle } from '@/engine/grading'
 
@@ -216,6 +216,41 @@ export function unmarkedLemmas(windowLemmas: string[][], candidates: IntakeCandi
       seen.add(key)
       out.push(l)
     }
+  }
+  return out
+}
+
+// ─── Stage E: add-as-known chips ───────────────────────────────────────────────
+
+/** The buckets a chip can be painted into (user design 2026-11-06). */
+export type ChipBucket = 'short' | 'long' | 'dontknow'
+
+/**
+ * Due-date spread windows per known-bucket, in days from today (the shape `claimSpreadDay`
+ * consumes). Short = "verify over the next ~2 weeks"; long = "~3 months" — the center sits
+ * safely past LONG_TERM_THRESHOLD_DAYS, so a long-painted word is implicit-credit eligible
+ * from day one.
+ */
+export const CHIP_WINDOWS: Record<'short' | 'long', { min: number; max: number; center: number }> = {
+  short: { min: 2,  max: 14,  center: 7 },
+  long:  { min: 80, max: 100, center: 90 },
+}
+
+/** The learning history each bucket stands in for (feeds `initialDifficulty`, same scale as
+ *  onboarding bands: short ≈ "recognize it" (hard), long ≈ "know it cold" (easy)). */
+export const CHIP_SEED_RATING: Record<'short' | 'long', Rating> = { short: 'hard', long: 'easy' }
+
+/** Defensive parse of the gloss route's `{ glosses: [{ index, gloss }] }` payload → index → gloss. */
+export function parseGlosses(raw: unknown): Map<number, string> {
+  const out = new Map<number, string>()
+  if (typeof raw !== 'object' || raw === null) return out
+  const list = (raw as { glosses?: unknown }).glosses
+  if (!Array.isArray(list)) return out
+  for (const g of list) {
+    if (typeof g !== 'object' || g === null) continue
+    const r = g as Record<string, unknown>
+    const gloss = typeof r.gloss === 'string' ? r.gloss.trim() : ''
+    if (typeof r.index === 'number' && Number.isInteger(r.index) && r.index >= 0 && gloss) out.set(r.index, gloss)
   }
   return out
 }

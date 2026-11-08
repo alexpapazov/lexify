@@ -77,7 +77,12 @@ Current feature files:
   entry; Media nav link hidden offline. STAGE D BUILT 2026-11-07: parse-page also returns
   `allLemmas` (content lemmas only, max_tokens 16000); `unmarkedLemmas` +
   `splitUnmarkedLemmas` in lib/mediaIntake; unmarked list stored on the entry, split counts
-  in stats, summary lines on review/detail. Stage E (chips + credit wiring) is next. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  in stats, summary lines on review/detail. STAGE E BUILT 2026-11-07 (the payoff): chip board
+  on review (short/long/don't-know paint; CHIP_WINDOWS 2–14d / 80–100d, seeding mirrors
+  onboarding buildStates with bulk_known), `/api/media/gloss` (Haiku) for new chips (no gloss
+  → chip skipped, never an empty back), painting an existing non-graduated card graduates IT,
+  implicit credit via creditCardSighting on Save for unmarked+graduated matches, Link action
+  (addToDeck shared card). Read the Stage E section of the proposal before touching. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /

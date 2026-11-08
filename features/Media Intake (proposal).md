@@ -130,7 +130,28 @@ The entry splits unmarked lemmas against the lexicon:
   phase's seeding — no new card. This is the catch-up path for a stale library;
 - unmarked + **not in library** → add-as-known candidates (Stage E chips, new cards).
 
-## Stage E — Entry review: the three outcomes
+## Stage E — Entry review: the three outcomes — BUILT 2026-11-07
+
+All in `app/media/page.tsx` commit flow + review screen. Implementation facts:
+- **Chips** = unmarked lemmas that are new OR match a non-graduated card (dot marker + tooltip).
+  Bucket selector paints on tap; `CHIP_WINDOWS` (short 2–14 center 7 / long 80–100 center 90,
+  long.min ≥ the 30d threshold — tested) + `CHIP_SEED_RATING` (short≈hard, long≈easy) in
+  lib/mediaIntake. Seeding mirrors onboarding's buildStates exactly: claimSpreadDay +
+  onboardDueIso + stabilityForInterval(landed day), forward + reverse rows, prod lane by
+  activeProductionTrack, `acceleratedMode: 'bulk_known'` (never counts toward goals).
+- **New chips need a gloss**: `/api/media/gloss` (Haiku batch, index-keyed, fail-soft);
+  a chip whose gloss doesn't come back is SKIPPED (never an empty back), reported in the
+  summary as "paint them again next time".
+- **Auto-graduation**: a painted chip with an existing card overwrites that card's rows with
+  the graduated seeding (existing state as base — introducedDate/reps kept). Don't-know on an
+  existing-card chip is a no-op v1.
+- **Implicit credit** fires on Save for every unmarked+graduated match via creditCardSighting
+  (mapLimit 4, per-card fail-soft); eligibility is the engine's. Profile tz/turnover loaded
+  with a guarded select (deviceTimeZone fallback).
+- **Link action** on marked matches: cardRepo.addToDeck (shared card) + attach sentences.
+- Save button enabled when there are rows OR painted chips OR credit targets; deck is only
+  found/created when cards will live in it. Entry stats gain linked/knownAdded/
+  graduatedExisting/dontKnowAdded/credited/chipSkipped; detail + done screens report them.
 
 For a page of ~100 words with 5 marked:
 

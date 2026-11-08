@@ -1,5 +1,6 @@
 import type { Card } from '@/domain'
-import { windowPages, collapseOccurrences, compareWithLexicon, parseOccurrences, parseAllLemmas, unmarkedLemmas, splitUnmarkedLemmas, type PageOccurrence } from '@/lib/mediaIntake'
+import { windowPages, collapseOccurrences, compareWithLexicon, parseOccurrences, parseAllLemmas, unmarkedLemmas, splitUnmarkedLemmas, parseGlosses, CHIP_WINDOWS, CHIP_SEED_RATING, type PageOccurrence } from '@/lib/mediaIntake'
+import { LONG_TERM_THRESHOLD_DAYS } from '@/engine/implicitCredit'
 
 function occ(over: Partial<PageOccurrence>): PageOccurrence {
   return { text: 'sentier', lemma: 'sentier', kind: 'word', gloss: 'path', sentence: 'Le sentier est fermé.', marker: 'underlined', ...over }
@@ -96,6 +97,24 @@ describe('stage D — unmarked lemmas', () => {
     const { known, unknown } = splitUnmarkedLemmas(['sentier', 'clairière', 'berge'], cards, 'fr', 'en')
     expect(known.map(k => [k.lemma, k.card.id])).toEqual([['sentier', 'a'], ['clairière', 'c']])
     expect(unknown).toEqual(['berge'])
+  })
+})
+
+describe('stage E — chip constants + gloss parsing', () => {
+  it('the long bucket lands entirely past the long-term threshold (credit-eligible on day one)', () => {
+    expect(CHIP_WINDOWS.long.min).toBeGreaterThanOrEqual(LONG_TERM_THRESHOLD_DAYS)
+    expect(CHIP_WINDOWS.short.max).toBeLessThan(LONG_TERM_THRESHOLD_DAYS)   // short stays short-term
+    expect(CHIP_SEED_RATING.short).toBe('hard')
+    expect(CHIP_SEED_RATING.long).toBe('easy')
+  })
+
+  it('parseGlosses keeps valid index/gloss pairs, drops junk', () => {
+    const out = parseGlosses({ glosses: [
+      { index: 0, gloss: ' path ' }, { index: 2, gloss: 'moss' },
+      { index: -1, gloss: 'x' }, { index: 1, gloss: '' }, { index: 1.5, gloss: 'y' }, 'junk', null,
+    ] })
+    expect([...out.entries()]).toEqual([[0, 'path'], [2, 'moss']])
+    expect(parseGlosses(null).size).toBe(0)
   })
 })
 
