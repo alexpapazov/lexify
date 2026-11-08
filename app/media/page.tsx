@@ -24,6 +24,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabasePipelineRepository } from '@/lib/data/pipelines'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseMediaEntryRepository } from '@/lib/data/mediaEntries'
+import { SupabaseMediaBookRepository } from '@/lib/data/mediaBooks'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { appendStoredCloze } from '@/lib/reviewCloze'
@@ -41,7 +42,7 @@ import { langFlag, langName } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
-import type { Card, CardState, LanguagePair, MediaEntry } from '@/domain'
+import type { Card, CardState, LanguagePair, MediaBook, MediaEntry } from '@/domain'
 
 const MARKERS_KEY = 'lexify-book-markers'   // legacy fallback only — configs now live on entries
 const PARSE_CONCURRENCY = 2
@@ -70,16 +71,34 @@ const BUCKETS: { key: ChipBucket; label: string; hint: string; chipClass: string
   { key: 'dontknow', label: "I don't know it", hint: 'forgot to mark — learn it',      chipClass: 'border-amber-400/70 bg-amber-400/10 text-ink', dotClass: 'bg-amber-400' },
 ]
 
-/** File → downscaled JPEG data URL (canvas). Photos of book pages compress very well. */
+/** File → downscaled JPEG data URL (canvas). Photos of book pages compress very well.
+ *  Decode is two-tier: createImageBitmap first, then an <img> element (some browsers decode
+ *  formats one way but not the other). A file neither can read throws with ITS NAME, so one
+ *  bad photo never takes down the batch — the usual culprit is an iPhone HEIC in Chrome. */
 async function fileToDataUrl(file: File): Promise<string> {
-  const bitmap = await createImageBitmap(file)
-  const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height))
-  const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale)
-  const canvas = document.createElement('canvas')
-  canvas.width = w; canvas.height = h
-  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, w, h)
-  bitmap.close()
-  return canvas.toDataURL('image/jpeg', 0.82)
+  const draw = (src: CanvasImageSource, width: number, height: number): string => {
+    const scale = Math.min(1, MAX_EDGE / Math.max(width, height))
+    const w = Math.round(width * scale), h = Math.round(height * scale)
+    const canvas = document.createElement('canvas')
+    canvas.width = w; canvas.height = h
+    canvas.getContext('2d')!.drawImage(src, 0, 0, w, h)
+    return canvas.toDataURL('image/jpeg', 0.82)
+  }
+  try {
+    const bitmap = await createImageBitmap(file)
+    try { return draw(bitmap, bitmap.width, bitmap.height) } finally { bitmap.close() }
+  } catch { /* fall through to the <img> decoder */ }
+  const url = URL.createObjectURL(file)
+  try {
+    const img = new Image()
+    img.src = url
+    await img.decode()
+    return draw(img, img.naturalWidth, img.naturalHeight)
+  } catch {
+    throw new Error(`“${file.name}” could not be read — if it's an iPhone HEIC photo, export or share it as JPEG first.`)
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }
 
 function legacyMarkerStore(): Record<string, MarkerConfig> {
@@ -102,10 +121,14 @@ export default function MediaPage() {
   const [userId, setUserId] = useState('')
   const [pairs, setPairs] = useState<LanguagePair[]>([])
   const [entries, setEntries] = useState<MediaEntry[]>([])
+  const [books, setBooks] = useState<MediaBook[]>([])
   const [loading, setLoading] = useState(true)
 
-  const [view, setView] = useState<'list' | 'detail' | 'wizard'>('list')
+  const [view, setView] = useState<'books' | 'book' | 'detail' | 'wizard'>('books')
+  const [activeBook, setActiveBook] = useState<MediaBook | null>(null)
   const [detail, setDetail] = useState<MediaEntry | null>(null)
+  /** The book this wizard run logs to — preset when launched from a book, created at parse otherwise. */
+  const [wizardBook, setWizardBook] = useState<MediaBook | null>(null)
 
   // ── Wizard state (the former /create/book page) ──
   const [pairKey, setPairKey] = useState('')
@@ -139,12 +162,14 @@ export default function MediaPage() {
       const { data: { session } } = await createClient().auth.getSession()
       if (!session) { setLoading(false); return }
       setUserId(session.user.id)
-      const [ps, es] = await Promise.all([
+      const [ps, es, bs] = await Promise.all([
         new SupabaseLanguagePairRepository().list(session.user.id),
         new SupabaseMediaEntryRepository().list(session.user.id).catch(() => [] as MediaEntry[]),
+        new SupabaseMediaBookRepository().list(session.user.id).catch(() => [] as MediaBook[]),
       ])
       setPairs(ps)
       setEntries(es)
+      setBooks(bs)
       if (ps[0]) setPairKey(`${ps[0].sourceLanguage}|${ps[0].targetLanguage}`)
       setLoading(false)
     })()
@@ -163,21 +188,28 @@ export default function MediaPage() {
   async function addFiles(files: FileList | null) {
     if (!files || files.length === 0) return
     setPreparing(true)
-    try {
-      const prepared = await Promise.all([...files].map(async f => ({ name: f.name, dataUrl: await fileToDataUrl(f) })))
-      setPhotos(prev => [...prev, ...prepared])
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not read those images.')
-    } finally {
-      setPreparing(false)
+    setError(null)
+    // Per-file: one unreadable photo reports its name and the rest still load.
+    const results = await Promise.allSettled([...files].map(async f => ({ name: f.name, dataUrl: await fileToDataUrl(f) })))
+    const prepared = results.filter((r): r is PromiseFulfilledResult<{ name: string; dataUrl: string }> => r.status === 'fulfilled').map(r => r.value)
+    const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (prepared.length > 0) setPhotos(prev => [...prev, ...prepared])
+    if (failures.length > 0) {
+      setError(failures.map(f => f.reason instanceof Error ? f.reason.message : 'An image could not be read.').join(' '))
     }
+    setPreparing(false)
   }
 
   const pair = pairs.find(p => `${p.sourceLanguage}|${p.targetLanguage}` === pairKey) ?? null
   const anyMarker = markers.circled || markers.underlined || markers.lineToMargin || markers.questionMark || markers.highlighted || markers.custom.trim() !== ''
 
-  function startWizard() {
-    setTitle(''); setReadOn(localToday()); setMarkers(DEFAULT_MARKERS); setPhotos([]); setRows([]); setSummary(null); setUnmarkedSummary(null); setError(null)
+  /** Opens the wizard — logging to an existing book (fields prefilled + locked) or creating one. */
+  function startWizard(book: MediaBook | null) {
+    setWizardBook(book)
+    setTitle(book?.title ?? '')
+    if (book) setPairKey(`${book.sourceLanguage}|${book.targetLanguage}`)
+    setMarkers(book?.markers ? { ...DEFAULT_MARKERS, ...(book.markers as MarkerConfig) } : DEFAULT_MARKERS)
+    setReadOn(localToday()); setPhotos([]); setRows([]); setSummary(null); setUnmarkedSummary(null); setError(null)
     setChips([]); setActiveBucket(null)
     knownGradRef.current = []
     entryRef.current = null
@@ -240,6 +272,23 @@ export default function MediaPage() {
       const candidates = collapseOccurrences(all).sort((a, b) => b.count - a.count)
       // Stage D: everything you read and did NOT mark is evidence too. Split against the lexicon
       // for the summary; the lemma list itself is stored as fact on the entry (Stage E acts on it).
+      // Resolve the book record: a preset book remembers this run's markers; a fresh title
+      // becomes a new book. Best-effort — the entry still logs (with its title) if this fails.
+      let book = wizardBook
+      try {
+        if (book) {
+          void new SupabaseMediaBookRepository().update(book.id, { markers })
+            .then(b => setBooks(prev => prev.map(x => x.id === b.id ? b : x))).catch(() => {})
+        } else {
+          book = await new SupabaseMediaBookRepository().create(userId, {
+            title: title.trim() || 'Untitled book',
+            sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage, markers,
+          })
+          setBooks(prev => [book!, ...prev])
+          setWizardBook(book)
+        }
+      } catch { /* keep going — the entry row below is the important write */ }
+
       const unmarked = unmarkedLemmas(windowLemmas, candidates)
       const split = splitUnmarkedLemmas(unmarked, libraryRef.current.cards, pair.sourceLanguage, pair.targetLanguage)
       setUnmarkedSummary({ total: unmarked.length, known: split.known.length, unknown: split.unknown.length })
@@ -260,7 +309,8 @@ export default function MediaPage() {
       // The log row saves NOW — what you read is recorded even if you abandon the review.
       try {
         const entry = await new SupabaseMediaEntryRepository().create(userId, {
-          title: title.trim() || 'Untitled book',
+          bookId: book?.id ?? null,
+          title: book?.title ?? (title.trim() || 'Untitled book'),
           sourceLanguage: pair.sourceLanguage, targetLanguage: pair.targetLanguage,
           pages: photos.length,
           // Clamp defensively: the input's max already blocks the future, but a typed date must too.
@@ -471,6 +521,13 @@ export default function MediaPage() {
         })
       }
 
+      // The book remembers its deck after the first commit creates/finds it.
+      if (deck && wizardBook && wizardBook.deckId !== deck.id) {
+        void new SupabaseMediaBookRepository().update(wizardBook.id, { deckId: deck.id })
+          .then(b => { setWizardBook(b); setBooks(prev => prev.map(x => x.id === b.id ? b : x)) })
+          .catch(() => {})
+      }
+
       const stats = {
         ...(entryRef.current?.stats ?? {}),
         created: toCreate.length,
@@ -499,12 +556,18 @@ export default function MediaPage() {
     }
   }
 
+  /** Leave the wizard/detail: back to the owning book's page when there is one, else the shelf. */
+  function backToLog(book: MediaBook | null) {
+    if (book) { setActiveBook(book); setView('book') } else { setActiveBook(null); setView('books') }
+    setDetail(null)
+  }
+
   async function deleteEntry(entry: MediaEntry) {
     if (!window.confirm(`Delete the ${entryDate(entry)} entry for “${entry.title}”? The cards it created stay in your library.`)) return
     try {
       await new SupabaseMediaEntryRepository().softDelete(entry.id)
       setEntries(prev => prev.filter(e => e.id !== entry.id))
-      setView('list'); setDetail(null)
+      backToLog(activeBook)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delete failed.')
     }
@@ -529,7 +592,7 @@ export default function MediaPage() {
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <button className="text-sm text-ink-muted hover:text-ink" onClick={() => { setView('list'); setDetail(null) }}>← Media log</button>
+            <button className="text-sm text-ink-muted hover:text-ink" onClick={() => backToLog(activeBook)}>← {activeBook ? activeBook.title : 'Media log'}</button>
             <h1 className="text-2xl font-semibold text-ink mt-1">{langFlag(detail.sourceLanguage)} {detail.title}</h1>
             <p className="text-sm text-ink-muted mt-1">
               {entryDate(detail)} · {detail.pages} page{detail.pages !== 1 ? 's' : ''} · {cands.length} word{cands.length !== 1 ? 's' : ''} marked
@@ -599,8 +662,8 @@ export default function MediaPage() {
         )}
         <div className="flex justify-center gap-3">
           {summary.deckId && <Link href={routes.deck(summary.deckId)} className="btn-primary">Open the deck</Link>}
-          <button className="btn-ghost" onClick={startWizard}>More pages</button>
-          <button className="btn-ghost" onClick={() => setView('list')}>Back to log</button>
+          <button className="btn-ghost" onClick={() => startWizard(wizardBook)}>More pages</button>
+          <button className="btn-ghost" onClick={() => backToLog(wizardBook)}>Back to log</button>
         </div>
       </div>
     )
@@ -737,7 +800,7 @@ export default function MediaPage() {
             onClick={() => void commit()}>
             {step === 'committing' ? 'Saving…' : 'Save to Lexify'}
           </button>
-          <button className="btn-ghost" disabled={step === 'committing'} onClick={() => setView('list')}>Done</button>
+          <button className="btn-ghost" disabled={step === 'committing'} onClick={() => backToLog(wizardBook)}>Done</button>
         </div>
       </div>
     )
@@ -761,8 +824,8 @@ export default function MediaPage() {
     return (
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
         <div>
-          <button className="text-sm text-ink-muted hover:text-ink" onClick={() => setView('list')}>← Media log</button>
-          <h1 className="text-2xl font-semibold text-ink mt-1">New entry — book pages</h1>
+          <button className="text-sm text-ink-muted hover:text-ink" onClick={() => backToLog(wizardBook ?? activeBook)}>← {wizardBook?.title ?? activeBook?.title ?? 'Media log'}</button>
+          <h1 className="text-2xl font-semibold text-ink mt-1">{wizardBook ? `Log pages — ${wizardBook.title}` : 'New book — log pages'}</h1>
           <p className="text-sm text-ink-muted mt-1">
             Photograph the pages you read, in order. Lexify finds the words you marked and turns them
             into cards — each with the exact sentence it came from.
@@ -772,23 +835,30 @@ export default function MediaPage() {
 
         <div className="panel space-y-3">
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Book</label>
-          <input className="input" placeholder="Book title — becomes the deck name" value={title}
-            onChange={e => setTitle(e.target.value)} onBlur={e => hydrateMarkers(e.target.value)} />
+          {wizardBook ? (
+            <p className="text-sm text-ink">
+              {langFlag(wizardBook.sourceLanguage)} {wizardBook.title}
+              <span className="text-ink-faint"> · {langName(wizardBook.sourceLanguage)} → {langName(wizardBook.targetLanguage)}</span>
+            </p>
+          ) : (<>
+            <input className="input" placeholder="Book title — becomes the deck name" value={title}
+              onChange={e => setTitle(e.target.value)} onBlur={e => hydrateMarkers(e.target.value)} />
+            {pairs.length > 1 && (
+              <select className="input" value={pairKey} onChange={e => setPairKey(e.target.value)}>
+                {pairs.map(p => (
+                  <option key={p.id} value={`${p.sourceLanguage}|${p.targetLanguage}`}>
+                    {langFlag(p.sourceLanguage)} {langName(p.sourceLanguage)} → {langName(p.targetLanguage)}
+                  </option>
+                ))}
+              </select>
+            )}
+          </>)}
           <div className="flex items-center gap-3">
             <label className="text-sm text-ink-muted shrink-0">Read on</label>
             <input type="date" className="input py-1.5 text-sm w-auto" value={readOn} max={localToday()}
               onChange={e => setReadOn(e.target.value)} />
             <span className="text-xs text-ink-faint">the day you read these pages — today or earlier</span>
           </div>
-          {pairs.length > 1 && (
-            <select className="input" value={pairKey} onChange={e => setPairKey(e.target.value)}>
-              {pairs.map(p => (
-                <option key={p.id} value={`${p.sourceLanguage}|${p.targetLanguage}`}>
-                  {langFlag(p.sourceLanguage)} {langName(p.sourceLanguage)} → {langName(p.targetLanguage)}
-                </option>
-              ))}
-            </select>
-          )}
         </div>
 
         <div className="panel space-y-3">
@@ -838,50 +908,111 @@ export default function MediaPage() {
     )
   }
 
-  // ═══ The log ═══
+  // Entries sorted by reading day (not logging day) — a backfilled entry files under when it was read.
+  const sortedEntries = (list: MediaEntry[]) => [...list].sort((a, b) =>
+    (b.readOn ?? b.createdAt.slice(0, 10)).localeCompare(a.readOn ?? a.createdAt.slice(0, 10)) || b.createdAt.localeCompare(a.createdAt))
+
+  const entryRow = (e: MediaEntry, showTitle: boolean) => {
+    const st = e.stats as Record<string, number | undefined>
+    const found = (e.candidates as unknown[]).length
+    return (
+      <button key={e.id} className="panel w-full text-left hover:border-accent/40 transition-colors"
+        onClick={() => { setDetail(e); setView('detail'); setError(null) }}>
+        <div className="flex items-baseline gap-3 flex-wrap">
+          <span className="font-medium text-ink">{showTitle ? <>{langFlag(e.sourceLanguage)} {e.title}</> : fmtDay(e.readOn ?? e.createdAt.slice(0, 10))}</span>
+          {showTitle && <span className="text-xs text-ink-faint ml-auto">{entryDate(e)}</span>}
+        </div>
+        <p className="text-xs text-ink-muted mt-1">
+          {e.pages} page{e.pages !== 1 ? 's' : ''} · {found} marked
+          {typeof st.created === 'number' && st.created > 0 ? ` · ${st.created} card${st.created !== 1 ? 's' : ''} created` : ''}
+          {typeof st.attached === 'number' && st.attached > 0 ? ` · ${st.attached} gained sentences` : ''}
+          {typeof st.credited === 'number' && st.credited > 0 ? ` · ${st.credited} credited` : ''}
+          {st.created == null ? ' · review not saved' : ''}
+        </p>
+      </button>
+    )
+  }
+
+  // ═══ One book's page ═══
+  if (view === 'book' && activeBook) {
+    const bookEntries = sortedEntries(entries.filter(e => e.bookId === activeBook.id))
+    const pagesTotal = bookEntries.reduce((n, e) => n + e.pages, 0)
+    const markedTotal = bookEntries.reduce((n, e) => n + (e.candidates as unknown[]).length, 0)
+    return (
+      <div className="space-y-6 max-w-2xl mx-auto pb-12">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <button className="text-sm text-ink-muted hover:text-ink" onClick={() => { setActiveBook(null); setView('books') }}>← Media log</button>
+            <h1 className="text-2xl font-semibold text-ink mt-1">{langFlag(activeBook.sourceLanguage)} {activeBook.title}</h1>
+            <p className="text-sm text-ink-muted mt-1">
+              {bookEntries.length} entr{bookEntries.length === 1 ? 'y' : 'ies'} · {pagesTotal} page{pagesTotal !== 1 ? 's' : ''} · {markedTotal} word{markedTotal !== 1 ? 's' : ''} marked
+            </p>
+          </div>
+          <button className="btn-primary shrink-0" onClick={() => startWizard(activeBook)}>+ Log pages</button>
+        </div>
+        {error && <p className="text-sm text-danger">{error}</p>}
+        {activeBook.deckId && (
+          <Link href={routes.deck(activeBook.deckId)} className="btn-ghost inline-block text-sm">Open the book&apos;s deck →</Link>
+        )}
+        {bookEntries.length === 0 ? (
+          <div className="panel text-sm text-ink-muted text-center py-10">No entries yet — log the first pages you read.</div>
+        ) : (
+          <div className="space-y-2">{bookEntries.map(e => entryRow(e, false))}</div>
+        )}
+      </div>
+    )
+  }
+
+  // ═══ The shelf ═══
+  const unfiled = entries.filter(e => !e.bookId)
   return (
     <div className="space-y-6 max-w-2xl mx-auto pb-12">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-ink">Media</h1>
           <p className="text-sm text-ink-muted mt-1">
-            A log of what you read. Each entry extracts the words you marked — and keeps Lexify in
-            step with the words you didn&apos;t.
+            A log of what you read, one book at a time. Each entry extracts the words you marked —
+            and keeps Lexify in step with the words you didn&apos;t.
           </p>
         </div>
-        <button className="btn-primary shrink-0" onClick={startWizard}>+ New entry</button>
+        <button className="btn-primary shrink-0" onClick={() => startWizard(null)}>+ New book</button>
       </div>
       {error && <p className="text-sm text-danger">{error}</p>}
 
       {loading ? (
         <div className="panel text-sm text-ink-muted text-center py-8">Loading…</div>
-      ) : entries.length === 0 ? (
+      ) : books.length === 0 && unfiled.length === 0 ? (
         <div className="panel text-sm text-ink-muted text-center py-10 space-y-2">
-          <p>No entries yet.</p>
-          <p className="text-xs text-ink-faint">Photograph the pages you read — marked words become cards with their book sentences.</p>
+          <p>No books yet.</p>
+          <p className="text-xs text-ink-faint">Add the book you&apos;re reading, photograph the pages as you go — marked words become cards with their book sentences.</p>
         </div>
       ) : (
         <div className="space-y-2">
-          {/* Reading order, not logging order: a backfilled entry sorts to its reading day. */}
-          {[...entries].sort((a, b) => (b.readOn ?? b.createdAt.slice(0, 10)).localeCompare(a.readOn ?? a.createdAt.slice(0, 10)) || b.createdAt.localeCompare(a.createdAt)).map(e => {
-            const st = e.stats as Record<string, number | undefined>
-            const found = (e.candidates as unknown[]).length
+          {books.map(b => {
+            const bookEntries = entries.filter(e => e.bookId === b.id)
+            const pagesTotal = bookEntries.reduce((n, e) => n + e.pages, 0)
+            const lastRead = sortedEntries(bookEntries)[0]
             return (
-              <button key={e.id} className="panel w-full text-left hover:border-accent/40 transition-colors"
-                onClick={() => { setDetail(e); setView('detail'); setError(null) }}>
+              <button key={b.id} className="panel w-full text-left hover:border-accent/40 transition-colors"
+                onClick={() => { setActiveBook(b); setView('book'); setError(null) }}>
                 <div className="flex items-baseline gap-3 flex-wrap">
-                  <span className="font-medium text-ink">{langFlag(e.sourceLanguage)} {e.title}</span>
-                  <span className="text-xs text-ink-faint ml-auto">{entryDate(e)}</span>
+                  <span className="font-medium text-ink text-base">{langFlag(b.sourceLanguage)} {b.title}</span>
+                  {lastRead && <span className="text-xs text-ink-faint ml-auto">last read {entryDate(lastRead)}</span>}
                 </div>
                 <p className="text-xs text-ink-muted mt-1">
-                  {e.pages} page{e.pages !== 1 ? 's' : ''} · {found} marked
-                  {typeof st.created === 'number' && st.created > 0 ? ` · ${st.created} card${st.created !== 1 ? 's' : ''} created` : ''}
-                  {typeof st.attached === 'number' && st.attached > 0 ? ` · ${st.attached} gained sentences` : ''}
-                  {st.created == null ? ' · review not saved' : ''}
+                  {bookEntries.length} entr{bookEntries.length === 1 ? 'y' : 'ies'} · {pagesTotal} page{pagesTotal !== 1 ? 's' : ''}
+                  {bookEntries.length === 0 ? ' — nothing logged yet' : ''}
                 </p>
               </button>
             )
           })}
+          {/* Legacy entries never linked to a book (pre-migration-130 rows the backfill missed). */}
+          {unfiled.length > 0 && (
+            <div className="space-y-2 pt-2">
+              <h2 className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Unfiled entries</h2>
+              {sortedEntries(unfiled).map(e => entryRow(e, true))}
+            </div>
+          )}
         </div>
       )}
     </div>

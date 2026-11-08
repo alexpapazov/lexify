@@ -94,7 +94,13 @@ Current feature files:
   list). Media entries carry a READING DATE
   (`read_on`, **migration 129** — wizard date input, today or earlier only, clamped at
   create; list sorts and displays by read_on ?? created_at; fmtDay avoids the UTC-midnight
-  previous-day bug). STAGE 1 BUILT 2026-11-05: /create/book (entry card on
+  previous-day bug). BOOKS AS RECORDS (**migration 130**, 2026-11-07): `media_books`
+  (title+pair+markers+deck_id; backfill from existing entries) + `media_entries.book_id`;
+  /media is now a SHELF of book cards → a book's page (entries + "+ Log pages" preset wizard:
+  title/pair locked, markers editable and saved back to the book on parse) → entry detail.
+  "+ New book" runs the full wizard and creates the book at parse. Book remembers its deck
+  after first commit. Photo decode is two-tier (createImageBitmap → <img>) with PER-FILE
+  errors naming the file — an iPhone HEIC in Chrome no longer kills the whole batch. STAGE 1 BUILT 2026-11-05: /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding
   page-pair window per call, marker presets + per-book free text, images never stored) →
   lib/mediaIntake.ts pipeline (windowPages / collapseOccurrences keeps per-sentence answers /

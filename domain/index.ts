@@ -444,11 +444,30 @@ export interface JournalEntry {
 // the candidate shape; this type stays `unknown`-flavored at the JSONB edges so the domain
 // layer doesn't import from lib.
 
+/** A book in the media log (migration 130): created once, every reading entry files under it.
+ *  Canonical home of the reader's marker config; `deckId` remembers the book's deck once the
+ *  first commit creates it. */
+export interface MediaBook {
+  id:             string
+  userId:         UserId
+  title:          string
+  sourceLanguage: string
+  targetLanguage: string
+  /** MarkerConfig (lib/mediaIntake.ts). */
+  markers:        unknown
+  deckId:         string | null
+  createdAt:      string
+  updatedAt:      string
+  deletedAt:      string | null
+}
+
 export interface MediaEntry {
   id:             string
   userId:         UserId
   kind:           'book' | 'youtube'
-  /** The book (or video) title — groups entries and recalls the book's marker config. */
+  /** The owning book (migration 130). Null = legacy entry never backfilled. */
+  bookId:         string | null
+  /** The book (or video) title — denormalized for display/history. */
   title:          string
   sourceLanguage: string
   targetLanguage: string

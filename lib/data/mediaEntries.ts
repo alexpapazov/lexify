@@ -14,6 +14,7 @@ function rowToEntry(row: Record<string, unknown>): MediaEntry {
     id:             row.id as string,
     userId:         row.user_id as string,
     kind:           (row.kind as MediaEntry['kind']) ?? 'book',
+    bookId:         (row.book_id as string | null) ?? null,
     title:          row.title as string,
     sourceLanguage: row.source_language as string,
     targetLanguage: row.target_language as string,
@@ -46,6 +47,7 @@ export class SupabaseMediaEntryRepository {
 
   async create(userId: UserId, input: {
     kind?: MediaEntry['kind']
+    bookId?: string | null
     title: string
     sourceLanguage: string
     targetLanguage: string
@@ -60,7 +62,7 @@ export class SupabaseMediaEntryRepository {
     const { data, error } = await this.db
       .from('media_entries')
       .insert({
-        user_id: userId, kind: input.kind ?? 'book', title: input.title,
+        user_id: userId, kind: input.kind ?? 'book', book_id: input.bookId ?? null, title: input.title,
         source_language: input.sourceLanguage, target_language: input.targetLanguage,
         pages: input.pages, read_on: input.readOn ?? null,
         markers: input.markers, candidates: input.candidates,
