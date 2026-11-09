@@ -145,7 +145,9 @@ export default function MediaPage() {
     setWl(next)
   }
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
-  const commitBusyRef = useRef(false)
+  /** Commits run strictly one after another; opening an entry AWAITS this queue first, so an
+   *  exit-then-instant-reopen can never show (or lose) pre-save state. */
+  const commitQueueRef = useRef<Promise<void>>(Promise.resolve())
   /** Resolves when loadContext has the library — save paths await it (snapshot opens load it in
    *  the background instead of blocking the view). */
   const ctxReadyRef = useRef<Promise<void> | null>(null)
@@ -378,15 +380,20 @@ export default function MediaPage() {
     }
   }
 
-  async function openWorklist(entry: MediaEntry) {
+  async function openWorklist(entryIn: MediaEntry) {
     setError(null)
-    const book = books.find(b => b.id === entry.bookId) ?? null
+    const book = books.find(b => b.id === entryIn.bookId) ?? null
     setWizardBook(book)
-    entryRef.current = entry
     setWorklist(null)
     setActiveBucket(null)
     setSaveState('idle')
     setView('rate')
+
+    // An exit-then-quick-reopen must see the SAVED state: wait out any in-flight commit, then
+    // take the freshest copy of the entry (the commit updates entryRef as it lands).
+    await commitQueueRef.current
+    const entry = entryRef.current?.id === entryIn.id ? entryRef.current : entryIn
+    entryRef.current = entry
 
     // The lexicon match runs ONCE, at first open, and is snapshotted onto the entry — every
     // later open rebuilds instantly from the snapshot (user decision 2026-11-08). The library
@@ -490,17 +497,23 @@ export default function MediaPage() {
    * window to flip an accidental mark). Items whose gloss fails stay unrated and retry on the
    * next trigger. There is no Save button anywhere — this runs itself.
    */
-  async function commitWork(opts: { chips: boolean; penalties: boolean }) {
+  function commitWork(opts: { chips: boolean; penalties: boolean }): Promise<void> {
+    const run = () => commitRun(opts).catch(() => {})
+    const queued = commitQueueRef.current.then(run, run)
+    commitQueueRef.current = queued
+    return queued
+  }
+
+  async function commitRun(opts: { chips: boolean; penalties: boolean }) {
     const entry = entryRef.current
     const wlNow = wlRef.current
-    if (!wlNow || !entry || commitBusyRef.current) return
+    if (!wlNow || !entry) return
     const all = wlNow.pages.flatMap(pg => pg.items)
     const penalties  = opts.penalties ? all.filter(it => it.cls === 'penalty' && it.penalize) : []
     const dismissed  = opts.penalties ? all.filter(it => it.cls === 'penalty' && !it.penalize) : []
     const chipsItems = opts.chips ? all.filter(it => it.cls !== 'penalty') : []
     if (penalties.length + dismissed.length + chipsItems.length === 0) return
 
-    commitBusyRef.current = true
     setSaveState('saving')
     try {
       await ctxReadyRef.current   // snapshot opens load the library in the background
@@ -631,8 +644,7 @@ export default function MediaPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Saving failed — your paints are kept, it will retry.')
       setSaveState('idle')
-    } finally {
-      commitBusyRef.current = false
+      throw e
     }
   }
   commitWorkRef.current = commitWork
@@ -797,9 +809,38 @@ export default function MediaPage() {
         {error && <p className="text-sm text-danger">{error}</p>}
 
         {!wl ? (
-          <div className="panel text-sm text-ink-muted text-center py-10">Matching the extracted words against your lexicon…</div>
+          <div className="panel text-sm text-ink-muted text-center py-10">Loading…</div>
         ) : (
           <>
+            {/* ── 1. The underlined words you supposedly know — decide these first ── */}
+            {wl.pages.some(pg => pg.items.some(it => it.cls === 'penalty')) && (
+              <div className="space-y-2">
+                <h2 className="text-base font-medium text-ink">Marked words already in your lexicon</h2>
+                {wl.pages.flatMap((pg, pi) => pg.items.filter(it => it.cls === 'penalty').map(it => (
+                  <div key={it.key} className="panel space-y-1">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="font-medium text-ink">{it.display}</span>
+                      <span className="text-xs text-ink-faint">
+                        {wl.pages.length > 1 ? `${pg.label} · ` : ''}in your lexicon: {displayText(it.existingFront ?? '')} — {displayText(it.existingBack ?? '')} · you marked it anyway
+                      </span>
+                      <div className="ml-auto flex gap-1">
+                        <button className={`px-2.5 py-1 rounded-lg border text-xs transition-colors ${it.penalize ? 'border-danger/70 bg-danger/10 text-ink font-medium' : 'border-line/20 text-ink-muted hover:text-ink'}`}
+                          onClick={() => setItem(it.key, x => ({ ...x, penalize: true }))}>
+                          Didn't recognize it — due today
+                        </button>
+                        <button className={`px-2.5 py-1 rounded-lg border text-xs transition-colors ${!it.penalize ? 'border-line/60 bg-surface-raised text-ink font-medium' : 'border-line/20 text-ink-muted hover:text-ink'}`}
+                          onClick={() => setItem(it.key, x => ({ ...x, penalize: false }))}>
+                          Accidental mark
+                        </button>
+                      </div>
+                    </div>
+                    {it.sentences[0] && <p className="text-xs text-ink-muted italic">{it.sentences[0].sentence}</p>}
+                  </div>
+                )))}
+              </div>
+            )}
+
+            {/* ── 2. The buckets, right above the chips they paint ── */}
             <div className="flex flex-wrap gap-2">
               {BUCKETS.map(b => {
                 const active = activeBucket === b.key
@@ -824,45 +865,20 @@ export default function MediaPage() {
               visit. × throws a word out for good. Everything saves when you leave the entry.
             </p>
 
+            {/* ── 3. The chips, page by page ── */}
             {wl.pages.map((pg, pi) => {
-              const penaltyItems = pg.items.filter(it => it.cls === 'penalty')
               const chipItems = pg.items.filter(it => it.cls !== 'penalty' && !it.removed)
+              if (chipItems.length === 0 && pg.credited === 0 && !pg.failed) return null
               return (
                 <div key={pi} className="space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-base font-medium text-ink">
-                      {pg.label}
-                      <span className="text-xs text-ink-faint font-normal ml-2">
-                        {pg.items.filter(it => !it.removed).length > 0 ? `${pg.items.filter(it => !it.removed).length} to rate` : '✓ done'}
-                        {pg.credited > 0 ? ` · ${pg.credited} credited` : ''}
-                        {pg.failed ? ' · failed to parse' : ''}
-                      </span>
-                    </h2>
-
-                  </div>
-
-                  {penaltyItems.map(it => (
-                    <div key={it.key} className="panel space-y-1">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <span className="font-medium text-ink">{it.display}</span>
-                        <span className="text-xs text-ink-faint">
-                          in your lexicon: {displayText(it.existingFront ?? '')} — {displayText(it.existingBack ?? '')} · you marked it anyway
-                        </span>
-                        <div className="ml-auto flex gap-1">
-                          <button className={`px-2.5 py-1 rounded-lg border text-xs transition-colors ${it.penalize ? 'border-danger/70 bg-danger/10 text-ink font-medium' : 'border-line/20 text-ink-muted hover:text-ink'}`}
-                            onClick={() => setItem(it.key, x => ({ ...x, penalize: true }))}>
-                            Didn't recognize it — due today
-                          </button>
-                          <button className={`px-2.5 py-1 rounded-lg border text-xs transition-colors ${!it.penalize ? 'border-line/60 bg-surface-raised text-ink font-medium' : 'border-line/20 text-ink-muted hover:text-ink'}`}
-                            onClick={() => setItem(it.key, x => ({ ...x, penalize: false }))}>
-                            Accidental mark
-                          </button>
-                        </div>
-                      </div>
-                      {it.sentences[0] && <p className="text-xs text-ink-muted italic">{it.sentences[0].sentence}</p>}
-                    </div>
-                  ))}
-
+                  <h2 className="text-base font-medium text-ink">
+                    {pg.label}
+                    <span className="text-xs text-ink-faint font-normal ml-2">
+                      {chipItems.length > 0 ? `${chipItems.length} to rate` : '✓ done'}
+                      {pg.credited > 0 ? ` · ${pg.credited} credited` : ''}
+                      {pg.failed ? ' · failed to parse' : ''}
+                    </span>
+                  </h2>
                   {chipItems.length > 0 && (
                     <div className="panel flex flex-wrap gap-1.5">
                       {chipItems.map(it => {
