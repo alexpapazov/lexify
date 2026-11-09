@@ -26,6 +26,7 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { initialCardState, fastTrackCardState } from '@/engine/pipeline'
 import { batchFastTrackDueDates } from '@/engine/density'
+import { initialDifficulty, stabilityForInterval, DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
 import { ConfirmDialog } from './ConfirmDialog'
 
 function formatDate(iso: string | null, fallback = '—'): string {
@@ -488,12 +489,12 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
   }
 
   /**
-   * Move this card between the normal track (`acceleratedMode: 'none'`) and the accelerated,
-   * import-known fast-track. Switching to accelerated on an un-graduated card fast-track-graduates
-   * it; on an already-graduated card it just flips the mode + resets the boost counters (and asks
-   * for one typed confirmation). Switching to normal clears the accel flags but keeps the schedule.
+   * Pin this card's schedule to a maturity phase, graduating it first if it never finished the
+   * pipeline. Long term = a 45-day interval (past the 30-day line); short term = due on a random
+   * day within the next week. Every scheduled lane on both rows moves together, and FSRS
+   * stability is re-seeded to match the new interval so later reviews grow from it honestly.
    */
-  async function setTrack(accel: boolean) {
+  async function setMaturity(bucket: 'long' | 'short') {
     setTrackBusy(true)
     setTrackMsg(null)
     try {
@@ -502,24 +503,51 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
       if (!pipelineId) pipelineId = (await new SupabasePipelineRepository().getDefault()).id
       const now = new Date()
       const nowIso = now.toISOString()
-      let next: CardState
-      if (accel) {
-        if (!state || !state.graduated) {
-          const [dueAt] = await batchFastTrackDueDates(userId, 1, now, stateRepo)
-          next = fastTrackCardState(userId, card.id, pipelineId, dueAt ?? nowIso, now)
-        } else {
-          next = { ...state, acceleratedMode: 'import_known', acceleratedLocked: false, acceleratedWrongStreak: 0, acceleratedPenalty: 0, acceleratedTypedConfirmed: false, postAccelRestartWindow: 0, postAccelWrongCount: 0, forcedTypedRemaining: 3 }
-        }
-      } else {
-        if (!state) { setTrackMsg({ ok: true, text: 'Already on the normal track.' }); setTrackBusy(false); return }
-        next = { ...state, acceleratedMode: 'none', acceleratedTypedConfirmed: false, acceleratedWrongStreak: 0, acceleratedPenalty: 0, postAccelRestartWindow: 0, postAccelWrongCount: 0 }
+      const offset = bucket === 'long' ? 45 : 1 + Math.floor(Math.random() * 7)
+      const dueAt  = new Date(now.getTime() + offset * 86_400_000).toISOString()
+      const prodTrack = enabledTracks?.smart ? 'smart' : 'typed'
+
+      const reschedule = (base: CardState, direction: 'forward' | 'reverse'): CardState => ({
+        ...base,
+        reviewDirection: direction,
+        graduated: true,
+        graduatedAt: base.graduatedAt ?? nowIso,
+        relearning: false, relearningStep: 0, goodStreak: 0, againStreak: 0,
+        difficulty: base.difficulty ?? initialDifficulty([bucket === 'long' ? 'easy' : 'hard']),
+        stability:  stabilityForInterval(offset, DEFAULT_FSRS_CONFIG.requestRetention),
+        intervalDays: offset, scheduledIntervalDays: offset, dueAt,
+        ...(direction === 'forward'
+          ? {
+              ...(base.smartDueAt != null || prodTrack === 'smart' ? { smartIntervalDays: offset, smartDueAt: dueAt } : {}),
+              ...(base.typedDueAt != null || prodTrack === 'typed' ? { typedIntervalDays: offset, typedDueAt: dueAt } : {}),
+              ...(base.recallDueAt != null ? { recallIntervalDays: offset, recallDueAt: dueAt } : {}),
+            }
+          : { recallIntervalDays: offset, recallDueAt: dueAt }),
+        // A card graduated BY this button (never finished the pipeline) must not count toward
+        // daily goals — same bulk_known marker the onboarding/chip seeds use.
+        ...(!base.graduated && base.reps === 0 ? { acceleratedMode: 'bulk_known' as const } : {}),
+      })
+
+      const fwdBase = state ?? { ...initialCardState(userId, card.id, pipelineId), reviewDirection: 'forward' as const }
+      const savedFwd = await stateRepo.upsert(reschedule(fwdBase, 'forward'))
+      onStateChange(savedFwd)
+      if (reverseCardState) {
+        setReverseCardState(await stateRepo.upsert(reschedule(reverseCardState, 'reverse')))
+      } else if (reverseCardState === null) {
+        // No recognition row yet (never-studied or legacy card) — seed one so both directions land
+        // in the chosen phase, mirroring how chip-bucket seeding always creates the pair.
+        const revBase = { ...initialCardState(userId, card.id, pipelineId), reviewDirection: 'reverse' as const }
+        setReverseCardState(await stateRepo.upsert(reschedule(revBase, 'reverse')))
       }
-      const saved = await stateRepo.upsert(next)
-      onStateChange(saved)
-      setTrackMsg({ ok: true, text: accel ? 'Moved to the accelerated track.' : 'Moved to the normal track.' })
-      setTimeout(() => setTrackMsg(null), 2500)
+      setTrackMsg({
+        ok: true,
+        text: bucket === 'long'
+          ? 'Set to long term — next review in 45 days.'
+          : `Set to short term — next review in ${offset} day${offset === 1 ? '' : 's'}.`,
+      })
+      setTimeout(() => setTrackMsg(null), 3500)
     } catch (err: unknown) {
-      setTrackMsg({ ok: false, text: err instanceof Error ? err.message : 'Failed to change track' })
+      setTrackMsg({ ok: false, text: err instanceof Error ? err.message : 'Failed to set maturity' })
     } finally {
       setTrackBusy(false)
     }
@@ -996,23 +1024,25 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
           <p className="text-success text-xs bg-success/10 border border-success/20 rounded-lg px-3 py-2">✓ {resetDone}</p>
         )}
 
-        {/* Learning track — normal pipeline vs accelerated (import-known) fast-track */}
+        {/* Maturity — pin the schedule to long term (45d) or short term (within a week) */}
         <div className="space-y-1.5">
-          <p className="text-xs text-ink-faint">Learning track:</p>
+          <p className="text-xs text-ink-faint">Maturity:</p>
           <div className="flex gap-1.5">
             {([
-              { accel: false, label: 'Normal', hint: 'full pipeline' },
-              { accel: true,  label: 'Accelerated', hint: 'already known — fast-track' },
+              { bucket: 'short' as const, label: 'Set to short term', hint: 'due within the next week' },
+              { bucket: 'long'  as const, label: 'Set to long term',  hint: 'next review in 45 days' },
             ]).map(t => {
-              const isActive = (state?.acceleratedMode === 'import_known') === t.accel
+              const prodInterval = state?.smartIntervalDays ?? state?.typedIntervalDays ?? state?.intervalDays
+              const isCurrent = !!state?.graduated
+                && maturityPhase(prodInterval) === (t.bucket === 'long' ? 'long_term' : 'short_term')
               return (
                 <button
-                  key={t.label}
-                  onClick={() => { if (!isActive) void setTrack(t.accel) }}
-                  disabled={trackBusy || isActive}
-                  className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-default ${isActive ? 'border-accent/40 bg-accent/5' : 'border-line/10 hover:bg-line/5'}`}
+                  key={t.bucket}
+                  onClick={() => void setMaturity(t.bucket)}
+                  disabled={trackBusy}
+                  className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${isCurrent ? 'border-accent/40 bg-accent/5' : 'border-line/10 hover:bg-line/5'}`}
                 >
-                  <span className="block text-sm text-ink">{t.label}{isActive && <span className="text-xs text-accent font-medium"> · Active</span>}</span>
+                  <span className="block text-sm text-ink">{t.label}{isCurrent && <span className="text-xs text-accent font-medium"> · Current</span>}</span>
                   <span className="block text-xs text-ink-faint">{t.hint}</span>
                 </button>
               )
