@@ -15,8 +15,9 @@
  * snapshotted onto the entry and remembered on the book.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
@@ -107,6 +108,16 @@ const entryDate = (e: MediaEntry) => e.readOn ? fmtDay(e.readOn) : fmtDate(e.cre
 const localToday = () => new Date().toLocaleDateString('en-CA')
 
 export default function MediaPage() {
+  return (
+    <Suspense fallback={<div className="text-ink-muted pt-16 text-center">Loading…</div>}>
+      <MediaPageInner />
+    </Suspense>
+  )
+}
+
+function MediaPageInner() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const offline = useOfflineMode()
   const [userId, setUserId] = useState('')
   const [pairs, setPairs] = useState<LanguagePair[]>([])
@@ -660,11 +671,44 @@ export default function MediaPage() {
     void commitWorkRef.current?.({ chips: true, penalties: true })
   }, [])
 
+  /** Keep the URL in step with the view, so a refresh lands exactly where you were. */
+  function syncUrl(params: { book?: string | null; entry?: string | null }) {
+    router.replace(routes.media({
+      ...(params.book ? { book: params.book } : {}),
+      ...(params.entry ? { entry: params.entry } : {}),
+    }))
+  }
+
   /** Leave the wizard/detail: back to the owning book's page when there is one, else the shelf. */
   function backToLog(book: MediaBook | null) {
     if (book) { setActiveBook(book); setView('book') } else { setActiveBook(null); setView('books') }
     setDetail(null)
+    syncUrl({ book: book?.id ?? null })
   }
+
+  // Refresh restore: once books + entries are in, re-open whatever the URL names.
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (loading || restoredRef.current) return
+    restoredRef.current = true
+    const bookParam = searchParams.get('book')
+    const entryParam = searchParams.get('entry')
+    if (entryParam) {
+      const e = entries.find(x => x.id === entryParam)
+      if (e) {
+        const st = e.stats as Record<string, unknown>
+        setActiveBook(books.find(b => b.id === e.bookId) ?? null)
+        if (e.status === 'done' && st.engine === 'v2') void openWorklist(e)
+        else { setDetail(e); setView('detail') }
+        return
+      }
+    }
+    if (bookParam) {
+      const b = books.find(x => x.id === bookParam)
+      if (b) { setActiveBook(b); setView('book') }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading])
 
   /** Moves a book — its entries, deck, and every card in the deck — to a different language
    *  pair (fixing a book created under the wrong language). Language-derived card caches
@@ -1056,6 +1100,7 @@ export default function MediaPage() {
     // A processed entry IS its worklist — the row opens the rating view directly, no detail hop.
     const open = () => {
       setError(null)
+      syncUrl({ book: e.bookId, entry: e.id })
       if (e.status === 'done' && isV2) { void openWorklist(e) } else { setDetail(e); setView('detail') }
     }
     return (
@@ -1100,7 +1145,7 @@ export default function MediaPage() {
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <button className="text-sm text-ink-muted hover:text-ink" onClick={() => { setActiveBook(null); setView('books') }}>← Media log</button>
+            <button className="text-sm text-ink-muted hover:text-ink" onClick={() => { setActiveBook(null); setView('books'); syncUrl({}) }}>← Media log</button>
             <h1 className="text-2xl font-semibold text-ink mt-1">{langFlag(activeBook.sourceLanguage)} {activeBook.title}</h1>
             <p className="text-sm text-ink-muted mt-1">
               {bookEntries.length} entr{bookEntries.length === 1 ? 'y' : 'ies'} · {pagesTotal} page{pagesTotal !== 1 ? 's' : ''} · {markedTotal} word{markedTotal !== 1 ? 's' : ''} marked
@@ -1184,7 +1229,7 @@ export default function MediaPage() {
             const lastRead = sortedEntries(bookEntries)[0]
             return (
               <button key={b.id} className="panel w-full text-left hover:border-accent/40 transition-colors"
-                onClick={() => { setActiveBook(b); setView('book'); setError(null); setChangingLang(false) }}>
+                onClick={() => { setActiveBook(b); setView('book'); setError(null); setChangingLang(false); syncUrl({ book: b.id }) }}>
                 <div className="flex items-baseline gap-3 flex-wrap">
                   <span className="font-medium text-ink text-base">{langFlag(b.sourceLanguage)} {b.title}</span>
                   {lastRead && <span className="text-xs text-ink-faint ml-auto">last read {entryDate(lastRead)}</span>}
