@@ -57,6 +57,8 @@ interface UIItem extends WorklistItem {
   penalize: boolean
   /** ×-ed away: hidden immediately, recorded as 'ignored' on the next auto-save. */
   removed:  boolean
+  /** The user rewrote the display form (double-click) — it beats the gloss route's version. */
+  displayEdited?: boolean
 }
 interface UIPage extends Omit<WorklistPageSection, 'items'> { items: UIItem[] }
 
@@ -149,6 +151,9 @@ function MediaPageInner() {
   const [activeBucket, setActiveBucket] = useState<ChipBucket | null>(null)
   /** The rating worklist for the entry being rated (view 'rate'); null while it loads. */
   const [wl, setWl] = useState<{ pages: UIPage[]; quietCount: number; detectedLang: string | null } | null>(null)
+  /** Chip being display-edited (double-click) + its draft text. */
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
   /** Mirror of `wl` for the save engine — sequential saves must never read stale state. */
   const wlRef = useRef<{ pages: UIPage[]; quietCount: number; detectedLang: string | null } | null>(null)
   const setWorklist = (next: { pages: UIPage[]; quietCount: number; detectedLang: string | null } | null) => {
@@ -432,7 +437,7 @@ function MediaPageInner() {
       // the next open just rebuilds fresh).
       void new SupabaseMediaEntryRepository().update(entry.id, {
         candidates: built.allItems,
-        stats: { ...entry.stats, wlV: 2, wlPages: built.pageMeta, wlLang: built.detectedLang, wlQuiet: built.quietCount },
+        stats: { ...entry.stats, wlV: 2, wlPages: built.pageMeta, wlLang: built.detectedLang, wlQuiet: built.quietCount, wlMarked: built.allItems.filter(i => i.marked).length },
       }).then(u => { entryRef.current = u; setEntries(prev => prev.map(e => e.id === u.id ? u : e)) }).catch(() => {})
       if (built.creditTargets.length > 0) void applyCredits(entry, built.creditTargets)
     } catch (e) {
@@ -553,7 +558,9 @@ function MediaPageInner() {
         ? await fetchGlosses(needGloss.map(it => it.lemma), entry.sourceLanguage, entry.targetLanguage, nounArticle)
         : new Map<string, { gloss: string; display: string | null }>()
       const glossOf = (it: UIItem) => it.gloss ?? glossMap.get(it.lemma)?.gloss ?? null
-      const frontOf = (it: UIItem) => it.marked ? it.display : (glossMap.get(it.lemma)?.display ?? it.display)
+      // A hand-edited display always wins; otherwise marked items keep the page's form and
+      // unmarked ones take the gloss route's article-bearing form.
+      const frontOf = (it: UIItem) => (it.marked || it.displayEdited) ? it.display : (glossMap.get(it.lemma)?.display ?? it.display)
       const dkReady = dkNew.filter(it => glossOf(it) != null)
       const slReady = slNew.filter(it => glossOf(it) != null)
       const glossSkipped = (dkNew.length - dkReady.length) + (slNew.length - slReady.length)
@@ -639,7 +646,14 @@ function MediaPageInner() {
         remaining,
         ...(deckId ? { deckId } : {}),
       }
-      const updated = await new SupabaseMediaEntryRepository().update(entry.id, { ratings, stats })
+      const edited = all.filter(it => it.displayEdited)
+      const snapshotPatch = edited.length > 0 && Array.isArray(entry.candidates) && (prevStats.wlV != null)
+        ? { candidates: (entry.candidates as WorklistItem[]).map(c => {
+            const e2 = edited.find(x => x.key === c.key)
+            return e2 ? { ...c, display: e2.display } : c
+          }) }
+        : {}
+      const updated = await new SupabaseMediaEntryRepository().update(entry.id, { ratings, stats, ...snapshotPatch })
       entryRef.current = updated
       setEntries(prev => prev.map(e => e.id === updated.id ? updated : e))
       const cur = wlRef.current
@@ -670,6 +684,13 @@ function MediaPageInner() {
   useEffect(() => () => {
     void commitWorkRef.current?.({ chips: true, penalties: true })
   }, [])
+
+  /** How many words were MARKED in an entry — v2 entries read the snapshot stat (their
+   *  `candidates` column holds the whole worklist snapshot, not just marked words). */
+  const markedCount = (e: MediaEntry): number => {
+    const st = e.stats as Record<string, unknown>
+    return st.engine === 'v2' ? Number(st.wlMarked ?? 0) : (e.candidates as unknown[]).length
+  }
 
   /** Keep the URL in step with the view, so a refresh lands exactly where you were. */
   function syncUrl(params: { book?: string | null; entry?: string | null }) {
@@ -751,7 +772,8 @@ function MediaPageInner() {
 
   // ═══ Entry detail ═══
   if (view === 'detail' && detail) {
-    const cands = detail.candidates as IntakeCandidate[]
+    const isV2Detail = (detail.stats as Record<string, unknown>).engine === 'v2'
+    const cands = isV2Detail ? [] : detail.candidates as IntakeCandidate[]
     const st = detail.stats as Record<string, number | string | undefined>
     const detailProg = progressMap.get(detail.id)
     return (
@@ -761,7 +783,7 @@ function MediaPageInner() {
             <button className="text-sm text-ink-muted hover:text-ink" onClick={() => backToLog(activeBook)}>← {activeBook ? activeBook.title : 'Media log'}</button>
             <h1 className="text-2xl font-semibold text-ink mt-1">{langFlag(detail.sourceLanguage)} {detail.title}</h1>
             <p className="text-sm text-ink-muted mt-1">
-              {entryDate(detail)} · {detail.pages} page{detail.pages !== 1 ? 's' : ''} · {cands.length} word{cands.length !== 1 ? 's' : ''} marked
+              {entryDate(detail)} · {detail.pages} page{detail.pages !== 1 ? 's' : ''} · {markedCount(detail)} word{markedCount(detail) !== 1 ? 's' : ''} marked
               {typeof st.created === 'number' && st.created > 0 ? ` · ${st.created} card${st.created !== 1 ? 's' : ''} created` : ''}
               {typeof st.attached === 'number' && st.attached > 0 ? ` · ${st.attached} gained sentences` : ''}
               {typeof st.failedWindows === 'number' && st.failedWindows > 0 ? ` · ${st.failedWindows} window${st.failedWindows !== 1 ? 's' : ''} failed` : ''}
@@ -791,7 +813,9 @@ function MediaPageInner() {
           <Link href={routes.deck(st.deckId)} className="btn-ghost inline-block text-sm">Open the book&apos;s deck →</Link>
         )}
 
-        {detail.status !== 'done' ? null : cands.length > 0 ? (
+        {detail.status !== 'done' ? null : isV2Detail ? (
+          <button className="btn-primary" onClick={() => void openWorklist(detail)}>Rate the words →</button>
+        ) : cands.length > 0 ? (
           <div className="space-y-2">
             <h2 className="text-base font-medium text-ink">Marked words</h2>
             {cands.map((c, i) => (
@@ -906,7 +930,8 @@ function MediaPageInner() {
             <p className="text-xs text-ink-faint">
               Marked words come pre-painted “I don't know”; everything else starts blank. Pick a bucket,
               tap the words that belong in it — unpainted words stay undecided and keep for a later
-              visit. × throws a word out for good. Everything saves when you leave the entry.
+              visit. × throws a word out for good; double-click a chip to rewrite how the card will be
+              written (the match stays the same). Everything saves when you leave the entry.
             </p>
 
             {/* ── 3. The chips, page by page ── */}
@@ -927,17 +952,39 @@ function MediaPageInner() {
                     <div className="panel flex flex-wrap gap-1.5">
                       {chipItems.map(it => {
                         const bucket = BUCKETS.find(b => b.key === it.bucket)
+                        if (editingKey === it.key) {
+                          const commitEdit = () => {
+                            const v = editValue.trim()
+                            if (v) setItem(it.key, x => ({ ...x, display: v, displayEdited: true }))
+                            setEditingKey(null)
+                          }
+                          return (
+                            <input key={it.key} autoFocus value={editValue}
+                              className="input py-1 px-2.5 text-sm rounded-full w-auto"
+                              style={{ width: `${Math.max(6, editValue.length + 2)}ch` }}
+                              onChange={e => setEditValue(e.target.value)}
+                              onBlur={commitEdit}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') commitEdit()
+                                if (e.key === 'Escape') setEditingKey(null)
+                              }} />
+                          )
+                        }
                         return (
                           <span key={it.key}
-                            title={(it.existingId ? `In your library unstudied: ${displayText(it.existingFront ?? '')} — ${displayText(it.existingBack ?? '')}. ` : '') + (it.gloss ? `${it.gloss}` : '')}
+                            title={(it.existingId ? `In your library unstudied: ${displayText(it.existingFront ?? '')} — ${displayText(it.existingBack ?? '')}. ` : '') + (it.gloss ? `${it.gloss} · ` : '') + 'double-click to edit'}
                             className={[
                               'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-sm transition-colors cursor-pointer select-none',
                               bucket ? bucket.chipClass : 'border-line/20 text-ink-muted hover:text-ink hover:border-line/40',
                             ].join(' ')}
-                            onClick={() => setItem(it.key, x => ({
-                              ...x,
-                              bucket: activeBucket === null ? null : (x.bucket === activeBucket ? null : activeBucket),
-                            }))}>
+                            onDoubleClick={e => { e.preventDefault(); setEditingKey(it.key); setEditValue(it.display) }}
+                            onClick={e => {
+                              if (e.detail > 1) return   // second click of a double-click: edit, don't repaint
+                              setItem(it.key, x => ({
+                                ...x,
+                                bucket: activeBucket === null ? null : (x.bucket === activeBucket ? null : activeBucket),
+                              }))
+                            }}>
                             {it.display}
                             <span
                               className="text-ink-faint hover:text-danger text-xs leading-none px-0.5 -mr-1"
@@ -1093,7 +1140,7 @@ function MediaPageInner() {
 
   const entryRow = (e: MediaEntry, showTitle: boolean) => {
     const st = e.stats as Record<string, number | string | undefined>
-    const found = (e.candidates as unknown[]).length
+    const found = markedCount(e)
     const prog = progressMap.get(e.id)
     const isV2 = st.engine === 'v2'
     const remainingToRate = typeof st.remaining === 'number' ? st.remaining : null
@@ -1140,7 +1187,7 @@ function MediaPageInner() {
   if (view === 'book' && activeBook) {
     const bookEntries = sortedEntries(entries.filter(e => e.bookId === activeBook.id))
     const pagesTotal = bookEntries.reduce((n, e) => n + e.pages, 0)
-    const markedTotal = bookEntries.reduce((n, e) => n + (e.candidates as unknown[]).length, 0)
+    const markedTotal = bookEntries.reduce((n, e) => n + markedCount(e), 0)
     return (
       <div className="space-y-6 max-w-2xl mx-auto pb-12">
         <div className="flex items-start justify-between gap-3">
