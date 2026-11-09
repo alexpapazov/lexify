@@ -30,7 +30,7 @@ import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerP
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { appendStoredCloze } from '@/lib/reviewCloze'
 import { DEFAULT_OPTIONS, ARTICLE_LANGS, type IntakeOptions, type IntakeCandidate, type ChipBucket } from '@/lib/mediaIntake'
-import { buildWorklist, type WorklistItem, type WorklistPageSection } from '@/lib/mediaWorklist'
+import { buildWorklist, worklistFromSnapshot, type Worklist, type WorklistItem, type WorklistPageMeta, type WorklistPageSection } from '@/lib/mediaWorklist'
 import { fetchGlosses, seedKnownStates, applyRecognitionPenalty } from '@/lib/mediaRate'
 import { creditCardSighting } from '@/lib/implicitCredit'
 import { buildEnabledTracksMap, buildRetentionMap, buildCalibrationMap, type EnabledTracks } from '@/lib/sessionLimits'
@@ -146,6 +146,9 @@ export default function MediaPage() {
   }
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
   const commitBusyRef = useRef(false)
+  /** Resolves when loadContext has the library — save paths await it (snapshot opens load it in
+   *  the background instead of blocking the view). */
+  const ctxReadyRef = useRef<Promise<void> | null>(null)
   /** Latest commitWork, so the unmount flush never runs a stale closure. */
   const commitWorkRef = useRef<((opts: { chips: boolean; penalties: boolean }) => Promise<void>) | null>(null)
 
@@ -355,6 +358,26 @@ export default function MediaPage() {
    * the items that still need something — don't-know chips (marked words), long-term-prepainted
    * chips (unmarked new words), and recognition failures. Credits apply automatically.
    */
+  /** A built worklist → the UI shape (pre-paints per the user's rules). */
+  function toUi(built: Worklist): { pages: UIPage[]; quietCount: number; detectedLang: string | null } {
+    return {
+      pages: built.pages.map(pg => ({
+        ...pg,
+        items: pg.items.map(it => ({
+          ...it,
+          // Only MARKED words auto-fill ("I don't know"); everything else starts blank —
+          // unpainted means undecided, and undecided words simply wait for a later visit
+          // (user decision 2026-11-08: never silently file a word as known).
+          bucket: it.cls === 'dontknow' ? 'dontknow' as ChipBucket : null,
+          penalize: it.cls === 'penalty',
+          removed: false,
+        })),
+      })),
+      quietCount: built.quietCount,
+      detectedLang: built.detectedLang,
+    }
+  }
+
   async function openWorklist(entry: MediaEntry) {
     setError(null)
     const book = books.find(b => b.id === entry.bookId) ?? null
@@ -362,31 +385,38 @@ export default function MediaPage() {
     entryRef.current = entry
     setWorklist(null)
     setActiveBucket(null)
+    setSaveState('idle')
     setView('rate')
+
+    // The lexicon match runs ONCE, at first open, and is snapshotted onto the entry — every
+    // later open rebuilds instantly from the snapshot (user decision 2026-11-08). The library
+    // still loads in the background because SAVING needs it; commits await ctxReadyRef.
+    const st = entry.stats as Record<string, unknown>
+    const snapMeta = st.wlPages as WorklistPageMeta[] | undefined
+    if (st.wlV === 1 && Array.isArray(entry.candidates) && Array.isArray(snapMeta)) {
+      const built = worklistFromSnapshot(entry.candidates, snapMeta, entry.ratings, (st.wlLang as string | null) ?? null)
+      setWorklist(toUi(built))
+      ctxReadyRef.current = loadContext().catch(() => {})
+      if (built.creditTargets.length > 0) void applyCredits(entry, built.creditTargets)
+      return
+    }
+
     try {
+      const ctxPromise = loadContext()
+      ctxReadyRef.current = ctxPromise.catch(() => {})
       const [pages] = await Promise.all([
         new SupabaseMediaPageRepository().listForEntry(entry.id),
-        loadContext(),
+        ctxPromise,
       ])
       const built = buildWorklist(pages, entry.ratings, libraryRef.current.cards, libraryRef.current.forward, entry.sourceLanguage, entry.targetLanguage)
-      setWorklist({
-        pages: built.pages.map(pg => ({
-          ...pg,
-          items: pg.items.map(it => ({
-            ...it,
-            // Only MARKED words auto-fill ("I don't know"); everything else starts blank —
-            // unpainted means undecided, and undecided words simply wait for a later visit
-            // (user decision 2026-11-08: never silently file a word as known).
-            bucket: it.cls === 'dontknow' ? 'dontknow' as ChipBucket : null,
-            penalize: it.cls === 'penalty',
-            removed: false,
-          })),
-        })),
-        quietCount: built.quietCount,
-        detectedLang: built.detectedLang,
-      })
+      setWorklist(toUi(built))
+      // Persist the snapshot so this match never has to run again (retries here if it fails —
+      // the next open just rebuilds fresh).
+      void new SupabaseMediaEntryRepository().update(entry.id, {
+        candidates: built.allItems,
+        stats: { ...entry.stats, wlV: 1, wlPages: built.pageMeta, wlLang: built.detectedLang, wlQuiet: built.quietCount },
+      }).then(u => { entryRef.current = u; setEntries(prev => prev.map(e => e.id === u.id ? u : e)) }).catch(() => {})
       if (built.creditTargets.length > 0) void applyCredits(entry, built.creditTargets)
-      setSaveState('idle')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load the results.')
       backToLog(book)
@@ -396,7 +426,9 @@ export default function MediaPage() {
   /** Implicit credit is automatic — ×1.3 for every unrated unmarked long-term word, recorded
    *  as 'credited' so it never re-applies (the ≥20h per-row cap guards double-uploads too). */
   async function applyCredits(entry: MediaEntry, targets: WorklistItem[]) {
+    await ctxReadyRef.current   // snapshot opens load the library in the background
     const { retMap, calMap, tracksByPair } = paramsRef.current
+    const cardById = new Map(libraryRef.current.cards.map(c => [c.id, c]))
     const ctx = {
       userId, now: new Date(), tz: profileRef.current.tz, turnoverHour: profileRef.current.turnoverHour,
       retMap, calMap, tracks: tracksByPair.get(`${entry.sourceLanguage}|${entry.targetLanguage}`),
@@ -405,10 +437,12 @@ export default function MediaPage() {
     let credited = 0
     await mapLimit(targets, 4, async t => {
       try {
+        const card = t.existingId ? cardById.get(t.existingId) : undefined
+        if (!card) return null
         const out = await creditCardSighting({
-          card: t.existing!,
-          forward: libraryRef.current.forward.get(t.existing!.id) ?? null,
-          reverse: libraryRef.current.reverse.get(t.existing!.id) ?? null,
+          card,
+          forward: libraryRef.current.forward.get(card.id) ?? null,
+          reverse: libraryRef.current.reverse.get(card.id) ?? null,
         }, ctx)
         if (out) credited++
       } catch { /* best-effort per card */ }
@@ -469,6 +503,9 @@ export default function MediaPage() {
     commitBusyRef.current = true
     setSaveState('saving')
     try {
+      await ctxReadyRef.current   // snapshot opens load the library in the background
+      const cardById = new Map(libraryRef.current.cards.map(c => [c.id, c]))
+      const liveCard = (it: UIItem) => (it.existingId ? cardById.get(it.existingId) ?? null : null)
       const cardRepo = new SupabaseCardRepository()
       const stateRepo = new SupabaseCardStateRepository()
       const { retMap, calMap, tracksByPair } = paramsRef.current
@@ -479,10 +516,10 @@ export default function MediaPage() {
       const shortLong  = chipsItems.filter(it => !it.removed && (it.bucket === 'short' || it.bucket === 'long'))
       // Only an explicit × is "ignored"; an unpainted chip is UNDECIDED and waits for you.
       const ignored    = chipsItems.filter(it => it.removed)
-      const dkNew      = dontKnow.filter(it => !it.existing)
-      const dkExisting = dontKnow.filter(it => it.existing)
-      const slNew      = shortLong.filter(it => !it.existing)
-      const slExisting = shortLong.filter(it => it.existing)
+      const dkNew      = dontKnow.filter(it => !it.existingId)
+      const dkExisting = dontKnow.filter(it => it.existingId && liveCard(it))
+      const slNew      = shortLong.filter(it => !it.existingId)
+      const slExisting = shortLong.filter(it => it.existingId && liveCard(it))
 
       // Glosses + display forms: marked items carry theirs from the page; unmarked new cards
       // gloss here (the display form adds the noun's article when the book's option asks).
@@ -528,28 +565,32 @@ export default function MediaPage() {
         const states: CardState[] = []
         slCreated.forEach((c, i) => states.push(...seedKnownStates(c.id, slReady[i]!.bucket as 'short' | 'long', undefined, undefined, deps)))
         for (const it of slExisting) {
-          states.push(...seedKnownStates(it.existing!.id, it.bucket as 'short' | 'long',
-            libraryRef.current.forward.get(it.existing!.id), libraryRef.current.reverse.get(it.existing!.id), deps))
+          states.push(...seedKnownStates(it.existingId!, it.bucket as 'short' | 'long',
+            libraryRef.current.forward.get(it.existingId!), libraryRef.current.reverse.get(it.existingId!), deps))
         }
         await stateRepo.upsertBatch(states)
       }
 
       let linkPos = 100000
       for (const it of [...dkExisting, ...penalties]) {
-        if (deckId) await cardRepo.addToDeck(deckId, it.existing!.id, linkPos++)
+        const card = liveCard(it)
+        if (!card) continue
+        if (deckId) await cardRepo.addToDeck(deckId, card.id, linkPos++)
         if (it.sentences.length > 0) {
-          let choices = it.existing!.choices
+          let choices = card.choices
           for (const sn of it.sentences.slice(0, 3)) {
-            choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: it.gloss ?? displayText(it.existing!.back) })
+            choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: it.gloss ?? displayText(card.back) })
           }
-          await cardRepo.update(it.existing!.id, { choices })
+          await cardRepo.update(card.id, { choices })
         }
       }
 
       if (penalties.length > 0) {
         const deps = { userId, src: entry.sourceLanguage, tgt: entry.targetLanguage, now, tracks, retMap, calMap, stateRepo, pipelineId, load: new Map<number, number>() }
         for (const it of penalties) {
-          await applyRecognitionPenalty(it.existing!, libraryRef.current.forward.get(it.existing!.id) ?? null, libraryRef.current.reverse.get(it.existing!.id) ?? null, deps)
+          const card = liveCard(it)
+          if (!card) continue
+          await applyRecognitionPenalty(card, libraryRef.current.forward.get(card.id) ?? null, libraryRef.current.reverse.get(card.id) ?? null, deps)
         }
       }
 
@@ -805,7 +846,7 @@ export default function MediaPage() {
                       <div className="flex items-center gap-3 flex-wrap">
                         <span className="font-medium text-ink">{it.display}</span>
                         <span className="text-xs text-ink-faint">
-                          in your lexicon: {displayText(it.existing!.front)} — {displayText(it.existing!.back)} · you marked it anyway
+                          in your lexicon: {displayText(it.existingFront ?? '')} — {displayText(it.existingBack ?? '')} · you marked it anyway
                         </span>
                         <div className="ml-auto flex gap-1">
                           <button className={`px-2.5 py-1 rounded-lg border text-xs transition-colors ${it.penalize ? 'border-danger/70 bg-danger/10 text-ink font-medium' : 'border-line/20 text-ink-muted hover:text-ink'}`}
@@ -828,7 +869,7 @@ export default function MediaPage() {
                         const bucket = BUCKETS.find(b => b.key === it.bucket)
                         return (
                           <span key={it.key}
-                            title={(it.existing ? `In your library unstudied: ${displayText(it.existing.front)} — ${displayText(it.existing.back)}. ` : '') + (it.gloss ? `${it.gloss}` : '')}
+                            title={(it.existingId ? `In your library unstudied: ${displayText(it.existingFront ?? '')} — ${displayText(it.existingBack ?? '')}. ` : '') + (it.gloss ? `${it.gloss}` : '')}
                             className={[
                               'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-sm transition-colors cursor-pointer select-none',
                               bucket ? bucket.chipClass : 'border-line/20 text-ink-muted hover:text-ink hover:border-line/40',

@@ -22,6 +22,9 @@ import { cardMaturity } from '@/lib/folderStats'
 
 export type ItemClass = 'dontknow' | 'rate' | 'penalty' | 'credit' | 'quiet'
 
+/** FULLY SERIALIZABLE (user decision 2026-11-08: match against the lexicon ONCE, snapshot the
+ *  result onto the entry, reopen instantly). The matched card is carried as id + display
+ *  strings; save-time operations re-resolve the live Card by id. */
 export interface WorklistItem {
   /** Dedupe + ratings key: normalized lemma (phrases: their printed text). */
   key:       string
@@ -35,11 +38,17 @@ export interface WorklistItem {
   marked:    boolean
   /** Index into the worklist's page sections (earliest occurrence). */
   pageIdx:   number
-  existing:  Card | null
+  /** The matched lexicon card, as snapshot-safe fields. */
+  existingId:    string | null
+  existingFront: string | null
+  existingBack:  string | null
   cls:       ItemClass
   /** The rating already recorded for this key, if any — settled items leave the list. */
   rated:     string | null
 }
+
+/** A page section's identity in the snapshot. */
+export interface WorklistPageMeta { label: string; failed: boolean }
 
 export interface WorklistPageSection {
   label:     string
@@ -53,6 +62,10 @@ export interface WorklistPageSection {
 
 export interface Worklist {
   pages:         WorklistPageSection[]
+  /** EVERY item (rated ones included) — what the entry snapshot stores. */
+  allItems:      WorklistItem[]
+  /** Page labels + failed flags, index-aligned with items' pageIdx — snapshot metadata. */
+  pageMeta:      WorklistPageMeta[]
   /** Unrated credit targets (unmarked + graduated long-term) — applied automatically. */
   creditTargets: WorklistItem[]
   /** Unmarked known words below the long-term line — seen, nothing happens (summary only). */
@@ -127,6 +140,11 @@ export function buildWorklist(
   const items: WorklistItem[] = partials.map((p, i) => {
     const existing = matches[i]!.existing
     const st = existing ? forward.get(existing.id) : undefined
+    const existingFields = {
+      existingId:    existing?.id ?? null,
+      existingFront: existing?.front ?? null,
+      existingBack:  existing?.back ?? null,
+    }
     let cls: ItemClass
     if (p.marked) {
       // Graduated + marked = recognition failure. A card still in the pipeline has nothing to
@@ -141,24 +159,47 @@ export function buildWorklist(
     } else {
       cls = 'rate'                                                   // in the library, never studied — painting graduates THAT card
     }
-    return { ...p, existing, cls, rated: ratings[p.key] ?? null }
+    return { ...p, ...existingFields, cls, rated: ratings[p.key] ?? null }
   })
 
-  // ── Page sections ──
-  const sections: WorklistPageSection[] = ordered.map((pg, i) => ({
+  const pageMeta: WorklistPageMeta[] = ordered.map((pg, i) => ({
     label: pg.pageNumber != null ? `p. ${pg.pageNumber}` : `Page ${i + 1}`,
+    failed: pg.status === 'failed',
+  }))
+  const detected = [...langTally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+  return assembleWorklist(items, pageMeta, detected)
+}
+
+/** Sections + counts from items — shared by the fresh build and the snapshot path. */
+function assembleWorklist(items: WorklistItem[], pageMeta: WorklistPageMeta[], detectedLang: string | null): Worklist {
+  const sections: WorklistPageSection[] = pageMeta.map((meta, i) => ({
+    label: meta.label,
     items: items.filter(it => it.pageIdx === i && it.rated == null && (it.cls === 'dontknow' || it.cls === 'rate' || it.cls === 'penalty')),
     credited: items.filter(it => it.pageIdx === i && it.rated === 'credited').length,
     settled: items.filter(it => it.pageIdx === i && it.rated != null && it.rated !== 'credited').length,
-    failed: pg.status === 'failed',
+    failed: meta.failed,
   }))
-
-  const detected = [...langTally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
   return {
     pages: sections,
+    allItems: items,
+    pageMeta,
     creditTargets: items.filter(it => it.cls === 'credit' && it.rated == null),
     quietCount: items.filter(it => it.cls === 'quiet').length,
-    detectedLang: detected,
+    detectedLang,
     remaining: sections.reduce((n, s) => n + s.items.length, 0),
   }
+}
+
+/**
+ * Rebuilds the worklist from the snapshot stored on the entry at first open — NO library load,
+ * NO page fetch, instant. `ratings` re-applies on top so rated items stay settled.
+ */
+export function worklistFromSnapshot(
+  snapshot: unknown[],
+  pageMeta: WorklistPageMeta[],
+  ratings:  Record<string, string>,
+  detectedLang: string | null,
+): Worklist {
+  const items = (snapshot as WorklistItem[]).map(it => ({ ...it, rated: ratings[it.key] ?? null }))
+  return assembleWorklist(items, pageMeta, detectedLang)
 }

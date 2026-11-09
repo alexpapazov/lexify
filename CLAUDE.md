@@ -148,7 +148,15 @@ Current feature files:
   sequential commits honest, "Saving…/All changes saved" indicator. A v2-done entry row opens
   the WORKLIST directly (no detail hop; detail remains for processing/legacy only). The gloss
   route also returns `display` (noun-article flashcard form per entry.options.nounArticle) so
-  unmarked chips' cards get "la berge" fronts, not bare lemmas.
+  unmarked chips' cards get "la berge" fronts, not bare lemmas. REVISED SAVE MODEL
+  (2026-11-08 PM, supersedes idle auto-save): everything commits ON EXIT ONLY (back button +
+  unmount); only MARKED words pre-paint ("I don't know"); unpainted = UNDECIDED and reappears
+  (never silently filed as known); × = ignored forever. WORKLIST SNAPSHOT: the lexicon match
+  runs ONCE at first open and persists onto the entry (candidates = serializable
+  WorklistItem[] with existingId/Front/Back strings instead of Card; stats.wlV/wlPages/
+  wlLang/wlQuiet); later opens rebuild instantly via worklistFromSnapshot; the library loads
+  in the BACKGROUND (ctxReadyRef — commits await it and re-resolve live cards by existingId).
+  Agents page Card-status filter: Graduated chip → Short term / Long term (cardMaturity).
   Saving links marked existing cards into the book's deck (addToDeck) + attaches sentences.
   collapseOccurrences/unmarkedLemmas/splitUnmarkedLemmas DELETED (worklist supersedes).
   OLD STAGE 1 (superseded): /create/book (entry card on

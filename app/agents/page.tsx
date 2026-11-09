@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { cardMaturity } from '@/lib/folderStats'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { labelCards } from '@/lib/labelCards'
 import { buildScopeTree } from '@/lib/scopeTree'
@@ -18,11 +19,12 @@ const BATCH_SIZE = 20
 type Phase = 'setup' | 'gathering' | 'analyzing' | 'review' | 'done'
 
 // ── Scope tree (a mini library: pairs → folders → subfolders → decks) ──────────
-type CardStatus = 'unlearned' | 'learning' | 'graduated' | 'due' | 'dormant'
+type CardStatus = 'unlearned' | 'learning' | 'shortterm' | 'longterm' | 'due' | 'dormant'
 const STATUS_META: { key: CardStatus; label: string; color: string }[] = [
   { key: 'unlearned', label: 'Unlearned', color: 'var(--c-ink-muted, #9aa)' },
   { key: 'learning',  label: 'Learning',  color: '#F0883E' },
-  { key: 'graduated', label: 'Graduated', color: '#4ADE80' },
+  { key: 'shortterm', label: 'Short term', color: '#38BDF8' },
+  { key: 'longterm',  label: 'Long term',  color: '#4ADE80' },
   { key: 'due',       label: 'Due now',   color: '#6640FF' },
   { key: 'dormant',   label: 'Dormant',   color: '#9aa' },
 ]
@@ -117,8 +119,9 @@ export default function AgentsPage() {
   }
 
   // Narrow scoped cards to the selected statuses (empty = all). Status is read from each card's
-  // forward card_state: none → unlearned, dormant, !graduated → learning, else graduated (due if its
-  // production due date has passed). 'graduated' includes due cards; 'due' is the due-only subset.
+  // forward card_state: none → unlearned, dormant, !graduated → learning; graduated cards split
+  // SHORT vs LONG term on the production interval (same 30d rule as everywhere — cardMaturity).
+  // Either term includes its due cards; 'due' is the due-only subset across both.
   async function filterByStatus(cards: ScopedCard[]): Promise<ScopedCard[]> {
     if (statuses.size === 0 || statuses.size === STATUS_META.length || !userId) return cards
     const stateRepo = new SupabaseCardStateRepository()
@@ -133,7 +136,7 @@ export default function AgentsPage() {
       if (!s) return statuses.has('unlearned')
       if (s.dormant) return statuses.has('dormant')
       if (!s.graduated) return statuses.has('learning')
-      if (statuses.has('graduated')) return true
+      if (statuses.has(cardMaturity(s) === 'long_term' ? 'longterm' : 'shortterm')) return true
       return statuses.has('due') && prodDue(s)
     }
     return cards.filter(c => matches(fwd.get(c.cardId)))
