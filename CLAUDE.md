@@ -157,6 +157,17 @@ Current feature files:
   wlLang/wlQuiet); later opens rebuild instantly via worklistFromSnapshot; the library loads
   in the BACKGROUND (ctxReadyRef — commits await it and re-resolve live cards by existingId).
   Agents page Card-status filter: Graduated chip → Short term / Long term (cardMaturity).
+  LATE 2026-11-08 REFINEMENTS (all user-driven): rate view ORDER = penalty rows first, then
+  bucket selector, then per-page chips. Commits are SERIALIZED through commitQueueRef and
+  openWorklist AWAITS the queue + takes entryRef's fresh copy (fixes exit→quick-reopen losing
+  ratings). Media nav persists in the URL (routes.media, ?book=&entry=, restore effect after
+  load; wizard deliberately not restored). `normalizeKey` (lib/mediaIntake) is THE media
+  normalizer (NFC, curly→straight apostrophes, œ→oe/æ→ae, whitespace, case) used by both
+  lexicon matching and worklist keys — snapshot wlV bumped to 2 so pre-fix snapshots rebuild
+  once. v2 `candidates` = the snapshot, so the legacy detail renderer is GATED (isV2Detail →
+  "Rate the words" button) and marked counts read stats.wlMarked, never candidates.length.
+  Chips: × = ignored forever; DOUBLE-CLICK edits the display form (displayEdited beats the
+  gloss route's form, persists into the snapshot; onClick ignores e.detail>1).
   Saving links marked existing cards into the book's deck (addToDeck) + attaches sentences.
   collapseOccurrences/unmarkedLemmas/splitUnmarkedLemmas DELETED (worklist supersedes).
   OLD STAGE 1 (superseded): /create/book (entry card on
