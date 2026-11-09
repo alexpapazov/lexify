@@ -411,7 +411,7 @@ function MediaPageInner() {
     // still loads in the background because SAVING needs it; commits await ctxReadyRef.
     const st = entry.stats as Record<string, unknown>
     const snapMeta = st.wlPages as WorklistPageMeta[] | undefined
-    if (st.wlV === 1 && Array.isArray(entry.candidates) && Array.isArray(snapMeta)) {
+    if (st.wlV === 2 && Array.isArray(entry.candidates) && Array.isArray(snapMeta)) {
       const built = worklistFromSnapshot(entry.candidates, snapMeta, entry.ratings, (st.wlLang as string | null) ?? null)
       setWorklist(toUi(built))
       ctxReadyRef.current = loadContext().catch(() => {})
@@ -432,7 +432,7 @@ function MediaPageInner() {
       // the next open just rebuilds fresh).
       void new SupabaseMediaEntryRepository().update(entry.id, {
         candidates: built.allItems,
-        stats: { ...entry.stats, wlV: 1, wlPages: built.pageMeta, wlLang: built.detectedLang, wlQuiet: built.quietCount },
+        stats: { ...entry.stats, wlV: 2, wlPages: built.pageMeta, wlLang: built.detectedLang, wlQuiet: built.quietCount },
       }).then(u => { entryRef.current = u; setEntries(prev => prev.map(e => e.id === u.id ? u : e)) }).catch(() => {})
       if (built.creditTargets.length > 0) void applyCredits(entry, built.creditTargets)
     } catch (e) {

@@ -17,7 +17,7 @@
  */
 
 import type { Card, CardState, MediaPage } from '@/domain'
-import { parseOccurrences, parseAllLemmas, compareWithLexicon, type IntakeCandidate } from '@/lib/mediaIntake'
+import { parseOccurrences, parseAllLemmas, compareWithLexicon, normalizeKey, type IntakeCandidate } from '@/lib/mediaIntake'
 import { cardMaturity } from '@/lib/folderStats'
 
 export type ItemClass = 'dontknow' | 'rate' | 'penalty' | 'credit' | 'quiet'
@@ -76,7 +76,7 @@ export interface Worklist {
   remaining:     number
 }
 
-export const normKey = (s: string) => s.trim().toLowerCase()
+export const normKey = normalizeKey
 
 /** Reading order for the worklist's page sections: printed page number, then upload order. */
 export function orderDonePages(pages: MediaPage[]): MediaPage[] {

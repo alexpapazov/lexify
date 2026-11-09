@@ -1,4 +1,4 @@
-import { buildWorklist } from '../mediaWorklist'
+import { buildWorklist, normKey } from '../mediaWorklist'
 import { applyRecognitionPenalty, seedKnownStates } from '../mediaRate'
 import { initialCardState } from '../../engine/pipeline'
 import type { Card, CardState, MediaPage } from '@/domain'
@@ -28,6 +28,14 @@ function grad(cardId: string, over: Partial<CardState> = {}): CardState {
   return { ...initialCardState('u1', cardId, 'p'), graduated: true, difficulty: 5, stability: 90,
     smartIntervalDays: 90, smartDueAt: iso(30), intervalDays: 90, dueAt: iso(30), lastReviewedAt: iso(-45), reps: 6, ...over }
 }
+
+describe('normKey — OCR variance folding', () => {
+  it('curly apostrophes, ligatures, case, and whitespace all collapse to one key', () => {
+    expect(normKey('s’absenter')).toBe(normKey("s'absenter"))
+    expect(normKey('Œil')).toBe(normKey('oeil'))
+    expect(normKey('  Le   Temps ')).toBe('le temps')
+  })
+})
 
 describe('buildWorklist — classification', () => {
   const cards = [

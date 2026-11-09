@@ -103,7 +103,21 @@ export interface IntakeCandidate {
   markers:   string[]
 }
 
-const normLemma = (s: string) => s.trim().toLowerCase()
+/**
+ * The ONE normalizer every media key/match goes through. OCR output varies between windows —
+ * curly vs straight apostrophes (s'absenter vs s'absenter), œ vs oe — and any variance here
+ * becomes a duplicate chip or a missed lexicon match.
+ */
+export const normalizeKey = (s: string) => s
+  .normalize('NFC')
+  .toLowerCase()
+  .replace(/[\u2018\u2019\u02BC\u0060\u00B4]/g, "'")
+  .replace(/\u0153/g, 'oe')
+  .replace(/\u00E6/g, 'ae')
+  .replace(/\s+/g, ' ')
+  .trim()
+
+const normLemma = normalizeKey
 
 // ─── Stage C: compare against the lexicon ──────────────────────────────────────
 
