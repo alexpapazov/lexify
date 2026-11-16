@@ -159,6 +159,21 @@ describe('stored cloze sentences', () => {
     expect(repicked.clozeSentences![1]!.picked).toBeUndefined()
   })
 
+  it('LEGACY media sentences (no source tag) count as book by shape: blank translation + no tokens', async () => {
+    // Attached by the media tab before `source` shipped: translation '' and no tokens field —
+    // stored FIRST (the old appendStoredCloze prepended). It must not stay the active sentence.
+    const legacyBook = { sentence: 'Vi el perro del libro viejo.', answer: 'perro', translation: '', gloss: 'dog' }
+    const oldGenerated = { sentence: 'Mi perro duerme.', answer: 'perro', translation: 'My dog sleeps.', gloss: 'dog' } // pre-tokens generated
+    const c = card({ choices: { front: [], back: [], clozeSentences: [legacyBook, oldGenerated] } })
+    const cz = await resolveReviewCloze(c, { allowGenerate: false })
+    expect(cz!.before).toBe('Mi ')                                  // the generated one wins
+    // Legacy book alone still renders as the fallback, and picking it pins it.
+    const alone = card({ choices: { front: [], back: [], clozeSentences: [legacyBook] } })
+    expect((await resolveReviewCloze(alone, { allowGenerate: false }))!.before).toBe('Vi el ')
+    const pinned = chooseStoredCloze(alone.choices, 0)
+    expect(pinned.clozeSentences![0]!.picked).toBe(true)
+  })
+
   it('resolveReviewCloze: an unpicked book sentence is only a FALLBACK; picked or generated wins', async () => {
     const book = { ...stored('Vi el perro en el libro.'), source: 'book' as const }
     // Book only, generation off (offline) → the book sentence still renders.

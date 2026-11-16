@@ -176,7 +176,10 @@ Current feature files:
   back to the book sentence only when generation fails/offline; `chooseStoredCloze` now sets
   `picked` (ℹ-panel "Use", works at index 0 for book sentences) which makes a book sentence
   active for good; the ℹ panel tags book sentences and withholds the Active badge from unpicked
-  ones. `StoredClozeSentence.source/picked` in domain.
+  ones. `StoredClozeSentence.source/picked` in domain. LEGACY media sentences (attached before
+  the tag) are recognized by SHAPE via `isBookCloze`: translation '' AND tokens field absent —
+  media always stored both that way; generated sentences always carry a translation. So
+  pre-existing cards' book sentences behave identically, no data migration.
   collapseOccurrences/unmarkedLemmas/splitUnmarkedLemmas DELETED (worklist supersedes).
   OLD STAGE 1 (superseded): /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding

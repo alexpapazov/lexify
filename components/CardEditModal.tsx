@@ -14,7 +14,7 @@ import { SupabaseReviewEventRepository }       from '@/lib/data/reviewEvents'
 import { SupabaseLadderClimbRepository }       from '@/lib/data/ladderClimb'
 import type { Card, CardState, CardChoices, CardConfusion, CardConfusionLink, Pipeline, TypedAnswerOverride, ReviewEvent } from '@/domain'
 import { prefetchChoices, needsChoices, ensureChoicesGenerated, regenerateChoicesExcluding } from '@/lib/distractors'
-import { generateReviewCloze, clozeEligible, chooseStoredCloze } from '@/lib/reviewCloze'
+import { generateReviewCloze, clozeEligible, chooseStoredCloze, isBookCloze } from '@/lib/reviewCloze'
 import { maturityPhase, LONG_TERM_THRESHOLD_DAYS } from '@/engine/implicitCredit'
 import { langName, TTS_SUPPORTED_LANGUAGES } from '@/lib/languages'
 import { displayText } from '@/lib/cardText'
@@ -1236,7 +1236,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                     // first. Exception: an unpicked BOOK sentence is only a fallback (reviews
                     // generate a fresh one instead), so it never shows the Active badge — "Use"
                     // pins it explicitly.
-                    const isActive = i === 0 && (cs.source !== 'book' || cs.picked)
+                    const isActive = i === 0 && (!isBookCloze(cs) || cs.picked)
                     return (
                       <div key={`${cs.sentence}-${i}`}
                         className={`flex items-start gap-2 rounded border px-2.5 py-1.5 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-line/10 bg-surface-raised/50'}`}>
@@ -1249,7 +1249,7 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                           </p>
                           <p className="text-xs text-ink-muted italic">{cs.translation}</p>
                         </div>
-                        {cs.source === 'book' && (
+                        {isBookCloze(cs) && (
                           <span className="text-[10px] text-ink-faint uppercase tracking-wider pt-0.5 shrink-0" title="Extracted from the book's page">Book</span>
                         )}
                         {isActive ? (

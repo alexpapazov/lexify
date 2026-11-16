@@ -156,6 +156,16 @@ export function appendStoredCloze(choices: CardChoices | null, stored: StoredClo
 }
 
 /**
+ * Whether a stored sentence came from a book page. New attachments carry `source:'book'`;
+ * LEGACY media attachments (stored before the tag shipped) are recognized by their shape —
+ * media always stored `translation: ''` and never a `tokens` field, while generated sentences
+ * always store both (old generated ones may lack tokens but always have a translation).
+ */
+export function isBookCloze(s: StoredClozeSentence): boolean {
+  return s.source === 'book' || (!s.translation.trim() && s.tokens == null)
+}
+
+/**
  * Adds one sentence WITHOUT claiming the active slot: at the BACK of the stored set. Book-
  * extracted sentences attach this way (user decision 2026-11-15 — book sentences are often too
  * long for a cloze), so an existing or future generated sentence stays the one reviews show.
@@ -177,7 +187,7 @@ export function chooseStoredCloze(choices: CardChoices | null, index: number): C
   const list = base.clozeSentences ?? []
   const chosen = list[index]
   if (!chosen) return base
-  if (index === 0 && (chosen.source !== 'book' || chosen.picked)) return base
+  if (index === 0 && (!isBookCloze(chosen) || chosen.picked)) return base
   return {
     ...base,
     clozeSentences: [
@@ -253,7 +263,7 @@ export async function resolveReviewCloze(card: Card, opts: { allowGenerate: bool
   for (const s of card.choices?.clozeSentences ?? []) {
     const cz = storedToReviewCloze(s, card)
     if (!cz) continue
-    if (s.source === 'book' && !s.picked) {
+    if (isBookCloze(s) && !s.picked) {
       bookFallback = bookFallback ?? cz
       continue
     }
