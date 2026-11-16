@@ -1,6 +1,6 @@
 import type { Card } from '@/domain'
 import type { PreparedExercise } from '@/lib/practiceGenerate'
-import { buildReviewCloze, clozeEligible, clozeStrictness, appendStoredCloze, chooseStoredCloze, storedToReviewCloze, MAX_STORED_CLOZES } from '@/lib/reviewCloze'
+import { buildReviewCloze, clozeEligible, clozeStrictness, appendStoredCloze, appendStoredClozeBack, chooseStoredCloze, storedToReviewCloze, resolveReviewCloze, MAX_STORED_CLOZES } from '@/lib/reviewCloze'
 
 function card(over: Partial<Card> = {}): Card {
   return {
@@ -132,6 +132,46 @@ describe('stored cloze sentences', () => {
     // Already-active and out-of-range picks are no-ops (same object back).
     expect(chooseStoredCloze(picked, 0)).toBe(picked)
     expect(chooseStoredCloze(picked, 9)).toBe(picked)
+  })
+
+  it('appendStoredClozeBack never claims the active slot, dedupes, never evicts', () => {
+    let choices = appendStoredCloze(null, stored('Generada perro.'))
+    choices = appendStoredClozeBack(choices, { ...stored('Libro uno perro.'), source: 'book' as const })
+    expect(choices.clozeSentences!.map(s => s.sentence)).toEqual(['Generada perro.', 'Libro uno perro.'])
+    expect(appendStoredClozeBack(choices, { ...stored('Libro uno perro.'), source: 'book' as const })).toBe(choices)
+    choices = appendStoredClozeBack(choices, { ...stored('Libro dos perro.'), source: 'book' as const })
+    const full = appendStoredClozeBack(choices, { ...stored('Libro tres perro.'), source: 'book' as const })
+    expect(full.clozeSentences!).toHaveLength(MAX_STORED_CLOZES)
+    expect(full.clozeSentences!.map(s => s.sentence)).toEqual(['Generada perro.', 'Libro uno perro.', 'Libro dos perro.'])
+  })
+
+  it('picking a BOOK sentence sets `picked` (even at index 0) so reviews honor it', () => {
+    const book = { ...stored('Libro perro.'), source: 'book' as const }
+    let choices = appendStoredClozeBack(null, book)
+    choices = chooseStoredCloze(choices, 0)
+    expect(choices.clozeSentences![0]!.picked).toBe(true)
+    // Picking it again is a no-op; picking another sentence clears it.
+    expect(chooseStoredCloze(choices, 0)).toBe(choices)
+    choices = appendStoredCloze(choices, stored('Generada perro.'))   // generated lands first
+    const repicked = chooseStoredCloze(choices, 1)                    // re-pick the book one
+    expect(repicked.clozeSentences![0]!.sentence).toBe('Libro perro.')
+    expect(repicked.clozeSentences![0]!.picked).toBe(true)
+    expect(repicked.clozeSentences![1]!.picked).toBeUndefined()
+  })
+
+  it('resolveReviewCloze: an unpicked book sentence is only a FALLBACK; picked or generated wins', async () => {
+    const book = { ...stored('Vi el perro en el libro.'), source: 'book' as const }
+    // Book only, generation off (offline) → the book sentence still renders.
+    const bookOnly = card({ choices: appendStoredClozeBack(null, book) })
+    const fb = await resolveReviewCloze(bookOnly, { allowGenerate: false })
+    expect(fb).not.toBeNull()
+    expect(fb!.before).toBe('Vi el ')
+    // With a generated sentence stored too (it lands first), the generated one wins.
+    const both = card({ choices: appendStoredCloze(appendStoredClozeBack(null, book), stored('Mi perro duerme.')) })
+    expect((await resolveReviewCloze(both, { allowGenerate: false }))!.before).toBe('Mi ')
+    // An explicitly PICKED book sentence is active for good.
+    const pinned = card({ choices: chooseStoredCloze(appendStoredClozeBack(null, book), 0) })
+    expect((await resolveReviewCloze(pinned, { allowGenerate: false }))!.before).toBe('Vi el ')
   })
 
   it('storedToReviewCloze anchors a stored sentence, and drops one whose word is gone', () => {

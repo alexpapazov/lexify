@@ -29,7 +29,7 @@ import { SupabaseMediaBookRepository } from '@/lib/data/mediaBooks'
 import { SupabaseMediaPageRepository } from '@/lib/data/mediaPages'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { forwardStateMap } from '@/lib/cardStateMap'
-import { appendStoredCloze } from '@/lib/reviewCloze'
+import { appendStoredClozeBack } from '@/lib/reviewCloze'
 import { DEFAULT_OPTIONS, ARTICLE_LANGS, type IntakeOptions, type IntakeCandidate, type ChipBucket } from '@/lib/mediaIntake'
 import { buildWorklist, worklistFromSnapshot, type Worklist, type WorklistItem, type WorklistPageMeta, type WorklistPageSection } from '@/lib/mediaWorklist'
 import { fetchGlosses, seedKnownStates, applyRecognitionPenalty } from '@/lib/mediaRate'
@@ -581,7 +581,7 @@ function MediaPageInner() {
         if (it.sentences.length === 0) continue
         let choices = created[i]!.choices
         for (const sn of it.sentences.slice(0, 3)) {
-          choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: glossOf(it)! })
+          choices = appendStoredClozeBack(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: glossOf(it)!, source: 'book' })
         }
         await cardRepo.update(created[i]!.id, { choices })
       }
@@ -610,7 +610,7 @@ function MediaPageInner() {
         if (it.sentences.length > 0) {
           let choices = card.choices
           for (const sn of it.sentences.slice(0, 3)) {
-            choices = appendStoredCloze(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: it.gloss ?? displayText(card.back) })
+            choices = appendStoredClozeBack(choices, { sentence: sn.sentence, answer: sn.answer, translation: '', gloss: it.gloss ?? displayText(card.back), source: 'book' })
           }
           await cardRepo.update(card.id, { choices })
         }

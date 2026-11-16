@@ -1230,30 +1230,39 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
                 <p className="text-xs text-ink-faint">This card needs vocabulary labels (part of speech + lemma) before sentences can be generated.</p>
               ) : (
                 <>
-                  {(card.choices?.clozeSentences ?? []).map((cs, i) => (
+                  {(card.choices?.clozeSentences ?? []).map((cs, i) => {
                     // The FIRST sentence is the ACTIVE one — the one every cloze review shows.
-                    // "Use" moves another to the front; a freshly generated sentence also lands first.
-                    <div key={`${cs.sentence}-${i}`}
-                      className={`flex items-start gap-2 rounded border px-2.5 py-1.5 ${i === 0 ? 'border-accent/40 bg-accent/5' : 'border-line/10 bg-surface-raised/50'}`}>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-ink">
-                          {/* Highlight the blanked span so it's obvious what a review hides. */}
-                          {cs.sentence.split(cs.answer).flatMap((part, j, arr) => j < arr.length - 1
-                            ? [part, <span key={j} className="text-success font-medium">{cs.answer}</span>]
-                            : [part])}
-                        </p>
-                        <p className="text-xs text-ink-muted italic">{cs.translation}</p>
+                    // "Use" moves another to the front; a freshly generated sentence also lands
+                    // first. Exception: an unpicked BOOK sentence is only a fallback (reviews
+                    // generate a fresh one instead), so it never shows the Active badge — "Use"
+                    // pins it explicitly.
+                    const isActive = i === 0 && (cs.source !== 'book' || cs.picked)
+                    return (
+                      <div key={`${cs.sentence}-${i}`}
+                        className={`flex items-start gap-2 rounded border px-2.5 py-1.5 ${isActive ? 'border-accent/40 bg-accent/5' : 'border-line/10 bg-surface-raised/50'}`}>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-ink">
+                            {/* Highlight the blanked span so it's obvious what a review hides. */}
+                            {cs.sentence.split(cs.answer).flatMap((part, j, arr) => j < arr.length - 1
+                              ? [part, <span key={j} className="text-success font-medium">{cs.answer}</span>]
+                              : [part])}
+                          </p>
+                          <p className="text-xs text-ink-muted italic">{cs.translation}</p>
+                        </div>
+                        {cs.source === 'book' && (
+                          <span className="text-[10px] text-ink-faint uppercase tracking-wider pt-0.5 shrink-0" title="Extracted from the book's page">Book</span>
+                        )}
+                        {isActive ? (
+                          <span className="text-[10px] text-accent-soft uppercase tracking-wider pt-0.5 shrink-0">Active</span>
+                        ) : (
+                          <button onClick={() => void handleChooseCloze(i)} title="Show this sentence in cloze reviews"
+                            className="text-xs text-accent-soft hover:text-accent pt-0.5 shrink-0">Use</button>
+                        )}
+                        <button onClick={() => void handleRemoveCloze(i)} title="Remove this sentence"
+                          className="text-ink-faint hover:text-danger text-sm leading-none pt-0.5">×</button>
                       </div>
-                      {i === 0 ? (
-                        <span className="text-[10px] text-accent-soft uppercase tracking-wider pt-0.5 shrink-0">Active</span>
-                      ) : (
-                        <button onClick={() => void handleChooseCloze(i)} title="Show this sentence in cloze reviews"
-                          className="text-xs text-accent-soft hover:text-accent pt-0.5 shrink-0">Use</button>
-                      )}
-                      <button onClick={() => void handleRemoveCloze(i)} title="Remove this sentence"
-                        className="text-ink-faint hover:text-danger text-sm leading-none pt-0.5">×</button>
-                    </div>
-                  ))}
+                    )
+                  })}
                   {(card.choices?.clozeSentences?.length ?? 0) === 0 && (
                     <p className="text-xs text-ink-faint">None yet — your first cloze review generates one, or fetch one now.</p>
                   )}

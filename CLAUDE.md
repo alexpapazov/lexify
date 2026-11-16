@@ -169,6 +169,14 @@ Current feature files:
   Chips: × = ignored forever; DOUBLE-CLICK edits the display form (displayEdited beats the
   gloss route's form, persists into the snapshot; onClick ignores e.detail>1).
   Saving links marked existing cards into the book's deck (addToDeck) + attaches sentences.
+  BOOK CLOZE SENTENCES ARE FALLBACKS (2026-11-15, user: extraction sentences often too long):
+  media attaches them via `appendStoredClozeBack` with `source:'book'` (END of the stored set —
+  never the active slot, never evicting); `resolveReviewCloze` skips unpicked book sentences and
+  GENERATES a fresh one on the first cloze review (persisted first = active thereafter), falling
+  back to the book sentence only when generation fails/offline; `chooseStoredCloze` now sets
+  `picked` (ℹ-panel "Use", works at index 0 for book sentences) which makes a book sentence
+  active for good; the ℹ panel tags book sentences and withholds the Active badge from unpicked
+  ones. `StoredClozeSentence.source/picked` in domain.
   collapseOccurrences/unmarkedLemmas/splitUnmarkedLemmas DELETED (worklist supersedes).
   OLD STAGE 1 (superseded): /create/book (entry card on
   Create) — photos → client downscale → /api/media/parse-page (Sonnet VISION, one sliding

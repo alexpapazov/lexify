@@ -740,6 +740,12 @@ export interface StoredClozeSentence {
   gloss: string
   /** Per-word glosses for the tap-a-word panel (absent on sentences stored before this shipped). */
   tokens?: { text: string; gloss: string }[]
+  /** Where the sentence came from. 'book' = media extraction (often too long for a cloze —
+   *  reviews prefer a generated sentence unless the learner picks it). Absent = generated. */
+  source?: 'book'
+  /** The learner explicitly chose this sentence in the ℹ panel — reviews honor it even when
+   *  it's a book sentence. */
+  picked?: boolean
 }
 
 export interface CardChoices {

@@ -155,14 +155,36 @@ export function appendStoredCloze(choices: CardChoices | null, stored: StoredClo
   return { ...base, clozeSentences: [stored, ...rest].slice(0, MAX_STORED_CLOZES) }
 }
 
+/**
+ * Adds one sentence WITHOUT claiming the active slot: at the BACK of the stored set. Book-
+ * extracted sentences attach this way (user decision 2026-11-15 — book sentences are often too
+ * long for a cloze), so an existing or future generated sentence stays the one reviews show.
+ * Dedupes by sentence text; a full set keeps what it has — a book sentence never evicts.
+ */
+export function appendStoredClozeBack(choices: CardChoices | null, stored: StoredClozeSentence): CardChoices {
+  const base: CardChoices = choices ?? { front: [], back: [] }
+  const list = base.clozeSentences ?? []
+  if (list.some(s => s.sentence === stored.sentence)) return base
+  return { ...base, clozeSentences: [...list, stored].slice(0, MAX_STORED_CLOZES) }
+}
+
 /** Marks the stored sentence at `index` ACTIVE by moving it to the front — cloze reviews always
- *  use the first stored sentence that validates. The ℹ panel's "Use" button calls this. */
+ *  use the first stored sentence that validates. The ℹ panel's "Use" button calls this. Picking
+ *  also sets `picked`, which is what lets a BOOK sentence be the active one (unpicked book
+ *  sentences are only fallbacks — see `resolveReviewCloze`). */
 export function chooseStoredCloze(choices: CardChoices | null, index: number): CardChoices {
   const base: CardChoices = choices ?? { front: [], back: [] }
   const list = base.clozeSentences ?? []
   const chosen = list[index]
-  if (!chosen || index === 0) return base
-  return { ...base, clozeSentences: [chosen, ...list.filter((_, i) => i !== index)] }
+  if (!chosen) return base
+  if (index === 0 && (chosen.source !== 'book' || chosen.picked)) return base
+  return {
+    ...base,
+    clozeSentences: [
+      { ...chosen, picked: true },
+      ...list.filter((_, i) => i !== index).map(({ picked: _p, ...rest }) => rest as StoredClozeSentence),
+    ],
+  }
 }
 
 /**
@@ -217,13 +239,29 @@ export async function generateReviewCloze(card: Card): Promise<{ cloze: ReviewCl
  * panel's "Use" pick, or the newest generated) — else, online, one freshly generated + persisted,
  * else null → the plain prompt. Once a card has ANY usable stored sentence it is REUSED every
  * review, never regenerated (user decision 2026-09-09); variety is curated in the ℹ panel.
+ *
+ * BOOK sentences are the exception (user decision 2026-11-15: extraction sentences are often too
+ * long for a cloze): an unpicked `source:'book'` sentence never claims the active slot — the
+ * first cloze review generates a fresh sentence instead (persisted at the front, so this happens
+ * ONCE), and the book sentence stays stored as a fallback and ℹ-panel option. Only a failed or
+ * unavailable generation (offline) shows the book sentence, and explicitly picking it in the ℹ
+ * panel makes it active for good.
  */
 export async function resolveReviewCloze(card: Card, opts: { allowGenerate: boolean }): Promise<ReviewCloze | null> {
   if (!clozeEligible(card)) return null
+  let bookFallback: ReviewCloze | null = null
   for (const s of card.choices?.clozeSentences ?? []) {
     const cz = storedToReviewCloze(s, card)
-    if (cz) return cz
+    if (!cz) continue
+    if (s.source === 'book' && !s.picked) {
+      bookFallback = bookFallback ?? cz
+      continue
+    }
+    return cz
   }
-  if (!opts.allowGenerate) return null
-  return (await generateReviewCloze(card))?.cloze ?? null
+  if (opts.allowGenerate) {
+    const gen = (await generateReviewCloze(card))?.cloze ?? null
+    if (gen) return gen
+  }
+  return bookFallback
 }
