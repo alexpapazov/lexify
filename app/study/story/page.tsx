@@ -300,7 +300,7 @@ function StoryInner() {
         </p>
         <div className="flex justify-center gap-3">
           {skippedTotal > 0 && <button onClick={() => router.push(normalUrl)} className="btn-primary">Normal review</button>}
-          <Link href="/study/today" className="btn-ghost">Back to Today</Link>
+          <Link href="/study" className="btn-ghost">Back to study</Link>
         </div>
       </div>
     )
@@ -320,7 +320,7 @@ function StoryInner() {
         {saveErrors > 0 && <p className="text-xs text-danger">{saveErrors} credit{saveErrors === 1 ? '' : 's'} failed to save — those cards stay due.</p>}
         <div className="flex justify-center gap-3">
           {rest > 0 && <button onClick={() => router.push(normalUrl)} className="btn-primary">Review the rest ({rest})</button>}
-          <Link href="/study/today" className="btn-ghost">Back to Today</Link>
+          <Link href="/study" className="btn-ghost">Back to study</Link>
         </div>
       </div>
     )
@@ -379,7 +379,7 @@ function StoryInner() {
   return (
     <div className="max-w-2xl mx-auto space-y-5 pb-12">
       <div className="flex items-center justify-between gap-3">
-        <Link href="/study/today" className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
+        <Link href="/study" className="text-sm text-ink-muted hover:text-ink">✕ End session</Link>
         <span className="text-xs text-ink-muted">Story {batchIdx + 1} / {batches.length}</span>
         <span className="text-xs text-ink-faint">{passage === 'native' ? 'Targets only in language' : 'Full passage'}</span>
       </div>

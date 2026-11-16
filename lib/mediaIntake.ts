@@ -192,20 +192,26 @@ export function parseAllLemmas(raw: unknown): string[] {
 /** The buckets a chip can be painted into (user design 2026-11-06). */
 export type ChipBucket = 'short' | 'long' | 'dontknow'
 
+/** A bucket a seeded-known word can land in. `fresh` is the external-session "just learned"
+ *  bucket (2026-11-15) — learned today outside Lexify, first check-in within days. */
+export type SeedBucket = 'fresh' | 'short' | 'long'
+
 /**
  * Due-date spread windows per known-bucket, in days from today (the shape `claimSpreadDay`
- * consumes). Short = "verify over the next ~2 weeks"; long = "~3 months" — the center sits
- * safely past LONG_TERM_THRESHOLD_DAYS, so a long-painted word is implicit-credit eligible
- * from day one.
+ * consumes). Fresh = "just learned, verify within days"; short = "verify over the next
+ * ~2 weeks"; long = "~3 months" — the center sits safely past LONG_TERM_THRESHOLD_DAYS, so a
+ * long-painted word is implicit-credit eligible from day one.
  */
-export const CHIP_WINDOWS: Record<'short' | 'long', { min: number; max: number; center: number }> = {
+export const CHIP_WINDOWS: Record<SeedBucket, { min: number; max: number; center: number }> = {
+  fresh: { min: 2,  max: 4,   center: 3 },
   short: { min: 2,  max: 14,  center: 7 },
   long:  { min: 80, max: 100, center: 90 },
 }
 
 /** The learning history each bucket stands in for (feeds `initialDifficulty`, same scale as
- *  onboarding bands: short ≈ "recognize it" (hard), long ≈ "know it cold" (easy)). */
-export const CHIP_SEED_RATING: Record<'short' | 'long', Rating> = { short: 'hard', long: 'easy' }
+ *  onboarding bands: fresh ≈ "just got it" (good), short ≈ "recognize it" (hard), long ≈
+ *  "know it cold" (easy)). */
+export const CHIP_SEED_RATING: Record<SeedBucket, Rating> = { fresh: 'good', short: 'hard', long: 'easy' }
 
 /** Defensive parse of the gloss route's `{ glosses: [{ index, gloss, display }] }` payload.
  *  `display` is the flashcard form (noun with article when the book wants it) — null when the

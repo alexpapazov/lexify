@@ -1493,6 +1493,16 @@ export default function StudyPage() {
                 )}
               </div>
             )}
+
+            {/* ── External study — words learned outside Lexify ───────── */}
+            <div className="pt-2">
+              <Link
+                href={routes.sessions()}
+                className="block w-full text-center rounded-lg border border-line/10 px-4 py-3 text-sm text-ink-muted hover:text-ink hover:bg-surface-raised/50 transition-colors"
+              >
+                📝 Log an external study session
+              </Link>
+            </div>
           </div>
         </>
       )}

@@ -513,6 +513,24 @@ export interface MediaPage {
   error:       string | null
 }
 
+/** An EXTERNAL study session (migration 133): words learned/reviewed outside Lexify, pasted in
+ *  and rated so the scheduler catches up. `items` = SessionItem[] (lib/externalSession.ts) —
+ *  `unknown`-flavored at the JSONB edge like the media types. */
+export interface StudySession {
+  id:             string
+  userId:         UserId
+  sourceLanguage: string
+  targetLanguage: string
+  /** The day the session happened (YYYY-MM-DD, today or earlier). */
+  studiedOn:      string
+  items:          unknown[]
+  /** Loose summary: { newCards, updated, skipped, deckId }. */
+  stats:          Record<string, unknown>
+  createdAt:      string
+  updatedAt:      string
+  deletedAt:      string | null
+}
+
 // ─── Scheduler params ─────────────────────────────────────────────────────────
 
 export interface SchedulerParams {

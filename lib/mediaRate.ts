@@ -19,7 +19,7 @@ import { scheduleGraduatedFsrs } from '@/engine/dueNow'
 import { DEFAULT_FSRS_CONFIG, initialDifficulty, stabilityForInterval } from '@/engine/fsrs'
 import { claimSpreadDay, onboardDueIso } from '@/engine/density'
 import { initialCardState } from '@/engine/pipeline'
-import { CHIP_WINDOWS, CHIP_SEED_RATING, parseGlosses } from '@/lib/mediaIntake'
+import { CHIP_WINDOWS, CHIP_SEED_RATING, parseGlosses, type SeedBucket } from '@/lib/mediaIntake'
 import { activeProductionTrack, calibrationFor, retentionFor, type EnabledTracks } from '@/lib/sessionLimits'
 import { apiUrl } from '@/lib/apiBase'
 import { mapLimit, chunk } from '@/lib/mapLimit'
@@ -67,7 +67,7 @@ export async function fetchGlosses(lemmas: string[], src: string, tgt: string, n
 /** The graduated rows a short/long-painted word gets — onboarding's buildStates, bucket-flavored. */
 export function seedKnownStates(
   cardId: string,
-  bucket: 'short' | 'long',
+  bucket: SeedBucket,
   existingFwd: CardState | undefined,
   existingRev: CardState | undefined,
   deps: RateDeps,

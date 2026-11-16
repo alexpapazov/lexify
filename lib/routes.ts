@@ -24,6 +24,8 @@ function withQuery(base: string, q: Query): string {
 export const routes = {
   /** The media log — optionally deep-linked to a book or an entry (refresh-safe). */
   media:         (extra: Query = {})                 => withQuery('/media', extra),
+  /** The external-study session log (paste words learned outside Lexify). */
+  sessions:      (extra: Query = {})                 => withQuery('/study/sessions', extra),
   /** Deck detail. */
   deck:          (deckId: string, extra: Query = {}) => withQuery('/study/deck',         { deck: deckId,   ...extra }),
   /** Due-now / category study session for a deck. */

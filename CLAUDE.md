@@ -182,6 +182,24 @@ Current feature files:
   windows, full extraction, lemma dedupe with skip/attach/add/replace), YouTube transcripts
   (captions.list provenance gate + Supadata), onboarding mode setting, media-sourced cloze,
   lemma backfill as Stage 0. Read it before building anything intake-shaped.
+- **External study sessions** (2026-11-15, no feature file — this entry is the doc):
+  `/study/sessions` (routes.sessions; button at the BOTTOM of the Study dashboard) logs words
+  studied OUTSIDE Lexify (ChatGPT batches, writing drills) so the scheduler catches up without
+  the pipeline. Paste list (`word — gloss` optional; bullets stripped; single-line splits on
+  commas; `normalizeKey` dedupe) → lexicon match (`matchSessionItems`, same lemma-primary index
+  as media) → per-word buckets pre-painted "Just learned". Semantics (`lib/externalSession.ts`,
+  tested): matched EXISTING card is UPDATED, never duplicated — graduated + fresh → both rows
+  PINNED into the 2–4d window (stability reseeded, one shared offset); graduated + short/long →
+  a REAL FSRS Good/Easy review on each graduated row (reps+1, lanes follow, dormant rows left
+  asleep); never-studied/mid-pipeline → `seedKnownStates` graduates THAT card. Unmatched words
+  → cards in the pair's found-or-created "External study" deck, born graduated per bucket.
+  `CHIP_WINDOWS`/`CHIP_SEED_RATING` gained the `fresh` bucket ({2,4}, seed rating 'good';
+  `SeedBucket` type) and `seedKnownStates` accepts it. **Migration `133_study_sessions.sql`
+  must be applied** (next number: 134) — `study_sessions` table (items jsonb
+  = SessionItem[] audit trail, stats, studied_on ≤ today, soft delete) + repo
+  `lib/data/studySessions.ts` (online only, no cache). No review_events — the session row is
+  the audit trail. The TODAY tab was DELETED the same day (page + nav sub-link; story's
+  back-links now point to /study — note /study/story currently has NO launcher).
 - `features/Phrasebook (proposal).md` — DEFERRED idea (2026-09-21, nothing built): per-pair
   idioms/constructions whose mastery signal is usage in journal entries; on-demand Sonnet
   analysis stored on the entry, mastery aggregates, struggle-driven journal prompts. Read it
