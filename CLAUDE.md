@@ -47,8 +47,10 @@ Current feature files:
   the due-picker rows navigate straight in), clean match = full Good on the reverse
   row, mismatches write nothing. REDO ROUNDS (2026-10-19): missed pairs come back as fresh
   rounds at the END (`MatchingGame` `redoMissed`/`onRedoRound`, the express page un-dirties
-  reborn pairs) and a clean redo match EARNS credit — the pile finishes in-mode; only
-  Again-rated pairs stay for a normal session. Same day: session-page relearn re-shows
+  reborn pairs) and a clean redo match EARNS credit — the pile finishes in-mode. 2026-11-15: an
+  AGAIN rating also respawns the pair as a redo round (`rateTile` adds it to `missedRef`; the
+  express page's `againRef` exclusion REMOVED) — nothing leaves matching for a normal session;
+  a miss replays in-mode until matched clean and rated forward. Same day: session-page relearn re-shows
   append to the END of the queue (was index+3 splice), keeping their presentation (cloze
   cards redo their cloze). Optional RATING mode (same select,
   `express_rating`, migration 123): rating buttons on the matched tile;

@@ -163,6 +163,13 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
   function rateTile(pairId: string, rating: Rating) {
     const tp = pairById(pairId)
     setUnrated(prev => { const next = new Map(prev); next.delete(pairId); return next })
+    // Again = "show it to me again": the pair respawns in a redo round at the end, same as a
+    // mismatch (user decision 2026-11-15 — a miss never kicks the card out of the mode into a
+    // normal review; it keeps replaying here until matched and rated forward).
+    if (rating === 'again' && redoMissed) {
+      missedRef.current.add(pairId)
+      setMissedCount(missedRef.current.size)
+    }
     if (tp) onRateMatch?.(tp, rating)
   }
 

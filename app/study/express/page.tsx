@@ -59,8 +59,6 @@ function ExpressInner() {
   /** Settings → Study defaults → Due Now: pause each clean match for an Again/Hard/Good/Easy. */
   const [ratingMode, setRatingMode] = useState(false)
   const [ratedCounts, setRatedCounts] = useState({ hard: 0, good: 0, easy: 0 })
-  /** Clean matches the learner rated Again — no write, they stay due for a real review. */
-  const againRef = useRef<Set<string>>(new Set())
 
   const tzRef = useRef(deviceTimeZone())
   const turnoverRef = useRef(0)
@@ -149,9 +147,11 @@ function ExpressInner() {
     credit(a.pair.id, 'good')
   }
 
-  /** Rating mode: the learner rated a clean match. Again writes nothing — the card stays due. */
+  /** Rating mode: the learner rated a clean match. Again writes nothing — the game respawns the
+   *  pair in a redo round (MatchingGame.rateTile), so it stays IN matching until matched and
+   *  rated forward (user decision 2026-11-15). Exiting early just leaves it due. */
   function handleRateMatch(pair: { id: string }, rating: 'again' | 'hard' | 'good' | 'easy') {
-    if (rating === 'again') { againRef.current.add(pair.id); return }
+    if (rating === 'again') return
     credit(pair.id, rating)
   }
 
@@ -210,11 +210,11 @@ function ExpressInner() {
         onAttempt={handleAttempt}
         redoMissed
         // A redo life un-dirties the pair: the redo is a REAL attempt — matching it cleanly now
-        // earns credit (mismatching re-dirties it and spawns another life). Again-rated pairs are
-        // deliberately NOT reborn: that was an explicit "leave it for a real review".
+        // earns credit (mismatching re-dirties it and spawns another life). Again-rated pairs
+        // are reborn the same way and rate again on their redo (user decision 2026-11-15).
         onRedoRound={ids => ids.forEach(id => dirtyRef.current.delete(id))}
         shouldCollectRating={ratingMode
-          ? p => candidateById.has(p.id) && !dirtyRef.current.has(p.id) && !creditedRef.current.has(p.id) && !againRef.current.has(p.id)
+          ? p => candidateById.has(p.id) && !dirtyRef.current.has(p.id) && !creditedRef.current.has(p.id)
           : undefined}
         onRateMatch={ratingMode ? handleRateMatch : undefined}
         renderFinish={({ total, mistakes }) => {
@@ -223,9 +223,10 @@ function ExpressInner() {
             ? ` (${[['easy', ratedCounts.easy], ['good', ratedCounts.good], ['hard', ratedCounts.hard]]
                 .filter(([, n]) => (n as number) > 0).map(([l, n]) => `${n} ${l}`).join(' · ')})`
             : ' (matched clean, counted as Good)'
-          // With redo rounds, missed pairs replay until matched clean — what's left unscheduled
-          // is only pairs the learner RATED Again (an explicit "keep it due").
-          const stayReason = ratingMode ? 'rated Again' : 'left unfinished'
+          // With redo rounds (mismatches AND Again ratings both respawn), everything replays
+          // until matched clean and rated forward — anything left unscheduled was abandoned
+          // mid-game or failed to save.
+          const stayReason = 'left unfinished'
           return (
             <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
               <h1 className="text-2xl font-semibold text-ink">Express review done</h1>
