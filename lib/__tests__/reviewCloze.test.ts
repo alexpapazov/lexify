@@ -96,6 +96,14 @@ describe('buildReviewCloze — bare bones: the only rejection is "nothing to bla
     ])
   })
 
+  it('the blank shows the CARD\'S back, never the model\'s context paraphrase', () => {
+    // The model glossed "perro" as "hound" to fit the sentence; the learner learned it as "dog".
+    const paraphrased = prepared('El perro duerme.', 'perro', { targetGloss: 'hound' } as Partial<PreparedExercise>)
+    expect(buildReviewCloze(paraphrased, card())!.gloss).toBe('dog')
+    // A card with a blank back still falls back to the model's gloss.
+    expect(buildReviewCloze(paraphrased, card({ back: ' ' }))!.gloss).toBe('hound')
+  })
+
   it('a missing translation does NOT reject — the sentence renders without the line', () => {
     const noTranslation = prepared('El perro duerme.', 'perro')
     noTranslation.exercise.translation = '  '

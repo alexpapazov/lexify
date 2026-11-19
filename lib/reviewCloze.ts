@@ -104,7 +104,11 @@ export function buildReviewCloze(prepared: PreparedExercise, card: Card): Review
       after: ex.sentence.slice(at + len),
       answer: ex.sentence.slice(at, at + len),
       translation: ex.translation,
-      gloss: (prepared.targetGloss || card.back).trim(),
+      // The blank shows the CARD'S OWN back — the exact translation the learner mapped the word
+      // to — never the model's context paraphrase (user decision 2026-11-18: a paraphrase that
+      // fits the sentence better can fail to trigger the learned association). The model's gloss
+      // is only a fallback for a card with a blank back.
+      gloss: (displayText(card.back).trim() || prepared.targetGloss).trim(),
       tokens: ex.tokens.map(t => ({ text: t.text, gloss: t.gloss })),
     }
   }
