@@ -1,5 +1,5 @@
 import { boostRow, creditRow, type ProgramDeps } from '../program'
-import { buildProgramBatches, matchingChunks, type ProgramWord } from '../programPool'
+import { buildProgramBatches, nextMatchingChunk, type ProgramWord } from '../programPool'
 import { initialCardState } from '../../engine/pipeline'
 import type { Card, CardState } from '@/domain'
 import type { EnabledTracks } from '../sessionLimits'
@@ -100,17 +100,30 @@ describe('buildProgramBatches', () => {
   })
 })
 
-describe('matchingChunks', () => {
-  it('chunks to size and never puts identical tile text in one round', () => {
-    const words: ProgramWord[] = [
-      { card: card('x1', 'un', 'one'), state: grad('x1') },
-      { card: card('x2', 'deux', 'two'), state: grad('x2') },
-      { card: card('x3', 'dos', 'two'), state: grad('x3') },     // duplicate gloss → later chunk
-    ]
-    const chunks = matchingChunks(words, 8)
-    expect(chunks).toHaveLength(2)
-    expect(chunks[0]!.map(w => w.card.id)).toEqual(['x1', 'x2'])
-    expect(chunks[1]!.map(w => w.card.id)).toEqual(['x3'])
-    expect(matchingChunks(words, 2)[0]).toHaveLength(2)
+describe('nextMatchingChunk', () => {
+  const mk = (id: string, front = id, back = `${id}-g`): ProgramWord => ({ card: card(id, front, back), state: grad(id) })
+
+  it('misses sprinkle in — an even share per remaining round, never one clumped redo', () => {
+    const fresh = Array.from({ length: 12 }, (_, i) => mk(`f${i}`))
+    const retry = Array.from({ length: 4 }, (_, i) => mk(`r${i}`))
+    const chunk = nextMatchingChunk(fresh, retry, 8)         // 16 left → 2 rounds → 2 retries now
+    expect(chunk).toHaveLength(8)
+    expect(chunk.filter(w => w.card.id.startsWith('r'))).toHaveLength(2)
+  })
+
+  it('misses alone are simply the round when nothing fresh remains', () => {
+    const retry = [mk('r0'), mk('r1'), mk('r2')]
+    expect(nextMatchingChunk([], retry, 8).map(w => w.card.id)).toEqual(['r0', 'r1', 'r2'])
+  })
+
+  it('never puts identical tile text in one round; the collided word waits', () => {
+    const words = [mk('x1', 'un', 'one'), mk('x2', 'deux', 'two'), mk('x3', 'dos', 'two')]
+    const chunk = nextMatchingChunk(words, [], 8)
+    expect(chunk.map(w => w.card.id)).toEqual(['x1', 'x2'])  // x3 shares the gloss "two"
+  })
+
+  it('tops up with retries when fresh words run short', () => {
+    const chunk = nextMatchingChunk([mk('f0')], [mk('r0'), mk('r1')], 8)
+    expect(chunk.map(w => w.card.id).sort()).toEqual(['f0', 'r0', 'r1'])
   })
 })

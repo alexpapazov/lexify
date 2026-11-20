@@ -22,7 +22,7 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { SupabaseReviewProgramRepository, type ReviewProgram } from '@/lib/data/reviewPrograms'
 import { buildCalibrationMap, buildEnabledTracksMap, buildRetentionMap, type EnabledTracks } from '@/lib/sessionLimits'
-import { buildProgramBatches, matchingChunks, type ProgramBatch, type ProgramWord } from '@/lib/programPool'
+import { buildProgramBatches, nextMatchingChunk, type ProgramBatch, type ProgramWord } from '@/lib/programPool'
 import { boostRow, creditRow, finalizeStalePrograms, openProgramsForToday, splitStates, type ProgramDeps } from '@/lib/program'
 import { earnedStrength, finalStageRating, stagesForDirection, STAGE_LABEL, STAGE_STRENGTH, type StageKind, type WordProgress } from '@/engine/program'
 import { MatchingGame, type MatchPair } from '@/components/practice/MatchingGame'
@@ -234,16 +234,28 @@ function DueInner() {
   }
 
   // ── Matching stage state ────────────────────────────────────────────────
+  // A missed/?-marked pair does NOT clear in its round — it stays active and the next rounds
+  // mix it back in (an even share per remaining round, lib/programPool.nextMatchingChunk),
+  // never one clumped redo round (user decision 2026-11-20). Rounds advance on the finish
+  // button; a round of nothing-but-misses is simply what's left at the end.
   const [matchChunk, setMatchChunk] = useState<ProgramWord[] | null>(null)
-  const dirtyRef = useRef<Set<string>>(new Set())
+  const dirtyRef = useRef<Set<string>>(new Set())          // this round's misses (no credit)
+  const missedStageRef = useRef<Set<string>>(new Set())    // the stage's misses (redistribute)
+  const matchStageRef = useRef(-1)
   useEffect(() => {
-    if (view !== 'run' || stageKind !== 'matching') { setMatchChunk(null); return }
-    if (matchChunk && matchChunk.some(w => prog(w.card.id).cleared === stageIdx && !prog(w.card.id).done)) return
-    const next = matchingChunks(active)[0] ?? null
+    if (view !== 'run' || stageKind !== 'matching') { matchStageRef.current = -1; setMatchChunk(null); return }
+    const stageChanged = matchStageRef.current !== stageIdx
+    if (stageChanged) {
+      matchStageRef.current = stageIdx
+      missedStageRef.current = new Set()
+    }
+    if (!stageChanged && matchChunk) return
+    const fresh = active.filter(w => !missedStageRef.current.has(w.card.id))
+    const retry = active.filter(w => missedStageRef.current.has(w.card.id))
     dirtyRef.current = new Set()
-    setMatchChunk(next)
+    setMatchChunk(nextMatchingChunk(fresh, retry))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, stageKind, stageIdx, progressV])
+  }, [view, stageKind, stageIdx, matchChunk, progressV])
 
   // ── Card-stage queue (cloze / recall / typed) ───────────────────────────
   const [queue, setQueue] = useState<string[]>([])
@@ -377,26 +389,34 @@ function DueInner() {
               const w = matchChunk.find(x => x.card.id === p.id)
               if (w) speak(w.card.front, w.card.sourceLanguage)
             }}
-            redoMissed
-            onRedoRound={ids => ids.forEach(id => dirtyRef.current.delete(id))}
             onAttempt={a => {
               if (!a.correct) {
+                // No credit this round; the pair redistributes into the upcoming rounds.
                 dirtyRef.current.add(a.pair.id)
-                if (a.confused) dirtyRef.current.add(a.confused.id)
+                missedStageRef.current.add(a.pair.id)
+                if (a.confused) {
+                  dirtyRef.current.add(a.confused.id)
+                  missedStageRef.current.add(a.confused.id)
+                }
                 return
               }
               if (dirtyRef.current.has(a.pair.id)) return
               const w = matchChunk.find(x => x.card.id === a.pair.id)
               if (w && prog(w.card.id).cleared === stageIdx) clearWord(w, 'good')
             }}
-            renderFinish={() => (
-              <div className="max-w-md mx-auto pt-10 space-y-4 text-center">
-                <p className="text-ink text-sm">Round done.</p>
-                <button onClick={() => setMatchChunk(null)} className="btn-primary">
-                  {active.length > 0 ? 'Next round' : isFinalStage ? 'Finish' : 'Next stage'}
-                </button>
-              </div>
-            )}
+            renderFinish={() => {
+              const missedHere = matchChunk.filter(w => prog(w.card.id).cleared === stageIdx && !prog(w.card.id).done).length
+              return (
+                <div className="max-w-md mx-auto pt-10 space-y-4 text-center">
+                  <p className="text-ink text-sm">
+                    Round done.{missedHere > 0 ? ` ${missedHere} missed — they'll come back mixed into the next rounds.` : ''}
+                  </p>
+                  <button onClick={() => setMatchChunk(null)} className="btn-primary">
+                    {active.length > 0 ? 'Next round' : isFinalStage ? 'Finish' : 'Next stage'}
+                  </button>
+                </div>
+              )
+            }}
           />
         </div>
       )

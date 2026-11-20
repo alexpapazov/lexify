@@ -71,28 +71,32 @@ export function buildProgramBatches(
     .sort((a, b) => a.key.localeCompare(b.key))
 }
 
-/** Matching chunks of up to `size`, keeping each chunk's tile texts unique so two identical
- *  glosses never sit in one round (the id-matched game would otherwise be a guessing game).
- *  Collided words just land in a later chunk. */
-export function matchingChunks(words: ProgramWord[], size = 8): ProgramWord[][] {
-  const chunks: ProgramWord[][] = []
-  let pending = [...words]
-  while (pending.length > 0) {
-    const chunk: ProgramWord[] = []
-    const fronts = new Set<string>()
-    const backs = new Set<string>()
-    const rest: ProgramWord[] = []
-    for (const w of pending) {
-      const f = w.card.front.trim().toLowerCase()
-      const b = w.card.back.trim().toLowerCase()
-      if (chunk.length < size && !fronts.has(f) && !backs.has(b)) {
-        chunk.push(w); fronts.add(f); backs.add(b)
-      } else {
-        rest.push(w)
-      }
-    }
-    chunks.push(chunk)
-    pending = rest
+/**
+ * The NEXT matching round: fresh words first, with the stage's earlier misses SPRINKLED in —
+ * an even share per remaining round (user decision 2026-11-20: a missed pair redistributes
+ * across the upcoming rounds, never clumped into one immediate redo) — unless misses are all
+ * that's left, in which case they simply are the round. Tile texts stay unique per round so
+ * two identical glosses never make the id-matched game a guessing game; a collided word just
+ * waits for a later round.
+ */
+export function nextMatchingChunk(fresh: ProgramWord[], retry: ProgramWord[], size = 8): ProgramWord[] {
+  const total = fresh.length + retry.length
+  if (total === 0) return []
+  const roundsLeft = Math.max(1, Math.ceil(total / size))
+  const retryShare = Math.min(retry.length, Math.ceil(retry.length / roundsLeft))
+  const pick: ProgramWord[] = []
+  const ids = new Set<string>()
+  const fronts = new Set<string>()
+  const backs = new Set<string>()
+  const tryAdd = (w: ProgramWord): void => {
+    const f = w.card.front.trim().toLowerCase()
+    const b = w.card.back.trim().toLowerCase()
+    if (ids.has(w.card.id) || fronts.has(f) || backs.has(b)) return
+    pick.push(w); ids.add(w.card.id); fronts.add(f); backs.add(b)
   }
-  return chunks
+  for (const w of fresh) { if (pick.length >= size - retryShare) break; tryAdd(w) }
+  for (const w of retry) { if (pick.length >= size) break; tryAdd(w) }
+  // Top up from whatever's left (few fresh words, or text collisions blocked some slots).
+  for (const w of [...fresh, ...retry]) { if (pick.length >= size) break; tryAdd(w) }
+  return pick
 }

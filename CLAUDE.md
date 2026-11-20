@@ -229,8 +229,12 @@ Current feature files:
   cappedInterval grow-only, finalStageRating); writes in `lib/program.ts` (boostRow =
   interval-only push, NO D/S/reps; creditRow = real FSRS review with growth capped by final
   stage; finalizeStalePrograms runs LAZILY on Study-dashboard + Due-page load — no cron);
-  pool in `lib/programPool.ts` (relearn-loop rows counted but linked to a normal session,
-  matchingChunks keeps tile texts unique per round). Day-state rows
+  pool in `lib/programPool.ts` (relearn-loop rows counted but linked to a normal session;
+  `nextMatchingChunk` keeps tile texts unique per round AND redistributes the stage's misses
+  — an even share per remaining round, never one clumped redo; the runner's MatchingGame runs
+  WITHOUT redoMissed, a missed/?-marked pair just stays uncleared and mixes into later rounds
+  — express keeps its redo rounds, it has no later rounds). Matching tiles have a corner "?"
+  = self-reported miss (red flash, no credit, counts as mistake — MatchingGame.dontKnow). Day-state rows
   (`lib/data/reviewPrograms.ts`): one per pair+direction+turnover-aware day, progress
   cardId→{cleared, done: credited|locked}; clearing the FINAL stage credits immediately;
   "Lock in progress" cashes boosts early; everything else pays out at day turnover. Misses
