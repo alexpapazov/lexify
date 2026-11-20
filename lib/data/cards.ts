@@ -132,6 +132,26 @@ export class SupabaseCardRepository implements CardRepository {
    * every deck that links it, mirroring N× `listByDeck`). Deck ids are chunked to keep the `.in()`
    * query string bounded (see the 1000-row-cap notes in CLAUDE.md).
    */
+  /**
+   * SESSION-column cards by explicit ids — the program runner's cross-deck pool (no deck scope,
+   * so `listForDecks` doesn't fit). Full `choices` included: feeding a BULK card into anything
+   * that writes `choices` back (cloze generation!) would clobber the stored distractors/
+   * synonyms/sentences. Audio blobs excluded — hydrate via `audioForCards`. Online only.
+   */
+  async listSessionByIds(cardIds: CardId[]): Promise<Card[]> {
+    if (cardIds.length === 0) return []
+    const out: Card[] = []
+    for (let i = 0; i < cardIds.length; i += 400) {
+      const { data, error } = await this.db.from('cards')
+        .select(SESSION_CARD_COLUMNS)
+        .in('id', cardIds.slice(i, i + 400))
+        .is('deleted_at', null)
+      if (error) throw new Error(error.message)
+      out.push(...(data ?? []).map(r => rowToCard(r as unknown as Record<string, unknown>)))
+    }
+    return out
+  }
+
   async listForDecks(deckIds: DeckId[]): Promise<Map<string, Card[]>> {
     const out = new Map<string, Card[]>()
     if (deckIds.length === 0) return out

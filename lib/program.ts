@@ -54,7 +54,7 @@ function rowInterval(state: CardState, direction: ProgramDirection): number {
     : state.recallIntervalDays ?? state.intervalDays)
 }
 
-function fsrsFor(state: CardState, direction: ProgramDirection, grade: Rating, deps: ProgramDeps) {
+function fsrsFor(state: CardState, direction: ProgramDirection, grade: Rating, deps: ProgramDeps, opts: { hintGrowthFactor?: number } = {}) {
   const field = fieldFor(direction, deps.tracks)
   const intervalDays = rowInterval(state, direction)
   return scheduleGraduatedFsrs({
@@ -68,7 +68,7 @@ function fsrsFor(state: CardState, direction: ProgramDirection, grade: Rating, d
     ...DEFAULT_FSRS_CONFIG,
     requestRetention:     retentionFor(deps.retMap, deps.src, deps.tgt, field),
     retentionCalibration: calibrationFor(deps.calMap, deps.src, deps.tgt, field),
-  }, {})
+  }, opts)
 }
 
 function withLanes(state: CardState, direction: ProgramDirection, days: number, dueAt: string): Partial<CardState> {
@@ -95,10 +95,12 @@ export function boostRow(state: CardState, direction: ProgramDirection, strength
 }
 
 /** The one real FSRS review for a word that cleared the final stage — growth capped by that
- *  stage's strength, memory bookkeeping in full. `rating` is never 'again' (misses replay). */
-export function creditRow(state: CardState, direction: ProgramDirection, rating: Rating, strength: number, deps: ProgramDeps): CardState {
+ *  stage's strength, memory bookkeeping in full. `rating` is never 'again' (misses replay).
+ *  A hint used on the clearing answer dampens the growth (`hintGrowthFactor`, same as
+ *  sessions). */
+export function creditRow(state: CardState, direction: ProgramDirection, rating: Rating, strength: number, deps: ProgramDeps, opts: { hintGrowthFactor?: number } = {}): CardState {
   const old = rowInterval(state, direction)
-  const fsrs = fsrsFor(state, direction, rating, deps)
+  const fsrs = fsrsFor(state, direction, rating, deps, opts)
   const days = cappedInterval(old, fsrs.intervalDays ?? old, strength)
   const dueAt = new Date(deps.now.getTime() + days * 86_400_000).toISOString()
   return {

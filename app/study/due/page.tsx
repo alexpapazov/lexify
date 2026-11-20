@@ -19,8 +19,11 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
-import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow } from '@/lib/data/userSchedulerParams'
+import { SupabaseTypedAnswerOverrideRepository } from '@/lib/data/typedAnswerOverrides'
 import { SupabaseReviewProgramRepository, type ReviewProgram } from '@/lib/data/reviewPrograms'
+import { hydrateSessionAudio, applyAudioPatch } from '@/lib/sessionAudio'
+import { apiUrl } from '@/lib/apiBase'
 import { buildCalibrationMap, buildEnabledTracksMap, buildRetentionMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { buildProgramBatches, nextMatchingChunk, type ProgramBatch, type ProgramWord } from '@/lib/programPool'
 import { boostRow, creditRow, finalizeStalePrograms, openProgramsForToday, splitStates, type ProgramDeps } from '@/lib/program'
@@ -38,7 +41,7 @@ import { displayText } from '@/lib/cardText'
 import { langFlag, langName } from '@/lib/languages'
 import { speak } from '@/lib/speak'
 import { DEFAULT_GRADING_SETTINGS, DEFAULT_TYPED_STRICTNESS } from '@/domain'
-import type { Rating } from '@/domain'
+import type { Card, Rating, TypedStrictness } from '@/domain'
 
 const PRESETS: Record<'production' | 'recognition', { name: string; stages: StageKind[] }[]> = {
   production: [
@@ -81,10 +84,30 @@ function DueInner() {
   const tracksRef = useRef<Map<string, EnabledTracks>>(new Map())
   const retMapRef = useRef<Map<string, number>>(new Map())
   const calMapRef = useRef<Map<string, number>>(new Map())
+  const paramRowsRef = useRef<SchedulerParamsRow[]>([])
+  /** Persisted typed-answer overrides, `${cardId}:${side}` → normalized texts — same map the
+   *  session pages feed TypingMode. */
+  const overridesRef = useRef<Map<string, Set<string>>>(new Map())
   const stateRepo = useMemo(() => new SupabaseCardStateRepository(), [])
   const programRepo = useMemo(() => new SupabaseReviewProgramRepository(), [])
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
   const progressRef = useRef<Record<string, WordProgress>>({})
+
+  /** The run's cards re-read with SESSION columns (full `choices`, synonyms, cloze sentences;
+   *  bulk cards must NEVER reach anything that writes `choices` back) + audio patched in. */
+  const [sessionCards, setSessionCards] = useState<Map<string, Card>>(new Map())
+  // The same per-review chrome the session pages have: IPA toggle + hint tracking.
+  const [showIPA, setShowIPA] = useState(false)
+  const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
+  const hintGFRef = useRef<number | null>(null)
+
+  /** Per-pair typed strictness off the forward_typed row — exactly what sessions use. */
+  const strictFor = (src: string, tgt: string): TypedStrictness => {
+    const row = paramRowsRef.current.find(r => r.sourceLanguage === src && r.targetLanguage === tgt && r.answerField === 'forward_typed')
+    return row
+      ? { spelling: row.strictSpelling, accents: row.strictAccents, articles: row.strictArticles }
+      : DEFAULT_TYPED_STRICTNESS
+  }
 
   useEffect(() => {
     void (async () => {
@@ -103,12 +126,21 @@ function DueInner() {
         // Yesterday's unfinished programs pay out their boosts BEFORE today's batches build.
         await finalizeStalePrograms(uid, tz, turnover)
 
-        const [cards, states, paramRows, open] = await Promise.all([
+        const [cards, states, paramRows, open, overrideRows] = await Promise.all([
           new SupabaseCardRepository().listAllForUser(uid),
           stateRepo.listAllForUser(uid),
           new SupabaseUserSchedulerParamsRepository().listForUser(uid).catch(() => []),
           openProgramsForToday(uid, todayRef.current),
+          new SupabaseTypedAnswerOverrideRepository().listForUser(uid).catch(() => []),
         ])
+        const ov = new Map<string, Set<string>>()
+        for (const o of overrideRows) {
+          const key = `${o.cardId}:${o.answerSide}`
+          if (!ov.has(key)) ov.set(key, new Set())
+          ov.get(key)!.add(o.answerText)
+        }
+        overridesRef.current = ov
+        paramRowsRef.current = paramRows
         tracksRef.current = buildEnabledTracksMap(paramRows)
         retMapRef.current = buildRetentionMap(paramRows)
         calMapRef.current = buildCalibrationMap(paramRows)
@@ -148,6 +180,19 @@ function DueInner() {
     setProgress(progressRef.current)
     setProgressV(v => v + 1)
     setView('run')
+    void loadSessionCards(b)
+  }
+
+  /** Re-reads the batch's cards with SESSION columns (full choices, synonyms, sentences).
+   *  Bulk cards stay only as placeholders until this lands; anything that writes `choices`
+   *  back (cloze generation) waits for it. */
+  async function loadSessionCards(b: ProgramBatch) {
+    try {
+      const cards = await new SupabaseCardRepository().listSessionByIds(b.words.map(w => w.card.id))
+      setSessionCards(new Map(cards.map(c => [c.id, c])))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   async function handleStart() {
@@ -196,13 +241,15 @@ function DueInner() {
   const active = remaining.filter(w => prog(w.card.id).cleared === stageIdx)
   const isFinalStage = stageIdx === stages.length - 1
 
-  /** Clears the current stage for a word; the final stage writes the real review. */
-  function clearWord(word: ProgramWord, rating: Rating | null) {
+  /** Clears the current stage for a word; the final stage writes the real review (a hint used
+   *  on the clearing answer dampens the growth, same as sessions). */
+  function clearWord(word: ProgramWord, rating: Rating | null, hintGrowthFactor?: number | null) {
     const id = word.card.id
     const cleared = Math.max(prog(id).cleared, stageIdx + 1)
     if (cleared >= stages.length) {
       const final = stages[stages.length - 1]!
-      const updated = creditRow(word.state, batch!.direction, finalStageRating(final, rating), STAGE_STRENGTH[final], deps())
+      const updated = creditRow(word.state, batch!.direction, finalStageRating(final, rating), STAGE_STRENGTH[final], deps(),
+        hintGrowthFactor != null ? { hintGrowthFactor } : {})
       saveQueueRef.current = saveQueueRef.current
         .then(() => stateRepo.upsert(updated).then(() => undefined))
         .catch(err => console.error('[program] credit failed:', err))
@@ -271,20 +318,57 @@ function DueInner() {
   }, [view, stageKind, stageIdx, program, progressV])
 
   // Cloze prefetch for the next few queued cards (stored sentence or one generation).
+  // STRICTLY session cards only: resolveReviewCloze persists onto card.choices, and a bulk
+  // card's null choices would clobber the stored distractors/synonyms/sentences.
   const [clozeByCard, setClozeByCard] = useState<Map<string, ReviewCloze | null>>(new Map())
   const clozeInFlight = useRef<Set<string>>(new Set())
   useEffect(() => {
     if (view !== 'run' || stageKind !== 'cloze') return
     for (const id of queue.slice(0, 3)) {
-      const w = pool.find(x => x.card.id === id)
-      if (!w || clozeByCard.has(id) || clozeInFlight.current.has(id) || !clozeEligible(w.card)) continue
+      const sc = sessionCards.get(id)
+      if (!sc || clozeByCard.has(id) || clozeInFlight.current.has(id) || !clozeEligible(sc)) continue
       clozeInFlight.current.add(id)
-      void resolveReviewCloze(w.card, { allowGenerate: !isOfflineActive() })
+      void resolveReviewCloze(sc, { allowGenerate: !isOfflineActive() })
         .then(cz => setClozeByCard(prev => new Map(prev).set(id, cz)))
         .catch(() => setClozeByCard(prev => new Map(prev).set(id, null)))
         .finally(() => clozeInFlight.current.delete(id))
     }
-  }, [view, stageKind, queue, pool, clozeByCard])
+  }, [view, stageKind, queue, sessionCards, clozeByCard])
+
+  // Stored audio clips for the next few cards (SESSION columns exclude the blobs). Playback
+  // without a clip would fall back to regenerating TTS — hydration keeps real recordings.
+  useEffect(() => {
+    if (view !== 'run' || !stageKind || stageKind === 'matching') return
+    const targets = queue.slice(0, 3).map(id => sessionCards.get(id)).filter((c): c is Card => !!c)
+    if (targets.length === 0) return
+    void hydrateSessionAudio(targets, patch => setSessionCards(prev => {
+      const next = new Map(prev)
+      for (const c of targets) next.set(c.id, applyAudioPatch(next.get(c.id) ?? c, patch))
+      return next
+    }))
+  }, [view, stageKind, queue, sessionCards])
+
+  // IPA for the current card when the prompt shows the target word (recognition direction) —
+  // same transcribe-once-and-store behavior as sessions.
+  const currentCardId = queue.find(id => { const p = prog(id); return p.cleared === stageIdx && !p.done })
+  useEffect(() => {
+    if (view !== 'run' || !batch || batch.direction !== 'recognition' || !currentCardId) return
+    const sc = sessionCards.get(currentCardId)
+    if (!sc || sc.ipa || ipaCache.has(sc.id)) return
+    fetch(apiUrl('/api/ipa'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: sc.front, language: sc.sourceLanguage }),
+    })
+      .then(r => r.json())
+      .then((d: { ok: boolean; ipa?: string }) => {
+        if (!d.ok || !d.ipa) return
+        setIpaCache(prev => new Map(prev).set(sc.id, d.ipa!))
+        new SupabaseCardRepository().update(sc.id, { ipa: d.ipa }).catch(() => {})
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, batch, currentCardId, sessionCards])
 
   // ── Views ───────────────────────────────────────────────────────────────
   if (loading) return <div className="max-w-2xl mx-auto pt-24 text-center text-ink-muted text-sm">Loading…</div>
@@ -423,21 +507,29 @@ function DueInner() {
     }
 
     // Card stages — one at a time; Again replays at the end of the stage queue.
-    const currentId = queue.find(id => {
-      const p = prog(id)
-      return p.cleared === stageIdx && !p.done
-    })
-    const word = currentId ? pool.find(w => w.card.id === currentId) : undefined
-    if (!word) {
+    const word = currentCardId ? pool.find(w => w.card.id === currentCardId) : undefined
+    // The SESSION-column copy carries choices (synonyms, stored sentences, overrides targets)
+    // and hydrated audio — the bulk placeholder must never reach the review components.
+    const card = word ? sessionCards.get(word.card.id) : undefined
+    if (!word || !card) {
       return <div className="max-w-2xl mx-auto space-y-4 pb-16">{header}<p className="text-sm text-ink-muted text-center pt-8">Loading…</p></div>
     }
     const promptSide = batch.direction === 'production' ? 'back' as const : 'front' as const
+    const answerSide = promptSide === 'back' ? 'front' as const : 'back' as const
+    const promptLanguage = promptSide === 'front' ? card.sourceLanguage : undefined
+    const pairStrict = strictFor(batch.src, batch.tgt)
+    const gsWithLang = { ...DEFAULT_GRADING_SETTINGS, answerLanguage: answerSide === 'front' ? batch.src : batch.tgt }
+    const currentIpaText = showIPA && promptSide === 'front' ? (ipaCache.get(card.id) ?? card.ipa ?? undefined) : undefined
+    const ipaToggle = promptSide === 'front' ? () => setShowIPA(v => !v) : undefined
     const onRate = (rating: Rating, wasCorrect = rating !== 'again') => {
+      const hintGF = hintGFRef.current
+      hintGFRef.current = null
       setAttempt(a => a + 1)
-      if (!wasCorrect || rating === 'again') {
+      // The session rule: a hinted Hard wasn't a cold recall — it replays instead of clearing.
+      if (!wasCorrect || rating === 'again' || (rating === 'hard' && hintGF != null)) {
         setQueue(q => [...q.filter(id => id !== word.card.id), word.card.id])   // replay in-stage
       } else {
-        clearWord(word, rating)
+        clearWord(word, rating, hintGF)
         setQueue(q => q.filter(id => id !== word.card.id))
       }
     }
@@ -449,24 +541,42 @@ function DueInner() {
           // prompt and the word is typed into the usual grader. Articles auto-accept in cloze —
           // the sentence's own article sits visibly before the blank.
           <TypingMode
-            key={`${word.card.id}-${stageIdx}-${attempt}`}
-            card={word.card}
+            key={`${card.id}-${stageIdx}-${attempt}`}
+            card={card}
             promptSide={promptSide}
-            cloze={stageKind === 'cloze' ? clozeByCard.get(word.card.id) || undefined : undefined}
-            strictness={stageKind === 'cloze' ? clozeStrictness(DEFAULT_TYPED_STRICTNESS) : undefined}
-            gradingSettings={DEFAULT_GRADING_SETTINGS}
+            promptLanguage={promptLanguage}
+            cloze={stageKind === 'cloze' ? clozeByCard.get(card.id) || undefined : undefined}
+            strictness={stageKind === 'cloze' ? clozeStrictness(pairStrict) : pairStrict}
+            gradingSettings={gsWithLang}
             gradedReview={true}
-            answerLanguage={word.card.sourceLanguage}
-            synonyms={promptSide === 'back' ? (word.card.choices?.frontSynonyms ?? []) : (word.card.choices?.backSynonyms ?? [])}
-            autoPlayAudio={false}
+            answerLanguage={answerSide === 'front' ? batch.src : batch.tgt}
+            synonyms={answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+            overrideAnswers={Array.from(overridesRef.current.get(`${card.id}:${answerSide}`) ?? [])}
+            onOverrideAnswer={(answerText, accept) => {
+              const key = `${card.id}:${answerSide}`
+              const set = overridesRef.current.get(key) ?? new Set<string>()
+              if (accept) set.add(answerText); else set.delete(answerText)
+              overridesRef.current.set(key, set)
+              void new SupabaseTypedAnswerOverrideRepository()[accept ? 'add' : 'remove'](userId, card.id, answerSide, answerText).catch(console.error)
+            }}
+            hintable
+            onHint={(_level, growthFactor) => { hintGFRef.current = growthFactor }}
+            onIDontKnow={() => onRate('again', false)}
+            autoPlayAudio={promptSide === 'front'}
+            ipaText={currentIpaText} onToggleIPA={ipaToggle}
             onRate={(r, wasCorrect) => onRate(r, wasCorrect)}
           />
         ) : (
           <FlashcardMode
-            key={`${word.card.id}-${stageIdx}-${attempt}`}
-            card={word.card}
+            key={`${card.id}-${stageIdx}-${attempt}`}
+            card={card}
             promptSide={promptSide}
-            autoPlayAudio={false}
+            promptLanguage={promptLanguage}
+            answerLanguage={answerSide === 'front' ? batch.src : batch.tgt}
+            hintable
+            onHint={(_level, growthFactor) => { hintGFRef.current = growthFactor }}
+            autoPlayAudio={promptSide === 'front'}
+            ipaText={currentIpaText} onToggleIPA={ipaToggle}
             onRate={r => onRate(r)}
           />
         )}

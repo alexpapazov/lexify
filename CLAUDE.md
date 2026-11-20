@@ -242,7 +242,18 @@ Current feature files:
   The dashboard's "Study all due" button now LINKS to /study/due — the old due-picker
   popover (pairTypeDue, forward_cloze/reverse_matching launch modes) was DELETED; express/
   cloze/story pages still exist and their deep links work, they're just not launched from
-  the dashboard anymore.
+  the dashboard anymore. SESSION PARITY PASS (2026-11-20, user: "reuse all the same stuff"):
+  the runner re-reads the batch's cards via `cardRepo.listSessionByIds` (SESSION columns —
+  **a BULK card must NEVER reach anything that writes `choices` back**: the cloze generator
+  persisting onto a bulk card's null choices would CLOBBER stored distractors/synonyms/
+  sentences; the render blocks on `sessionCards`), hydrates audio for the next 3 queue cards
+  (`hydrateSessionAudio`), and wires per-pair typed strictness (forward_typed row), typed-
+  answer OVERRIDES (load + persist), synonyms, hint button (growthFactor dampens the final
+  credit via `creditRow` opts; hinted Hard replays — session rule), IPA (recognition
+  direction only, transcribe-once-and-store), autoplay/Listen when the prompt shows the
+  target word, and I-don't-know → replay. Cloze stage = TYPED (clozeStrictness over the pair
+  strictness). Still NOT in the runner: ℹ info modal, star, prompt editing, Almost, deck
+  siblings, confusion detection — classic sessions only.
 - `features/Phrasebook (proposal).md` — DEFERRED idea (2026-09-21, nothing built): per-pair
   idioms/constructions whose mastery signal is usage in journal entries; on-demand Sonnet
   analysis stored on the entry, mastery aggregates, struggle-driven journal prompts. Read it
