@@ -28,7 +28,7 @@ import { earnedStrength, finalStageRating, stagesForDirection, STAGE_LABEL, STAG
 import { MatchingGame, type MatchPair } from '@/components/practice/MatchingGame'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
-import { resolveReviewCloze, clozeEligible, type ReviewCloze } from '@/lib/reviewCloze'
+import { resolveReviewCloze, clozeEligible, clozeStrictness, type ReviewCloze } from '@/lib/reviewCloze'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
 import { isOfflineActive } from '@/lib/offline/mode'
@@ -37,7 +37,7 @@ import { deviceTimeZone } from '@/lib/offline/profilePrefs'
 import { displayText } from '@/lib/cardText'
 import { langFlag, langName } from '@/lib/languages'
 import { speak } from '@/lib/speak'
-import { DEFAULT_GRADING_SETTINGS } from '@/domain'
+import { DEFAULT_GRADING_SETTINGS, DEFAULT_TYPED_STRICTNESS } from '@/domain'
 import type { Rating } from '@/domain'
 
 const PRESETS: Record<'production' | 'recognition', { name: string; stages: StageKind[] }[]> = {
@@ -444,11 +444,16 @@ function DueInner() {
     return (
       <div className="max-w-2xl mx-auto space-y-4 pb-16">
         {header}
-        {stageKind === 'typed' ? (
+        {stageKind === 'typed' || stageKind === 'cloze' ? (
+          // Cloze is TYPED production (user decision 2026-11-20): the sentence's blank is the
+          // prompt and the word is typed into the usual grader. Articles auto-accept in cloze —
+          // the sentence's own article sits visibly before the blank.
           <TypingMode
             key={`${word.card.id}-${stageIdx}-${attempt}`}
             card={word.card}
             promptSide={promptSide}
+            cloze={stageKind === 'cloze' ? clozeByCard.get(word.card.id) || undefined : undefined}
+            strictness={stageKind === 'cloze' ? clozeStrictness(DEFAULT_TYPED_STRICTNESS) : undefined}
             gradingSettings={DEFAULT_GRADING_SETTINGS}
             gradedReview={true}
             answerLanguage={word.card.sourceLanguage}
@@ -461,7 +466,6 @@ function DueInner() {
             key={`${word.card.id}-${stageIdx}-${attempt}`}
             card={word.card}
             promptSide={promptSide}
-            cloze={stageKind === 'cloze' ? clozeByCard.get(word.card.id) || undefined : undefined}
             autoPlayAudio={false}
             onRate={r => onRate(r)}
           />

@@ -5,7 +5,7 @@ describe('program strength math', () => {
     const stages: StageKind[] = ['matching', 'cloze', 'typed']
     expect(earnedStrength(stages, 0)).toBe(0)
     expect(earnedStrength(stages, 1)).toBe(0.4)
-    expect(earnedStrength(stages, 2)).toBe(0.75)
+    expect(earnedStrength(stages, 2)).toBe(0.9)
     expect(earnedStrength(stages, 3)).toBe(1)
     // A weaker stage later never loses strength already earned.
     expect(earnedStrength(['recall', 'matching'], 2)).toBe(1)

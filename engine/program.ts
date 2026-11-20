@@ -25,7 +25,7 @@ export type StageKind = 'matching' | 'cloze' | 'recall' | 'typed'
 
 export const STAGE_STRENGTH: Record<StageKind, number> = {
   matching: 0.4,
-  cloze:    0.75,
+  cloze:    0.9,   // typed production in context — barely dampened (user tune 2026-11-20)
   recall:   1,
   typed:    1,
 }
