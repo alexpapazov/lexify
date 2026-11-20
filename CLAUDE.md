@@ -222,8 +222,23 @@ Current feature files:
   (chunked, online-only). Multiple→single DELETES reverse rows (ConfirmDialog with count) — NO
   ghosting, user decision. Reverse rows never regrow while the reverse track is off:
   seedKnownStates, CardEditModal setMaturity, and LadderStudy graduate() are all gated on
-  tracks.reverse. Part 2 (program builder: per-stage day-state, turnover finalization, lock-in
-  button, strengths 0.4/0.75/1.0) NOT built — the design is locked in the doc header.
+  tracks.reverse. Part 2 BUILT 2026-11-20 (**migration 134 `review_programs` must be
+  applied**): `/study/due` (routes.due) = batches per pair × direction → program builder
+  (presets Busy/Standard/Deep + custom chain, strength % shown) → runner. Engine
+  `engine/program.ts` (STAGE_STRENGTH 0.4/0.75/1/1, earnedStrength = max over cleared prefix,
+  cappedInterval grow-only, finalStageRating); writes in `lib/program.ts` (boostRow =
+  interval-only push, NO D/S/reps; creditRow = real FSRS review with growth capped by final
+  stage; finalizeStalePrograms runs LAZILY on Study-dashboard + Due-page load — no cron);
+  pool in `lib/programPool.ts` (relearn-loop rows counted but linked to a normal session,
+  matchingChunks keeps tile texts unique per round). Day-state rows
+  (`lib/data/reviewPrograms.ts`): one per pair+direction+turnover-aware day, progress
+  cardId→{cleared, done: credited|locked}; clearing the FINAL stage credits immediately;
+  "Lock in progress" cashes boosts early; everything else pays out at day turnover. Misses
+  replay in-stage (Again in card stages requeues at the END; matching uses redoMissed).
+  The dashboard's "Study all due" button now LINKS to /study/due — the old due-picker
+  popover (pairTypeDue, forward_cloze/reverse_matching launch modes) was DELETED; express/
+  cloze/story pages still exist and their deep links work, they're just not launched from
+  the dashboard anymore.
 - `features/Phrasebook (proposal).md` — DEFERRED idea (2026-09-21, nothing built): per-pair
   idioms/constructions whose mastery signal is usage in journal entries; on-demand Sonnet
   analysis stored on the entry, mastery aggregates, struggle-driven journal prompts. Read it

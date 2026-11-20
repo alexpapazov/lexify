@@ -18,6 +18,7 @@ import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 import { buildEnabledTracksMap, trackEnabled, forwardProductionMode, type EnabledTracks } from '@/lib/sessionLimits'
 import { deckDuePools } from '@/lib/todayPools'
+import { finalizeStalePrograms } from '@/lib/program'
 import { forwardStateMap } from '@/lib/cardStateMap'
 import { SupabaseLadderClimbRepository } from '@/lib/data/ladderClimb'
 import { getToday, localDateWithTurnover } from '@/lib/dates'
@@ -340,14 +341,6 @@ export default function StudyPage() {
   const [dailyCeiling,      setDailyCeiling]      = useState<number | null>(null)
   const [schedules,         setSchedules]         = useState<Map<string, GoalSchedule>>(new Map())
   const [scheduleDone,      setScheduleDone]      = useState<Map<string, number>>(new Map())
-  const [showDuePicker, setShowDuePicker] = useState(false)
-  const [expandedDueType, setExpandedDueType] = useState<'typing' | 'sgForward' | 'sgReverse' | null>(null)
-  // Due Now launch modes (Settings → Study → Due Now, migration 124): a due-picker row launches
-  // straight into the configured mode — forward rows into cloze prompts, reverse rows into the
-  // express matching session. Defaults (false/false) = normal reviews, incl. pre-migration.
-  const [forwardCloze, setForwardCloze] = useState(false)
-  const [reverseMatching, setReverseMatching] = useState(false)
-  const duePickerRef = useRef<HTMLDivElement>(null)
   const forecastSettingsRef = useRef<HTMLDivElement>(null)
   const offline = useOfflineMode()
   const router = useRouter()
@@ -374,9 +367,6 @@ export default function StudyPage() {
     const decksP   = deckRepo.list(uid)
     const profileP = loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus, goal_full_debt, goal_full_debt_since, goal_full_debt_resets, full_debt_skip_shortfall_days, full_debt_skip_surplus_days, goal_deferrals, daily_word_ceiling').eq('user_id', uid).single())
     const paramsP  = new SupabaseUserSchedulerParamsRepository().listForUser(uid)
-    // Targeted, not part of the omnibus profile select: migration 124 unapplied must degrade to
-    // normal-review launches, never blank the goal columns via the fallback select.
-    const dueModesP = supabase.from('profiles').select('forward_cloze, reverse_matching').eq('user_id', uid).maybeSingle()
     // A missing goal_schedules table (migration 114 not yet applied) must never blank the dashboard.
     const schedulesP = new SupabaseGoalScheduleRepository().listActive(uid).catch(() => [] as GoalSchedule[])
     const cardsP   = cardRepo.listAllForUser(uid)
@@ -402,12 +392,11 @@ export default function StudyPage() {
       profileRes = await loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, goal_carry_shortfall, goal_carry_surplus').eq('user_id', uid).single())
     }
 
-    const dueModes = (await dueModesP).data as { forward_cloze?: boolean | null; reverse_matching?: boolean | null } | null
-    setForwardCloze(dueModes?.forward_cloze ?? false)
-    setReverseMatching(dueModes?.reverse_matching ?? false)
-
     const tz           = (profileRes.data?.timezone as string | null) ?? deviceTimeZone()
     const turnoverHour = (profileRes.data?.day_turnover_hour as number | null) ?? 0
+    // Yesterday's unfinished review programs pay out their boosts (fire-and-forget — the Due
+    // page awaits its own finalize before building batches; this just settles them earlier).
+    void finalizeStalePrograms(uid, tz, turnoverHour)
     setCarryShortfall((profileRes.data?.goal_carry_shortfall as boolean | null) ?? false)
     setCarrySurplus((profileRes.data?.goal_carry_surplus as boolean | null) ?? false)
     const fullDebtOn = (profileRes.data?.goal_full_debt as boolean | null) ?? false
@@ -802,17 +791,6 @@ export default function StudyPage() {
   }, [forecastStartDate, forecastEndDate, forecastFilters, enabledTracks, forecastCfg])
 
   useEffect(() => {
-    if (!showDuePicker) return
-    function handleClick(e: MouseEvent) {
-      if (duePickerRef.current && !duePickerRef.current.contains(e.target as Node)) {
-        setShowDuePicker(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [showDuePicker])
-
-  useEffect(() => {
     if (!showForecastSettings) return
     function handleClick(e: MouseEvent) {
       if (forecastSettingsRef.current && !forecastSettingsRef.current.contains(e.target as Node)) {
@@ -866,21 +844,6 @@ export default function StudyPage() {
       return { ...prev, [key]: next }
     })
   }
-
-  // Per-pair typing / self-graded due counts, for nesting languages under each card type.
-  // Self-graded is split by direction: sgForward = native→target (forward production shown self-graded
-  // + recall), sgReverse = target→native (reverse recall).
-  interface PairTypeDue { source: string; target: string; typing: number; sgForward: number; sgReverse: number }
-  const pairTypeDue: PairTypeDue[] = Object.values(
-    deckStats.reduce<Record<string, PairTypeDue>>((acc, { deck, dueNowTyping, dueNowForward, dueNowReverse }) => {
-      const key = `${deck.sourceLanguage}|${deck.targetLanguage}`
-      if (!acc[key]) acc[key] = { source: deck.sourceLanguage, target: deck.targetLanguage, typing: 0, sgForward: 0, sgReverse: 0 }
-      acc[key]!.typing    += dueNowTyping
-      acc[key]!.sgForward += dueNowForward - dueNowTyping
-      acc[key]!.sgReverse += dueNowReverse
-      return acc
-    }, {})
-  )
 
   // Cards projected to be reviewed on the selected forecast date (for the click-to-expand panel).
   // Uses the SAME per-row FSRS projection as the bars, so the list length equals the bar count.
@@ -1174,81 +1137,15 @@ export default function StudyPage() {
             </div>
           )}
 
-          {/* ── Study all due ───────────────────────────────────────────── */}
+          {/* ── Study all due → the program builder (/study/due) ────────── */}
           {deckStats.length > 0 && (
-            <div className="mt-8 relative inline-block" ref={duePickerRef} data-tour="due-now">
+            <div className="mt-8" data-tour="due-now">
               {totalDue === 0 ? (
                 <button disabled className="btn-primary opacity-40 cursor-not-allowed">No cards due</button>
               ) : (
-                <button className="btn-primary" onClick={() => setShowDuePicker(v => !v)}>
+                <Link href={routes.due()} className="btn-primary inline-block">
                   Study all due ({totalDue})
-                </button>
-              )}
-              {showDuePicker && pairTypeDue.some(p => p.typing + p.sgForward + p.sgReverse > 0) && (
-                <div className="absolute left-0 top-full mt-2 z-20 min-w-[260px] rounded-card border border-line/10 bg-surface-deep shadow-xl overflow-hidden">
-                  {([
-                    { key: 'typing',    label: 'Typing',      hint: 'native → target', query: 'present=typing',               n2t: true,  pick: (p: PairTypeDue) => p.typing },
-                    { key: 'sgForward', label: 'Self-graded', hint: 'native → target', query: 'present=selfgraded&dir=forward', n2t: true,  pick: (p: PairTypeDue) => p.sgForward },
-                    { key: 'sgReverse', label: 'Self-graded', hint: 'target → native', query: 'present=selfgraded&dir=reverse', n2t: false, pick: (p: PairTypeDue) => p.sgReverse },
-                  ] as const).map(t => ({ ...t, count: pairTypeDue.reduce((s, p) => s + t.pick(p), 0) })).filter(t => t.count > 0).map(t => {
-                    const expanded = expandedDueType === t.key
-                    const pairs = pairTypeDue.filter(p => t.pick(p) > 0)
-                    return (
-                      <div key={t.key} className="border-b border-line/10 last:border-b-0">
-                        <button
-                          className="w-full flex items-center justify-between px-4 py-3 text-sm text-left hover:bg-surface-raised transition-colors"
-                          onClick={() => setExpandedDueType(v => v === t.key ? null : t.key)}
-                        >
-                          <span className="text-ink flex items-center gap-1.5">
-                            <span className={`text-ink-faint transition-transform ${expanded ? 'rotate-90' : ''}`}>›</span>
-                            {t.label} <span className="text-ink-faint text-xs">· {t.hint}</span>
-                          </span>
-                          <span className="chip text-xs ml-3">{t.count}</span>
-                        </button>
-                        {expanded && (
-                          <div className="bg-surface-deep/60">
-                            {([{ pickKey: 'all', pair: null as PairTypeDue | null, label: 'All languages', count: t.count },
-                               ...pairs.map(p => ({
-                                 pickKey: `${p.source}|${p.target}`, pair: p as PairTypeDue | null,
-                                 label: t.n2t ? `${langName(p.target)} → ${langName(p.source)}` : `${langName(p.source)} → ${langName(p.target)}`,
-                                 count: t.pick(p),
-                               }))]).map(row => {
-                              const pairQuery = row.pair ? `&source=${row.pair.source}&target=${row.pair.target}` : ''
-                              const sessionUrl = `/study/all/session?category=due&${t.query}${pairQuery}`
-                              // The launch mode comes from Settings → Study → Due Now — a row goes
-                              // straight in (the per-row Cloze/Matching chooser is gone): reverse
-                              // rows into express matching, forward rows into cloze prompts.
-                              const go = () => {
-                                setShowDuePicker(false)
-                                if (t.key === 'sgReverse' && reverseMatching) {
-                                  router.push(routes.express(row.pair ? { source: row.pair.source, target: row.pair.target } : {}))
-                                } else {
-                                  router.push(t.key !== 'sgReverse' && forwardCloze ? `${sessionUrl}&cloze=1` : sessionUrl)
-                                }
-                              }
-                              const modeTag = t.key === 'sgReverse'
-                                ? (reverseMatching ? '⚡' : null)
-                                : (forwardCloze ? '📝' : null)
-                              return (
-                                <button key={row.pickKey}
-                                  className="w-full flex items-center justify-between pl-9 pr-4 py-2.5 text-sm text-left hover:bg-surface-raised transition-colors"
-                                  onClick={go}
-                                >
-                                  <span className={row.pair ? 'text-ink' : 'text-ink-muted'}>
-                                    {row.label}
-                                    {/* A quiet reminder of the configured mode (change it in Settings). */}
-                                    {modeTag && <span className="ml-1.5 text-xs">{modeTag}</span>}
-                                  </span>
-                                  <span className="chip text-xs ml-3">{row.count}</span>
-                                </button>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
+                </Link>
               )}
             </div>
           )}

@@ -26,6 +26,8 @@ export const routes = {
   media:         (extra: Query = {})                 => withQuery('/media', extra),
   /** The external-study session log (paste words learned outside Lexify). */
   sessions:      (extra: Query = {})                 => withQuery('/study/sessions', extra),
+  /** Due Now batches + the program builder. */
+  due:           (extra: Query = {})                 => withQuery('/study/due', extra),
   /** Deck detail. */
   deck:          (deckId: string, extra: Query = {}) => withQuery('/study/deck',         { deck: deckId,   ...extra }),
   /** Due-now / category study session for a deck. */
