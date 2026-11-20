@@ -213,6 +213,17 @@ Current feature files:
   `lib/data/studySessions.ts` (online only, no cache). No review_events — the session row is
   the audit trail. The TODAY tab was DELETED the same day (page + nav sub-link; story's
   back-links now point to /study — note /study/story currently has NO launcher).
+- `features/Due Now Redesign (design draft).md` — directions + program builder. **READ ITS
+  "ROUNDS CONCLUDED" HEADER BEFORE TOUCHING DUE NOW.** Part 1 BUILT 2026-11-20: per-pair
+  Directions UI (single/multiple + one production modality) in the pair SRS modal replaced the
+  four track checkboxes (`handleSrsToggle` deleted); `lib/directions.ts` (currentModality /
+  modalityFlagWrites compile to the track flags; seedReverseRow copies D/S + spreads first due
+  in [1, interval]; enable/disableRecognitionDirection), `cardStates.deleteReverseForCards`
+  (chunked, online-only). Multiple→single DELETES reverse rows (ConfirmDialog with count) — NO
+  ghosting, user decision. Reverse rows never regrow while the reverse track is off:
+  seedKnownStates, CardEditModal setMaturity, and LadderStudy graduate() are all gated on
+  tracks.reverse. Part 2 (program builder: per-stage day-state, turnover finalization, lock-in
+  button, strengths 0.4/0.75/1.0) NOT built — the design is locked in the doc header.
 - `features/Phrasebook (proposal).md` — DEFERRED idea (2026-09-21, nothing built): per-pair
   idioms/constructions whose mastery signal is usage in journal entries; on-demand Sonnet
   analysis stored on the entry, mastery aggregates, struggle-driven journal prompts. Read it

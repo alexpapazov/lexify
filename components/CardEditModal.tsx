@@ -533,9 +533,10 @@ export function CardEditModal({ card, state, userId, deckId, deckCards, sourceLa
       onStateChange(savedFwd)
       if (reverseCardState) {
         setReverseCardState(await stateRepo.upsert(reschedule(reverseCardState, 'reverse')))
-      } else if (reverseCardState === null) {
+      } else if (reverseCardState === null && enabledTracks?.reverse !== false) {
         // No recognition row yet (never-studied or legacy card) — seed one so both directions land
-        // in the chosen phase, mirroring how chip-bucket seeding always creates the pair.
+        // in the chosen phase, mirroring how chip-bucket seeding creates the pair. A
+        // single-direction pair (recognition deleted) never grows one.
         const revBase = { ...initialCardState(userId, card.id, pipelineId), reviewDirection: 'reverse' as const }
         setReverseCardState(await stateRepo.upsert(reschedule(revBase, 'reverse')))
       }

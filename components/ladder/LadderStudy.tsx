@@ -38,6 +38,8 @@ import { apiUrl } from '@/lib/apiBase'
 import { UndoFab } from '@/components/session/UndoFab'
 import { CardEditModal } from '@/components/CardEditModal'
 import { isOfflineActive } from '@/lib/offline/mode'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { buildEnabledTracksMap } from '@/lib/sessionLimits'
 import { resolveReviewCloze, clozeEligible, type ReviewCloze } from '@/lib/reviewCloze'
 import { useActiveTimer } from '@/lib/activeTimer'
 import type { Card, CardChoices, Deck, Ladder, RungType } from '@/domain'
@@ -757,8 +759,18 @@ export function LadderStudy({ scope }: { scope: LadderScope }) {
     await repo.upsert({ ...base, graduated: true, graduatedAt: now.toISOString(), reps: 1, lastRating: 'good', lastReviewedAt: now.toISOString(),
       dormancyThreshold: dorm?.threshold ?? null, dormant: dorm?.dormant ?? false,
       reviewDirection: 'forward', intervalDays: tDays, scheduledIntervalDays: tDays, typedIntervalDays: tDays, dueAt: due(tDays), typedDueAt: due(tDays) })
-    await repo.upsert({ ...base, graduated: true, graduatedAt: now.toISOString(), reps: 1, lastRating: 'good', lastReviewedAt: now.toISOString(),
-      reviewDirection: 'reverse', intervalDays: nDays, scheduledIntervalDays: nDays, recallIntervalDays: nDays, dueAt: due(nDays), recallDueAt: due(nDays) })
+    // A single-direction pair (recognition deleted — lib/directions.ts) never grows a reverse
+    // row at graduation. The params read is cached, so this costs nothing per card.
+    let reverseOn = true
+    try {
+      const rows = await new SupabaseUserSchedulerParamsRepository().listForUser(userId)
+      const tracks = buildEnabledTracksMap(rows).get(`${deck?.sourceLanguage}|${deck?.targetLanguage}`)
+      reverseOn = tracks?.reverse !== false
+    } catch { /* unknown → default to creating it, the pre-existing behavior */ }
+    if (reverseOn) {
+      await repo.upsert({ ...base, graduated: true, graduatedAt: now.toISOString(), reps: 1, lastRating: 'good', lastReviewedAt: now.toISOString(),
+        reviewDirection: 'reverse', intervalDays: nDays, scheduledIntervalDays: nDays, recallIntervalDays: nDays, dueAt: due(nDays), recallDueAt: due(nDays) })
+    }
   }
 
   // Pathway sibling of onOutcome: run the graph engine, then the same queue/graduate/reshow plumbing.

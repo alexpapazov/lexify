@@ -221,6 +221,22 @@ export class SupabaseCardStateRepository implements CardStateRepository {
     if (error) throw new Error(error.message)
   }
 
+  /** Permanently deletes the REVERSE rows of the given cards — the multiple→single direction
+   *  conversion (lib/directions.ts). Online only: a destructive bulk operation has no business
+   *  running against the offline store's outbox. Chunked to keep the query string bounded. */
+  async deleteReverseForCards(userId: UserId, cardIds: CardId[]): Promise<void> {
+    if (cardIds.length === 0) return
+    if (isOfflineActive()) throw new Error('Direction changes need a connection.')
+    invalidateReads('states:')
+    for (let i = 0; i < cardIds.length; i += 400) {
+      const { error } = await this.db.from('card_states')
+        .delete()
+        .eq('user_id', userId).eq('review_direction', 'reverse')
+        .in('card_id', cardIds.slice(i, i + 400))
+      if (error) throw new Error(error.message)
+    }
+  }
+
   async copy(userId: UserId, fromCardId: CardId, toCardId: CardId): Promise<CardState | null> {
     const existing = await this.get(userId, fromCardId)
     if (!existing) return null

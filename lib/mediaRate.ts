@@ -97,7 +97,8 @@ export function seedKnownStates(
       acceleratedMode: 'bulk_known' as const,
     }
   }
-  return [make('forward'), make('reverse')]
+  // A single-direction pair (recognition deleted — lib/directions.ts) never grows reverse rows.
+  return deps.tracks?.reverse === false ? [make('forward')] : [make('forward'), make('reverse')]
 }
 
 export interface PenaltyOutcome { forward?: CardState; reverse?: CardState }

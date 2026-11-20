@@ -26,6 +26,8 @@ import { LibraryGearMenu } from '@/components/library/LibraryGearMenu'
 import type { Folder, Deck, LanguagePair, Card, CardState, TypedStrictnessLevel } from '@/domain'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow, type SchedulerParamsHistoryRow } from '@/lib/data/userSchedulerParams'
+import { currentModality, modalityFlagWrites, countRecognitionRows, disableRecognitionDirection, enableRecognitionDirection, type ProductionModality } from '@/lib/directions'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -562,26 +564,80 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     }
   }
 
-  async function handleSrsToggle(answerField: string, field: 'forward_typed_enabled' | 'forward_recall_enabled' | 'reverse_recall_enabled' | 'forward_smart_enabled', value: boolean) {
+  // ── Directions (Due Now Redesign Part 1, 2026-11-20) ─────────────────────
+  // One Directions setting per pair replaces the four track checkboxes: single (production
+  // only) vs multiple (production + recognition, each its own schedule), and ONE production
+  // modality compiled to the three production flags. Multiple→single DELETES recognition
+  // rows (confirmed, with count); single→multiple seeds them spread (lib/directions.ts).
+  const [dirBusy, setDirBusy] = useState(false)
+  const [dirMsg, setDirMsg] = useState<string | null>(null)
+  const [dirConfirmCount, setDirConfirmCount] = useState<number | null>(null)
+
+  async function handleSetModality(m: ProductionModality) {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
     const repo = new SupabaseUserSchedulerParamsRepository()
-    const keyFor = {
-      forward_typed_enabled:  'forwardTypedEnabled',
-      forward_recall_enabled: 'forwardRecallEnabled',
-      reverse_recall_enabled: 'reverseRecallEnabled',
-      forward_smart_enabled:  'forwardSmartEnabled',
-    } as const
-    await repo.update(userId, src, tgt, answerField, { [field]: value })
-    setSrsParams(prev => prev.map(p => p.answerField === answerField ? { ...p, [keyFor[field]]: value } : p))
+    const keyFor: Record<string, 'forwardTypedEnabled' | 'forwardSmartEnabled' | 'forwardRecallEnabled'> = {
+      forward_typed_enabled: 'forwardTypedEnabled', forward_smart_enabled: 'forwardSmartEnabled', forward_recall_enabled: 'forwardRecallEnabled',
+    }
+    for (const w of modalityFlagWrites(m)) {
+      await repo.update(userId, src, tgt, w.answerField, { [w.column]: w.value })
+      setSrsParams(prev => prev.map(p => p.answerField === w.answerField ? { ...p, [keyFor[w.column]!]: w.value } : p))
+    }
+  }
 
-    // Typed production and Smart typing are mutually exclusive — enabling one turns
-    // the other off (they'd otherwise double-schedule the same target production).
-    if (value && (field === 'forward_typed_enabled' || field === 'forward_smart_enabled')) {
-      const otherAnswer = field === 'forward_typed_enabled' ? 'forward_smart' : 'forward_typed'
-      const otherField  = field === 'forward_typed_enabled' ? 'forward_smart_enabled' : 'forward_typed_enabled'
-      await repo.update(userId, src, tgt, otherAnswer, { [otherField]: false })
-      setSrsParams(prev => prev.map(p => p.answerField === otherAnswer ? { ...p, [keyFor[otherField]]: false } : p))
+  async function handleSelectSingle() {
+    if (!pairSettingsFor || !userId || dirBusy) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    setDirBusy(true)
+    setDirMsg(null)
+    try {
+      const count = await countRecognitionRows(userId, src, tgt)
+      if (count === 0) {
+        await disableRecognitionDirection(userId, src, tgt)
+        setSrsParams(prev => prev.map(p => p.answerField === 'reverse_recall' ? { ...p, reverseRecallEnabled: false } : p))
+        setDirMsg('Single direction.')
+      } else {
+        setDirConfirmCount(count)   // destructive — confirm with the real number first
+      }
+    } catch (e) {
+      setDirMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDirBusy(false)
+    }
+  }
+
+  async function handleConfirmSingle() {
+    if (!pairSettingsFor || !userId) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    setDirConfirmCount(null)
+    setDirBusy(true)
+    try {
+      const n = await disableRecognitionDirection(userId, src, tgt)
+      setSrsParams(prev => prev.map(p => p.answerField === 'reverse_recall' ? { ...p, reverseRecallEnabled: false } : p))
+      setDirMsg(`Single direction — ${n} recognition schedule${n === 1 ? '' : 's'} deleted.`)
+    } catch (e) {
+      setDirMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDirBusy(false)
+    }
+  }
+
+  async function handleSelectMultiple() {
+    if (!pairSettingsFor || !userId || dirBusy) return
+    const [src, tgt] = pairSettingsFor.split('|') as [string, string]
+    setDirBusy(true)
+    setDirMsg(null)
+    try {
+      const n = await enableRecognitionDirection(userId, src, tgt)
+      setSrsParams(prev => prev.map(p => p.answerField === 'reverse_recall' ? { ...p, reverseRecallEnabled: true } : p))
+      setDirMsg(n > 0
+        ? `Recognition enabled — ${n} schedule${n === 1 ? '' : 's'} seeded, first reviews spread over each card's interval.`
+        : 'Recognition enabled.')
+    } catch (e) {
+      setDirMsg(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDirBusy(false)
     }
   }
 
@@ -1041,46 +1097,99 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                       <p className="text-xs text-ink-faint">Loading…</p>
                     ) : (
                       <>
-                        {/* Review track toggles */}
-                        <div className="flex flex-col gap-1.5">
-                          <p className="text-xs text-ink-faint mb-0.5">Enable review tracks for this language pair:</p>
-                          {BUCKETS.map(b => (
-                            <div key={b.field} className="flex flex-col gap-1">
-                              <div className="flex items-center gap-2">
-                                <label className="flex items-center gap-2 cursor-pointer flex-1">
-                                  <input
-                                    type="checkbox"
-                                    checked={b.row?.[b.toggleKey] ?? (b.field === 'forward_smart' ? false : true)}
-                                    onChange={e => handleSrsToggle(b.field, b.dbToggle, e.target.checked).catch(() => {})}
-                                    className="accent-accent"
-                                  />
-                                  <span className="text-sm text-ink">{b.label}</span>
-                                </label>
+                        {/* Directions — single vs multiple, one modality per direction */}
+                        {(() => {
+                          const multiple = rrRow?.reverseRecallEnabled ?? true
+                          const modality = currentModality({
+                            typed:      ftRow?.forwardTypedEnabled  ?? true,
+                            smart:      smRow?.forwardSmartEnabled  ?? false,
+                            selfgraded: frRow?.forwardRecallEnabled ?? false,
+                          })
+                          return (
+                            <div className="flex flex-col gap-2">
+                              <p className="text-xs text-ink-faint mb-0.5">Directions — how many schedules each card runs:</p>
+                              <div className="flex gap-1.5">
                                 <button
-                                  className="text-xs text-danger hover:underline whitespace-nowrap"
-                                  title={`Reset ${b.label} multipliers (Good/Easy/Hard) to defaults`}
-                                  onClick={() => {
-                                    if (confirm(`Reset the ${b.label} multiplier calibration back to defaults? Use this to un-pollute a track whose calibration was corrupted (e.g. reverse recall from the old miscategorization bug).`)) {
-                                      handleResetTrackCalibration(b.field).catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
-                                    }
-                                  }}
+                                  onClick={() => { if (multiple) void handleSelectSingle() }}
+                                  disabled={dirBusy}
+                                  className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors ${!multiple ? 'border-accent/40 bg-accent/5' : 'border-line/10 hover:bg-line/5'}`}
                                 >
-                                  Reset calibration
+                                  <span className="block text-sm text-ink">Single</span>
+                                  <span className="block text-xs text-ink-faint">production only — recognition schedules are deleted</span>
+                                </button>
+                                <button
+                                  onClick={() => { if (!multiple) void handleSelectMultiple() }}
+                                  disabled={dirBusy}
+                                  className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors ${multiple ? 'border-accent/40 bg-accent/5' : 'border-line/10 hover:bg-line/5'}`}
+                                >
+                                  <span className="block text-sm text-ink">Multiple</span>
+                                  <span className="block text-xs text-ink-faint">each direction has its own schedule</span>
                                 </button>
                               </div>
-                              {b.field === 'forward_smart' && (b.row?.forwardSmartEnabled ?? false) && (
-                                <div className="flex items-center gap-2 pl-6 flex-wrap">
+
+                              {/* Production direction — always on; one modality */}
+                              <div className="flex items-center gap-2 rounded-lg border border-line/10 px-3 py-2">
+                                <span className="text-sm text-ink flex-1">{langName(tgt)} → {langName(src)} <span className="text-xs text-ink-faint">production</span></span>
+                                <select
+                                  className="input text-sm"
+                                  value={modality}
+                                  onChange={e => handleSetModality(e.target.value as ProductionModality).catch(() => {})}
+                                >
+                                  <option value="smart">Smart typing</option>
+                                  <option value="typed">Typed (always)</option>
+                                  <option value="selfgraded">Self-graded</option>
+                                </select>
+                              </div>
+                              {modality === 'smart' && (
+                                <div className="flex items-center gap-2 pl-3 flex-wrap">
                                   <span className="text-xs text-ink-muted">Type it until the interval reaches</span>
                                   <SmartThresholdInput
                                     value={ftRow?.smartTypingThresholdDays ?? DEFAULT_SCHEDULER_PARAMS.smartTypingThresholdDays}
                                     onCommit={n => handleSrsSmartThreshold(n).catch(() => {})}
                                   />
-                                  <span className="text-xs text-ink-muted">days, then it becomes self-graded. Lower it to do more self-graded, sooner.</span>
+                                  <span className="text-xs text-ink-muted">days, then it becomes self-graded.</span>
                                 </div>
                               )}
+
+                              {/* Recognition direction — exists only under Multiple */}
+                              {multiple && (
+                                <div className="flex items-center gap-2 rounded-lg border border-line/10 px-3 py-2">
+                                  <span className="text-sm text-ink flex-1">{langName(src)} → {langName(tgt)} <span className="text-xs text-ink-faint">recognition</span></span>
+                                  <span className="text-xs text-ink-muted">self-graded · matching · story</span>
+                                </div>
+                              )}
+
+                              {dirMsg && <p className="text-xs text-ink-muted">{dirMsg}</p>}
+
+                              {dirConfirmCount != null && (
+                                <ConfirmDialog
+                                  message={`Switch to single direction? This permanently deletes ${dirConfirmCount} recognition schedule${dirConfirmCount === 1 ? '' : 's'} for this pair. Review history stays, but the schedules cannot be restored — re-enabling later re-seeds them from production.`}
+                                  onConfirm={() => void handleConfirmSingle()}
+                                  onCancel={() => setDirConfirmCount(null)}
+                                />
+                              )}
+
+                              <details>
+                                <summary className="text-xs text-ink-faint cursor-pointer">Reset a track&apos;s calibration…</summary>
+                                <div className="flex gap-3 flex-wrap pt-1">
+                                  {BUCKETS.map(b => (
+                                    <button
+                                      key={b.field}
+                                      className="text-xs text-danger hover:underline"
+                                      onClick={() => {
+                                        if (confirm(`Reset the ${b.label} calibration back to defaults?`)) {
+                                          handleResetTrackCalibration(b.field).catch(err => alert('Reset failed: ' + (err instanceof Error ? err.message : String(err))))
+                                        }
+                                      }}
+                                    >
+                                      {b.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </details>
                             </div>
-                          ))}
-                        </div>
+                          )
+                        })()}
 
                         {/* Max interval */}
                         <div className="flex items-center gap-2">
