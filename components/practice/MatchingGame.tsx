@@ -221,6 +221,24 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
     }
   }
 
+  /** The tile-corner "?" — "I don't know this pairing." Counts exactly as a mismatch: both
+   *  tiles flash red, the pair earns no credit (onAttempt incorrect) and, with redo lives on,
+   *  it respawns in a redo round to be done again (user request 2026-11-20). */
+  function dontKnow(pairId: string) {
+    const tp = pairById(pairId)
+    if (!tp || matched.has(pairId)) return
+    setMistakes(m => m + 1)
+    if (redoMissed) {
+      missedRef.current.add(pairId)
+      setMissedCount(missedRef.current.size)
+    }
+    onAttempt?.({ pair: tp, correct: false })
+    setSelLeft(null); setSelRight(null)
+    setWrong({ left: pairId, right: pairId })
+    if (wrongTimer.current) clearTimeout(wrongTimer.current)
+    wrongTimer.current = setTimeout(() => setWrong(null), 500)
+  }
+
   function pick(side: 'left' | 'right', id: string) {
     // Hearing the word is part of matching it — every tap of a target-language tile speaks it.
     if (side === targetSide && audioOn) {
@@ -280,19 +298,28 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
     const isWrong    = wrong !== null && (side === 'left' ? wrong.left : wrong.right) === p.id
     const isRating   = unrated.get(p.id) === side
     const button = (
-      <button
-        key={`${side}-${p.id}`}
-        onClick={() => !isMatched && pick(side, p.id)}
-        disabled={isMatched}
-        className={`w-full rounded-card border px-3 py-3 text-sm leading-snug transition-all select-none ${
-          isMatched  ? 'border-success/30 bg-success/5 text-ink-faint/50' :
-          isWrong    ? 'border-danger bg-danger/10 text-danger' :
-          isSelected ? 'border-accent bg-accent/10 text-accent-soft scale-[1.02]' :
-          'border-line/20 text-ink hover:border-line/40 hover:bg-surface-raised cursor-pointer'
-        }`}
-      >
-        {side === targetSide ? p.front : p.back}
-      </button>
+      <div key={`${side}-${p.id}`} className="relative">
+        <button
+          onClick={() => !isMatched && pick(side, p.id)}
+          disabled={isMatched}
+          className={`w-full rounded-card border px-3 py-3 text-sm leading-snug transition-all select-none ${
+            isMatched  ? 'border-success/30 bg-success/5 text-ink-faint/50' :
+            isWrong    ? 'border-danger bg-danger/10 text-danger' :
+            isSelected ? 'border-accent bg-accent/10 text-accent-soft scale-[1.02]' :
+            'border-line/20 text-ink hover:border-line/40 hover:bg-surface-raised cursor-pointer'
+          }`}
+        >
+          {side === targetSide ? p.front : p.back}
+        </button>
+        {!isMatched && (
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); dontKnow(p.id) }}
+            className="absolute top-0.5 right-1.5 z-10 px-1 text-xs leading-none text-ink-faint/50 hover:text-danger transition-colors"
+            title="I don't know this one — counts as a miss, the pair comes back"
+          >?</button>
+        )}
+      </div>
     )
     if (!isRating) return button
     // Rating overlay on the just-matched tile. Non-blocking: it stays until rated (or the round's
