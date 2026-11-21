@@ -49,6 +49,28 @@ describe('boostRow — the intermediate push', () => {
     expect(out.recallIntervalDays).toBe(out.intervalDays)
     expect(out.intervalDays).toBeGreaterThanOrEqual(15)
   })
+
+  it('re-applying a boost with the recorded baseline is a no-op, never a compounding step', () => {
+    const state = grad('c1')
+    const base  = state.intervalDays
+    const once  = boostRow(state, 'production', 0.4, deps, base)
+    expect(once.intervalDays).toBeGreaterThan(base)
+    // Second application (a re-pressed lock, a resumed run, a finalize after a lock): the
+    // boosted row plus the SAME baseline must land on the same target — boostRow returns the
+    // state unchanged instead of walking another 40% toward the full interval.
+    const twice = boostRow(once, 'production', 0.4, deps, base)
+    expect(twice).toBe(once)
+    // Without a baseline (legacy progress) it compounds — the bug this guards against.
+    const legacy = boostRow(once, 'production', 0.4, deps)
+    expect(legacy.intervalDays).toBeGreaterThan(once.intervalDays)
+  })
+
+  it('a real boost appends to the interval history; a no-op does not', () => {
+    const state = grad('c1')
+    const out = boostRow(state, 'production', 0.4, deps, state.intervalDays)
+    expect(out.intervalHistory[out.intervalHistory.length - 1]).toBe(out.intervalDays)
+    expect(boostRow(out, 'production', 0.4, deps, state.intervalDays).intervalHistory).toBe(out.intervalHistory)
+  })
 })
 
 describe('creditRow — the final-stage real review', () => {
@@ -69,6 +91,11 @@ describe('creditRow — the final-stage real review', () => {
     expect(light.intervalDays).toBeGreaterThanOrEqual(state.intervalDays)
     expect(light.stability).toBe(fullc.stability)   // memory model stays honest; only growth is capped
   })
+
+  it('a credit appends its interval to the history — the ℹ panel stays truthful', () => {
+    const out = creditRow(grad('c1'), 'production', 'good', 1, deps)
+    expect(out.intervalHistory[out.intervalHistory.length - 1]).toBe(out.intervalDays)
+  })
 })
 
 describe('relearnReview — the real relearn gate, inside the session', () => {
@@ -87,6 +114,7 @@ describe('relearnReview — the real relearn gate, inside the session', () => {
     expect(s2.relearning).toBe(false)
     expect(s2.intervalDays).toBeGreaterThanOrEqual(1)
     expect(s2.smartIntervalDays).toBe(s2.intervalDays)
+    expect(s2.intervalHistory[s2.intervalHistory.length - 1]).toBe(s2.intervalDays)
   })
 
   it('Easy escapes immediately; three Agains send it back to the pipeline', () => {

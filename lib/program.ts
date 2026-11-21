@@ -19,6 +19,7 @@
  */
 
 import type { CardState, Rating, UserId } from '@/domain'
+import { appendHistory } from '@/engine/pipeline'
 import { scheduleGraduatedFsrs } from '@/engine/dueNow'
 import { DEFAULT_FSRS_CONFIG } from '@/engine/fsrs'
 import { cappedInterval, earnedStrength, pendingBoosts, type StageKind } from '@/engine/program'
@@ -48,7 +49,7 @@ function fieldFor(direction: ProgramDirection, tracks: EnabledTracks | undefined
   return 'forward_recall'
 }
 
-function rowInterval(state: CardState, direction: ProgramDirection): number {
+export function rowInterval(state: CardState, direction: ProgramDirection): number {
   return Math.max(1, direction === 'production'
     ? state.smartIntervalDays ?? state.typedIntervalDays ?? state.intervalDays
     : state.recallIntervalDays ?? state.intervalDays)
@@ -85,13 +86,25 @@ function withLanes(state: CardState, direction: ProgramDirection, days: number, 
 }
 
 /** The grow-only interval push for a partially completed program: toward the full Good
- *  interval, by `strength`. No rating, no reps, memory state untouched. */
-export function boostRow(state: CardState, direction: ProgramDirection, strength: number, deps: ProgramDeps): CardState {
-  const old = rowInterval(state, direction)
+ *  interval, by `strength`. No rating, no reps, memory state untouched.
+ *
+ *  `base` is the word's PRE-PROGRAM interval (WordProgress.base). The push always computes
+ *  from it, never from the row's current interval — so applying the boost twice (second lock
+ *  press, resumed run, finalize after a lock) is a no-op, not a compounding 40% step
+ *  (2026-11-20 double-boost bug). Legacy progress without a base falls back to the current
+ *  interval, which can still only grow. */
+export function boostRow(state: CardState, direction: ProgramDirection, strength: number, deps: ProgramDeps, base?: number): CardState {
+  const cur = rowInterval(state, direction)
+  const old = base ?? cur
   const full = fsrsFor(state, direction, 'good', deps).intervalDays ?? old
-  const days = cappedInterval(old, full, strength)
+  const days = Math.max(cur, cappedInterval(old, full, strength))
+  if (days === cur) return state
   const dueAt = new Date(deps.now.getTime() + days * 86_400_000).toISOString()
-  return { ...state, ...withLanes(state, direction, days, dueAt) }
+  return {
+    ...state,
+    intervalHistory: appendHistory(state.intervalHistory, days),
+    ...withLanes(state, direction, days, dueAt),
+  }
 }
 
 /** The one real FSRS review for a word that cleared the final stage — growth capped by that
@@ -109,6 +122,7 @@ export function creditRow(state: CardState, direction: ProgramDirection, rating:
     relearning: false, relearningStep: 0, goodStreak: fsrs.goodStreak, againStreak: 0,
     reps: state.reps + 1,
     lastRating: rating, lastReviewedAt: deps.now.toISOString(),
+    intervalHistory: appendHistory(state.intervalHistory, days),
     ...withLanes(state, direction, days, dueAt),
   }
 }
@@ -152,7 +166,14 @@ export function relearnReview(state: CardState, direction: ProgramDirection, rat
   if (fsrs.intervalDays != null) {
     const days = Math.max(1, fsrs.intervalDays)
     const dueAt = new Date(deps.now.getTime() + days * 86_400_000).toISOString()
-    return { kind: 'scheduled', state: { ...base, relearningStep: 0, ...withLanes(state, direction, days, dueAt) } }
+    return {
+      kind: 'scheduled',
+      state: {
+        ...base, relearningStep: 0,
+        intervalHistory: appendHistory(state.intervalHistory, days),
+        ...withLanes(state, direction, days, dueAt),
+      },
+    }
   }
   const dueAt = new Date(deps.now.getTime() + (fsrs.dueInMinutes ?? 10) * 60_000).toISOString()
   return {
@@ -216,12 +237,13 @@ export async function finalizeStalePrograms(userId: UserId, tz: string, turnover
         retMap, calMap,
       }
       const rows: CardState[] = []
-      for (const { cardId, cleared } of pendingBoosts(program.progress)) {
+      for (const { cardId, cleared, base } of pendingBoosts(program.progress)) {
         const state = rowForDirection(states, cardId, program.direction)
         if (!state?.graduated || state.dormant) continue
         const strength = earnedStrength(program.stages as StageKind[], cleared)
         if (strength <= 0) continue
-        rows.push(boostRow(state, program.direction, strength, deps))
+        const boosted = boostRow(state, program.direction, strength, deps, base)
+        if (boosted !== state) rows.push(boosted)
       }
       if (rows.length > 0) await stateRepo.upsertBatch(rows)
       await programRepo.markFinalized(program.id)

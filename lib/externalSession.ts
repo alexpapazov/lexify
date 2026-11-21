@@ -19,6 +19,7 @@
 
 import type { Card, CardState, Rating } from '@/domain'
 import { scheduleGraduatedFsrs } from '@/engine/dueNow'
+import { appendHistory } from '@/engine/pipeline'
 import { DEFAULT_FSRS_CONFIG, stabilityForInterval } from '@/engine/fsrs'
 import { maturityPhase } from '@/engine/implicitCredit'
 import { normalizeKey, compareWithLexicon, CHIP_WINDOWS, type IntakeCandidate, type SeedBucket } from '@/lib/mediaIntake'
@@ -153,6 +154,7 @@ function reviewRow(state: CardState, direction: 'forward' | 'reverse', grade: Ra
     relearning: false, relearningStep: 0, goodStreak: fsrs.goodStreak, againStreak: 0,
     reps: state.reps + 1,
     lastRating: grade, lastReviewedAt: nowIso,
+    intervalHistory: appendHistory(state.intervalHistory, days),
     intervalDays: days, scheduledIntervalDays: days, dueAt,
     ...(direction === 'forward'
       ? {

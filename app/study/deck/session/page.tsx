@@ -1007,6 +1007,12 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           lapses:             grade === 'again' ? state.lapses + 1 : state.lapses,
           relearningStep:     relearnMinutes != null ? 1 : 0,
           recallIntervalDays: fsrs.intervalDays ?? state.recallIntervalDays,
+          // The ℹ panel's interval history logs EVERY real schedule write, recall/reverse included
+          // (2026-11-20: it used to be production-lane only, which read as corruption next to a
+          // stability the recall track had legitimately grown).
+          intervalHistory:    relearnMinutes == null && fsrs.intervalDays != null
+            ? appendHistory(state.intervalHistory, fsrs.intervalDays)
+            : state.intervalHistory,
           recallDueAt:        newRecallDueAt,
           // Keep dueAt in sync for reverse-direction rows so the dashboard
           // doesn't see the original (past) dueAt and treat the card as still due.
@@ -1094,6 +1100,9 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
             smartIntervalDays:     fsrs.intervalDays ?? state.smartIntervalDays,
             smartDueAt:            dueAt,
             dueAt,
+            intervalHistory: fsrs.dueInMinutes == null && fsrs.intervalDays != null
+              ? appendHistory(state.intervalHistory, fsrs.intervalDays)
+              : state.intervalHistory,
             // Accelerated (import-known) cards go self-graded once a typed review is correct.
             acceleratedTypedConfirmed: state.acceleratedTypedConfirmed || (state.acceleratedMode === 'import_known' && !!wasTyped && wasCorrect),
           }

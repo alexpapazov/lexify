@@ -75,11 +75,16 @@ export interface WordProgress {
   /** 'credited' = cleared the final stage (real review written, done for the day);
    *  'locked' = the learner cashed out the current boost early (also done for the day). */
   done?: 'credited' | 'locked'
+  /** The row's interval BEFORE the program touched it (captured at the first stage clear).
+   *  Boosts always compute from this baseline, so re-applying one (a second lock press, a
+   *  resumed run, a turnover finalize after a lock) converges on the SAME target instead of
+   *  compounding 40% closer to the full interval each time — the 2026-11-20 double-boost bug. */
+  base?: number
 }
 
 /** Words that still owe a turnover boost: progressed, not credited, not locked. */
-export function pendingBoosts(progress: Record<string, WordProgress>): { cardId: string; cleared: number }[] {
+export function pendingBoosts(progress: Record<string, WordProgress>): { cardId: string; cleared: number; base?: number }[] {
   return Object.entries(progress)
     .filter(([, p]) => p.cleared > 0 && !p.done)
-    .map(([cardId, p]) => ({ cardId, cleared: p.cleared }))
+    .map(([cardId, p]) => ({ cardId, cleared: p.cleared, base: p.base }))
 }

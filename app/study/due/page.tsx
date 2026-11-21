@@ -26,7 +26,7 @@ import { hydrateSessionAudio, applyAudioPatch } from '@/lib/sessionAudio'
 import { apiUrl } from '@/lib/apiBase'
 import { buildCalibrationMap, buildEnabledTracksMap, buildRetentionMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { buildProgramBatches, nextMatchingChunk, type ProgramBatch, type ProgramWord } from '@/lib/programPool'
-import { boostRow, creditRow, relearnReview, finalizeStalePrograms, openProgramsForToday, splitStates, type ProgramDeps } from '@/lib/program'
+import { boostRow, creditRow, relearnReview, finalizeStalePrograms, openProgramsForToday, rowInterval, splitStates, type ProgramDeps } from '@/lib/program'
 import { earnedStrength, finalStageRating, stagesForDirection, STAGE_LABEL, STAGE_STRENGTH, type StageKind, type WordProgress } from '@/engine/program'
 import { initialCardState } from '@/engine/pipeline'
 import { MatchingGame, type MatchPair } from '@/components/practice/MatchingGame'
@@ -255,6 +255,17 @@ function DueInner() {
     setProgress(progressRef.current)
     setProgressV(v => v + 1)
     persistProgress()
+    // Keep the resume map in step with live progress — otherwise leaving the run and
+    // re-entering the batch resumes from the PAGE-LOAD progress, forgetting every lock and
+    // credit made since, and re-arms "Lock in progress" (the 2026-11-20 double-boost bug).
+    if (batch) {
+      const key = batch.key
+      const snapshot = { ...progressRef.current }
+      setTodayPrograms(prev => {
+        const cur = prev.get(key)
+        return cur ? new Map(prev).set(key, { ...cur, progress: snapshot }) : prev
+      })
+    }
   }
 
   const prog = (cardId: string): WordProgress => progress[cardId] ?? { cleared: 0 }
@@ -288,6 +299,9 @@ function DueInner() {
   function clearWord(word: ProgramWord, rating: Rating | null, hintGrowthFactor?: number | null) {
     const id = word.card.id
     const cleared = Math.max(prog(id).cleared, stageIdx + 1)
+    // The pre-program interval, captured once at the first clear: every later boost computes
+    // from it, so re-applications converge instead of compounding (WordProgress.base).
+    const base = prog(id).base ?? rowInterval(word.state, batch!.direction)
     if (cleared >= stages.length) {
       const final = stages[stages.length - 1]!
       const updated = creditRow(word.state, batch!.direction, finalStageRating(final, rating), STAGE_STRENGTH[final], deps(),
@@ -295,9 +309,9 @@ function DueInner() {
       saveQueueRef.current = saveQueueRef.current
         .then(() => stateRepo.upsert(updated).then(() => undefined))
         .catch(err => console.error('[program] credit failed:', err))
-      updateProgress(id, { cleared, done: 'credited' })
+      updateProgress(id, { cleared, base, done: 'credited' })
     } else {
-      updateProgress(id, { cleared })
+      updateProgress(id, { cleared, base })
     }
   }
 
@@ -310,12 +324,15 @@ function DueInner() {
     for (const w of remaining) {
       const p = prog(w.card.id)
       if (p.cleared <= 0) continue
-      rows.push(boostRow(w.state, batch.direction, earnedStrength(stages, p.cleared), d))
+      const boosted = boostRow(w.state, batch.direction, earnedStrength(stages, p.cleared), d, p.base)
+      if (boosted !== w.state) rows.push(boosted)
       ids.push(w.card.id)
     }
-    if (rows.length === 0) return
+    if (ids.length === 0) return
     try {
-      await stateRepo.upsertBatch(rows)
+      // rows can be fewer than ids: a word already at (or past) its boost target is a no-op
+      // write, but it still gets its 'locked' flag so nothing re-arms it later.
+      if (rows.length > 0) await stateRepo.upsertBatch(rows)
       for (const id of ids) updateProgress(id, { ...prog(id), done: 'locked' })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))

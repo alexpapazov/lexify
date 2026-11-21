@@ -313,7 +313,11 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
       for (const { state } of uniqueCards.values()) {
         if (!state) counts.unlearned++
         else if (state.dormant) counts.dormant++
-        else if (state.graduated) counts.graduated++
+        else if (state.graduated) {
+          counts.graduated++
+          if (cardMaturity(state) === 'long_term') counts.longTerm++
+          else counts.shortTerm++
+        }
         else counts.learning++
       }
       // Due Now via the shared helper (same definition as the dashboard/session): date-level, real

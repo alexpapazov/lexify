@@ -248,9 +248,26 @@ Current feature files:
   — express keeps its redo rounds, it has no later rounds). Matching tiles have a corner "?"
   = self-reported miss (red flash, no credit, counts as mistake — MatchingGame.dontKnow). Day-state rows
   (`lib/data/reviewPrograms.ts`): one per pair+direction+turnover-aware day, progress
-  cardId→{cleared, done: credited|locked}; clearing the FINAL stage credits immediately;
+  cardId→{cleared, done: credited|locked, base}; clearing the FINAL stage credits immediately;
   "Lock in progress" cashes boosts early; everything else pays out at day turnover. Misses
   replay in-stage (Again in card stages requeues at the END; matching uses redoMissed).
+  DOUBLE-BOOST BUG FIXED 2026-11-21 (found via live-DB forensics with the user): boosts used
+  to compute from the row's CURRENT interval, so a re-applied lock compounded 40% closer to
+  the full interval each time (1−0.6²=0.64 — 기리다 went 10.9→103→158 in one night; 7 ko rows
+  repaired by SQL to their single-boost values). Two holes enabled re-application: (1)
+  `todayPrograms` was only set at page load, so leaving the run and re-entering the batch
+  resumed PAGE-LOAD progress, forgetting locks/credits and re-arming the Lock button — now
+  `updateProgress` keeps the resume map in sync; (2) no idempotency — now `WordProgress.base`
+  records the pre-program interval at the first stage clear and `boostRow(state, dir,
+  strength, deps, base)` always computes from it (grow-only vs current, returns the SAME
+  state object when nothing moves; lockInNow/finalize skip no-op rows, lock still flags them
+  done). INTERVAL HISTORY APPENDS EVERYWHERE (same session): the ℹ panel's history used to be
+  appended only by the typed-forward + graduation branches, so recall-track reviews, smart
+  reviews, program credits/boosts, relearn escapes, and external-session reviews grew the
+  schedule invisibly — stability legitimately ≫ last history entry read as corruption (the
+  ~890-row "anomaly" audit was almost entirely this display gap; only the 7 locked rows were
+  real). Now appended by: all 3 session pages' recall + smart branches, `creditRow`,
+  `boostRow` (real moves only), `relearnReview` (scheduled), and `externalSession.reviewRow`.
   The dashboard's "Study all due" button now LINKS to /study/due — the old due-picker
   popover (pairTypeDue, forward_cloze/reverse_matching launch modes) was DELETED; express/
   cloze/story pages still exist and their deep links work, they're just not launched from
