@@ -1,4 +1,4 @@
-import { boostRow, creditRow, type ProgramDeps } from '../program'
+import { boostRow, creditRow, relearnReview, type ProgramDeps } from '../program'
 import { buildProgramBatches, nextMatchingChunk, type ProgramWord } from '../programPool'
 import { initialCardState } from '../../engine/pipeline'
 import type { Card, CardState } from '@/domain'
@@ -71,6 +71,42 @@ describe('creditRow — the final-stage real review', () => {
   })
 })
 
+describe('relearnReview — the real relearn gate, inside the session', () => {
+  const looping = (over: Partial<CardState> = {}) =>
+    grad('c1', { relearning: true, relearningStep: 1, goodStreak: 0, againStreak: 0, stability: 2, intervalDays: 2, smartIntervalDays: 2, ...over })
+
+  it('first Good keeps looping; the second Good escapes and schedules', () => {
+    const first = relearnReview(looping(), 'production', 'good', deps)
+    expect(first.kind).toBe('looping')
+    const s1 = (first as { state: CardState }).state
+    expect(s1.goodStreak).toBe(1)
+    expect(s1.relearning).toBe(true)
+    const second = relearnReview(s1, 'production', 'good', deps)
+    expect(second.kind).toBe('scheduled')
+    const s2 = (second as { state: CardState }).state
+    expect(s2.relearning).toBe(false)
+    expect(s2.intervalDays).toBeGreaterThanOrEqual(1)
+    expect(s2.smartIntervalDays).toBe(s2.intervalDays)
+  })
+
+  it('Easy escapes immediately; three Agains send it back to the pipeline', () => {
+    expect(relearnReview(looping(), 'production', 'easy', deps).kind).toBe('scheduled')
+    let st = looping()
+    let out = relearnReview(st, 'production', 'again', deps)
+    expect(out.kind).toBe('looping')
+    st = (out as { state: CardState }).state
+    out = relearnReview(st, 'production', 'again', deps)
+    expect(out.kind).toBe('looping')
+    st = (out as { state: CardState }).state
+    expect(relearnReview(st, 'production', 'again', deps).kind).toBe('ladder')
+  })
+
+  it('never increments lapses — the lapse was counted entering the loop', () => {
+    const out = relearnReview(looping({ lapses: 3 }), 'production', 'again', deps)
+    expect((out as { state: CardState }).state.lapses).toBe(3)
+  })
+})
+
 describe('buildProgramBatches', () => {
   const cards = [card('a'), card('b'), card('c'), card('d')]
   const forward = new Map<string, CardState>([
@@ -84,11 +120,12 @@ describe('buildProgramBatches', () => {
   ])
   const tracks = new Map<string, EnabledTracks>([['fr|en', { typed: false, smart: true, recall: false, reverse: true } as EnabledTracks]])
 
-  it('splits per direction, excludes relearning (counted) and not-due rows', () => {
+  it('splits per direction; relearning rows ride along FLAGGED (same session, never a link-out)', () => {
     const batches = buildProgramBatches(cards, forward, reverse, tracks, NOW)
     const prod = batches.find(b => b.direction === 'production')!
     const rec  = batches.find(b => b.direction === 'recognition')!
-    expect(prod.words.map(w => w.card.id).sort()).toEqual(['a', 'd'])
+    expect(prod.words.filter(w => !w.relearn).map(w => w.card.id).sort()).toEqual(['a', 'd'])
+    expect(prod.words.filter(w => w.relearn).map(w => w.card.id)).toEqual(['b'])
     expect(prod.relearning).toBe(1)
     expect(rec.words.map(w => w.card.id)).toEqual(['d'])
   })

@@ -234,7 +234,14 @@ Current feature files:
   cappedInterval grow-only, finalStageRating); writes in `lib/program.ts` (boostRow =
   interval-only push, NO D/S/reps; creditRow = real FSRS review with growth capped by final
   stage; finalizeStalePrograms runs LAZILY on Study-dashboard + Due-page load — no cron);
-  pool in `lib/programPool.ts` (relearn-loop rows counted but linked to a normal session;
+  pool in `lib/programPool.ts` (RELEARN IN-SESSION, 2026-11-20: relearn-loop rows ride along
+  in the batch FLAGGED `relearn` — the runner weaves them in as REAL relearn reviews
+  (`lib/program.relearnReview`: live relearning/streak state through scheduleGraduatedFsrs;
+  Good×2/Easy escapes+schedules, Again×3 resets to initialCardState; lapses never incremented
+  in-loop) at the seams — between matching rounds, before stage cards, standalone when only
+  relearns remain; production=typed, recognition=flashcard. A matching MISS also queues ONE
+  remedial written check (relearnKindRef 'remedial', practice-only, no write). No link-out,
+  never a separate mode;
   `nextMatchingChunk` keeps tile texts unique per round AND redistributes the stage's misses
   — an even share per remaining round, never one clumped redo; the runner's MatchingGame runs
   WITHOUT redoMissed, a missed/?-marked pair just stays uncleared and mixes into later rounds

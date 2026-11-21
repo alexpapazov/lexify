@@ -3,15 +3,22 @@
  * per language pair × direction, holding the graduated cards due right now in that direction.
  * Pure — the page feeds it cards/states/track flags.
  *
- * Relearn-loop rows are counted but NOT batched: the relearn gate (Good×2 / Easy to escape)
- * belongs to a normal session, so the batch row links those out instead of weakening them
- * through program stages.
+ * Relearn-loop rows ride ALONG in the batch (flagged `relearn`): the runner serves them as
+ * REAL relearn reviews woven into the same session — the gate (Good×2 / Easy to escape) runs
+ * intact, they just never leave the session (user decision 2026-11-20). They are excluded
+ * from program stages and credits.
  */
 
 import type { Card, CardState } from '@/domain'
 import type { EnabledTracks } from '@/lib/sessionLimits'
 
-export interface ProgramWord { card: Card; state: CardState }
+export interface ProgramWord {
+  card: Card
+  state: CardState
+  /** In the relearn loop: served inside the SAME session as real relearn reviews (written /
+   *  recall), never through program stages, never a separate mode (user decision 2026-11-20). */
+  relearn?: boolean
+}
 
 export interface ProgramBatch {
   key:        string            // `${src}|${tgt}|${direction}`
@@ -19,7 +26,7 @@ export interface ProgramBatch {
   tgt:        string
   direction:  'production' | 'recognition'
   words:      ProgramWord[]
-  /** Due but in the relearn loop — review them in a normal session. */
+  /** How many of `words` are relearn-loop rows (display only). */
   relearning: number
 }
 
@@ -50,7 +57,7 @@ export function buildProgramBatches(
       const dueIso = typing ? fwd.smartDueAt ?? fwd.typedDueAt ?? fwd.dueAt : fwd.recallDueAt ?? fwd.dueAt
       if (prodOn && isDue(dueIso)) {
         const b = batch(card.sourceLanguage, card.targetLanguage, 'production')
-        if (fwd.relearning) b.relearning++
+        if (fwd.relearning) { b.relearning++; b.words.push({ card, state: fwd, relearn: true }) }
         else b.words.push({ card, state: fwd })
       }
     }
@@ -60,7 +67,7 @@ export function buildProgramBatches(
     if (rev?.graduated && !rev.dormant && fwd?.graduated && tracks?.reverse !== false) {
       if (isDue(rev.recallDueAt ?? rev.dueAt)) {
         const b = batch(card.sourceLanguage, card.targetLanguage, 'recognition')
-        if (rev.relearning) b.relearning++
+        if (rev.relearning) { b.relearning++; b.words.push({ card, state: rev, relearn: true }) }
         else b.words.push({ card, state: rev })
       }
     }

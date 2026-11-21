@@ -113,6 +113,62 @@ export function creditRow(state: CardState, direction: ProgramDirection, rating:
   }
 }
 
+/** What one real relearn-loop rating did to the row. */
+export type RelearnOutcome =
+  | { kind: 'scheduled'; state: CardState }   // escaped the loop — scheduled forward, done today
+  | { kind: 'looping';   state: CardState }   // still in the loop — re-shows later this session
+  | { kind: 'ladder' }                        // three Agains — back to the learning pipeline
+
+/**
+ * A REAL review on a relearn-loop row, inside the program session (user decision 2026-11-20:
+ * relearning never leaves the session — the cards weave in as written/recall exercises).
+ * Runs the genuine relearn gate via the row's live relearning/streak state: Good×2 or Easy
+ * escapes and schedules; Again×3 un-graduates. Lapses are NOT incremented here — the lapse
+ * was counted when the row entered the loop.
+ */
+export function relearnReview(state: CardState, direction: ProgramDirection, rating: Rating, deps: ProgramDeps): RelearnOutcome {
+  const field = fieldFor(direction, deps.tracks)
+  const intervalDays = rowInterval(state, direction)
+  const fsrs = scheduleGraduatedFsrs({
+    difficulty: state.difficulty, stability: state.stability,
+    intervalDays, lapses: state.lapses,
+    relearning: state.relearning, goodStreak: state.goodStreak, againStreak: state.againStreak,
+    elapsedDays: state.lastReviewedAt
+      ? Math.max(0, (deps.now.getTime() - new Date(state.lastReviewedAt).getTime()) / 86_400_000)
+      : 0,
+  }, rating, {
+    ...DEFAULT_FSRS_CONFIG,
+    requestRetention:     retentionFor(deps.retMap, deps.src, deps.tgt, field),
+    retentionCalibration: calibrationFor(deps.calMap, deps.src, deps.tgt, field),
+  }, {})
+  if (fsrs.sendToLadder) return { kind: 'ladder' }
+  const base: CardState = {
+    ...state,
+    difficulty: fsrs.difficulty, stability: fsrs.stability,
+    relearning: fsrs.relearning, goodStreak: fsrs.goodStreak, againStreak: fsrs.againStreak,
+    reps: state.reps + 1,
+    lastRating: rating, lastReviewedAt: deps.now.toISOString(),
+  }
+  if (fsrs.intervalDays != null) {
+    const days = Math.max(1, fsrs.intervalDays)
+    const dueAt = new Date(deps.now.getTime() + days * 86_400_000).toISOString()
+    return { kind: 'scheduled', state: { ...base, relearningStep: 0, ...withLanes(state, direction, days, dueAt) } }
+  }
+  const dueAt = new Date(deps.now.getTime() + (fsrs.dueInMinutes ?? 10) * 60_000).toISOString()
+  return {
+    kind: 'looping',
+    state: {
+      ...base, relearningStep: 1, dueAt,
+      ...(direction === 'recognition'
+        ? { recallDueAt: dueAt }
+        : {
+            ...(state.smartDueAt != null ? { smartDueAt: dueAt } : {}),
+            ...(state.typedDueAt != null ? { typedDueAt: dueAt } : {}),
+          }),
+    },
+  }
+}
+
 /** The direction's row for a card, from the whole-user state list. */
 export function rowForDirection(
   states: { forward: Map<string, CardState>; reverse: Map<string, CardState> },

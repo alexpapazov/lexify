@@ -26,8 +26,9 @@ import { hydrateSessionAudio, applyAudioPatch } from '@/lib/sessionAudio'
 import { apiUrl } from '@/lib/apiBase'
 import { buildCalibrationMap, buildEnabledTracksMap, buildRetentionMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { buildProgramBatches, nextMatchingChunk, type ProgramBatch, type ProgramWord } from '@/lib/programPool'
-import { boostRow, creditRow, finalizeStalePrograms, openProgramsForToday, splitStates, type ProgramDeps } from '@/lib/program'
+import { boostRow, creditRow, relearnReview, finalizeStalePrograms, openProgramsForToday, splitStates, type ProgramDeps } from '@/lib/program'
 import { earnedStrength, finalStageRating, stagesForDirection, STAGE_LABEL, STAGE_STRENGTH, type StageKind, type WordProgress } from '@/engine/program'
+import { initialCardState } from '@/engine/pipeline'
 import { MatchingGame, type MatchPair } from '@/components/practice/MatchingGame'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
@@ -190,6 +191,10 @@ function DueInner() {
     progressRef.current = { ...prog.progress }
     setProgress(progressRef.current)
     setProgressV(v => v + 1)
+    // Relearn-loop words ride along in the SAME session (user decision 2026-11-20): real
+    // relearn reviews woven between rounds/cards, never a separate mode.
+    relearnKindRef.current = new Map(b.words.filter(w => w.relearn).map(w => [w.card.id, 'loop' as const]))
+    setRelearnQ(b.words.filter(w => w.relearn).map(w => w.card.id))
     setView('run')
     void loadSessionCards(b)
   }
@@ -254,10 +259,20 @@ function DueInner() {
 
   // ── Runner derivations ──────────────────────────────────────────────────
   const stages = program?.stages ?? []
+  // Stage pipeline pool = the NON-relearn words; relearn words run their own inline queue.
   const pool: ProgramWord[] = useMemo(
-    () => (batch ? batch.words : []),
+    () => (batch ? batch.words.filter(w => !w.relearn) : []),
     [batch],
   )
+  const [relearnQ, setRelearnQ] = useState<string[]>([])
+  /** 'loop' = a real relearn-loop row (real FSRS writes); 'remedial' = a word missed during
+   *  matching this session — one written check, no schedule write. */
+  const relearnKindRef = useRef<Map<string, 'loop' | 'remedial'>>(new Map())
+  const addRemedial = (id: string) => {
+    if (relearnKindRef.current.has(id)) return
+    relearnKindRef.current.set(id, 'remedial')
+    setRelearnQ(q => [...q, id])
+  }
   const remaining = pool.filter(w => !prog(w.card.id).done)
   const stageIdx = remaining.length > 0
     ? Math.min(stages.length - 1, Math.min(...remaining.map(w => prog(w.card.id).cleared)))
@@ -322,12 +337,14 @@ function DueInner() {
       missedStageRef.current = new Set()
     }
     if (!stageChanged && matchChunk) return
+    // Pending relearn/remedial cards drain between rounds — the next round waits for them.
+    if (relearnQ.length > 0) { if (stageChanged) setMatchChunk(null); return }
     const fresh = active.filter(w => !missedStageRef.current.has(w.card.id))
     const retry = active.filter(w => missedStageRef.current.has(w.card.id))
     dirtyRef.current = new Set()
     setMatchChunk(nextMatchingChunk(fresh, retry))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, stageKind, stageIdx, matchChunk, progressV])
+  }, [view, stageKind, stageIdx, matchChunk, progressV, relearnQ])
 
   // ── Card-stage queue (cloze / recall / typed) ───────────────────────────
   const [queue, setQueue] = useState<string[]>([])
@@ -455,7 +472,7 @@ function DueInner() {
     const locked   = pool.filter(w => prog(w.card.id).done === 'locked').length
     const lockable = remaining.filter(w => prog(w.card.id).cleared > 0).length
 
-    if (remaining.length === 0) {
+    if (remaining.length === 0 && relearnQ.length === 0) {
       return (
         <div className="max-w-md mx-auto pt-16 space-y-4 text-center">
           <h1 className="text-2xl font-semibold text-ink">Program complete</h1>
@@ -472,7 +489,9 @@ function DueInner() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <button onClick={() => setView('batches')} className="text-sm text-ink-muted hover:text-ink">← Due{lockable > 0 ? ' (progress saved)' : ''}</button>
         <span className="text-xs text-ink-muted">
-          {langFlag(batch.src)} {dirLabel(batch)} · stage {stageIdx + 1}/{stages.length}: {stageKind ? STAGE_LABEL[stageKind] : ''} · {remaining.length} left
+          {langFlag(batch.src)} {dirLabel(batch)}
+          {remaining.length > 0 ? ` · stage ${stageIdx + 1}/${stages.length}: ${stageKind ? STAGE_LABEL[stageKind] : ''} · ${remaining.length} left` : ''}
+          {relearnQ.length > 0 ? ` · ${relearnQ.length} relearn` : ''}
         </span>
         {lockable > 0 && stages.length > 1 && (
           <button onClick={() => void lockInNow()} className="text-xs text-accent-soft hover:text-accent" title="Apply every started word's current boost now and finish">
@@ -481,6 +500,86 @@ function DueInner() {
         )}
       </div>
     )
+
+    // ── Inline relearn/remedial card — takes priority at the natural seams: between matching
+    // rounds, before stage cards, and as the whole session when only relearns remain. A 'loop'
+    // card is a REAL relearn review (the gate runs intact: Good×2/Easy escapes and schedules,
+    // Again×3 back to the pipeline); a 'remedial' card is the written check a matching miss
+    // earned — practice only, no write. Never a separate mode (user decision 2026-11-20).
+    const relearnId = relearnQ[0]
+    const relearnNow = relearnId != null && (stageKind !== 'matching' || !matchChunk || matchChunk.length === 0 || remaining.length === 0)
+    if (relearnNow) {
+      const rWord = batch.words.find(w => w.card.id === relearnId)
+      const rCard = sessionCards.get(relearnId)
+      if (!rWord || !rCard) {
+        return <div className="space-y-6 pb-12">{header}<p className="text-sm text-ink-muted text-center pt-8">Loading…</p></div>
+      }
+      const rKind = relearnKindRef.current.get(relearnId) ?? 'remedial'
+      const rPromptSide = batch.direction === 'production' ? 'back' as const : 'front' as const
+      const rDeck = cardDeckRef.current.get(rCard.id)
+      const rGs = { ...(rDeck?.gradingSettings ?? DEFAULT_GRADING_SETTINGS), answerLanguage: batch.direction === 'production' ? batch.src : batch.tgt }
+      const onRelearnRate = (rating: Rating, wasCorrect = rating !== 'again') => {
+        setAttempt(a => a + 1)
+        const eff: Rating = wasCorrect && rating !== 'again' ? rating : 'again'
+        if (rKind === 'remedial') {
+          if (eff === 'again') setRelearnQ(q => [...q.slice(1), relearnId])
+          else { relearnKindRef.current.delete(relearnId); setRelearnQ(q => q.slice(1)) }
+          return
+        }
+        const out = relearnReview(rWord.state, batch.direction, eff, deps())
+        if (out.kind === 'ladder') {
+          // Three Agains: back to the learning pipeline, like sessions.
+          const reset = { ...initialCardState(userId, relearnId, rWord.state.pipelineId), reviewDirection: rWord.state.reviewDirection }
+          void stateRepo.upsert(reset).catch(err => console.error('Relearn reset failed:', err))
+          relearnKindRef.current.delete(relearnId)
+          setRelearnQ(q => q.slice(1))
+          return
+        }
+        rWord.state = out.state
+        void stateRepo.upsert(out.state).catch(err => console.error('Relearn save failed:', err))
+        if (out.kind === 'scheduled') {
+          relearnKindRef.current.delete(relearnId)
+          setRelearnQ(q => q.slice(1))        // escaped — scheduled forward, done for the day
+        } else {
+          setRelearnQ(q => [...q.slice(1), relearnId])   // still looping — re-shows later
+        }
+      }
+      return (
+        <div className="space-y-6 pb-12">
+          {header}
+          <p className="text-xs text-ink-faint text-center uppercase tracking-wider">
+            {rKind === 'loop' ? 'Relearning — two Goods in a row (or Easy) puts it back on schedule' : 'Missed in matching — type it once to move on'}
+          </p>
+          {batch.direction === 'production' ? (
+            <TypingMode
+              key={`relearn-${rCard.id}-${attempt}`}
+              card={rCard}
+              promptSide={rPromptSide}
+              strictness={strictFor(batch.src, batch.tgt)}
+              gradingSettings={rGs}
+              gradedReview={true}
+              answerLanguage={batch.src}
+              deckName={rDeck?.name}
+              synonyms={rCard.choices?.frontSynonyms ?? []}
+              overrideAnswers={Array.from(overridesRef.current.get(`${rCard.id}:front`) ?? [])}
+              autoPlayAudio={rGs.autoPlayAudio ?? true}
+              onRate={(r, wasCorrect) => onRelearnRate(r, wasCorrect)}
+            />
+          ) : (
+            <FlashcardMode
+              key={`relearn-${rCard.id}-${attempt}`}
+              card={rCard}
+              promptSide={rPromptSide}
+              promptLanguage={rCard.sourceLanguage}
+              answerLanguage={batch.tgt}
+              deckName={rDeck?.name}
+              autoPlayAudio={rGs.autoPlayAudio ?? true}
+              onRate={r => onRelearnRate(r)}
+            />
+          )}
+        </div>
+      )
+    }
 
     if (stageKind === 'matching') {
       if (!matchChunk || matchChunk.length === 0) {
@@ -500,12 +599,15 @@ function DueInner() {
             }}
             onAttempt={a => {
               if (!a.correct) {
-                // No credit this round; the pair redistributes into the upcoming rounds.
+                // No credit this round; the pair redistributes into the upcoming rounds AND
+                // earns one written check in this session (queued at the next seam).
                 dirtyRef.current.add(a.pair.id)
                 missedStageRef.current.add(a.pair.id)
+                addRemedial(a.pair.id)
                 if (a.confused) {
                   dirtyRef.current.add(a.confused.id)
                   missedStageRef.current.add(a.confused.id)
+                  addRemedial(a.confused.id)
                 }
                 return
               }
@@ -702,18 +804,9 @@ function DueInner() {
                 <div className="min-w-0">
                   <div className="text-sm text-ink font-medium">{langFlag(b.src)} {dirLabel(b)}</div>
                   <div className="text-xs text-ink-muted">
-                    {b.words.length} due
+                    {b.words.length - b.relearning} due
+                    {b.relearning > 0 ? ` · ${b.relearning} relearning (reviewed in-session)` : ''}
                     {inProgress && open ? ` · in progress (${open.stages.map(s => STAGE_LABEL[s]).join(' → ')})` : ''}
-                    {b.relearning > 0 && (
-                      <>
-                        {' · '}
-                        <Link
-                          className="text-accent-soft hover:text-accent"
-                          href={`/study/all/session?category=due&source=${b.src}&target=${b.tgt}`}
-                          title="Relearn-loop cards finish in a normal session"
-                        >{b.relearning} relearning →</Link>
-                      </>
-                    )}
                   </div>
                 </div>
                 {b.words.length > 0 && (
