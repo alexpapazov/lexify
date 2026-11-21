@@ -671,6 +671,7 @@ function DueInner() {
               }
             }}
             onClose={() => setInfoOpen(false)}
+            initialShowStats
           />
         )}
       </div>
