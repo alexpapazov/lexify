@@ -302,7 +302,7 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
         <button
           onClick={() => !isMatched && pick(side, p.id)}
           disabled={isMatched}
-          className={`w-full rounded-card border px-3 py-3 text-sm leading-snug transition-all select-none ${
+          className={`w-full rounded-card border px-5 py-5 text-lg leading-snug transition-all select-none ${
             isMatched  ? 'border-success/30 bg-success/5 text-ink-faint/50' :
             isWrong    ? 'border-danger bg-danger/10 text-danger' :
             isSelected ? 'border-accent bg-accent/10 text-accent-soft scale-[1.02]' :
@@ -344,7 +344,7 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
 
   const done = matched.size
   return (
-    <div className="space-y-6 max-w-2xl mx-auto pb-12">
+    <div className="space-y-6 max-w-4xl mx-auto pb-12">
       <div className="flex items-center justify-between gap-4">
         <button onClick={onExit} className="text-sm text-ink-faint hover:text-ink transition-colors">✕ End practice</button>
         <div className="flex items-center gap-4 text-sm text-ink-muted tabular-nums">

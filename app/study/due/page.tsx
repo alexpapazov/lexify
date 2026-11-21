@@ -501,87 +501,15 @@ function DueInner() {
       </div>
     )
 
-    // ── Inline relearn/remedial card — takes priority at the natural seams: between matching
-    // rounds, before stage cards, and as the whole session when only relearns remain. A 'loop'
-    // card is a REAL relearn review (the gate runs intact: Good×2/Easy escapes and schedules,
-    // Again×3 back to the pipeline); a 'remedial' card is the written check a matching miss
-    // earned — practice only, no write. Never a separate mode (user decision 2026-11-20).
+    // ── Relearn/remedial precedence — the natural seams: between matching rounds, before
+    // stage cards, standalone when only relearns remain. A 'loop' card is a REAL relearn
+    // review (Good×2/Easy escapes and schedules, Again×3 back to the pipeline); a 'remedial'
+    // card is the written check a matching miss earned — practice only, no write. Never a
+    // separate mode (user decision 2026-11-20).
     const relearnId = relearnQ[0]
     const relearnNow = relearnId != null && (stageKind !== 'matching' || !matchChunk || matchChunk.length === 0 || remaining.length === 0)
-    if (relearnNow) {
-      const rWord = batch.words.find(w => w.card.id === relearnId)
-      const rCard = sessionCards.get(relearnId)
-      if (!rWord || !rCard) {
-        return <div className="space-y-6 pb-12">{header}<p className="text-sm text-ink-muted text-center pt-8">Loading…</p></div>
-      }
-      const rKind = relearnKindRef.current.get(relearnId) ?? 'remedial'
-      const rPromptSide = batch.direction === 'production' ? 'back' as const : 'front' as const
-      const rDeck = cardDeckRef.current.get(rCard.id)
-      const rGs = { ...(rDeck?.gradingSettings ?? DEFAULT_GRADING_SETTINGS), answerLanguage: batch.direction === 'production' ? batch.src : batch.tgt }
-      const onRelearnRate = (rating: Rating, wasCorrect = rating !== 'again') => {
-        setAttempt(a => a + 1)
-        const eff: Rating = wasCorrect && rating !== 'again' ? rating : 'again'
-        if (rKind === 'remedial') {
-          if (eff === 'again') setRelearnQ(q => [...q.slice(1), relearnId])
-          else { relearnKindRef.current.delete(relearnId); setRelearnQ(q => q.slice(1)) }
-          return
-        }
-        const out = relearnReview(rWord.state, batch.direction, eff, deps())
-        if (out.kind === 'ladder') {
-          // Three Agains: back to the learning pipeline, like sessions.
-          const reset = { ...initialCardState(userId, relearnId, rWord.state.pipelineId), reviewDirection: rWord.state.reviewDirection }
-          void stateRepo.upsert(reset).catch(err => console.error('Relearn reset failed:', err))
-          relearnKindRef.current.delete(relearnId)
-          setRelearnQ(q => q.slice(1))
-          return
-        }
-        rWord.state = out.state
-        void stateRepo.upsert(out.state).catch(err => console.error('Relearn save failed:', err))
-        if (out.kind === 'scheduled') {
-          relearnKindRef.current.delete(relearnId)
-          setRelearnQ(q => q.slice(1))        // escaped — scheduled forward, done for the day
-        } else {
-          setRelearnQ(q => [...q.slice(1), relearnId])   // still looping — re-shows later
-        }
-      }
-      return (
-        <div className="space-y-6 pb-12">
-          {header}
-          <p className="text-xs text-ink-faint text-center uppercase tracking-wider">
-            {rKind === 'loop' ? 'Relearning — two Goods in a row (or Easy) puts it back on schedule' : 'Missed in matching — type it once to move on'}
-          </p>
-          {batch.direction === 'production' ? (
-            <TypingMode
-              key={`relearn-${rCard.id}-${attempt}`}
-              card={rCard}
-              promptSide={rPromptSide}
-              strictness={strictFor(batch.src, batch.tgt)}
-              gradingSettings={rGs}
-              gradedReview={true}
-              answerLanguage={batch.src}
-              deckName={rDeck?.name}
-              synonyms={rCard.choices?.frontSynonyms ?? []}
-              overrideAnswers={Array.from(overridesRef.current.get(`${rCard.id}:front`) ?? [])}
-              autoPlayAudio={rGs.autoPlayAudio ?? true}
-              onRate={(r, wasCorrect) => onRelearnRate(r, wasCorrect)}
-            />
-          ) : (
-            <FlashcardMode
-              key={`relearn-${rCard.id}-${attempt}`}
-              card={rCard}
-              promptSide={rPromptSide}
-              promptLanguage={rCard.sourceLanguage}
-              answerLanguage={batch.tgt}
-              deckName={rDeck?.name}
-              autoPlayAudio={rGs.autoPlayAudio ?? true}
-              onRate={r => onRelearnRate(r)}
-            />
-          )}
-        </div>
-      )
-    }
 
-    if (stageKind === 'matching') {
+    if (!relearnNow && stageKind === 'matching') {
       if (!matchChunk || matchChunk.length === 0) {
         return <div className="space-y-6 pb-12">{header}<p className="text-sm text-ink-muted text-center pt-8">Preparing round…</p></div>
       }
@@ -633,14 +561,19 @@ function DueInner() {
       )
     }
 
-    // Card stages — one at a time; Again replays at the end of the stage queue.
-    const word = currentCardId ? pool.find(w => w.card.id === currentCardId) : undefined
-    // The SESSION-column copy carries choices (synonyms, stored sentences, overrides targets)
+    // ── The active card: a relearn/remedial card at a seam, else the current stage card.
+    // ONE shared chrome for both — deck grading settings, overrides, synonyms, hint, IPA,
+    // audio, star, edits, ℹ modal — so a relearn review is a full review (user demand
+    // 2026-11-20: "every single thing functional").
+    const activeCardId = relearnNow ? relearnId : currentCardId
+    const word = activeCardId ? batch.words.find(w => w.card.id === activeCardId) : undefined
+    // The SESSION-column copy carries choices (synonyms, stored sentences, override targets)
     // and hydrated audio — the bulk placeholder must never reach the review components.
     const card = word ? sessionCards.get(word.card.id) : undefined
     if (!word || !card) {
       return <div className="space-y-6 pb-12">{header}<p className="text-sm text-ink-muted text-center pt-8">Loading…</p></div>
     }
+    const rKind = relearnNow ? (relearnKindRef.current.get(card.id) ?? 'remedial') : null
     const promptSide = batch.direction === 'production' ? 'back' as const : 'front' as const
     const answerSide = promptSide === 'back' ? 'front' as const : 'back' as const
     const promptLanguage = promptSide === 'front' ? card.sourceLanguage : undefined
@@ -651,7 +584,8 @@ function DueInner() {
     const autoplay = gsWithLang.autoPlayAudio ?? true
     const currentIpaText = showIPA && promptSide === 'front' ? (ipaCache.get(card.id) ?? card.ipa ?? undefined) : undefined
     const ipaToggle = promptSide === 'front' ? () => setShowIPA(v => !v) : undefined
-    const onRate = (rating: Rating, wasCorrect = rating !== 'again') => {
+
+    const onStageRate = (rating: Rating, wasCorrect = rating !== 'again') => {
       const hintGF = hintGFRef.current
       hintGFRef.current = null
       setInfoOpen(false)
@@ -664,6 +598,36 @@ function DueInner() {
         setQueue(q => q.filter(id => id !== word.card.id))
       }
     }
+    const onRelearnRate = (rating: Rating, wasCorrect = rating !== 'again') => {
+      hintGFRef.current = null
+      setInfoOpen(false)
+      setAttempt(a => a + 1)
+      const eff: Rating = wasCorrect && rating !== 'again' ? rating : 'again'
+      if (rKind === 'remedial') {
+        if (eff === 'again') setRelearnQ(q => [...q.slice(1), card.id])
+        else { relearnKindRef.current.delete(card.id); setRelearnQ(q => q.slice(1)) }
+        return
+      }
+      const out = relearnReview(word.state, batch.direction, eff, deps())
+      if (out.kind === 'ladder') {
+        // Three Agains: back to the learning pipeline, like sessions.
+        const reset = { ...initialCardState(userId, card.id, word.state.pipelineId), reviewDirection: word.state.reviewDirection }
+        void stateRepo.upsert(reset).catch(err => console.error('Relearn reset failed:', err))
+        relearnKindRef.current.delete(card.id)
+        setRelearnQ(q => q.slice(1))
+        return
+      }
+      word.state = out.state
+      void stateRepo.upsert(out.state).catch(err => console.error('Relearn save failed:', err))
+      if (out.kind === 'scheduled') {
+        relearnKindRef.current.delete(card.id)
+        setRelearnQ(q => q.slice(1))        // escaped — scheduled forward, done for the day
+      } else {
+        setRelearnQ(q => [...q.slice(1), card.id])   // still looping — re-shows later
+      }
+    }
+    const onRate = relearnNow ? onRelearnRate : onStageRate
+
     const patchCard = (patch: Partial<Card>) =>
       setSessionCards(prev => { const c0 = prev.get(card.id); return c0 ? new Map(prev).set(card.id, { ...c0, ...patch }) : prev })
     const onToggleStar = async (next: boolean) => {
@@ -676,27 +640,34 @@ function DueInner() {
     }
     // The sessions' "Almost" for a near-miss self-graded recall: small difficulty bump, replay
     // this stage, no schedule change (no review event — programs never write them).
-    const onAlmost = word.state.graduated ? () => {
+    const onAlmost = !relearnNow && word.state.graduated ? () => {
       const bumped = { ...word.state, difficulty: nextDifficulty(word.state.difficulty ?? 5, 'hard') }
       word.state = bumped
       void stateRepo.upsert(bumped).catch(err => console.error('Almost save failed:', err))
       setAttempt(a => a + 1)
       setQueue(q => [...q.filter(id => id !== word.card.id), word.card.id])
     } : undefined
+
+    const typedPresentation = relearnNow ? batch.direction === 'production' : (stageKind === 'typed' || stageKind === 'cloze')
     return (
       <div className="space-y-6 pb-12">
         {header}
-        {stageKind === 'typed' || stageKind === 'cloze' ? (
+        {relearnNow && (
+          <p className="text-xs text-ink-faint text-center uppercase tracking-wider">
+            {rKind === 'loop' ? 'Relearning — two Goods in a row (or Easy) puts it back on schedule' : 'Missed in matching — get it right once to move on'}
+          </p>
+        )}
+        {typedPresentation ? (
           // Cloze is TYPED production (user decision 2026-11-20): the sentence's blank is the
           // prompt and the word is typed into the usual grader. Articles auto-accept in cloze —
           // the sentence's own article sits visibly before the blank.
           <TypingMode
-            key={`${card.id}-${stageIdx}-${attempt}`}
+            key={`${relearnNow ? 'relearn' : stageIdx}-${card.id}-${attempt}`}
             card={card}
             promptSide={promptSide}
             promptLanguage={promptLanguage}
-            cloze={stageKind === 'cloze' ? clozeByCard.get(card.id) || undefined : undefined}
-            strictness={stageKind === 'cloze' ? clozeStrictness(pairStrict) : pairStrict}
+            cloze={!relearnNow && stageKind === 'cloze' ? clozeByCard.get(card.id) || undefined : undefined}
+            strictness={!relearnNow && stageKind === 'cloze' ? clozeStrictness(pairStrict) : pairStrict}
             gradingSettings={gsWithLang}
             gradedReview={true}
             answerLanguage={answerSide === 'front' ? batch.src : batch.tgt}
@@ -731,7 +702,7 @@ function DueInner() {
           />
         ) : (
           <FlashcardMode
-            key={`${card.id}-${stageIdx}-${attempt}`}
+            key={`${relearnNow ? 'relearn' : stageIdx}-${card.id}-${attempt}`}
             card={card}
             promptSide={promptSide}
             promptLanguage={promptLanguage}
@@ -768,7 +739,7 @@ function DueInner() {
               // Keep the run's scheduling source honest when the modal reschedules THIS
               // direction's row (maturity buttons, resets).
               if ((batch.direction === 'production') === (s.reviewDirection !== 'reverse')) {
-                const w2 = pool.find(x => x.card.id === s.cardId)
+                const w2 = batch.words.find(x => x.card.id === s.cardId)
                 if (w2) w2.state = s
               }
             }}
