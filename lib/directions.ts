@@ -98,9 +98,11 @@ async function loadPair(userId: UserId, src: string, tgt: string): Promise<{
   return { forward, reverse }
 }
 
-/** How many recognition schedules the single-direction switch would delete — for the confirm. */
-export async function countRecognitionRows(userId: UserId, src: string, tgt: string): Promise<number> {
-  return (await loadPair(userId, src, tgt)).reverse.size
+/** The card ids whose recognition schedules the single-direction switch would delete — for
+ *  the confirm dialog, and then handed BACK to `disableRecognitionDirection` so confirming
+ *  doesn't pay for a second whole-library read (the slow-popup complaint, 2026-11-20). */
+export async function findRecognitionRowIds(userId: UserId, src: string, tgt: string): Promise<string[]> {
+  return [...(await loadPair(userId, src, tgt)).reverse.keys()]
 }
 
 /**
@@ -117,11 +119,10 @@ export async function setTrackFlag(userId: UserId, src: string, tgt: string, ans
 /**
  * Multiple → single: permanently deletes every recognition row of the pair and turns the
  * reverse track off. Returns how many were deleted. IRREVERSIBLE by design (user decision:
- * no ghosting) — callers confirm first via `countRecognitionRows`.
+ * no ghosting) — callers confirm first via `findRecognitionRowIds` and pass the ids through.
  */
-export async function disableRecognitionDirection(userId: UserId, src: string, tgt: string): Promise<number> {
-  const { reverse } = await loadPair(userId, src, tgt)
-  const ids = [...reverse.keys()]
+export async function disableRecognitionDirection(userId: UserId, src: string, tgt: string, cardIds?: string[]): Promise<number> {
+  const ids = cardIds ?? await findRecognitionRowIds(userId, src, tgt)
   if (ids.length > 0) await new SupabaseCardStateRepository().deleteReverseForCards(userId, ids)
   await setTrackFlag(userId, src, tgt, 'reverse_recall', 'reverse_recall_enabled', false)
   return ids.length

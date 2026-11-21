@@ -26,7 +26,7 @@ import { LibraryGearMenu } from '@/components/library/LibraryGearMenu'
 import type { Folder, Deck, LanguagePair, Card, CardState, TypedStrictnessLevel } from '@/domain'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow, type SchedulerParamsHistoryRow } from '@/lib/data/userSchedulerParams'
-import { currentModality, modalityFlagWrites, setTrackFlag, countRecognitionRows, disableRecognitionDirection, enableRecognitionDirection, type ProductionModality } from '@/lib/directions'
+import { currentModality, modalityFlagWrites, setTrackFlag, findRecognitionRowIds, disableRecognitionDirection, enableRecognitionDirection, type ProductionModality } from '@/lib/directions'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -586,19 +586,23 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     }
   }
 
+  // The ids found by the count, handed to the confirm so it doesn't re-read the whole library.
+  const dirIdsRef = useRef<string[] | null>(null)
+
   async function handleSelectSingle() {
     if (!pairSettingsFor || !userId || dirBusy) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
     setDirBusy(true)
     setDirMsg(null)
     try {
-      const count = await countRecognitionRows(userId, src, tgt)
-      if (count === 0) {
-        await disableRecognitionDirection(userId, src, tgt)
+      const ids = await findRecognitionRowIds(userId, src, tgt)
+      if (ids.length === 0) {
+        await disableRecognitionDirection(userId, src, tgt, [])
         setSrsParams(prev => prev.map(p => p.answerField === 'reverse_recall' ? { ...p, reverseRecallEnabled: false } : p))
         setDirMsg('Single direction.')
       } else {
-        setDirConfirmCount(count)   // destructive — confirm with the real number first
+        dirIdsRef.current = ids
+        setDirConfirmCount(ids.length)   // destructive — confirm with the real number first
       }
     } catch (e) {
       setDirMsg(e instanceof Error ? e.message : String(e))
@@ -613,7 +617,8 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
     setDirConfirmCount(null)
     setDirBusy(true)
     try {
-      const n = await disableRecognitionDirection(userId, src, tgt)
+      const n = await disableRecognitionDirection(userId, src, tgt, dirIdsRef.current ?? undefined)
+      dirIdsRef.current = null
       setSrsParams(prev => prev.map(p => p.answerField === 'reverse_recall' ? { ...p, reverseRecallEnabled: false } : p))
       setDirMsg(`Single direction — ${n} recognition schedule${n === 1 ? '' : 's'} deleted.`)
     } catch (e) {
