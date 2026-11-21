@@ -63,7 +63,7 @@ export interface MatchAttempt {
   confused?: MatchPair
 }
 
-export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt, renderFinish, shouldCollectRating, onRateMatch, redoMissed, onRedoRound }: {
+export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget, onAttempt, renderFinish, shouldCollectRating, onRateMatch, redoMissed, onRedoRound, onInfo }: {
   pairs:  MatchPair[]
   onExit: () => void
   /** Which column holds the target-language words. */
@@ -98,6 +98,9 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
    */
   redoMissed?: boolean
   onRedoRound?: (pairIds: string[]) => void
+  /** Renders the "i" info/edit affordance on each unmatched tile's LEFT corner (opposite the
+   *  "?") — the owner opens its card modal (edit, set maturity, …). Omit and it's absent. */
+  onInfo?: (pair: MatchPair) => void
 }) {
   const [audioOn, toggleAudio] = usePracticeAudio()
   const [rounds,   setRounds]   = useState<Round[]>(() => buildRounds(pairs))
@@ -302,7 +305,7 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
         <button
           onClick={() => !isMatched && pick(side, p.id)}
           disabled={isMatched}
-          className={`w-full rounded-card border px-5 py-5 text-lg leading-snug transition-all select-none ${
+          className={`w-full rounded-card border px-5 py-5 text-2xl leading-snug transition-all select-none ${
             isMatched  ? 'border-success/30 bg-success/5 text-ink-faint/50' :
             isWrong    ? 'border-danger bg-danger/10 text-danger' :
             isSelected ? 'border-accent bg-accent/10 text-accent-soft scale-[1.02]' :
@@ -315,9 +318,17 @@ export function MatchingGame({ pairs, onExit, targetSide = 'left', onSpeakTarget
           <button
             type="button"
             onClick={e => { e.stopPropagation(); dontKnow(p.id) }}
-            className="absolute top-0.5 right-1.5 z-10 px-1 text-xs leading-none text-ink-faint/50 hover:text-danger transition-colors"
+            className="absolute top-1.5 right-2.5 z-10 px-1.5 text-xl leading-none text-ink-faint/60 hover:text-danger transition-colors"
             title="I don't know this one — counts as a miss, the pair comes back"
           >?</button>
+        )}
+        {!isMatched && onInfo && (
+          <button
+            type="button"
+            onClick={e => { e.stopPropagation(); onInfo(p) }}
+            title="Card info & edit"
+            className="absolute top-1.5 left-2.5 z-10 w-6 h-6 flex items-center justify-center rounded-full border border-line/10 hover:border-line/20 text-sm font-semibold italic leading-none text-ink-faint/60 hover:text-ink transition-colors"
+          >i</button>
         )}
       </div>
     )

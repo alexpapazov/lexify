@@ -104,6 +104,8 @@ function DueInner() {
   const [showIPA, setShowIPA] = useState(false)
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
   const [infoOpen, setInfoOpen] = useState(false)
+  /** ℹ pressed on a matching tile — opens the same CardEditModal for that pair's card. */
+  const [matchInfoId, setMatchInfoId] = useState<string | null>(null)
   const hintGFRef = useRef<number | null>(null)
   /** Each card's deck — the source of its GRADING SETTINGS (the session pages grade with the
    *  deck's settings; defaults silently broke accent acceptance, user report 2026-11-20),
@@ -514,12 +516,15 @@ function DueInner() {
         return <div className="space-y-6 pb-12">{header}<p className="text-sm text-ink-muted text-center pt-8">Preparing round…</p></div>
       }
       const pairs: MatchPair[] = matchChunk.map(w => ({ id: w.card.id, front: displayText(w.card.front), back: displayText(w.card.back) }))
+      const infoCard = matchInfoId ? sessionCards.get(matchInfoId) : undefined
+      const infoDeck = infoCard ? cardDeckRef.current.get(infoCard.id) : undefined
       return (
         <div className="space-y-6 pb-12">
           {header}
           <MatchingGame
             key={`${program.id}-${stageIdx}-${matchChunk[0]!.card.id}`}
             pairs={pairs}
+            onInfo={p => { if (sessionCards.has(p.id)) setMatchInfoId(p.id) }}
             onExit={() => setView('batches')}
             onSpeakTarget={p => {
               const w = matchChunk.find(x => x.card.id === p.id)
@@ -557,6 +562,31 @@ function DueInner() {
               )
             }}
           />
+          {infoCard && infoDeck && (
+            <CardEditModal
+              card={infoCard}
+              state={forwardRef.current.get(infoCard.id)}
+              userId={userId}
+              deckId={infoDeck.id}
+              deckCards={pool.map(w => sessionCards.get(w.card.id) ?? w.card).filter(c => cardDeckRef.current.get(c.id)?.id === infoDeck.id)}
+              sourceLanguage={batch.src}
+              targetLanguage={batch.tgt}
+              onSave={async (id, front, back) => {
+                await new SupabaseCardRepository().update(id, { front, back })
+                setSessionCards(prev => { const c0 = prev.get(id); return c0 ? new Map(prev).set(id, { ...c0, front, back }) : prev })
+              }}
+              onCardChange={c => setSessionCards(prev => new Map(prev).set(c.id, c))}
+              onStateChange={s => {
+                if (s.reviewDirection !== 'reverse') forwardRef.current.set(s.cardId, s)
+                if ((batch.direction === 'production') === (s.reviewDirection !== 'reverse')) {
+                  const w2 = batch.words.find(x => x.card.id === s.cardId)
+                  if (w2) w2.state = s
+                }
+              }}
+              onClose={() => setMatchInfoId(null)}
+              initialShowStats
+            />
+          )}
         </div>
       )
     }
