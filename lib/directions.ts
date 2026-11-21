@@ -96,6 +96,17 @@ export async function countRecognitionRows(userId: UserId, src: string, tgt: str
 }
 
 /**
+ * Sets one track flag, CREATING the params row first when the pair never had one — a plain
+ * UPDATE on a missing row silently no-ops, which left "disabled" tracks effectively on
+ * (bug found 2026-11-20 via Catch Up still listing reverse cards).
+ */
+export async function setTrackFlag(userId: UserId, src: string, tgt: string, answerField: string, column: string, value: boolean): Promise<void> {
+  const repo = new SupabaseUserSchedulerParamsRepository()
+  await repo.getOrCreate(userId, src, tgt, answerField)
+  await repo.update(userId, src, tgt, answerField, { [column]: value })
+}
+
+/**
  * Multiple → single: permanently deletes every recognition row of the pair and turns the
  * reverse track off. Returns how many were deleted. IRREVERSIBLE by design (user decision:
  * no ghosting) — callers confirm first via `countRecognitionRows`.
@@ -104,7 +115,7 @@ export async function disableRecognitionDirection(userId: UserId, src: string, t
   const { reverse } = await loadPair(userId, src, tgt)
   const ids = [...reverse.keys()]
   if (ids.length > 0) await new SupabaseCardStateRepository().deleteReverseForCards(userId, ids)
-  await new SupabaseUserSchedulerParamsRepository().update(userId, src, tgt, 'reverse_recall', { reverse_recall_enabled: false })
+  await setTrackFlag(userId, src, tgt, 'reverse_recall', 'reverse_recall_enabled', false)
   return ids.length
 }
 
@@ -115,7 +126,7 @@ export async function disableRecognitionDirection(userId: UserId, src: string, t
  * Returns how many rows were seeded.
  */
 export async function enableRecognitionDirection(userId: UserId, src: string, tgt: string): Promise<number> {
-  await new SupabaseUserSchedulerParamsRepository().update(userId, src, tgt, 'reverse_recall', { reverse_recall_enabled: true })
+  await setTrackFlag(userId, src, tgt, 'reverse_recall', 'reverse_recall_enabled', true)
   const { forward, reverse } = await loadPair(userId, src, tgt)
   const now = new Date()
   const rows: CardState[] = []

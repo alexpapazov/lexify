@@ -26,7 +26,7 @@ import { LibraryGearMenu } from '@/components/library/LibraryGearMenu'
 import type { Folder, Deck, LanguagePair, Card, CardState, TypedStrictnessLevel } from '@/domain'
 import { DEFAULT_SCHEDULER_PARAMS } from '@/domain'
 import { SupabaseUserSchedulerParamsRepository, type SchedulerParamsRow, type SchedulerParamsHistoryRow } from '@/lib/data/userSchedulerParams'
-import { currentModality, modalityFlagWrites, countRecognitionRows, disableRecognitionDirection, enableRecognitionDirection, type ProductionModality } from '@/lib/directions'
+import { currentModality, modalityFlagWrites, setTrackFlag, countRecognitionRows, disableRecognitionDirection, enableRecognitionDirection, type ProductionModality } from '@/lib/directions'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -576,12 +576,12 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
   async function handleSetModality(m: ProductionModality) {
     if (!pairSettingsFor || !userId) return
     const [src, tgt] = pairSettingsFor.split('|') as [string, string]
-    const repo = new SupabaseUserSchedulerParamsRepository()
     const keyFor: Record<string, 'forwardTypedEnabled' | 'forwardSmartEnabled' | 'forwardRecallEnabled'> = {
       forward_typed_enabled: 'forwardTypedEnabled', forward_smart_enabled: 'forwardSmartEnabled', forward_recall_enabled: 'forwardRecallEnabled',
     }
     for (const w of modalityFlagWrites(m)) {
-      await repo.update(userId, src, tgt, w.answerField, { [w.column]: w.value })
+      // setTrackFlag creates a missing params row first — a plain update would silently no-op.
+      await setTrackFlag(userId, src, tgt, w.answerField, w.column, w.value)
       setSrsParams(prev => prev.map(p => p.answerField === w.answerField ? { ...p, [keyFor[w.column]!]: w.value } : p))
     }
   }

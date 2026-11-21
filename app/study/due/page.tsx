@@ -459,11 +459,11 @@ function DueInner() {
 
     if (stageKind === 'matching') {
       if (!matchChunk || matchChunk.length === 0) {
-        return <div className="max-w-2xl mx-auto space-y-4 pb-16">{header}<p className="text-sm text-ink-muted text-center pt-8">Preparing round…</p></div>
+        return <div className="space-y-6 pb-12">{header}<p className="text-sm text-ink-muted text-center pt-8">Preparing round…</p></div>
       }
       const pairs: MatchPair[] = matchChunk.map(w => ({ id: w.card.id, front: displayText(w.card.front), back: displayText(w.card.back) }))
       return (
-        <div className="max-w-2xl mx-auto space-y-4 pb-16">
+        <div className="space-y-6 pb-12">
           {header}
           <MatchingGame
             key={`${program.id}-${stageIdx}-${matchChunk[0]!.card.id}`}
@@ -512,7 +512,7 @@ function DueInner() {
     // and hydrated audio — the bulk placeholder must never reach the review components.
     const card = word ? sessionCards.get(word.card.id) : undefined
     if (!word || !card) {
-      return <div className="max-w-2xl mx-auto space-y-4 pb-16">{header}<p className="text-sm text-ink-muted text-center pt-8">Loading…</p></div>
+      return <div className="space-y-6 pb-12">{header}<p className="text-sm text-ink-muted text-center pt-8">Loading…</p></div>
     }
     const promptSide = batch.direction === 'production' ? 'back' as const : 'front' as const
     const answerSide = promptSide === 'back' ? 'front' as const : 'back' as const
@@ -534,7 +534,7 @@ function DueInner() {
       }
     }
     return (
-      <div className="max-w-2xl mx-auto space-y-4 pb-16">
+      <div className="space-y-6 pb-12">
         {header}
         {stageKind === 'typed' || stageKind === 'cloze' ? (
           // Cloze is TYPED production (user decision 2026-11-20): the sentence's blank is the
@@ -562,7 +562,7 @@ function DueInner() {
             hintable
             onHint={(_level, growthFactor) => { hintGFRef.current = growthFactor }}
             onIDontKnow={() => onRate('again', false)}
-            autoPlayAudio={promptSide === 'front'}
+            autoPlayAudio
             ipaText={currentIpaText} onToggleIPA={ipaToggle}
             onRate={(r, wasCorrect) => onRate(r, wasCorrect)}
           />
@@ -575,7 +575,7 @@ function DueInner() {
             answerLanguage={answerSide === 'front' ? batch.src : batch.tgt}
             hintable
             onHint={(_level, growthFactor) => { hintGFRef.current = growthFactor }}
-            autoPlayAudio={promptSide === 'front'}
+            autoPlayAudio
             ipaText={currentIpaText} onToggleIPA={ipaToggle}
             onRate={r => onRate(r)}
           />

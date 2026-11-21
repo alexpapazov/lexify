@@ -28,7 +28,7 @@ import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
-import { buildEnabledTracksMap, buildRetentionMap, retentionFor } from '@/lib/sessionLimits'
+import { buildEnabledTracksMap, buildRetentionMap, retentionFor, trackEnabled } from '@/lib/sessionLimits'
 import { buildCatchUpPools, emptyPool, rescheduleOverdueTracks, candidateKey, catchUpTypeOf, candidateFor } from '@/lib/catchUpPools'
 import { assignBacklogDays, previewCatchUp, isLapsed, scopeKey, scopeDirection, addDays, daysBetween, type CatchUpType, type CatchUpCandidate } from '@/lib/catchUp'
 import { buildPaceSamples, pace, type PaceSamples, type PaceRow } from '@/lib/reviewPace'
@@ -262,11 +262,23 @@ export default function CatchUpPanel({ userId, timezone, turnoverHour }: {
       // The record is a historical fact; the remaining count is recomputed here from the live cards
       // every single load, so a bar can never claim progress that didn't happen.
       const storedPlans = ((profileRow?.catchup_plans ?? {}) as CatchUpPlanRecords)
+      // A plan whose scope's track/direction has since been DISABLED is hidden: its cards are
+      // ghosted or deleted (single-direction pairs), so showing "109 to go" for reviews that can
+      // never come due is pure noise (user report 2026-11-20). The record stays stored — a
+      // re-enabled direction brings a still-running plan straight back.
+      const scopeEnabled = (k: string): boolean => {
+        const [pk, t] = k.split(':') as [string, CatchUpType | undefined]
+        if (!t) return true
+        const en = tracks.get(pk)
+        if (t === 'sgReverse') return trackEnabled(en, 'recall', true)
+        const prodOn = trackEnabled(en, 'typed', false) || trackEnabled(en, 'smart', false) || trackEnabled(en, 'recall', false)
+        return prodOn
+      }
       const valid: CatchUpPlanRecords = {}
       for (const [k, v] of Object.entries(storedPlans)) {
         // A record from the deleted migration 121 has only `targetDate`; it can't drive a progress
         // bar, so it is dropped rather than shown with invented totals.
-        if (v && typeof v.targetDate === 'string' && typeof v.total === 'number') valid[k] = v
+        if (v && typeof v.targetDate === 'string' && typeof v.total === 'number' && scopeEnabled(k)) valid[k] = v
       }
       setPlans(valid)
 
