@@ -222,7 +222,12 @@ Current feature files:
   (chunked, online-only). Multiple→single DELETES reverse rows (ConfirmDialog with count) — NO
   ghosting, user decision. Reverse rows never regrow while the reverse track is off:
   seedKnownStates, CardEditModal setMaturity, and LadderStudy graduate() are all gated on
-  tracks.reverse. Part 2 BUILT 2026-11-20 (**migration 134 `review_programs` must be
+  tracks.reverse. TWO CONVERSION BUGS FIXED 2026-11-20: (1) flag writes were plain UPDATEs
+  that silently NO-OP when the pair lacks that params row — `setTrackFlag` getOrCreates
+  first (modality writes too); (2) the pair sweep used `listOwned` (owner_id filter), so
+  SHARED/browse-imported cards' reverse rows survived — `loadPair` now unions owned cards
+  with cards LINKED into the user's decks of the pair (deckIdsByCard). The Single button
+  stays clickable when already Single: it doubles as the leftover-row cleanup. Part 2 BUILT 2026-11-20 (**migration 134 `review_programs` must be
   applied**): `/study/due` (routes.due) = batches per pair × direction → program builder
   (presets Busy/Standard/Deep + custom chain, strength % shown) → runner. Engine
   `engine/program.ts` (STAGE_STRENGTH 0.4/0.75/1/1, earnedStrength = max over cleared prefix,

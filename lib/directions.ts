@@ -23,6 +23,7 @@ import type { Card, CardState, UserId } from '@/domain'
 import { initialCardState } from '@/engine/pipeline'
 import { SupabaseCardRepository } from '@/lib/data/cards'
 import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
+import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
 
 export type ProductionModality = 'typed' | 'smart' | 'selfgraded'
@@ -69,17 +70,24 @@ export function seedReverseRow(fwd: CardState, now: Date, rand: () => number = M
   }
 }
 
-/** The pair's cards + states, grouped the way both conversions need them. */
+/** The pair's cards + states, grouped the way both conversions need them. The card set is the
+ *  UNION of cards the user OWNS in this pair and cards LINKED into their decks of this pair —
+ *  shared/browse-imported cards belong to their original owner, so an ownership-only sweep
+ *  missed their reverse rows entirely (bug found 2026-11-20: 1,639 recognition schedules
+ *  survived a single-direction switch). The states are the user's own rows either way. */
 async function loadPair(userId: UserId, src: string, tgt: string): Promise<{
-  cards: Card[]
   forward: Map<string, CardState>
   reverse: Map<string, CardState>
 }> {
-  const [cards, states] = await Promise.all([
-    new SupabaseCardRepository().listOwned(userId, src, tgt),
+  const cardRepo = new SupabaseCardRepository()
+  const [owned, decks, states] = await Promise.all([
+    cardRepo.listOwned(userId, src, tgt),
+    new SupabaseDeckRepository().list(userId),
     new SupabaseCardStateRepository().listAllForUser(userId),
   ])
-  const ids = new Set(cards.map(c => c.id))
+  const pairDeckIds = decks.filter(d => d.sourceLanguage === src && d.targetLanguage === tgt).map(d => d.id)
+  const linked = pairDeckIds.length > 0 ? await cardRepo.deckIdsByCard(pairDeckIds) : new Map<string, string>()
+  const ids = new Set<string>([...owned.map((c: Card) => c.id), ...linked.keys()])
   const forward = new Map<string, CardState>()
   const reverse = new Map<string, CardState>()
   for (const s of states) {
@@ -87,7 +95,7 @@ async function loadPair(userId: UserId, src: string, tgt: string): Promise<{
     if (s.reviewDirection === 'reverse') reverse.set(s.cardId, s)
     else if (!forward.has(s.cardId) || s.graduated) forward.set(s.cardId, s)
   }
-  return { cards, forward, reverse }
+  return { forward, reverse }
 }
 
 /** How many recognition schedules the single-direction switch would delete — for the confirm. */

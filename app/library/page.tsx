@@ -1110,7 +1110,10 @@ function LibraryPageBody({ pairSource: initPairSource, pairTarget: initPairTarge
                               <p className="text-xs text-ink-faint mb-0.5">Directions — how many schedules each card runs:</p>
                               <div className="flex gap-1.5">
                                 <button
-                                  onClick={() => { if (multiple) void handleSelectSingle() }}
+                                  // Clickable even when already Single: it doubles as the cleanup
+                                  // for leftover recognition rows (shared-deck cards an earlier,
+                                  // ownership-only sweep missed) — a no-op when truly clean.
+                                  onClick={() => void handleSelectSingle()}
                                   disabled={dirBusy}
                                   className={`flex-1 rounded-lg border px-3 py-2 text-left transition-colors ${!multiple ? 'border-accent/40 bg-accent/5' : 'border-line/10 hover:bg-line/5'}`}
                                 >
