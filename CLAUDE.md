@@ -257,8 +257,13 @@ Current feature files:
   credit via `creditRow` opts; hinted Hard replays — session rule), IPA (recognition
   direction only, transcribe-once-and-store), autoplay/Listen when the prompt shows the
   target word, and I-don't-know → replay. Cloze stage = TYPED (clozeStrictness over the pair
-  strictness). Still NOT in the runner: ℹ info modal, star, prompt editing, Almost, deck
-  siblings, confusion detection — classic sessions only.
+  strictness). PARITY PASS 2 (2026-11-20): grading uses each card's DECK gradingSettings
+  (cardDeckRef via deckIdsByCard — defaults had silently broken accent acceptance), ℹ info
+  modal (CardEditModal with forwardRef state + same-deck pool cards; onStateChange patches
+  the pool word's row), star, prompt/answer editing, "Add as synonym", Almost (difficulty
+  bump + replay, no event), deck name label, autoplay from deck settings. Still NOT in the
+  runner: deck-sibling two-phase credit, confusion detection/drills, soft-wrong recall
+  rating, Undo — classic sessions only.
 - `features/Phrasebook (proposal).md` — DEFERRED idea (2026-09-21, nothing built): per-pair
   idioms/constructions whose mastery signal is usage in journal entries; on-demand Sonnet
   analysis stored on the entry, mastery aggregates, struggle-driven journal prompts. Read it

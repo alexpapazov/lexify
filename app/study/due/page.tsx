@@ -31,6 +31,9 @@ import { earnedStrength, finalStageRating, stagesForDirection, STAGE_LABEL, STAG
 import { MatchingGame, type MatchPair } from '@/components/practice/MatchingGame'
 import { FlashcardMode } from '@/components/session/FlashcardMode'
 import { TypingMode } from '@/components/session/TypingMode'
+import { CardEditModal } from '@/components/CardEditModal'
+import { SupabaseDeckRepository } from '@/lib/data/decks'
+import { nextDifficulty } from '@/engine/fsrs'
 import { resolveReviewCloze, clozeEligible, clozeStrictness, type ReviewCloze } from '@/lib/reviewCloze'
 import { OfflineUnavailable } from '@/components/offline/OfflineUnavailable'
 import { useOfflineMode } from '@/lib/offline/useOfflineMode'
@@ -41,7 +44,7 @@ import { displayText } from '@/lib/cardText'
 import { langFlag, langName } from '@/lib/languages'
 import { speak } from '@/lib/speak'
 import { DEFAULT_GRADING_SETTINGS, DEFAULT_TYPED_STRICTNESS } from '@/domain'
-import type { Card, Rating, TypedStrictness } from '@/domain'
+import type { Card, CardState, Deck, Rating, TypedStrictness } from '@/domain'
 
 const PRESETS: Record<'production' | 'recognition', { name: string; stages: StageKind[] }[]> = {
   production: [
@@ -96,10 +99,17 @@ function DueInner() {
   /** The run's cards re-read with SESSION columns (full `choices`, synonyms, cloze sentences;
    *  bulk cards must NEVER reach anything that writes `choices` back) + audio patched in. */
   const [sessionCards, setSessionCards] = useState<Map<string, Card>>(new Map())
-  // The same per-review chrome the session pages have: IPA toggle + hint tracking.
+  // The same per-review chrome the session pages have: IPA toggle + hint tracking + the ℹ modal.
   const [showIPA, setShowIPA] = useState(false)
   const [ipaCache, setIpaCache] = useState<Map<string, string>>(new Map())
+  const [infoOpen, setInfoOpen] = useState(false)
   const hintGFRef = useRef<number | null>(null)
+  /** Each card's deck — the source of its GRADING SETTINGS (the session pages grade with the
+   *  deck's settings; defaults silently broke accent acceptance, user report 2026-11-20),
+   *  deck name, and the ℹ modal's deck context. */
+  const cardDeckRef = useRef<Map<string, Deck>>(new Map())
+  /** Forward rows by card — the ℹ modal's `state` prop (recognition batches carry reverse rows). */
+  const forwardRef = useRef<Map<string, CardState>>(new Map())
 
   /** Per-pair typed strictness off the forward_typed row — exactly what sessions use. */
   const strictFor = (src: string, tgt: string): TypedStrictness => {
@@ -145,6 +155,7 @@ function DueInner() {
         retMapRef.current = buildRetentionMap(paramRows)
         calMapRef.current = buildCalibrationMap(paramRows)
         const split = splitStates(states)
+        forwardRef.current = split.forward
         setBatches(buildProgramBatches(cards, split.forward, split.reverse, tracksRef.current, new Date()))
         setTodayPrograms(open)
       } catch (e) {
@@ -188,7 +199,21 @@ function DueInner() {
    *  back (cloze generation) waits for it. */
   async function loadSessionCards(b: ProgramBatch) {
     try {
-      const cards = await new SupabaseCardRepository().listSessionByIds(b.words.map(w => w.card.id))
+      const cardRepo = new SupabaseCardRepository()
+      const [cards, decks] = await Promise.all([
+        cardRepo.listSessionByIds(b.words.map(w => w.card.id)),
+        new SupabaseDeckRepository().list(userId),
+      ])
+      // Each card's deck → its grading settings / deck name / ℹ-modal context (first link wins,
+      // like the session pages' deckIdsByCard usage).
+      const linked = await cardRepo.deckIdsByCard(decks.map(d => d.id))
+      const deckById = new Map(decks.map(d => [d.id, d]))
+      const byCard = new Map<string, Deck>()
+      for (const [cardId, deckId] of linked) {
+        const d = deckById.get(deckId)
+        if (d) byCard.set(cardId, d)
+      }
+      cardDeckRef.current = byCard
       setSessionCards(new Map(cards.map(c => [c.id, c])))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -518,12 +543,16 @@ function DueInner() {
     const answerSide = promptSide === 'back' ? 'front' as const : 'back' as const
     const promptLanguage = promptSide === 'front' ? card.sourceLanguage : undefined
     const pairStrict = strictFor(batch.src, batch.tgt)
-    const gsWithLang = { ...DEFAULT_GRADING_SETTINGS, answerLanguage: answerSide === 'front' ? batch.src : batch.tgt }
+    const deck = cardDeckRef.current.get(card.id)
+    // The DECK's grading settings, like sessions — defaults silently flipped accent handling.
+    const gsWithLang = { ...(deck?.gradingSettings ?? DEFAULT_GRADING_SETTINGS), answerLanguage: answerSide === 'front' ? batch.src : batch.tgt }
+    const autoplay = gsWithLang.autoPlayAudio ?? true
     const currentIpaText = showIPA && promptSide === 'front' ? (ipaCache.get(card.id) ?? card.ipa ?? undefined) : undefined
     const ipaToggle = promptSide === 'front' ? () => setShowIPA(v => !v) : undefined
     const onRate = (rating: Rating, wasCorrect = rating !== 'again') => {
       const hintGF = hintGFRef.current
       hintGFRef.current = null
+      setInfoOpen(false)
       setAttempt(a => a + 1)
       // The session rule: a hinted Hard wasn't a cold recall — it replays instead of clearing.
       if (!wasCorrect || rating === 'again' || (rating === 'hard' && hintGF != null)) {
@@ -533,6 +562,25 @@ function DueInner() {
         setQueue(q => q.filter(id => id !== word.card.id))
       }
     }
+    const patchCard = (patch: Partial<Card>) =>
+      setSessionCards(prev => { const c0 = prev.get(card.id); return c0 ? new Map(prev).set(card.id, { ...c0, ...patch }) : prev })
+    const onToggleStar = async (next: boolean) => {
+      await new SupabaseCardRepository().setStarred(card.id, next)
+      patchCard({ starred: next })
+    }
+    const onSideEdit = (side: 'front' | 'back') => (text: string) => {
+      void new SupabaseCardRepository().update(card.id, { [side]: text }).catch(err => console.error('Card edit failed:', err))
+      patchCard({ [side]: text })
+    }
+    // The sessions' "Almost" for a near-miss self-graded recall: small difficulty bump, replay
+    // this stage, no schedule change (no review event — programs never write them).
+    const onAlmost = word.state.graduated ? () => {
+      const bumped = { ...word.state, difficulty: nextDifficulty(word.state.difficulty ?? 5, 'hard') }
+      word.state = bumped
+      void stateRepo.upsert(bumped).catch(err => console.error('Almost save failed:', err))
+      setAttempt(a => a + 1)
+      setQueue(q => [...q.filter(id => id !== word.card.id), word.card.id])
+    } : undefined
     return (
       <div className="space-y-6 pb-12">
         {header}
@@ -570,7 +618,12 @@ function DueInner() {
             hintable
             onHint={(_level, growthFactor) => { hintGFRef.current = growthFactor }}
             onIDontKnow={() => onRate('again', false)}
-            autoPlayAudio
+            deckName={deck?.name}
+            onInfo={deck ? () => setInfoOpen(true) : undefined}
+            onToggleStar={onToggleStar}
+            onPromptEdit={onSideEdit(promptSide)}
+            onAnswerEdit={onSideEdit(answerSide)}
+            autoPlayAudio={autoplay}
             ipaText={currentIpaText} onToggleIPA={ipaToggle}
             onRate={(r, wasCorrect) => onRate(r, wasCorrect)}
           />
@@ -583,9 +636,41 @@ function DueInner() {
             answerLanguage={answerSide === 'front' ? batch.src : batch.tgt}
             hintable
             onHint={(_level, growthFactor) => { hintGFRef.current = growthFactor }}
-            autoPlayAudio
+            deckName={deck?.name}
+            onInfo={deck ? () => setInfoOpen(true) : undefined}
+            onToggleStar={onToggleStar}
+            onPromptEdit={onSideEdit(promptSide)}
+            onAnswerEdit={onSideEdit(answerSide)}
+            onAlmost={onAlmost}
+            autoPlayAudio={autoplay}
             ipaText={currentIpaText} onToggleIPA={ipaToggle}
             onRate={r => onRate(r)}
+          />
+        )}
+        {infoOpen && deck && (
+          <CardEditModal
+            card={card}
+            state={forwardRef.current.get(card.id)}
+            userId={userId}
+            deckId={deck.id}
+            deckCards={pool.map(w => sessionCards.get(w.card.id) ?? w.card).filter(c => cardDeckRef.current.get(c.id)?.id === deck.id)}
+            sourceLanguage={batch.src}
+            targetLanguage={batch.tgt}
+            onSave={async (id, front, back) => {
+              await new SupabaseCardRepository().update(id, { front, back })
+              patchCard({ front, back })
+            }}
+            onCardChange={c => setSessionCards(prev => new Map(prev).set(c.id, c))}
+            onStateChange={s => {
+              if (s.reviewDirection !== 'reverse') forwardRef.current.set(s.cardId, s)
+              // Keep the run's scheduling source honest when the modal reschedules THIS
+              // direction's row (maturity buttons, resets).
+              if ((batch.direction === 'production') === (s.reviewDirection !== 'reverse')) {
+                const w2 = pool.find(x => x.card.id === s.cardId)
+                if (w2) w2.state = s
+              }
+            }}
+            onClose={() => setInfoOpen(false)}
           />
         )}
       </div>
