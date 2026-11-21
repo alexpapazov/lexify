@@ -551,6 +551,14 @@ function DueInner() {
             gradedReview={true}
             answerLanguage={answerSide === 'front' ? batch.src : batch.tgt}
             synonyms={answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
+            onAddSynonym={answerSide === 'front' ? (normalizedText) => {
+              // Same write as sessions: append to the SESSION card's choices (full copy — never
+              // the bulk placeholder) and persist; the local map keeps the next render honest.
+              const choices = card.choices ?? { front: [], back: [] }
+              const updated = { ...choices, frontSynonyms: [...(choices.frontSynonyms ?? []), normalizedText] }
+              new SupabaseCardRepository().update(card.id, { choices: updated }).catch(err => console.error('Failed to save synonym:', err))
+              setSessionCards(prev => new Map(prev).set(card.id, { ...card, choices: updated }))
+            } : undefined}
             overrideAnswers={Array.from(overridesRef.current.get(`${card.id}:${answerSide}`) ?? [])}
             onOverrideAnswer={(answerText, accept) => {
               const key = `${card.id}:${answerSide}`
