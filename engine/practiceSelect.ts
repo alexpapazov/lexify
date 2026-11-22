@@ -264,6 +264,67 @@ function isCapped(type: TargetSource['type']): boolean {
 }
 
 /**
+ * The FILTER sources. Two or more of these active at once INTERSECT instead of unioning
+ * (user decision 2026-11-21): "starred + due soon + hardest" means "my difficult words that are
+ * due and starred", not three piles — the picks (`manual`/`decks`/`list`) stay additive on top.
+ */
+const FILTER_TYPES: ReadonlySet<TargetSource['type']> =
+  new Set(['starred', 'due', 'difficulty', 'difficultyRange'])
+
+/**
+ * Resolves 2+ filter sources into one intersected, ordered id list.
+ *
+ * `starred`, `due` and the `difficultyRange` band act as PREDICATES — a word must pass every one.
+ * The limits rank and cap the INTERSECTION, not the whole library: `difficulty` (hardest N) sorts
+ * the surviving pool by difficulty and takes N — "the hardest of my due starred words", which can
+ * actually match, unlike "globally hardest N ∩ due" which is usually empty. `difficultyRange`'s
+ * seeded sample likewise draws from the pool (skipped when `difficulty` is also active — one
+ * ranker wins, hardest-first beats a random draw). Order: due's soonest-first when due is active,
+ * else the predicate pool's deterministic order, else the ranker's.
+ */
+function intersectFilters(filters: TargetSource[], ctx: SelectionContext, byId: Map<string, Card>): string[] {
+  const sets: Set<string>[] = []
+  let dueOrder: string[] | null = null
+  for (const f of filters) {
+    if (f.type === 'starred') {
+      sets.push(new Set(ctx.cards.filter(c => c.starred).map(c => c.id)))
+    } else if (f.type === 'due') {
+      dueOrder = matchedCardIds(f, ctx, byId).ids
+      sets.push(new Set(dueOrder))
+    } else if (f.type === 'difficultyRange') {
+      const lo = Math.min(f.min, f.max)
+      const hi = Math.max(f.min, f.max)
+      sets.push(new Set([...ctx.statesByCard.values()]
+        .filter(s => s.graduated && s.difficulty != null && s.difficulty >= lo && s.difficulty <= hi)
+        .map(s => s.cardId)))
+    }
+    // 'difficulty' (hardest N) is a ranker, not a predicate — applied to the pool below.
+  }
+
+  // The pool: every graduated card passing all predicates, in a stable base order.
+  const base = dueOrder
+    ?? [...ctx.statesByCard.values()]
+      .filter(s => s.graduated && byId.has(s.cardId))
+      .map(s => s.cardId)
+      .sort()
+  let pool = base.filter(id => sets.every(set => set.has(id)))
+
+  const hardest = filters.find((f): f is Extract<TargetSource, { type: 'difficulty' }> => f.type === 'difficulty')
+  const range   = filters.find((f): f is Extract<TargetSource, { type: 'difficultyRange' }> => f.type === 'difficultyRange')
+  if (hardest) {
+    pool = [...pool].sort((a, b) => {
+      const sa = ctx.statesByCard.get(a), sb = ctx.statesByCard.get(b)
+      return ((sb?.difficulty ?? -1) - (sa?.difficulty ?? -1)) ||
+        ((sb?.lapses ?? 0) - (sa?.lapses ?? 0)) ||
+        a.localeCompare(b)
+    }).slice(0, Math.max(0, hardest.limit))
+  } else if (range) {
+    pool = seededShuffle(pool, range.seed).slice(0, Math.max(0, range.limit))
+  }
+  return pool
+}
+
+/**
  * Resolves every source into one deduped target list.
  *
  * Order is source order, then match order within a source (deck order, soonest-due, hardest-first,
@@ -286,8 +347,20 @@ export function resolveTargets(
   let droppedUnlabeled = 0
   let droppedUndrillable = 0
 
+  // 2+ filter sources intersect into one combined contribution (at the first one's position);
+  // a single filter — and every pick source — resolves exactly as before.
+  const filters = sources.filter(s => FILTER_TYPES.has(s.type))
+  const combined = filters.length >= 2 ? intersectFilters(filters, ctx, byId) : null
+  let combinedUsed = false
+
   for (const source of sources) {
-    const match = matchedCardIds(source, ctx, byId)
+    if (combined && FILTER_TYPES.has(source.type)) {
+      if (combinedUsed) continue
+      combinedUsed = true
+    }
+    const match = combined && FILTER_TYPES.has(source.type)
+      ? { ids: combined, unmatched: [] as string[] }
+      : matchedCardIds(source, ctx, byId)
     unmatched.push(...match.unmatched)
 
     let takenFromSource = 0

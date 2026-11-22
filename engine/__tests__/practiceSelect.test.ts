@@ -417,6 +417,63 @@ describe('composing sources', () => {
   })
 })
 
+describe('filter sources intersect (starred ∧ due ∧ hardest)', () => {
+  const TODAY = '2026-08-08'
+  const starred = (c: Card): Card => ({ ...c, starred: true })
+
+  it('starred + due selects only words that are BOTH', () => {
+    const both = starred(card('dix')), onlyStar = starred(card('onze')), onlyDue = card('douze')
+    const c = ctx({
+      cards: [both, onlyStar, onlyDue],
+      statesByCard: statesOf([
+        [both.id,     { dueAt: `${TODAY}T04:00:00Z` }],
+        [onlyStar.id, { dueAt: '2026-09-20T04:00:00Z' }],
+        [onlyDue.id,  { dueAt: `${TODAY}T04:00:00Z` }],
+      ]),
+    })
+    const sources: TargetSource[] = [{ type: 'starred' }, { type: 'due', withinDays: 0 }]
+    expect(resolveTargets(sources, c).targets.map(t => t.front)).toEqual(['dix'])
+  })
+
+  it('hardest ranks WITHIN the intersection, not the whole library', () => {
+    // The globally hardest card is not due — it must not crowd out the due ones.
+    const notDue = card('treize'), hardDue = card('quatorze'), easyDue = card('quinze')
+    const c = ctx({
+      cards: [notDue, hardDue, easyDue],
+      statesByCard: statesOf([
+        [notDue.id,  { difficulty: 10, dueAt: '2026-09-20T04:00:00Z' }],
+        [hardDue.id, { difficulty: 7,  dueAt: `${TODAY}T04:00:00Z` }],
+        [easyDue.id, { difficulty: 3,  dueAt: `${TODAY}T04:00:00Z` }],
+      ]),
+    })
+    const sources: TargetSource[] = [{ type: 'due', withinDays: 0 }, { type: 'difficulty', limit: 1 }]
+    expect(resolveTargets(sources, c).targets.map(t => t.front)).toEqual(['quatorze'])
+  })
+
+  it('picks stay additive on top of the intersected filters', () => {
+    const picked = card('seize'), both = starred(card('dix-sept')), onlyStar = starred(card('dix-huit'))
+    const c = ctx({
+      cards: [picked, both, onlyStar],
+      statesByCard: statesOf([
+        [both.id,     { dueAt: `${TODAY}T04:00:00Z` }],
+        [onlyStar.id, { dueAt: '2026-09-20T04:00:00Z' }],
+      ]),
+    })
+    const sources: TargetSource[] = [
+      { type: 'manual', cardIds: [picked.id] },
+      { type: 'starred' },
+      { type: 'due', withinDays: 0 },
+    ]
+    expect(resolveTargets(sources, c).targets.map(t => t.front).sort()).toEqual(['dix-sept', 'seize'])
+  })
+
+  it('a single filter source still stands alone (no intersection kicks in)', () => {
+    const star = starred(card('dix-neuf')), plain = card('vingt')
+    const c = ctx({ cards: [star, plain] })
+    expect(resolveTargets([{ type: 'starred' }], c).targets.map(t => t.front)).toEqual(['dix-neuf'])
+  })
+})
+
 describe('due source reads every track (the 39-missing-words regression)', () => {
   const TODAY = '2026-08-08'
   const due   = (): TargetSource[] => [{ type: 'due', withinDays: 0 }]

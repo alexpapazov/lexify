@@ -335,6 +335,10 @@ function PracticeInner() {
   const selection = useMemo(() => resolveTargets(sources, selectionCtx), [sources, selectionCtx])
   const chosen: PracticeTarget[] = selection.targets
 
+  /** How many FILTER sources are active — 2+ intersect (engine rule), and the UI says so. */
+  const activeFilterCount =
+    (starredOn ? 1 : 0) + (dueDays !== null ? 1 : 0) + (hardest !== null ? 1 : 0) + (rangeOn ? 1 : 0)
+
   /** Only for the Words tab's browsable list — every other source resolves in the engine. */
   const drillable = useMemo(() => toPracticeTargets(cards), [cards])
 
@@ -848,7 +852,12 @@ function PracticeInner() {
         {chosen.length > 0 && (
           <div className="space-y-2 pt-1">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-ink-muted">{chosen.length} word{chosen.length !== 1 ? 's' : ''} selected</span>
+              <span className="text-xs text-ink-muted">
+                {chosen.length} word{chosen.length !== 1 ? 's' : ''} selected
+                {activeFilterCount >= 2 && (
+                  <span className="text-ink-faint"> — filters combine: only words matching every active filter</span>
+                )}
+              </span>
             </div>
             <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
               {chosen.map(t => (
@@ -860,6 +869,14 @@ function PracticeInner() {
               ))}
             </div>
           </div>
+        )}
+
+        {/* Intersection came up empty — say so, or "starred + due = nothing" looks broken. */}
+        {chosen.length === 0 && activeFilterCount >= 2 && (
+          <p className="text-xs text-ink-faint pt-1">
+            No words match every active filter together — filters combine (starred ∧ due ∧ hardest).
+            Turn one off to widen the net.
+          </p>
         )}
 
         {/* Anything a source matched but couldn't use — never shrink the list silently. */}

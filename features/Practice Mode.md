@@ -456,9 +456,20 @@ re-copying would wipe the redo copies spliced onto the queue's end. Reaching the
   ONE production modality (the typing lanes when smart on or typed default-on, else the recall
   lane), plus the reverse row only when the reverse track is on. Absent (older callers/tests), the
   legacy all-lanes union stands. The practice page now loads scheduler params, builds the enabled-
-  tracks map, and passes `tracksMap.get(pairKey) ?? {}` ({} = app defaults: typing + reverse). Note
-  the 263 orphaned fr reverse rows still exist in the DB — the pair modal's Single button doubles
-  as the leftover-row cleanup if the user wants them gone.
+  tracks map, and passes `tracksMap.get(pairKey) ?? {}` ({} = app defaults: typing + reverse). The
+  orphaned fr reverse rows were deleted the same day via the pair modal's Single button (984
+  schedules — the full leftover set, not just the 263 graduated/due ones; user confirmed).
+
+- **2026-11-21 — Filter sources INTERSECT (user decision).** "Starred + Due soon + Hardest" used
+  to union three piles; the user wants to single out difficult words that are due AND starred.
+  Now 2+ active FILTER sources (`starred`/`due`/`difficulty`/`difficultyRange`) intersect:
+  `starred`, `due` and the range BAND are predicates, while the limits rank the INTERSECTION —
+  `difficulty` takes the hardest N of the surviving pool (not globally-hardest-∩-due, which is
+  usually empty), `difficultyRange` seed-samples the pool (skipped when hardest is also on).
+  Order: due's soonest-first when due is active. Picks (`manual`/`decks`/`list`) stay additive on
+  top, and a single filter behaves exactly as before (`intersectFilters` + `FILTER_TYPES` in
+  `engine/practiceSelect.ts`). UI: the "N words selected" line notes that filters combine when 2+
+  are on, and an empty intersection explains itself instead of looking broken. Four tests.
 
 ## Error log
 
