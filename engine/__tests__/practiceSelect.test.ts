@@ -456,6 +456,41 @@ describe('due source reads every track (the 39-missing-words regression)', () =>
     expect(resolveTargets(due(), c).targets).toHaveLength(1)
   })
 
+  it('with `tracks`, reads ONLY the enabled lanes — stale disabled lanes never count (the 261-words bug)', () => {
+    // A smart-typing pair with recall + reverse OFF: the forward recall lane and the leftover
+    // reverse row both carry long-overdue dates, but neither track is reviewed anymore.
+    const cards = [card('six'), card('sept')]
+    const tracks = { typed: false, smart: true, recall: false, reverse: false }
+    const c = ctx({
+      cards,
+      statesByCard: statesOf([
+        // Production comfortably in the future; recall lane stale-overdue.
+        [cards[0]!.id, { smartDueAt: '2026-09-20T04:00:00Z', recallDueAt: '2026-01-01T04:00:00Z' }],
+        // Production due today — the only word that should surface.
+        [cards[1]!.id, { smartDueAt: `${TODAY}T04:00:00Z` }],
+      ]),
+      // Ghosted reverse row, long overdue.
+      reverseDueByCard: new Map([[cards[0]!.id, '2026-01-01T04:00:00Z']]),
+      tracks,
+    })
+    expect(resolveTargets(due(), c).targets.map(t => t.front)).toEqual(['sept'])
+    // Re-enabling the reverse track brings the reverse-due word back.
+    expect(resolveTargets(due(), { ...c, tracks: { ...tracks, reverse: true } }).targets).toHaveLength(2)
+  })
+
+  it('a recall-modality pair (no typing lanes) reads the recall lane as production', () => {
+    const cards = [card('huit')]
+    const c = ctx({
+      cards,
+      statesByCard: statesOf([
+        [cards[0]!.id, { smartDueAt: '2026-01-01T04:00:00Z', recallDueAt: '2026-09-20T04:00:00Z' }],
+      ]),
+      tracks: { typed: false, smart: false, recall: true, reverse: false },
+    })
+    // The stale smart lane is ignored; the live recall lane is in the future → nothing due.
+    expect(resolveTargets(due(), c).targets).toHaveLength(0)
+  })
+
   it('compares on the LOCAL day when a converter is supplied', () => {
     // 03:00 UTC on the 9th is still the evening of the 8th in New York — due "today".
     const cards = [card('cinq')]

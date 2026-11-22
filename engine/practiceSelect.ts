@@ -68,6 +68,16 @@ export interface SelectionContext {
    */
   reverseDueByCard?: Map<string, string>
   /**
+   * The pair's enabled review tracks (`lib/sessionLimits.EnabledTracks` fits). When supplied, the
+   * `due` source reads ONLY the lanes the pair actually reviews — the same gating as the Due Now
+   * pool (`lib/programPool.buildProgramBatches`): the typing lanes when a typing modality is on
+   * (smart, or typed by default), else the self-graded recall lane, plus the reverse row only when
+   * the reverse track is on. Without this, stale dates on DISABLED lanes — ghosted everywhere
+   * else in the app — count as due here, and "due today" balloons to hundreds of words.
+   * Absent (older callers/tests), every lane is consulted, as before.
+   */
+  tracks?: { typed?: boolean; smart?: boolean; recall?: boolean; reverse?: boolean }
+  /**
    * Normalizes a written word to the library's match key. Injected rather than imported so this
    * module stays dependency-free; the caller passes `normalizeFrontKey(text, sourceLanguage)`, the
    * same key duplicate detection uses, so "el pan" finds the card whose front is "pan".
@@ -167,9 +177,19 @@ function matchedCardIds(source: TargetSource, ctx: SelectionContext, byId: Map<s
       // here even though its recall was due today.
       const localDay = ctx.localDayOf ?? ((iso: string) => iso.slice(0, 10))
       const horizon = addDays(ctx.today, Math.max(0, source.withinDays))
+      // With `tracks` supplied, read only the ENABLED lanes (mirrors buildProgramBatches):
+      // one production modality — the typing lanes, else recall — plus reverse when on.
+      const t = ctx.tracks
+      const typing = t == null || t.smart === true || t.typed !== false
+      const prodOn = t == null || typing || t.recall === true
+      const reverseOn = t == null || t.reverse !== false
       const earliestDue = (s: CardState): string | null => {
-        const dates = [s.smartDueAt ?? s.typedDueAt ?? s.dueAt, s.recallDueAt,
-          ctx.reverseDueByCard?.get(s.cardId)].filter((d): d is string => !!d)
+        const prod = typing ? s.smartDueAt ?? s.typedDueAt ?? s.dueAt : s.recallDueAt ?? s.dueAt
+        const dates = [
+          prodOn ? prod : null,
+          t == null ? s.recallDueAt : null,       // legacy union — only without track info
+          reverseOn ? ctx.reverseDueByCard?.get(s.cardId) : null,
+        ].filter((d): d is string => !!d)
         if (dates.length === 0) return null
         return dates.reduce((a, b) => (a < b ? a : b))
       }

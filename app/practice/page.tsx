@@ -21,6 +21,8 @@ import { SupabaseCardStateRepository } from '@/lib/data/cardStates'
 import { SupabaseLanguagePairRepository } from '@/lib/data/languagePairs'
 import { SupabaseDeckRepository } from '@/lib/data/decks'
 import { SupabaseFolderRepository } from '@/lib/data/folders'
+import { SupabaseUserSchedulerParamsRepository } from '@/lib/data/userSchedulerParams'
+import { buildEnabledTracksMap, type EnabledTracks } from '@/lib/sessionLimits'
 import { buildLibraryIndex, toPracticeTargets, type PracticeTarget } from '@/engine/practice'
 import {
   resolveTargets, DEFAULT_CAP_PER_SOURCE, MIN_DIFFICULTY, MAX_DIFFICULTY, type TargetSource,
@@ -159,6 +161,8 @@ function PracticeInner() {
   const [folders,  setFolders]  = useState<Folder[]>([])
   /** deck id → its card ids, for the deck/folder sources. */
   const [cardIdsByDeck, setCardIdsByDeck] = useState<Map<string, string[]>>(new Map())
+  /** `${src}|${tgt}` → enabled review tracks — gates which lanes the "Due soon" source reads. */
+  const [tracksMap, setTracksMap] = useState<Map<string, EnabledTracks>>(new Map())
 
   // ── Selection state: one entry per source kind, all composed at the end ─────
   const [tab,       setTab]       = useState<PickerTab>('words')
@@ -217,11 +221,12 @@ function PracticeInner() {
     setSelected(new Set()); setDeckSel(new Set()); setExpanded(new Set())
     setDueDays(null); setHardest(null); setPasted(''); setRangeOn(false); setStarredOn(false)
     void (async () => {
-      const [pairCards, allStates, allDecks, allFolders] = await Promise.all([
+      const [pairCards, allStates, allDecks, allFolders, paramRows] = await Promise.all([
         new SupabaseCardRepository().listOwned(userId, pair.sourceLanguage, pair.targetLanguage),
         new SupabaseCardStateRepository().listAllForUser(userId),
         new SupabaseDeckRepository().list(userId),
         new SupabaseFolderRepository().list(userId),
+        new SupabaseUserSchedulerParamsRepository().listForUser(userId).catch(() => []),
       ])
       if (cancelled) return
       const pairDecks = allDecks.filter(d =>
@@ -234,6 +239,7 @@ function PracticeInner() {
       setStates(allStates)
       setDecks(pairDecks)
       setFolders(allFolders)
+      setTracksMap(buildEnabledTracksMap(paramRows))
       setCardIdsByDeck(new Map([...byDeck].map(([deckId, list]) => [deckId, list.map(c => c.id)])))
     })()
     return () => { cancelled = true }
@@ -295,7 +301,11 @@ function PracticeInner() {
         .flatMap(s => { const d = s.recallDueAt ?? s.dueAt; return d ? [[s.cardId, d] as const] : [] }),
     ),
     normalizeKey: (text: string) => normalizeFrontKey(text, pair?.sourceLanguage ?? ''),
-  }), [cards, states, cardIdsByDeck, pair?.sourceLanguage])
+    // Gate "Due soon" to the pair's ENABLED lanes — without this, stale dates on disabled
+    // tracks (ghosted everywhere else) counted as due and "today" ballooned to hundreds.
+    // `{}` (no params rows yet) = the app-wide defaults: typing production + reverse.
+    tracks: tracksMap.get(pairKey) ?? {},
+  }), [cards, states, cardIdsByDeck, pair?.sourceLanguage, tracksMap, pairKey])
 
   /** This pair's slice of the library, as a navigable tree (shared with the agent's scope picker). */
   const tree = useMemo(() => {

@@ -446,6 +446,20 @@ re-copying would wipe the redo copies spliced onto the queue's end. Reaching the
   dormant rows are excluded, ordering is by the earliest due track, and `due` is uncapped — only
   `decks` keeps the per-source cap. Seven regression tests.
 
+- **2026-11-21 — "Due soon → Today" showed 261 French words when Due Now showed 32.** The 2026-08-22
+  fix over-corrected: the `due` source unioned EVERY lane's date with no regard for which review
+  tracks the pair has enabled, so lanes that are ghosted everywhere else in the app counted as due
+  here. Live-DB check: fr forward rows 1018 graduated, production-due 32 (= Due Now's 11 due + 21
+  relearning), but 263 leftover REVERSE rows (the pair is single-direction — reverse off) and 14
+  stale forward `recallDueAt` dates unioned to 268. Fix: `SelectionContext.tracks?` (shape fits
+  `EnabledTracks`) — when supplied, the `due` source mirrors `buildProgramBatches`' gating exactly:
+  ONE production modality (the typing lanes when smart on or typed default-on, else the recall
+  lane), plus the reverse row only when the reverse track is on. Absent (older callers/tests), the
+  legacy all-lanes union stands. The practice page now loads scheduler params, builds the enabled-
+  tracks map, and passes `tracksMap.get(pairKey) ?? {}` ({} = app defaults: typing + reverse). Note
+  the 263 orphaned fr reverse rows still exist in the DB — the pair modal's Single button doubles
+  as the leftover-row cleanup if the user wants them gone.
+
 ## Error log
 
 | Date | Error | Fix |
