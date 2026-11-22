@@ -268,6 +268,10 @@ Current feature files:
   ~890-row "anomaly" audit was almost entirely this display gap; only the 7 locked rows were
   real). Now appended by: all 3 session pages' recall + smart branches, `creditRow`,
   `boostRow` (real moves only), `relearnReview` (scheduled), and `externalSession.reviewRow`.
+  BATCH ROWS EXPANDABLE (2026-11-21): clicking a due-picker batch row (not the Start button)
+  expands its word list inline — each word shows front — back (+ relearning tag) with an
+  optimistic star toggle (`setStarred`; cached library Cards are immutable, so the toggle
+  SWAPS `w.card` for a copy and re-sets `batches`, reverting the swap on write failure).
   The dashboard's "Study all due" button now LINKS to /study/due — the old due-picker
   popover (pairTypeDue, forward_cloze/reverse_matching launch modes) was DELETED; express/
   cloze/story pages still exist and their deep links work, they're just not launched from

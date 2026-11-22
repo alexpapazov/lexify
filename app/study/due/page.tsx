@@ -81,6 +81,8 @@ function DueInner() {
   const [batch, setBatch] = useState<ProgramBatch | null>(null)
   const [draft, setDraft] = useState<StageKind[]>([])
   const [program, setProgram] = useState<ReviewProgram | null>(null)
+  /** Batch row expanded on the picker — shows the batch's words with star toggles. */
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
   const [progress, setProgress] = useState<Record<string, WordProgress>>({})
   const [progressV, setProgressV] = useState(0)
 
@@ -817,20 +819,68 @@ function DueInner() {
               const p = open.progress[w.card.id]
               return p && p.cleared > 0 && !p.done
             })
+            const expanded = expandedKey === b.key
             return (
-              <div key={b.key} className="flex items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
-                  <div className="text-sm text-ink font-medium">{langFlag(b.src)} {dirLabel(b)}</div>
-                  <div className="text-xs text-ink-muted">
-                    {b.words.length - b.relearning} due
-                    {b.relearning > 0 ? ` · ${b.relearning} relearning (reviewed in-session)` : ''}
-                    {inProgress && open ? ` · in progress (${open.stages.map(s => STAGE_LABEL[s]).join(' → ')})` : ''}
-                  </div>
-                </div>
-                {b.words.length > 0 && (
-                  <button onClick={() => openBuilder(b)} className="btn-primary text-sm shrink-0">
-                    {inProgress ? 'Continue' : 'Start'}
+              <div key={b.key}>
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <button
+                    onClick={() => setExpandedKey(expanded ? null : b.key)}
+                    className="min-w-0 flex-1 text-left group"
+                    aria-expanded={expanded}
+                  >
+                    <div className="text-sm text-ink font-medium">
+                      {langFlag(b.src)} {dirLabel(b)}
+                      <span className={`ml-2 inline-block text-ink-muted/60 text-xs transition-transform ${expanded ? 'rotate-90' : ''}`}>▸</span>
+                    </div>
+                    <div className="text-xs text-ink-muted">
+                      {b.words.length - b.relearning} due
+                      {b.relearning > 0 ? ` · ${b.relearning} relearning (reviewed in-session)` : ''}
+                      {inProgress && open ? ` · in progress (${open.stages.map(s => STAGE_LABEL[s]).join(' → ')})` : ''}
+                    </div>
                   </button>
+                  {b.words.length > 0 && (
+                    <button onClick={() => openBuilder(b)} className="btn-primary text-sm shrink-0">
+                      {inProgress ? 'Continue' : 'Start'}
+                    </button>
+                  )}
+                </div>
+                {expanded && (
+                  <div className="px-4 pb-3">
+                    <div className="rounded-lg border border-line/10 divide-y divide-line/5 max-h-80 overflow-y-auto">
+                      {b.words.map(w => (
+                        <div key={w.card.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                          <div className="min-w-0 text-sm">
+                            <span className="text-ink">{displayText(w.card.front)}</span>
+                            <span className="text-ink-muted"> — {displayText(w.card.back)}</span>
+                            {w.relearn && <span className="ml-2 text-[10px] uppercase tracking-wide text-warning">relearning</span>}
+                          </div>
+                          <button
+                            onClick={() => {
+                              // The batch's Card objects come from the cached library read —
+                              // shared and immutable, so swap the object instead of mutating it.
+                              const prevCard = w.card
+                              const next = !prevCard.starred
+                              w.card = { ...prevCard, starred: next }
+                              setBatches(bs => [...bs])
+                              new SupabaseCardRepository().setStarred(prevCard.id, next).catch(() => {
+                                w.card = prevCard
+                                setBatches(bs => [...bs])
+                              })
+                            }}
+                            className={`shrink-0 w-6 h-6 flex items-center justify-center transition-colors ${w.card.starred ? 'text-warning hover:text-warning/80' : 'text-ink-faint hover:text-ink-muted'}`}
+                            aria-pressed={w.card.starred ?? false}
+                            title={w.card.starred ? 'Starred — click to unstar' : 'Star this card'}
+                          >
+                            <svg viewBox="0 0 24 24" className="w-4 h-4"
+                              fill={w.card.starred ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8"
+                              strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 2.5l2.9 5.9 6.5.95-4.7 4.58 1.11 6.47L12 17.4l-5.81 3.05 1.11-6.47-4.7-4.58 6.5-.95L12 2.5z" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             )
