@@ -886,7 +886,7 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
         <SettingsSection title="Audio"
           description={<>The voice used for new cards. <strong className="text-ink">Robotic</strong> uses your device&apos;s built-in speech and generates nothing. <strong className="text-ink">AI voice</strong> and <strong className="text-ink">Forvo</strong> pre-generate real clips (Forvo falls back to AI when it has no recording). You can still override the source per card from its ℹ panel; existing cards keep their current audio until you clear it.</>}>
           <SettingsRow label="Auto-play audio in Study mode"
-            hint="Target-language audio plays automatically during Due Now sessions.">
+            hint="Target-language audio plays automatically during Due Now study. Turn it off to study in silence — your music keeps playing, and nothing sounds unless you tap a Listen button.">
             <input type="checkbox" checked={studyModeAutoplay} onChange={e => setStudyModeAutoplay(e.target.checked)} className="accent-accent w-4 h-4" />
           </SettingsRow>
           <SettingsRow label="Default audio source">

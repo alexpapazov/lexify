@@ -194,6 +194,10 @@ function FolderSessionInner() {
   const [forwardTypedEnabled, setForwardTypedEnabled] = useState(true)
   const [forwardRecallEnabled, setForwardRecallEnabled] = useState(true)
 
+  /** Settings → Audio → "Auto-play audio in Study mode" — off silences every automatic sound. */
+
+  const autoplayGlobalRef = useRef(true)
+
   const tzRef       = useRef('UTC')
   const turnoverRef = useRef(0)
   // Hint usage for the current card's review — consumed once in handleAnswer.
@@ -267,7 +271,7 @@ function FolderSessionInner() {
         folderRepo.list(session.user.id),
         pipelineRepo.getDefault(),
         folderRepo.get(folderId),
-        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
+        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
         new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
         new SupabaseCardConfusionLinkRepository().listForUser(session.user.id).catch(() => []),
       ])
@@ -283,6 +287,7 @@ function FolderSessionInner() {
 
       const tz           = (profileData.data?.timezone as string | null) ?? deviceTimeZone()
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
+      autoplayGlobalRef.current = (profileData.data?.study_mode_autoplay as boolean | null) ?? true
       setAudioSourceDefault(profileData.data?.audio_source_default as string | null)
       setAudioSourceByLanguage(profileData.data?.audio_source_by_language as Record<string, string> | null)
       tzRef.current       = tz
@@ -1547,7 +1552,7 @@ function FolderSessionInner() {
       ) : !state.graduated && step.stepType === 'recognition' ? (
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={deckCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage} deckName={deckName}
-          autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
+          autoPlayAudio={autoplayGlobalRef.current && (gradingSettings.autoPlayAudio ?? true)}
           splitGlossFromBack={step.answerSide === 'back'}
           onChoicesCached={handleChoicesCached}
           onIDontKnow={handleIDontKnow}
@@ -1565,7 +1570,7 @@ function FolderSessionInner() {
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={step.promptSide === 'back' ? sourceLanguage : targetLanguage}
-          gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={false} deckName={deckName}
+          gradingSettings={gradingSettings} autoPlayAudio={autoplayGlobalRef.current && (gradingSettings.autoPlayAudio ?? true)} gradedReview={false} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           deckSiblings={deckSiblings(card, step.answerSide, deckCards)}
@@ -1585,7 +1590,7 @@ function FolderSessionInner() {
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           cloze={reviewPromptSide === 'back' ? clozeByCard.get(card.id) || undefined : undefined} deckName={deckName}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
-          autoPlayAudio={gradingSettings.autoPlayAudio ?? true}
+          autoPlayAudio={autoplayGlobalRef.current && (gradingSettings.autoPlayAudio ?? true)}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
           onAlmost={state.graduated ? handleAlmost : undefined}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
@@ -1600,7 +1605,7 @@ function FolderSessionInner() {
           cloze={reviewPromptSide === 'back' ? clozeByCard.get(card.id) || undefined : undefined}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : targetLanguage}
-          gradingSettings={gradingSettings} autoPlayAudio={gradingSettings.autoPlayAudio ?? true} gradedReview={true} deckName={deckName}
+          gradingSettings={gradingSettings} autoPlayAudio={autoplayGlobalRef.current && (gradingSettings.autoPlayAudio ?? true)} gradedReview={true} deckName={deckName}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           deckSiblings={deckSiblings(card, reviewAnswerSide, deckCards)}

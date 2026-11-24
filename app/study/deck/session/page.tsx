@@ -228,6 +228,8 @@ export default function SessionPage() {
   const pendingOverrideAddRef = useRef<{ cardId: string; answerSide: CardSide; answerText: string } | null>(null)
 
   const indexRef       = useRef(0)   // current queue index (for async drill insertion)
+  /** Settings → Audio → "Auto-play audio in Study mode" — off silences every automatic sound. */
+  const autoplayGlobalRef = useRef(true)
   const tzRef          = useRef('UTC')
   const turnoverRef    = useRef(0)
   // Hint usage for the current card's review — consumed once in handleAnswer.
@@ -453,7 +455,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         cardRepo.listForDecks([deckId]),
         pipelineRepo.getDefault(),
         prefRepo.get(session.user.id, deckId),
-        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
+        loadProfileRow(() => supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay, audio_source_default, audio_source_by_language').eq('user_id', session.user.id).single()),
         stateRepo.listByDeck(session.user.id, deckId),
         new SupabaseTypedAnswerOverrideRepository().listForUser(session.user.id),
         new SupabaseUserSchedulerParamsRepository().listForUser(session.user.id),
@@ -463,6 +465,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
 
       const tz           = (profileData.data?.timezone as string | null) ?? deviceTimeZone()
       const turnoverHour = (profileData.data?.day_turnover_hour as number | null) ?? 0
+      autoplayGlobalRef.current = (profileData.data?.study_mode_autoplay as boolean | null) ?? true
       setAudioSourceDefault(profileData.data?.audio_source_default as string | null)
       setAudioSourceByLanguage(profileData.data?.audio_source_by_language as Record<string, string> | null)
       tzRef.current       = tz
@@ -2038,7 +2041,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         //   words and display one randomly as the correct answer.
         <MultipleChoiceMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide} answerSide={step.answerSide}
           deckCards={allCards} sourceLanguage={sourceLanguage} targetLanguage={targetLanguage}
-          autoPlayAudio={gradingSettings?.autoPlayAudio ?? true}
+          autoPlayAudio={autoplayGlobalRef.current && (gradingSettings?.autoPlayAudio ?? true)}
           excludeAnswerTexts={step.answerSide === 'front' && synMemberCards.length > 0
             ? synMemberCards.map(m => m.front) : undefined}
           splitGlossFromBack={step.answerSide === 'back'}
@@ -2088,7 +2091,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         <TypingMode key={`${card.id}-${index}`} card={card} promptSide={step.promptSide}
           promptLanguage={step.promptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={step.promptSide === 'back' ? sourceLanguage : targetLanguage}
-          gradingSettings={gradingSettings!} autoPlayAudio={gradingSettings?.autoPlayAudio ?? true} gradedReview={false}
+          gradingSettings={gradingSettings!} autoPlayAudio={autoplayGlobalRef.current && (gradingSettings?.autoPlayAudio ?? true)} gradedReview={false}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${step.answerSide}`) ?? [])}
           synonyms={step.answerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           deckSiblings={deckSiblings(card, step.answerSide, allCards)}
@@ -2109,7 +2112,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
         <FlashcardMode key={`${card.id}-${index}`} card={card} promptSide={reviewPromptSide}
           cloze={reviewPromptSide === 'back' ? clozeByCard.get(card.id) || undefined : undefined}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
-          autoPlayAudio={gradingSettings?.autoPlayAudio ?? true}
+          autoPlayAudio={autoplayGlobalRef.current && (gradingSettings?.autoPlayAudio ?? true)}
           onRate={rating => handleAnswer(rating, rating !== 'again')}
           onAlmost={state.graduated ? handleAlmost : undefined}
           onPromptEdit={t => handlePromptEdit(card.id, reviewPromptSide, t)}
@@ -2140,7 +2143,7 @@ const handleOverrideAnswer = useCallback((cardId: string, answerSide: CardSide, 
           cloze={reviewPromptSide === 'back' ? clozeByCard.get(card.id) || undefined : undefined}
           promptLanguage={reviewPromptSide === 'front' ? sourceLanguage : undefined}
           answerLanguage={reviewPromptSide === 'back' ? sourceLanguage : targetLanguage}
-          gradingSettings={gradingSettings!} autoPlayAudio={gradingSettings?.autoPlayAudio ?? true} gradedReview={true}
+          gradingSettings={gradingSettings!} autoPlayAudio={autoplayGlobalRef.current && (gradingSettings?.autoPlayAudio ?? true)} gradedReview={true}
           overrideAnswers={Array.from(overrides.get(`${card.id}:${reviewAnswerSide}`) ?? [])}
           synonyms={reviewAnswerSide === 'front' ? (card.choices?.frontSynonyms ?? []) : (card.choices?.backSynonyms ?? [])}
           deckSiblings={deckSiblings(card, reviewAnswerSide, allCards)}

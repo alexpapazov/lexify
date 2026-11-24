@@ -62,6 +62,8 @@ function ExpressInner() {
 
   const tzRef = useRef(deviceTimeZone())
   const turnoverRef = useRef(0)
+  /** Settings → Audio → "Auto-play audio in Study mode" — off silences the tile-tap audio. */
+  const autoplayGlobalRef = useRef(true)
   const retMapRef = useRef<Map<string, number>>(new Map())
   const calMapRef = useRef<Map<string, number>>(new Map())
   /** Cards touched by any mismatch this session — they keep their real review. */
@@ -82,7 +84,7 @@ function ExpressInner() {
         const uid = session.user.id
         setUserId(uid)
         const [profileRes, ratingRes, cards, states, paramRows] = await Promise.all([
-          supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', uid).maybeSingle(),
+          supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay').eq('user_id', uid).maybeSingle(),
           // Separate select with its own fallback: referencing express_rating in the main select
           // would blank timezone/turnover wholesale if migration 123 isn't applied yet (the
           // not-yet-migrated-profile-column landmine).
@@ -96,6 +98,7 @@ function ExpressInner() {
         const turnover = (profileRes.data?.day_turnover_hour as number | null) ?? 0
         tzRef.current = tz
         turnoverRef.current = turnover
+        autoplayGlobalRef.current = (profileRes.data?.study_mode_autoplay as boolean | null) ?? true
         retMapRef.current = buildRetentionMap(paramRows)
         calMapRef.current = buildCalibrationMap(paramRows)
         const built = buildExpressPool(cards, states, {
@@ -204,6 +207,7 @@ function ExpressInner() {
         pairs={pairs}
         onExit={() => router.push('/study')}
         onSpeakTarget={p => {
+          if (!autoplayGlobalRef.current) return
           const cand = candidateById.get(p.id)
           speak(cand ? cand.card.front : p.front, cand?.card.sourceLanguage ?? source ?? '')
         }}

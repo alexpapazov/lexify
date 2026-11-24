@@ -268,6 +268,13 @@ Current feature files:
   ~890-row "anomaly" audit was almost entirely this display gap; only the 7 locked rows were
   real). Now appended by: all 3 session pages' recall + smart branches, `creditRow`,
   `boostRow` (real moves only), `relearnReview` (scheduled), and `externalSession.reviewRow`.
+  GLOBAL AUTOPLAY HONORED EVERYWHERE (2026-11-24, user: typing in Due Now kept pausing their
+  music): Settings → Audio "Auto-play audio in Study mode" (`profiles.study_mode_autoplay`,
+  migration 047, default ON) was only wired into all/session — now the due RUNNER
+  (`autoplayGlobalRef` ANDed into `autoplay` + gating the matching `onSpeakTarget`), the deck +
+  folder session pages (ANDed into every `autoPlayAudio` prop), and express's tile-tap speak all
+  honor it. Off = total silence in Due Now study; Listen buttons still play on request. No
+  migration — the setting and its checkbox already existed.
   BATCH ROWS EXPANDABLE (2026-11-21): clicking a due-picker batch row (not the Start button)
   expands its word list inline — each word shows front — back (+ relearning tag) with an
   optimistic star toggle (`setStarred`; cached library Cards are immutable, so the toggle

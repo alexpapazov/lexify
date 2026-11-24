@@ -109,6 +109,10 @@ function DueInner() {
   /** ℹ pressed on a matching tile — opens the same CardEditModal for that pair's card. */
   const [matchInfoId, setMatchInfoId] = useState<string | null>(null)
   const hintGFRef = useRef<number | null>(null)
+  /** Settings → Audio → "Auto-play audio in Study mode" (profiles.study_mode_autoplay). Off =
+   *  the whole runner is silent — no autoplay, no submit-speak, no matching tile audio — so
+   *  studying never interrupts the learner's music. Listen buttons still work on request. */
+  const autoplayGlobalRef = useRef(true)
   /** Each card's deck — the source of its GRADING SETTINGS (the session pages grade with the
    *  deck's settings; defaults silently broke accent acceptance, user report 2026-11-20),
    *  deck name, and the ℹ modal's deck context. */
@@ -132,10 +136,11 @@ function DueInner() {
         if (!session) { router.push('/auth'); return }
         const uid = session.user.id
         setUserId(uid)
-        const profile = await supabase.from('profiles').select('timezone, day_turnover_hour').eq('user_id', uid).maybeSingle()
-          .then(r => r.data as { timezone: string | null; day_turnover_hour: number | null } | null, () => null)
+        const profile = await supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay').eq('user_id', uid).maybeSingle()
+          .then(r => r.data as { timezone: string | null; day_turnover_hour: number | null; study_mode_autoplay: boolean | null } | null, () => null)
         const tz = profile?.timezone ?? deviceTimeZone()
         const turnover = profile?.day_turnover_hour ?? 0
+        autoplayGlobalRef.current = profile?.study_mode_autoplay ?? true
         todayRef.current = getToday(tz, turnover)
 
         // Yesterday's unfinished programs pay out their boosts BEFORE today's batches build.
@@ -546,6 +551,7 @@ function DueInner() {
             onInfo={p => { if (sessionCards.has(p.id)) setMatchInfoId(p.id) }}
             onExit={() => setView('batches')}
             onSpeakTarget={p => {
+              if (!autoplayGlobalRef.current) return
               const w = matchChunk.find(x => x.card.id === p.id)
               if (w) speak(w.card.front, w.card.sourceLanguage)
             }}
@@ -630,7 +636,7 @@ function DueInner() {
     const deck = cardDeckRef.current.get(card.id)
     // The DECK's grading settings, like sessions — defaults silently flipped accent handling.
     const gsWithLang = { ...(deck?.gradingSettings ?? DEFAULT_GRADING_SETTINGS), answerLanguage: answerSide === 'front' ? batch.src : batch.tgt }
-    const autoplay = gsWithLang.autoPlayAudio ?? true
+    const autoplay = autoplayGlobalRef.current && (gsWithLang.autoPlayAudio ?? true)
     const currentIpaText = showIPA && promptSide === 'front' ? (ipaCache.get(card.id) ?? card.ipa ?? undefined) : undefined
     const ipaToggle = promptSide === 'front' ? () => setShowIPA(v => !v) : undefined
 
