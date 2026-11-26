@@ -194,6 +194,16 @@ function DueInner() {
     setView('builder')
   }
 
+  /** Re-open the BUILDER for an in-progress program (user decision 2026-11-26: "started with
+   *  matching but want to do it differently"). `programRepo.open`'s upsert replaces the chain
+   *  and keeps progress — cleared counts carry over (strength is max-over-prefix, so a lighter
+   *  new chain never revokes earned credit) and credited/locked words stay done. */
+  function openBuilderEdit(b: ProgramBatch) {
+    setBatch(b)
+    setDraft(todayPrograms.get(b.key)?.stages ?? PRESETS[b.direction][1]?.stages ?? ['matching'])
+    setView('builder')
+  }
+
   function startRun(b: ProgramBatch, prog: ReviewProgram) {
     setBatch(b)
     setProgram(prog)
@@ -294,11 +304,16 @@ function DueInner() {
     setRelearnQ(q => [...q, id])
   }
   const remaining = pool.filter(w => !prog(w.card.id).done)
+  /** Stage PLACEMENT clamps cleared to the last stage: editing today's plan to a SHORTER chain
+   *  can leave a word's cleared count past the end — it still owes the final (crediting) stage,
+   *  so it queues there instead of falling out of `active` and wedging the run. Earned-strength
+   *  math keeps the raw count. */
+  const clearedFor = (id: string) => Math.min(prog(id).cleared, Math.max(0, stages.length - 1))
   const stageIdx = remaining.length > 0
-    ? Math.min(stages.length - 1, Math.min(...remaining.map(w => prog(w.card.id).cleared)))
+    ? Math.min(stages.length - 1, Math.min(...remaining.map(w => clearedFor(w.card.id))))
     : 0
   const stageKind: StageKind | undefined = stages[stageIdx]
-  const active = remaining.filter(w => prog(w.card.id).cleared === stageIdx)
+  const active = remaining.filter(w => clearedFor(w.card.id) === stageIdx)
   const isFinalStage = stageIdx === stages.length - 1
 
   /** Clears the current stage for a word; the final stage writes the real review (a hint used
@@ -418,7 +433,7 @@ function DueInner() {
 
   // IPA for the current card when the prompt shows the target word (recognition direction) —
   // same transcribe-once-and-store behavior as sessions.
-  const currentCardId = queue.find(id => { const p = prog(id); return p.cleared === stageIdx && !p.done })
+  const currentCardId = queue.find(id => { const p = prog(id); return clearedFor(id) === stageIdx && !p.done })
   useEffect(() => {
     if (view !== 'run' || !batch || batch.direction !== 'recognition' || !currentCardId) return
     const sc = sessionCards.get(currentCardId)
@@ -444,6 +459,9 @@ function DueInner() {
   if (view === 'builder' && batch) {
     const strength = draft.length > 0 ? earnedStrength(draft, draft.length) : 0
     const palette = stagesForDirection(batch.direction)
+    // Rebuilding an already-started program (the Edit path) — progress carries over.
+    const builderEditing = Object.values(todayPrograms.get(batch.key)?.progress ?? {})
+      .some(p => p.cleared > 0 || p.done)
     return (
       <div className="max-w-2xl mx-auto space-y-5 pb-16">
         <button onClick={() => setView('batches')} className="text-sm text-ink-muted hover:text-ink">← Back</button>
@@ -485,8 +503,14 @@ function DueInner() {
             {' '}Quitting midway keeps each word&apos;s highest cleared stage: its smaller boost applies automatically at day turnover.
           </p>
           {error && <p className="text-danger text-xs">⚠ {error}</p>}
+          {builderEditing && (
+            <p className="text-xs text-ink-faint">
+              Changing today&apos;s plan — progress so far is kept: words keep the stages they&apos;ve
+              already cleared, and anything credited or locked in stays done.
+            </p>
+          )}
           <button onClick={() => void handleStart()} disabled={draft.length === 0} className="btn-primary w-full">
-            Start ({batch.words.length} words)
+            {builderEditing ? 'Update program' : 'Start'} ({batch.words.length} words)
           </button>
         </div>
       </div>
@@ -571,7 +595,7 @@ function DueInner() {
               }
               if (dirtyRef.current.has(a.pair.id)) return
               const w = matchChunk.find(x => x.card.id === a.pair.id)
-              if (w && prog(w.card.id).cleared === stageIdx) clearWord(w, 'good')
+              if (w && clearedFor(w.card.id) === stageIdx) clearWord(w, 'good')
             }}
             renderFinish={() => {
               const missedHere = matchChunk.filter(w => prog(w.card.id).cleared === stageIdx && !prog(w.card.id).done).length
@@ -845,9 +869,18 @@ function DueInner() {
                     </div>
                   </button>
                   {b.words.length > 0 && (
-                    <button onClick={() => openBuilder(b)} className="btn-primary text-sm shrink-0">
-                      {inProgress ? 'Continue' : 'Start'}
-                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {inProgress && (
+                        <button onClick={() => openBuilderEdit(b)}
+                          title="Change today's stage chain — progress so far is kept"
+                          className="rounded-lg border border-line/20 px-3 py-2 text-xs text-ink-muted hover:text-ink transition-colors">
+                          Edit
+                        </button>
+                      )}
+                      <button onClick={() => openBuilder(b)} className="btn-primary text-sm">
+                        {inProgress ? 'Continue' : 'Start'}
+                      </button>
+                    </div>
                   )}
                 </div>
                 {expanded && (

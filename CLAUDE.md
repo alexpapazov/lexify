@@ -268,6 +268,13 @@ Current feature files:
   ~890-row "anomaly" audit was almost entirely this display gap; only the 7 locked rows were
   real). Now appended by: all 3 session pages' recall + smart branches, `creditRow`,
   `boostRow` (real moves only), `relearnReview` (scheduled), and `externalSession.reviewRow`.
+  MID-DAY PLAN EDIT (2026-11-26, user: "started with matching but want to do it differently"):
+  an in-progress batch row shows an Edit button beside Continue → `openBuilderEdit` re-opens
+  the builder prefilled with today's chain; Start becomes "Update program". `programRepo.open`'s
+  upsert already replaced stages while keeping progress. Guard for SHORTER new chains:
+  `clearedFor(id)` clamps cleared to the last stage INDEX for placement (stageIdx/active/
+  currentCardId/matching-clear) so an over-cleared word queues at the crediting final stage
+  instead of wedging the run; raw cleared stays for earnedStrength (slice-capped, safe).
   GLOBAL AUTOPLAY HONORED EVERYWHERE (2026-11-24, user: typing in Due Now kept pausing their
   music): Settings → Audio "Auto-play audio in Study mode" (`profiles.study_mode_autoplay`,
   migration 047, default ON) was only wired into all/session — now the due RUNNER
