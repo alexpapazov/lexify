@@ -275,6 +275,10 @@ Current feature files:
   `clearedFor(id)` clamps cleared to the last stage INDEX for placement (stageIdx/active/
   currentCardId/matching-clear) so an over-cleared word queues at the crediting final stage
   instead of wedging the run; raw cleared stays for earnedStrength (slice-capped, safe).
+  BUG FIXED same day: the row's `inProgress` used `cleared>0 && !done`, but a SINGLE-STAGE
+  chain (matching only) credits on clear — cleared>0 implies done — so Edit never showed while
+  Continue still auto-resumed. `inProgress` must MIRROR openBuilder's resume condition
+  (`cleared > 0 || done` over the program's progress); keep the two in lockstep.
   GLOBAL AUTOPLAY HONORED EVERYWHERE (2026-11-24, user: typing in Due Now kept pausing their
   music): Settings → Audio "Auto-play audio in Study mode" (`profiles.study_mode_autoplay`,
   migration 047, default ON) was only wired into all/session — now the due RUNNER
