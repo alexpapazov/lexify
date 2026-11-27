@@ -148,6 +148,25 @@ describe('assignBacklogDays', () => {
     expect(r.assignments.size).toBe(90)
   })
 
+  it('never dumps a due-today backlog back onto today when future days are globally busy', () => {
+    // The 2026-11-26 Italian regression: 70 cards being re-dealt off an overloaded today, every
+    // other day in the window carrying ~130 reviews from OTHER languages (the load map is global),
+    // today's own load already subtracted by the caller. The level target (~126) towered over an
+    // empty today, so "earliest day with room" assigned all 70 straight back to today.
+    const existingLoad = new Map<string, number>([
+      [TODAY, 0],
+      ...Array.from({ length: 13 }, (_, i) => [addDays(TODAY, i + 1), 130] as [string, number]),
+    ])
+    const r = assignBacklogDays({ overdue: band('o', 70, 40, 30), today: TODAY, days: 14, existingLoad })
+
+    expect(r.assignments.size).toBe(70)
+    // ≈ 2× the fair share (70/14 = 5) plus the even top-up — never the whole pile.
+    expect(r.perDay.get(TODAY)!).toBeLessThanOrEqual(16)
+    const future = [...r.perDay.entries()].filter(([d]) => d !== TODAY)
+      .reduce((t, [, n]) => t + n, 0)
+    expect(future).toBeGreaterThanOrEqual(54)
+  })
+
   it('assigns nothing to a day that is already busier than the levelled total', () => {
     const existingLoad = new Map([[TODAY, 500], [addDays(TODAY, 1), 0]])
     const r = assignBacklogDays({ overdue: band('o', 20, 40, 30), today: TODAY, days: 2, existingLoad })

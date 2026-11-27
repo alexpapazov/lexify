@@ -212,7 +212,14 @@ export function assignBacklogDays(args: {
   const existing = args.existingLoad ?? new Map<string, number>()
   const existingTotal = days.reduce((t, d) => t + (existing.get(d) ?? 0), 0)
   const level = (existingTotal + ranked.length) / nDays
-  const capacity = new Map(days.map(d => [d, Math.max(0, level - (existing.get(d) ?? 0))]))
+  // A single day takes at most TWICE the backlog's fair share. The level is computed against the
+  // GLOBAL schedule, so when every other day in the window is busier than the level target, an
+  // emptied "today" (the caller subtracts the very cards being re-dealt) used to swallow the whole
+  // backlog via "earliest day with room" — a due-today pile-up re-dealt itself back onto today and
+  // visibly "would not budge" (2026-11-26: 70 Italian cards, other languages at 100–180/day).
+  const fairShare = ranked.length / nDays
+  const capacity = new Map(days.map(d =>
+    [d, Math.min(2 * fairShare, Math.max(0, level - (existing.get(d) ?? 0)))]))
 
   // Rounding and already-overloaded days can leave the capacities short of what must be placed;
   // top every day up evenly so nothing is left unassigned.

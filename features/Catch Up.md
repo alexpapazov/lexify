@@ -245,6 +245,17 @@ double-count. `conflictingScopes()` makes creating either one replace the other.
 
 ## 7. Error log
 
+- **2026-11-26 — the backlog re-dealt itself onto today (the 70 Italian cards).** A 14-day spread
+  of 70 due-today cards visibly did nothing: all 70 stayed on today. Cause: `assignBacklogDays`
+  levels against the GLOBAL load map (every language, both lanes), and `spread()` subtracts the
+  very cards being re-dealt from today's load. With other languages keeping every future day in
+  the window at 100–180 reviews, the level target (~126/day) towered over the emptied today, so
+  today's capacity exceeded the whole backlog and "highest damage into the earliest day with room"
+  assigned all 70 straight back to today — the writes ran, each card "moved" to the same day. The
+  preview, which promises `+⌈backlog/days⌉/day`, disagreed with reality by 14×. Fix: a single
+  day's backlog capacity is capped at **2× the fair share** (`ranked.length / nDays`); the even
+  top-up still runs when busy days leave slack short. Regression test: "never dumps a due-today
+  backlog back onto today when future days are globally busy".
 - **2026-08-22 — the plan was invisible.** Built first as a session-queue cap with a stored target
   date; every due count and the forecast chart were unchanged, so nothing appeared to happen. Cause
   was a wrong premise on my part: I had assumed rewriting due dates would corrupt the FSRS memory
