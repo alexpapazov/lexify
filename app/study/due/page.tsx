@@ -315,6 +315,30 @@ function DueInner() {
     relearnKindRef.current.set(id, 'remedial')
     setRelearnQ(q => [...q, id])
   }
+
+  /** ℹ-panel delete (parity gap vs sessions, user report 2026-11-26: the trash button never
+   *  rendered here because onDelete wasn't passed). The modal soft-deletes the card; this
+   *  removes the word from every place it can surface in the live run. */
+  function handleInfoDelete(cardId: string) {
+    setInfoOpen(false)
+    setMatchInfoId(null)
+    if (batch) {
+      // Swap in a filtered batch object — `pool` memoizes on the batch reference.
+      const nextBatch = { ...batch, words: batch.words.filter(w => w.card.id !== cardId) }
+      setBatch(nextBatch)
+      setBatches(bs => bs.map(x => (x.key === nextBatch.key ? nextBatch : x)))
+    }
+    setQueue(q => q.filter(id => id !== cardId))
+    setRelearnQ(q => q.filter(id => id !== cardId))
+    relearnKindRef.current.delete(cardId)
+    missedStageRef.current.delete(cardId)
+    // An emptied matching round rebuilds from the remaining words instead of sitting blank.
+    setMatchChunk(c => {
+      if (!c) return c
+      const next = c.filter(w => w.card.id !== cardId)
+      return next.length > 0 ? next : null
+    })
+  }
   const remaining = pool.filter(w => !prog(w.card.id).done)
   /** Stage PLACEMENT clamps cleared to the last stage: editing today's plan to a SHORTER chain
    *  can leave a word's cleared count past the end — it still owes the final (crediting) stage,
@@ -649,6 +673,7 @@ function DueInner() {
                   if (w2) w2.state = s
                 }
               }}
+              onDelete={handleInfoDelete}
               onClose={() => setMatchInfoId(null)}
               initialShowStats
             />
@@ -844,6 +869,7 @@ function DueInner() {
                 if (w2) w2.state = s
               }
             }}
+            onDelete={handleInfoDelete}
             onClose={() => setInfoOpen(false)}
             initialShowStats
           />

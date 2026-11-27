@@ -290,6 +290,12 @@ Current feature files:
   (clozeStrictness applied only when a cloze actually resolved; plain typed fallback when
   ineligible/offline/failed). Recognition-direction relearns stay flashcards — cloze is
   production-only. Classic session pages' relearn re-shows are NOT covered (runner only).
+  RUNNER ℹ DELETE (2026-11-26, user report "where did the delete button go"): the runner's
+  two CardEditModal call sites never passed `onDelete`, so the trash button only existed in
+  sessions. `handleInfoDelete` now wires both — swaps a filtered batch object in (pool
+  memoizes on the batch reference), prunes queue/relearnQ/relearnKind/missedStage, and
+  empties-to-null the current matching chunk so the round rebuilds. Blanking a card's text
+  via the edit fields does NOT delete it — the trash button is the delete path.
   GLOBAL AUTOPLAY HONORED EVERYWHERE (2026-11-24, user: typing in Due Now kept pausing their
   music): Settings → Audio "Auto-play audio in Study mode" (`profiles.study_mode_autoplay`,
   migration 047, default ON) was only wired into all/session — now the due RUNNER
