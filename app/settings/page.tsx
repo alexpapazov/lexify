@@ -482,6 +482,7 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
   const [expressRating, setExpressRating] = useState(false)
   const [forwardCloze, setForwardCloze] = useState(false)
   const [reverseMatching, setReverseMatching] = useState(false)
+  const [relearnCloze, setRelearnCloze] = useState(true)
   const [dueModeError, setDueModeError] = useState<string | null>(null)
   const [studyModeAutoplay,   setStudyModeAutoplay]   = useState(true)
   const [audioSourceDefault,  setAudioSourceDefaultState] = useState<'browser' | 'elevenlabs' | 'forvo' | 'standard'>('browser')
@@ -560,14 +561,16 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
           .eq('user_id', uid)
           .single(),
         new SupabaseLanguagePairRepository().list(uid),
-        supabase.from('profiles').select('express_rating, forward_cloze, reverse_matching').eq('user_id', uid).maybeSingle()
-          // 124 not yet applied fails the combined select — fall back to the 123 column alone.
+        supabase.from('profiles').select('express_rating, forward_cloze, reverse_matching, relearn_cloze').eq('user_id', uid).maybeSingle()
+          // A missing column fails the whole combined select — fall back through the older shapes.
+          .then(async r => r.data ? r : supabase.from('profiles').select('express_rating, forward_cloze, reverse_matching').eq('user_id', uid).maybeSingle())
           .then(async r => r.data ? r : supabase.from('profiles').select('express_rating').eq('user_id', uid).maybeSingle()),
       ])
-      const modes = expressRes.data as { express_rating?: boolean | null; forward_cloze?: boolean | null; reverse_matching?: boolean | null } | null
+      const modes = expressRes.data as { express_rating?: boolean | null; forward_cloze?: boolean | null; reverse_matching?: boolean | null; relearn_cloze?: boolean | null } | null
       setExpressRating(modes?.express_rating ?? false)
       setForwardCloze(modes?.forward_cloze ?? false)
       setReverseMatching(modes?.reverse_matching ?? false)
+      setRelearnCloze(modes?.relearn_cloze ?? true)
 
       if (profile) {
         setDisplayName(profile.display_name ?? '')
@@ -599,6 +602,18 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
       setForwardCloze(prev)
       // Show the REAL failure — "is the migration applied?" alone hid the actual cause once.
       setDueModeError(`Could not save (${error.message}) — is migration 124_due_review_modes.sql applied?`)
+    }
+  }
+
+  /** Relearning cards in the Due Now runner: cloze (default) or the classic plain prompt. */
+  async function handleRelearnCloze(on: boolean) {
+    const prev = relearnCloze
+    setRelearnCloze(on)
+    setDueModeError(null)
+    const { error } = await supabase.from('profiles').update({ relearn_cloze: on }).eq('user_id', userId)
+    if (error) {
+      setRelearnCloze(prev)
+      setDueModeError(`Could not save (${error.message}) — is migration 135_relearn_cloze.sql applied?`)
     }
   }
 
@@ -878,6 +893,16 @@ export function SettingsScreen({ section }: { section: SettingsSectionId }) {
               <option value="normal">Normal review</option>
               <option value="matching">⚡ Matching</option>
               <option value="rated">⚡ Matching + ratings</option>
+            </select>
+          </SettingsRow>
+          <SettingsRow label="Relearning cards"
+            hint={relearnCloze
+              ? 'A lapsed card relearns as a cloze — the word blanked out of a sentence — instead of the plain prompt. Falls back to the plain card when no sentence is available.'
+              : 'A lapsed card relearns as a classic review with the plain prompt.'}>
+            <select value={relearnCloze ? 'cloze' : 'normal'} onChange={e => void handleRelearnCloze(e.target.value === 'cloze')}
+              className="input text-sm w-52">
+              <option value="cloze">📝 Cloze</option>
+              <option value="normal">Normal review</option>
             </select>
           </SettingsRow>
           {dueModeError && <p className="text-danger text-xs">{dueModeError}</p>}

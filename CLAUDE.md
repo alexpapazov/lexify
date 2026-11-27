@@ -279,6 +279,17 @@ Current feature files:
   chain (matching only) credits on clear — cleared>0 implies done — so Edit never showed while
   Continue still auto-resumed. `inProgress` must MIRROR openBuilder's resume condition
   (`cleared > 0 || done` over the program's progress); keep the two in lockstep.
+  RELEARN-AS-CLOZE + STANDARD PRESET (2026-11-26, user decisions): the production "Standard"
+  preset is now matching → cloze (was matching → recall). A production-direction RELEARN
+  review (loop or matching-remedial) presents as a CLOZE instead of the plain typed prompt —
+  `profiles.relearn_cloze` (**migration 135 must be applied**, default ON), Settings → Due
+  Now → "Relearning cards" select. Runner: `relearnClozeRef` (read via a SEPARATE profiles
+  select — the combined-select landmine), the cloze prefetch effect also resolves
+  `relearnQ.slice(0,3)` whenever the setting is on (queue set at startRun, so clozes land
+  during the first matching round), and the relearn TypingMode gets `relearnClozeData`
+  (clozeStrictness applied only when a cloze actually resolved; plain typed fallback when
+  ineligible/offline/failed). Recognition-direction relearns stay flashcards — cloze is
+  production-only. Classic session pages' relearn re-shows are NOT covered (runner only).
   GLOBAL AUTOPLAY HONORED EVERYWHERE (2026-11-24, user: typing in Due Now kept pausing their
   music): Settings → Audio "Auto-play audio in Study mode" (`profiles.study_mode_autoplay`,
   migration 047, default ON) was only wired into all/session — now the due RUNNER

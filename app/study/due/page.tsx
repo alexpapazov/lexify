@@ -50,7 +50,7 @@ import type { Card, CardState, Deck, Rating, TypedStrictness } from '@/domain'
 const PRESETS: Record<'production' | 'recognition', { name: string; stages: StageKind[] }[]> = {
   production: [
     { name: 'Busy day',  stages: ['matching'] },
-    { name: 'Standard',  stages: ['matching', 'recall'] },
+    { name: 'Standard',  stages: ['matching', 'cloze'] },
     { name: 'Deep',      stages: ['matching', 'cloze', 'typed'] },
   ],
   recognition: [
@@ -113,6 +113,10 @@ function DueInner() {
    *  the whole runner is silent — no autoplay, no submit-speak, no matching tile audio — so
    *  studying never interrupts the learner's music. Listen buttons still work on request. */
   const autoplayGlobalRef = useRef(true)
+  /** Settings → Due Now → "Relearning cards" (profiles.relearn_cloze, migration 135). On =
+   *  a production-direction relearn review presents as a CLOZE (word blanked out of a
+   *  sentence) instead of the plain typed prompt; falls back to plain when no cloze resolves. */
+  const relearnClozeRef = useRef(true)
   /** Each card's deck — the source of its GRADING SETTINGS (the session pages grade with the
    *  deck's settings; defaults silently broke accent acceptance, user report 2026-11-20),
    *  deck name, and the ℹ modal's deck context. */
@@ -136,11 +140,19 @@ function DueInner() {
         if (!session) { router.push('/auth'); return }
         const uid = session.user.id
         setUserId(uid)
-        const profile = await supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay').eq('user_id', uid).maybeSingle()
-          .then(r => r.data as { timezone: string | null; day_turnover_hour: number | null; study_mode_autoplay: boolean | null } | null, () => null)
+        // relearn_cloze rides a SEPARATE select: a missing column (migration 135 not yet
+        // applied) nulls the whole combined read, silently resetting tz/turnover — the known
+        // profiles-select landmine.
+        const [profile, relearnCloze] = await Promise.all([
+          supabase.from('profiles').select('timezone, day_turnover_hour, study_mode_autoplay').eq('user_id', uid).maybeSingle()
+            .then(r => r.data as { timezone: string | null; day_turnover_hour: number | null; study_mode_autoplay: boolean | null } | null, () => null),
+          supabase.from('profiles').select('relearn_cloze').eq('user_id', uid).maybeSingle()
+            .then(r => (r.data as { relearn_cloze: boolean | null } | null)?.relearn_cloze ?? true, () => true),
+        ])
         const tz = profile?.timezone ?? deviceTimeZone()
         const turnover = profile?.day_turnover_hour ?? 0
         autoplayGlobalRef.current = profile?.study_mode_autoplay ?? true
+        relearnClozeRef.current = relearnCloze
         todayRef.current = getToday(tz, turnover)
 
         // Yesterday's unfinished programs pay out their boosts BEFORE today's batches build.
@@ -406,8 +418,12 @@ function DueInner() {
   const [clozeByCard, setClozeByCard] = useState<Map<string, ReviewCloze | null>>(new Map())
   const clozeInFlight = useRef<Set<string>>(new Set())
   useEffect(() => {
-    if (view !== 'run' || stageKind !== 'cloze') return
-    for (const id of queue.slice(0, 3)) {
+    if (view !== 'run') return
+    const ids = stageKind === 'cloze' ? queue.slice(0, 3) : []
+    // Relearn reviews present as cloze too (setting, default on) — their queue is set at
+    // startRun, so clozes resolve during the first matching round, before a relearn surfaces.
+    if (relearnClozeRef.current && batch?.direction === 'production') ids.push(...relearnQ.slice(0, 3))
+    for (const id of ids) {
       const sc = sessionCards.get(id)
       if (!sc || clozeByCard.has(id) || clozeInFlight.current.has(id) || !clozeEligible(sc)) continue
       clozeInFlight.current.add(id)
@@ -416,7 +432,8 @@ function DueInner() {
         .catch(() => setClozeByCard(prev => new Map(prev).set(id, null)))
         .finally(() => clozeInFlight.current.delete(id))
     }
-  }, [view, stageKind, queue, sessionCards, clozeByCard])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, stageKind, queue, relearnQ, sessionCards, clozeByCard])
 
   // Stored audio clips for the next few cards (SESSION columns exclude the blobs). Playback
   // without a clip would fall back to regenerating TTS — hydration keeps real recordings.
@@ -728,6 +745,11 @@ function DueInner() {
     } : undefined
 
     const typedPresentation = relearnNow ? batch.direction === 'production' : (stageKind === 'typed' || stageKind === 'cloze')
+    // A production relearn presents as cloze when the setting is on (user decision 2026-11-26)
+    // — plain typed card when no cloze resolved (ineligible card, offline, generation failed).
+    const relearnClozeData = relearnNow && batch.direction === 'production' && relearnClozeRef.current
+      ? clozeByCard.get(card.id) || undefined
+      : undefined
     return (
       <div className="space-y-6 pb-12">
         {header}
@@ -745,8 +767,8 @@ function DueInner() {
             card={card}
             promptSide={promptSide}
             promptLanguage={promptLanguage}
-            cloze={!relearnNow && stageKind === 'cloze' ? clozeByCard.get(card.id) || undefined : undefined}
-            strictness={!relearnNow && stageKind === 'cloze' ? clozeStrictness(pairStrict) : pairStrict}
+            cloze={relearnNow ? relearnClozeData : stageKind === 'cloze' ? clozeByCard.get(card.id) || undefined : undefined}
+            strictness={(!relearnNow && stageKind === 'cloze') || relearnClozeData ? clozeStrictness(pairStrict) : pairStrict}
             gradingSettings={gsWithLang}
             gradedReview={true}
             answerLanguage={answerSide === 'front' ? batch.src : batch.tgt}
