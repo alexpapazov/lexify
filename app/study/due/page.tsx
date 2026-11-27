@@ -845,10 +845,11 @@ function DueInner() {
         <div className="panel divide-y divide-line/5 p-0 overflow-hidden">
           {batches.map(b => {
             const open = todayPrograms.get(b.key)
-            const inProgress = open && b.words.some(w => {
-              const p = open.progress[w.card.id]
-              return p && p.cleared > 0 && !p.done
-            })
+            // Must mirror openBuilder's auto-resume condition exactly: whenever Continue would
+            // skip the builder, Edit is the only path back to it. A single-stage chain (matching
+            // only) never has a mid-chain word — cleared>0 implies done — so `!p.done` here hid
+            // Edit for exactly those programs.
+            const inProgress = open && Object.values(open.progress).some(p => p.cleared > 0 || p.done)
             const expanded = expandedKey === b.key
             return (
               <div key={b.key}>
